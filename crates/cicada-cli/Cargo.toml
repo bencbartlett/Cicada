@@ -1,0 +1,25 @@
+[package]
+name = "cicada-cli"
+description = "The cicada binary: serve, run, fmt, docs, catalog, cache"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "cicada"
+path = "src/main.rs"
+
+[dependencies]
+# anyhow is allowed ONLY in this crate (doc 14 §Toolchain).
+# cicada-server joins in stage 5 with `cicada serve` — no dead edges before.
+anyhow.workspace = true
+cicada-core.workspace = true
+cicada-stdlib.workspace = true
+clap.workspace = true
+
+[dev-dependencies]
+cargo_metadata.workspace = true
+
+[lints]
+workspace = true

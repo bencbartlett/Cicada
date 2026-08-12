@@ -1,0 +1,11 @@
+# LF everywhere, on every platform. The catalog freshness check and the
+# stage-2 byte-exact round-trip fixtures compare exact bytes; CRLF
+# translation would make them platform-dependent. Set before the first code
+# commit so no renormalization commit is ever needed.
+* text=auto eol=lf
+
+# Byte-stable generated + lock files (documentation of intent; covered by
+# the baseline above).
+docs/generated/** text eol=lf
+Cargo.lock text eol=lf
+web/package-lock.json text eol=lf

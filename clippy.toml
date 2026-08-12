@@ -1,0 +1,5 @@
+# unwrap/expect are denied in library code (doc 14) but fine in tests,
+# where a panic IS the failure report.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

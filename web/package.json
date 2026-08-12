@@ -1,0 +1,35 @@
+{
+  "name": "cicada-web",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Cicada SPA: React + TypeScript + Vite; xyflow canvas + three.js viewport land in stage 5",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "check": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "eslint": "^9.0.0",
+    "eslint-plugin-react-hooks": "^5.0.0",
+    "eslint-plugin-react-refresh": "^0.4.0",
+    "globals": "^15.0.0",
+    "typescript": "~5.8.0",
+    "typescript-eslint": "^8.0.0",
+    "vite": "^6.0.0",
+    "vitest": "^3.0.0"
+  }
+}

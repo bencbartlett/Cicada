@@ -1,0 +1,13 @@
+[package]
+name = "cicada-sched"
+description = "Cicada scheduler: generations, stores, executor, cost models, scrub warming"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+cicada-core.workspace = true
+
+[lints]
+workspace = true

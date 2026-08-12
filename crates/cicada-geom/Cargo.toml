@@ -1,0 +1,13 @@
+[package]
+name = "cicada-geom"
+description = "Cicada geometry: types, tolerance ops, and rented-kernel seams"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+cicada-core.workspace = true
+
+[lints]
+workspace = true

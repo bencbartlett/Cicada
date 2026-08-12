@@ -1,0 +1,38 @@
+# cargo-deny configuration (nightly CI, doc 14). Curate as real dependencies
+# arrive; entries here should carry reasons, not speculation.
+
+[graph]
+all-features = true
+
+[advisories]
+yanked = "deny"
+
+[licenses]
+# The workspace itself is unpublished (all rights reserved while private);
+# this list constrains DEPENDENCIES we may vendor into builds. The workspace
+# crates carry no license field by design — exempt them from the dep policy.
+private = { ignore = true }
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "CC0-1.0",
+  "MPL-2.0",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# In-workspace path deps carry no version requirement; that is not the
+# wildcard this rule exists to catch.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

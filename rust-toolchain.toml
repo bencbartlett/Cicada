@@ -1,0 +1,4 @@
+# Rust stable, MSRV = current stable, updated freely (doc 14).
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]

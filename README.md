@@ -50,10 +50,13 @@ hour that project lost to Grasshopper's failure modes.
 
 ## Status
 
-Docs-first, pre-v0. The founding documents synthesize design conversations
-from the wall-piece project (2026). The first code milestone is the
-[vertical-slice spike](docs/05-roadmap.md): the wall pipeline's hardest
-stretch running on the Rust + Tauri stack, measured.
+Pre-v0, spike in progress. The founding documents synthesize design
+conversations from the wall-piece project (2026). The current milestone is
+the [vertical-slice spike](docs/15-spike-plan.md): the wall pipeline's
+hardest stretch running on the Rust engine + web UI stack (DECISIONS.md
+web-first row), measured. Stage 0 (workspace scaffold, CI, operating
+manual) is complete; the repo's agent manual lives in
+[AGENTS.md](AGENTS.md).
 
 License: all rights reserved while private; a public license will be
 chosen at first public release.

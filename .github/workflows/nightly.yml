@@ -1,0 +1,57 @@
+# Nightly gates (doc 14 §CI pipeline): full matrix, corpus, benchmarks, audit.
+name: Nightly
+
+on:
+  schedule:
+    - cron: "0 8 * * *" # 08:00 UTC, daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test-matrix:
+    name: cargo test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked --workspace
+
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit
+
+  # Stubbed until their stages land (doc 15).
+  wall-corpus:
+    name: wall corpus end-to-end (stub — stage 6)
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "stub — nightly wall-corpus run with output-hash comparison lands in stage 6 (doc 15)"
+
+  benchmarks:
+    name: criterion benchmarks (stub — stage 4+)
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "stub — criterion baselines land with the first perf-sensitive code (doc 14; baseline storage is an open question)"

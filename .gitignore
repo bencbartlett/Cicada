@@ -1,20 +1,34 @@
-# Python
+# Rust
+/target
+
+# Web
+node_modules/
+web/dist/
+
+# Python (script nodes, corpus tooling — stage 4+)
 __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
 venv/
 
-# Cicada runtime artifacts
+# Cicada runtime artifacts. The cache NEVER lives in the project folder by
+# default (DECISIONS.md: project dirs are Dropbox-synced). `.cicada-cache/`
+# is an opt-in override — ignored so an accidental opt-in never churns git.
+# The lock file is last-solve state, local-only (DECISIONS.md .cic row).
 .cicada-cache/
 *.cic.lock
+
+# Renders and large outputs
+renders/
+*.blend1
 
 # OS / editor
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+*.log
 
-# Renders and large outputs
-renders/
-*.blend1
+# Claude Code local settings (skills and shared settings ARE committed)
+.claude/settings.local.json

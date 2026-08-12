@@ -1,0 +1,63 @@
+# Cicada workspace — layout and layering per docs/14-engineering-foundations.md.
+# Dependency direction is law: core ← {geom, lang, stdlib, sched, script} ← server ← cli.
+# A workspace test (crates/cicada-cli/tests/dependency_dag.rs) enforces it.
+
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+# MSRV = current stable, updated freely (doc 14 — solo project, no legacy burden).
+rust-version = "1.97"
+publish = false # all rights reserved while private (DECISIONS.md 2026-08-11)
+
+[workspace.dependencies]
+# In-workspace crates (path deps so version bumps stay in one place).
+cicada-core = { path = "crates/cicada-core" }
+cicada-macros = { path = "crates/cicada-macros" }
+cicada-geom = { path = "crates/cicada-geom" }
+cicada-lang = { path = "crates/cicada-lang" }
+cicada-stdlib = { path = "crates/cicada-stdlib" }
+cicada-sched = { path = "crates/cicada-sched" }
+cicada-script = { path = "crates/cicada-script" }
+cicada-server = { path = "crates/cicada-server" }
+
+# External. thiserror in libraries; anyhow only in cicada-cli (doc 14).
+anyhow = "1"
+blake3 = "1"
+cargo_metadata = "0.19"
+clap = { version = "4", features = ["derive"] }
+proptest = "1"
+thiserror = "2"
+
+[workspace.lints.rust]
+# `unsafe` only inside FFI seam modules (doc 14): deny globally, opt out per
+# module with a narrow `#[allow(unsafe_code)]` plus `// SAFETY:` comments.
+unsafe_code = "deny"
+# Doc comments are the single documentation source (doc 14) — undocumented
+# public items are a build error under CI's -D warnings.
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Fail loudly and immediately (doc 14): proper errors or invariant panics with
+# messages. Tests are exempt via clippy.toml (allow-unwrap-in-tests).
+unwrap_used = "deny"
+expect_used = "deny"
+# Curated pedantic allow-list (doc 14 open question): grown from real noise
+# only, never speculatively. Each entry carries the reason it earned its place.
+# (empty so far)
+
+# Overflow checks on in ALL profiles including release (DECISIONS.md):
+# a wrong answer is worse than a loud refusal.
+[profile.dev]
+overflow-checks = true
+
+[profile.release]
+overflow-checks = true
+
+[profile.bench]
+overflow-checks = true

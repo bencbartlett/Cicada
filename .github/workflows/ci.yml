@@ -1,0 +1,80 @@
+# Per-PR/push gates (doc 14 §CI pipeline). Nightly jobs live in nightly.yml.
+# --locked everywhere: a Cargo.toml/Cargo.lock desync fails loudly instead of
+# silently re-resolving to a graph that is not the committed one.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: fmt · clippy · tests (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --workspace
+      - name: Catalog freshness (stale CATALOG.md fails CI, doc 14)
+        run: cargo run --locked -p cicada-cli -- catalog --check
+
+  check-cross:
+    name: cargo check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked --workspace --all-targets
+
+  web:
+    name: web tsc · eslint · vitest
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm run lint
+      - run: npm test
+
+  # Stubbed until their stages land (doc 15). Kept visible so the CI shape
+  # matches doc 14 from day 0 and lighting them up is a one-line change.
+  wasm-guest:
+    name: WASM guest build (stub — v0.1, out of spike scope)
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "stub — cicada-guest and the WASM host land in v0.1 (doc 15 out-of-scope)"
+
+  playwright-smoke:
+    name: Playwright smoke (stub — stage 5)
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "stub — serve → place → wire → drag → screenshot lands in stage 5 (doc 15)"

@@ -1,0 +1,13 @@
+[package]
+name = "cicada-lang"
+description = "Cicada .cic dialect: lexer/parser/AST, minimal-edit writer, checker, diagnostics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+cicada-core.workspace = true
+
+[lints]
+workspace = true
