@@ -67,10 +67,19 @@ Web work needs Node ≥ 20 (CI uses 22).
 
 - The repo lives in a **Dropbox-synced folder**. Build dirs must be excluded
   from sync or Dropbox's file handles break builds (observed: cargo failing
-  to finalize `target/incremental`). `target/` and `web/node_modules/` are
-  marked with the `com.dropbox.ignored` NTFS stream; after deleting and
-  recreating either directory, re-mark it:
-  `Set-Content -Path <dir> -Stream com.dropbox.ignored -Value 1`.
+  to finalize `target/incremental`, os error 32). `target/` and
+  `web/node_modules/` are marked with the `com.dropbox.ignored` NTFS
+  stream. **In a fresh clone or worktree, create and mark the dir BEFORE
+  the first build** — marking an already-populated dir does not release
+  Dropbox's handles on existing files:
+
+  ```powershell
+  New-Item -ItemType Directory target
+  Set-Content -Path target -Stream com.dropbox.ignored -Value 1
+  ```
+
+  If builds hit os error 32 under an already-populated `target/`: delete
+  the directory, recreate it empty, mark it, rebuild.
 - The engine cache itself never has this problem — it lives in the user
   cache directory, never the project folder (DECISIONS.md).
 

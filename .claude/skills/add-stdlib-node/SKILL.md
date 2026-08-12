@@ -34,13 +34,21 @@ comments that feed the generated catalog (DECISIONS.md). No partial nodes.
    + `#[derive(Ports)]` reflect the struct instead; field names ARE the
    port names everywhere — Rust, catalog, canvas, dialect kwargs. A field
    with a default is an optional port. Single output = port named `out`.
+   Within a category, keep `registry()` in docs/08 row order — registry
+   order is catalog order.
 3. **Tests, all three kinds** (see `maths.rs` for the worked example):
    - *Table*: hand-picked cases including edges (zeros, negatives, extremes).
    - *Property*: a `proptest` invariant (symmetry, identity, bounds, …).
    - *Determinism*: golden blake3 hash of the output for fixed inputs.
      To bless the initial hash: run once, copy the actual from the failure
      message, and say so in the commit — this IS the stage-0 blessed path
-     (insta arrives stage 2). Raw float `==` is allowed ONLY here.
+     (insta arrives stage 2).
+   - Float comparison in tests: geometry values ALWAYS use
+     tolerance-aware asserts (doc 14's sanctioned API), never raw `==`.
+     Exact `==` (under `#[allow(clippy::float_cmp)]`) is sanctioned in
+     determinism/hash tests, and in table/property tests only where the
+     node's contract is exact IEEE arithmetic — pure maths, as in the
+     worked example.
    - If proptest ever finds a failure, it writes a
      `proptest-regressions/` file: **commit it with the fix** (it is a
      regression test, not noise).
