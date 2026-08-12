@@ -45,8 +45,9 @@ was wrong — cheap either way.
 - **Git in the UI**: status strip with per-node change markers,
   node-level visual graph diff, commit from the app, per-node history
   (doc 10).
-- **Stdlib**: the full docs/08 catalog (mesh tier; B-rep tier lands in
-  v0.2).
+- **Stdlib**: the full docs/08 catalog — analytic + B-rep solids
+  primary (OCCT: primitives, extrude/loft/revolve/sweep, booleans,
+  STEP in/out); mesh tier + Manifold booleans for mesh-destined work.
 - **Editable canvas**: GH-style placement/wiring/param editing
   materializing as dialect text edits; wire inspection, per-node preview
   toggles, **backward picking**.
@@ -55,8 +56,8 @@ was wrong — cheap either way.
 
 ## v0.2 — the CAD tier + beauty
 
-- OCCT backend behind the seam (`opencascade-rs`; build123d as API prior
-  art): procedural B-rep nodes, STEP in/out, tessellation node.
+- B-rep maturity: fillets/chamfers, surface ops, and OCCT's ceiling
+  map filled in with real-geometry evidence.
 - **Blender bridge**: USD export with IDs/materials, template .blend,
   headless `cicada render` (Cycles), camera bookmarks.
 - fidget backend for implicit blends/lattices (fillet-as-smooth-min).

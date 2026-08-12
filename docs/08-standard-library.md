@@ -63,17 +63,25 @@ named axes like `parts: Solid`):
 - **Display/output**: `Material`, plus fabrication types that arrive with
   the ported exporters (`Plate`, machine profiles).
 
-**Solid in v0.1 is a watertight mesh** — a refinement of `Mesh` whose
-constructor *is* the Manifold watertightness check. The `Brep` kind lands
-in v0.2 with explicit `Tessellate: Brep → Mesh` conversion. This keeps
-the mesh-native default of doc 03 honest in the type system.
+**Representations: analytic + B-rep first; meshing is
+post-processing.** `Curve` and `Surface` are analytic; **`Solid` is
+B-rep-backed (OCCT) from v0.1** — primitives, extrude, loft, revolve,
+sweep, booleans, STEP. The mesh tier stays first-class for
+mesh-destined work: `Watertight<Mesh>` is a refinement whose
+constructor *is* the Manifold watertightness check, and
+`Tessellate: Solid → Watertight<Mesh>` is the explicit bridge. The
+typical pipeline is analytic/B-rep until the end, then tessellate once
+— the GH workflow, typed. The wall corpus runs the mesh tier (FDM-bound
+parts; the spike builds frusta as analytic mesh constructions and
+carves with Manifold — wall lesson 6 still holds for mesh-destined
+geometry).
 
 The storage model in Rust (checker lattice is separate — see doc 02):
 
 ```rust
 #[derive(Clone, Hash)]
 enum Geometry { Point(Point3), Curve(Curve), Surface(Surface),
-                Mesh(Mesh), Solid(Solid) /* Field, Brep: v0.2 */ }
+                Mesh(Mesh), Solid(Solid) /* B-rep; Field: v0.2 */ }
 
 enum Curve { Line(Line), Arc(Arc), Circle(Circle), Ellipse(Ellipse),
              Polyline(Polyline), Nurbs(NurbsCurve), Compound(Vec<Curve>) }
@@ -265,7 +273,7 @@ it (doc 09).
 | Box / Center Box | `(plane: Plane, x, y, z: Domain) → Solid` | S | |
 | Sphere | `(plane: Plane, radius: Number) → Solid` | S | |
 | Cylinder / Cone | `(plane: Plane, radius: Number, height: Number) → Solid` | 1 | |
-| Solid Union / Difference / Intersection | `(a: [Solid], b: [Solid]) → [Solid]` | S | Manifold; the wall's carve in seconds |
+| Solid Union / Difference / Intersection | `(a: [Solid], b: [Solid]) → [Solid]` | 1 | OCCT B-rep booleans; known ceilings + Rhino.Compute rescue (doc 03) |
 | Offset Solid | `(solid: Solid, distance: Number) → Solid` | 1 | shell/inflate, Manifold |
 | Bounding Box | `(geometry: [Geometry], plane: Plane = world) → Solid` | 1 | union or per-item |
 | Area | `(g: Surface \| Closed<Planar<Curve>>) → (area: Number, centroid: Point)` | 1 | |
@@ -281,8 +289,9 @@ it (doc 09).
 | Mesh Box / Sphere / Plane | `(…) → Mesh` | 1 | parameterized density |
 | Construct Mesh | `(vertices: [Point], faces: [Face]) → Mesh` | 1 | faces = index triples/quads |
 | Deconstruct Mesh | `(mesh: Mesh) → (vertices: [Point], faces: [Face], normals: [Vector])` | 1 | |
-| Tessellate | `(solid: Solid \| Brep, density…) → Mesh` | 1 | the explicit conversion |
-| As Solid | `(mesh: Mesh) → Solid` | 1 | watertight refinement check (Manifold) |
+| Tessellate | `(solid: Solid, density…) → Watertight<Mesh>` | 1 | the explicit analytic/B-rep → mesh bridge |
+| As Watertight | `(mesh: Mesh) → Watertight<Mesh>` | S | Manifold check; the mesh-tier solid |
+| Mesh Boolean (union / difference / intersection) | `(a: [Watertight<Mesh>], b: [Watertight<Mesh>]) → [Watertight<Mesh>]` | S | Manifold — watertight, parallel, seconds; the wall's carve |
 | Weld / Smooth / Reduce | `(mesh: Mesh, …) → Mesh` | 1 | |
 | Field primitives | `(…) → Field` | 2 | sphere/box/gyroid/from-mesh SDF; fidget |
 | Field ops | `(a: Field, b: Field, k: Number) → Field` | 2 | union/smooth-union/offset/shell |

@@ -12,31 +12,49 @@ Cargo.toml                # workspace root
 crates/
   cicada-core/       # value model: hashing, interning, axes, Optional slots, ProjectConfig
   cicada-macros/     # #[node], #[derive(Ports)] proc macros
-  cicada-geom/       # geometry types, tolerance ops, kernel seams (manifold3d, spade, curvo, lyon, cavalier_contours, ttf-parser)
-  cicada-dialect/    # .cic lexer/parser/AST, minimal-edit writer, fmt; tree-sitter grammar
-  cicada-check/      # kind lattice, unification, axis/shape rules, diagnostics
+  cicada-geom/       # geometry types, tolerance ops, kernel seams (manifold3d, opencascade-rs, spade, curvo, lyon, cavalier_contours, ttf-parser)
+  cicada-lang/       # .cic lexer/parser/AST, minimal-edit writer, fmt; kind lattice, unification, axis rules, diagnostics; tree-sitter grammar
   cicada-stdlib/     # the node catalog (docs/08)
   cicada-sched/      # generations, stores, executor, cost models, scrub warming
   cicada-script/     # wasmtime host, Python worker pool, marshalling
   cicada-server/     # axum app: protocol, sessions, op log, transport, git
-  cicada-cli/        # the `cicada` binary: serve, run, fmt, cache
+  cicada-cli/        # the `cicada` binary: serve, run, fmt, docs, catalog, cache
 web/                 # SPA: React + TypeScript + Vite + xyflow + three.js + zustand
-corpus/              # wall-pipeline end-to-end corpus + golden hashes
-docs/                # these documents
+corpus/              # wall-pipeline end-to-end corpus + golden hashes (in-repo)
+docs/                # these documents (+ docs/generated/, see Documentation pipeline)
 ```
 
-**Dependency direction is law**: `core ← {geom, dialect, check,
-stdlib, sched, script} ← server ← cli`. Nothing depends on `server`
-except `cli`; `stdlib` never depends on `sched` (nodes are pure
-functions; the scheduler calls *them*); `web/` speaks only the
-protocol. Crate boundaries double as agent work boundaries — most
-tasks should touch one crate.
+**Dependency direction is law**: `core ← {geom, lang, stdlib, sched,
+script} ← server ← cli`. Nothing depends on `server` except `cli`;
+`stdlib` never depends on `sched` (nodes are pure functions; the
+scheduler calls *them*); `web/` speaks only the protocol. A CI check
+asserts the dependency DAG matches this layering.
+
+The principles that produced this shape: **the core stays tiny and
+fast** (everything depends on it, so it must compile in seconds);
+**heavy dependencies are quarantined** (`geom` holds kernel FFI,
+`script` holds wasmtime, `server` holds axum/tokio — iterating on the
+scheduler never rebuilds a kernel binding); **churn is isolated**
+(`stdlib` is ~130 nodes of constant addition; node work rebuilds one
+crate); `macros` is separate because Rust requires it; parser and
+checker share one crate (`lang`) because they share the AST and
+diagnostics types and co-evolve — splitting them would put an
+interface boundary through the highest-churn seam. Crates may start
+merged and split along these seams as compile times demand; **the
+seams are the contract, not the crate count**. Crate boundaries
+double as agent work boundaries — most tasks should touch one crate.
 
 ## Toolchain and conventions
 
 - Rust stable, edition 2024; MSRV = current stable, updated freely
   (solo project — no legacy support burden).
-- `rustfmt` defaults; `clippy --all-targets -- -D warnings` gates CI.
+- `rustfmt` defaults; lints: `clippy::all` + `clippy::pedantic` with
+  a small curated allow-list for noise, `-D warnings` in CI. **Fail
+  loudly and immediately**: `unwrap`/`expect` are lint-denied in
+  library code (proper errors or invariant panics with messages);
+  `overflow-checks = true` in all profiles including release; no
+  silent fallbacks anywhere — a wrong answer is worse than a loud
+  refusal (wall lesson 13).
 - `unsafe` only inside FFI seam modules, each block with a
   `// SAFETY:` comment.
 - Errors: `thiserror` enums in library crates; `anyhow` allowed only
@@ -68,10 +86,22 @@ struct Mesh {
   parameters (a Circle is a plane + radius; a Nurbs is control
   points/weights/knots/degree). Tessellation for display or meshing
   is a derived, cached, costed operation (doc 12).
-- **Solid** wraps a Manifold-validated watertight mesh (docs/08); the
-  seam converts zero-copy where kernel layouts allow.
+- **Solid is B-rep-backed (OCCT) from v0.1** (docs/08): an opaque
+  kernel shape handle wrapped with a content hash (hash of the
+  canonical serialized shape — serialization stability is a
+  spike-verify item). `Watertight<Mesh>` (Manifold-validated) is the
+  mesh-tier solid; the seams convert zero-copy where kernel layouts
+  allow.
 - Display buffers are derived f32 with origin-rebasing (doc 12);
   they live in the display cache, never in the value model.
+- **No dtype-generic geometry.** Values are f64-only; parameterizing
+  the value model over f32/f64 would double the stdlib surface,
+  marshalling, and cache-key combinatorics while fighting the
+  f64-only kernels (OCCT, curvo). The f32 wins are captured where
+  they pay without new value types: the display path is already f32;
+  individual nodes may compute internally in f32 when accuracy
+  permits; and a dedicated bulk-f32 kind (e.g. point clouds) can be
+  added later if a real workload demands it.
 
 ## Tolerance and units policy
 
@@ -88,6 +118,16 @@ struct Mesh {
   (`approx_eq`, `coincident`, `is_closed_within`) is the only float
   comparison path in geometry code. Raw `==` on floats is
   lint-banned except in hash/determinism tests.
+- **Units are changeable after the fact**, two ways: **relabel**
+  (1 mm → 1 in; numbers untouched) or **convert** (1 mm → 0.03937 in;
+  numbers rescaled). Convert rewrites the literals of params feeding
+  length-dimensioned ports — port specs carry a dimension tag
+  (`#[port(dimension = length)]`) so the engine knows a `radius` from
+  a `count` — including slider min/max/step, as one undoable op.
+  Anything it can't confidently convert (free variables in
+  expressions) is flagged for review, never silently scaled. Either
+  way the `ProjectConfig` hash changes, dirtying exactly the
+  unit-sensitive caches.
 
 ## The script marshalling ABI
 
@@ -104,6 +144,30 @@ struct Mesh {
   fast path is a later optimization). A `cicada-guest` SDK crate
   provides the types and a macro that emits the ports manifest as a
   custom section; compiled artifacts cache by source hash (doc 12).
+
+## Documentation pipeline
+
+One source of truth: the doc comments on nodes and ports. The
+`NodeSpec` already captures them (docs/08); two artifacts generate
+from it, and nothing is hand-maintained in parallel:
+
+- **`docs/generated/CATALOG.md`** — the condensed reference: one line
+  per registered node (signature + title line), grouped by category,
+  **committed to the repo and CI-checked** (regenerate + diff, like a
+  lockfile). This is what agents read while building — signatures
+  without grepping crates, a few KB of context instead of thousands
+  of lines of source. `cicada catalog` regenerates it; inside a user
+  project it merges the project's script nodes so the reference is
+  always complete.
+- **`cicada docs`** — the human-readable reference: per-node HTML
+  pages generated from the same doc comments, with runnable dialect
+  examples that CI actually executes (an example that stops solving
+  fails the build).
+
+Standards that keep this alive: every node's doc comment has a title
+line, a description, and at least one example; `add-stdlib-node` and
+script-authoring flows regenerate the catalog in the same commit; a
+stale CATALOG.md fails CI.
 
 ## Testing standards
 
@@ -159,7 +223,9 @@ repo itself carries the operating manual:
   - `protocol-change` — server + client + snapshot fixtures updated
     together.
   - `perf-check` — criterion before/after with the relevant bench.
-- **Working rules**: scope to one crate where possible; run the
+- **Working rules**: scope to one crate where possible; **read
+  `docs/generated/CATALOG.md` for node signatures instead of grepping
+  crates** (context is expensive; the catalog is a few KB); run the
   touched crate's tests plus `cargo check --workspace` before
   declaring done; never leave fmt/clippy red; small PRs; the commit
   body states *why*, the diff states *what*.
@@ -189,7 +255,6 @@ converts to open later).
 
 ## Open questions (not yet locked)
 
-- Exact clippy lint set beyond `-D warnings` (candidate: a curated
-  pedantic subset).
-- Corpus asset storage: in-repo vs git LFS (size-dependent).
 - Criterion baseline storage: committed JSON vs a benchmarks branch.
+- The exact pedantic allow-list (curate during the spike from real
+  noise, not speculation).
