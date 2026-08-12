@@ -45,7 +45,7 @@ wall.cic.layout.json  # layout sidecar: manual overrides only
 scripts/
   carve_pins.rs       # script node (Rust → WASM, the default)
   solve_field.py      # Python 3 script node (CPython subprocess)
-.cicada-cache/        # disk memoization (gitignored)
+.cicada-cache/        # opt-in project-local cache (default: user cache dir, doc 12)
 wall.cic.lock         # local last-solve state (gitignored)
 ```
 

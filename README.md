@@ -42,6 +42,7 @@ hour that project lost to Grasshopper's failure modes.
 | [docs/09-lists-and-iteration.md](docs/09-lists-and-iteration.md) | Lists instead of trees: pain-point research, combinators, pairing rules, iteration badges |
 | [docs/10-dialect-and-file-format.md](docs/10-dialect-and-file-format.md) | The dialect grammar, canvas round-trip contract, layout sidecar, and git integration |
 | [docs/11-ai-integration.md](docs/11-ai-integration.md) | The AI editing loop: read tools, checker-driven iteration, refactor primitives, permission tiers |
+| [docs/12-scheduler.md](docs/12-scheduler.md) | Scheduler internals: values and hashing, cache keys, solve generations, execution, cancellation, persistence |
 
 ## Status
 

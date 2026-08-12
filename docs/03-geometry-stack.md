@@ -40,8 +40,10 @@ Conversions are explicit, costed nodes (`tessellate: Solid → Mesh`,
   `#[node]` proc-macro) and the **stdlib catalog** itself (~130 typed
   node functions; docs/08).
 - The expression compiler (typed IR) and the WASM script host.
-- The Tauri app: canvas, params panel, inspectors, and viewer glue
-  (instancing, picking, per-node preview).
+- The web app (canvas, params panel, inspectors, viewer glue —
+  instancing, picking, per-node preview) and the engine server it
+  talks to; the desktop app is a thin Tauri wrapper around both,
+  later (web-first, doc 04).
 - **Fabrication exporters**, ported from the wall repo where they already
   exist and are production-proven: Bambu-flavored 3MF project writer
   (multi-plate, per-object settings, height ranges, dual-nozzle metadata),

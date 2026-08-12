@@ -93,7 +93,7 @@ bugs that matter are **shape errors**, and GH resolves them silently
 
 GH's slowness is not interpretation — geometry kernels and display dominate
 — it is architecture: full-downstream re-solve, single-threaded, on the UI
-thread, uncancellable. The Cicada runtime contract:
+thread, uncancellable. The Cicada runtime contract (internals: doc 12):
 
 - **Content-hash caching per node**: inputs hashed (geometry by content,
   params by value, code by AST hash); unchanged nodes never recompute.

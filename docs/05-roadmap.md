@@ -8,8 +8,9 @@ polish, and it stays deferred until evidence demands it.
 
 Two to three weeks, in the shipping stack: a Rust core skeleton (core
 types, `#[node]` registry, scheduler-lite with caching + cancellation),
-~20 stdlib nodes, a Tauri + React Flow canvas (place, wire, slider), and
-a three.js instanced viewport with picking. Port the wall pipeline's
+~20 stdlib nodes, and a browser UI served by the local engine
+(`cicada serve`) — React Flow canvas (place, wire, slider) and a
+three.js instanced viewport with picking (web-first, doc 04). Port the wall pipeline's
 hardest stretch — field solve → Voronoi → frustum build → pin-hole
 carve → pack — running the existing numpy/scipy wall scripts as Python
 script nodes and **Manifold** (Rust) for the carve. The wall scripts
@@ -60,6 +61,7 @@ was wrong — cheap either way.
   headless `cicada render` (Cycles), camera bookmarks.
 - fidget backend for implicit blends/lattices (fillet-as-smooth-min).
 - .gh migration importer (GH_IO-based) for recovering old definitions.
+- Desktop app: a thin Tauri wrapper bundling the local engine + web UI.
 - AI layer v1: prompt→node (Rust by default) with diff review,
   whole-pipeline refactors, "why is this slow" over the profiler.
 
