@@ -7,7 +7,7 @@ venv/
 
 # Cicada runtime artifacts
 .cicada-cache/
-*.ci.lock
+*.cic.lock
 
 # OS / editor
 .DS_Store

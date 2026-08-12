@@ -7,16 +7,7 @@ program — not islands of nodes.**
 Cicada is a successor-in-spirit to Grasshopper for procedural geometry and
 fabrication work, born from a full production run of a 1,500-part
 multi-machine 3D-printed wall piece built in Grasshopper — and from every
-hour that project lost to Grasshopper's failure modes. Grasshopper spent
-twenty years molting into bigger versions of itself without ever
-metamorphosing. Cicadas spend years underground, then emerge all at once.
-
-## The name
-
-Periodical cicadas surface on prime-numbered cycles after years of silent
-development. Their wings are transparent membranes over dark structural
-venation — a literal wireframe. Releases are named **Broods** (Brood I,
-Brood II, …), same as real cicada cohorts.
+hour that project lost to Grasshopper's failure modes.
 
 ## Thesis in five sentences
 
@@ -31,7 +22,7 @@ Brood II, …), same as real cicada cohorts.
    Content-hash caching, minimal recompute, parallel execution, and
    cancellation everywhere — a solve you can always Esc out of.
 4. **Geometry kernels are rented, never built.** Manifold for meshes, OCCT
-   for B-rep + STEP, libfive for implicits, behind one typed seam.
+   for B-rep + STEP, fidget for implicits, behind one typed seam.
 5. **The AI writes and refactors typed functions with stored prompts and
    attached property tests** — vibe-coded, but continuously verified.
 
@@ -44,15 +35,19 @@ Brood II, …), same as real cicada cohorts.
 | [docs/02-architecture.md](docs/02-architecture.md) | File format, type system, scheduler, script nodes, interaction model |
 | [docs/03-geometry-stack.md](docs/03-geometry-stack.md) | Build vs. rent: kernels, libraries, and the seam between them |
 | [docs/04-rendering-and-interop.md](docs/04-rendering-and-interop.md) | Real-time viewer, Blender bridge, exchange formats, .gh import |
-| [docs/05-roadmap.md](docs/05-roadmap.md) | The weekend spike, Brood I/II scope, explicit deferrals |
+| [docs/05-roadmap.md](docs/05-roadmap.md) | The vertical-slice spike, v0.1/v0.2 scope, explicit deferrals |
 | [docs/06-prior-art.md](docs/06-prior-art.md) | What to steal and what to avoid, project by project |
 | [docs/07-lessons-from-the-wall.md](docs/07-lessons-from-the-wall.md) | Every Grasshopper failure class from the wall project, mapped to the Cicada mechanism that kills it |
+| [docs/08-standard-library.md](docs/08-standard-library.md) | The stdlib: design rules, data model, node registry, and the full v1 catalog |
+| [docs/09-lists-and-iteration.md](docs/09-lists-and-iteration.md) | Lists instead of trees: pain-point research, combinators, pairing rules, iteration badges |
+| [docs/10-dialect-and-file-format.md](docs/10-dialect-and-file-format.md) | The dialect grammar, canvas round-trip contract, layout sidecar, and git integration |
+| [docs/11-ai-integration.md](docs/11-ai-integration.md) | The AI editing loop: read tools, checker-driven iteration, refactor primitives, permission tiers |
 
 ## Status
 
 Docs-first, pre-v0. The founding documents synthesize design conversations
 from the wall-piece project (2026). The first code milestone is the
-[weekend spike](docs/05-roadmap.md): port the wall pipeline's hardest stage
-to the Cicada stack and measure.
+[vertical-slice spike](docs/05-roadmap.md): the wall pipeline's hardest
+stretch running on the Rust + Tauri stack, measured.
 
 License: TBD (private repository).

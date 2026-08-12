@@ -18,12 +18,16 @@ Requirements, in priority order:
    complete; a cancelled solve leaves the last coherent frame.
 5. Section/measure/isolate as cheap inspection tools (later).
 
-**v1: polyscope** — Python-native, mesh/points/curves out of the box,
-imgui side panels for the params UI, days-not-weeks to first pixels.
+**v1: three.js inside the Tauri app** — instanced meshes make wall-scale
+scenes trivial; an ID-buffer pass gives backward picking (instance →
+node + element index + part ID); canvas, params panel, inspectors, and
+viewport dock in one window — itself a usability win over the GH/Rhino
+split. Mesh buffers stream from the Rust core over binary channels.
 
-**v2 candidates** if polyscope's ceiling is hit: a wgpu-based native
-viewer, or a three.js web view (which would also give remote/tablet
-dashboards). Decide on evidence from Brood I usage, not upfront.
+**v2 candidate** if the webview ceiling is hit on real scenes: a native
+wgpu viewer sharing the engine's GPU compute path. The web viewport also
+extends naturally to remote/tablet dashboards. Decide on evidence from
+v0.1 usage, not upfront.
 
 ## Blender bridge (photorealistic renders)
 
@@ -54,11 +58,16 @@ Blender is the render backend, not a modeling dependency:
 | 3MF (Bambu project flavor) | out | ported wall-repo writer | Multi-plate, per-object filaments, height ranges, per-pool slicer policy — production-proven |
 | STL/3MF (plain) | out | trimesh/Manifold | Generic mesh export |
 | DXF | out | ported wall-repo writer | CNC: holes/outlines/text layers, datum discipline |
-| STEP | in/out | OCCT (build123d) | The B-rep interchange; OCCT's best open feature |
+| STEP | in/out | OCCT (`opencascade-rs`) | The B-rep interchange; OCCT's best open feature |
 | .3dm | in/out | rhino3dm | Rhino interop without Rhino |
-| USD / glTF | out | usd-core / pygltf | Blender bridge + web preview |
+| USD / glTF | out | usd-core (Python side) / gltf (Rust) | Blender bridge + web preview; not a hot path |
 | SVG | out | small writer | Laser/plot workflows |
 | **.gh import** | in | GH_IO.dll via pythonnet | The format is cracked (raw-DEFLATE GH_Archive; base64 script source; `ScriptParamAccess` per input). A migration importer can recover component code, wiring, and access modes from existing definitions — the wall project's audit tooling is the seed |
+
+The wall-repo exporters (Bambu 3MF, DXF, manifests) and the .gh importer
+run as Python 3 script nodes first — they are production-proven code —
+and promote to Rust only if profiling ever cares; export is not a hot
+path.
 
 ## CSV/data surface
 

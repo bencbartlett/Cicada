@@ -29,7 +29,7 @@ manifests and print trackers. Characteristics that must be first-class:
 
 Parametric B-rep parts defined in code — extrude, revolve, loft, sweep,
 boolean, chamfer, modest fillets — with **STEP export** for interchange and
-3MF/STL for printing. This is the build123d/OCCT tier: brackets, enclosures,
+3MF/STL for printing. This is the OCCT B-rep tier: brackets, enclosures,
 jigs, fixtures, adapters. Not targeted: Class-A surfacing, large
 assemblies, PDM.
 

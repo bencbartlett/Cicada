@@ -14,25 +14,32 @@ and the tool collapses into "IDE with extra steps."
 A Cicada pipeline file has two layers:
 
 - **Top layer — the dataflow dialect.** Straight-line bindings, one per
-  node, order-independent, trivially parseable. This layer *is* the graph.
+  node, order-independent, trivially parseable. This layer *is* the
+  graph. (Full grammar and the canvas round-trip contract: doc 10.)
 
 ```python
-# wall.ci.py — top layer (each binding is a node; this IS the canvas)
-field   = solve_field(coil, samples, current=amps)      # Solve magnetic field
-cells   = voronoi(seeds, board)                         # parts: Cell
-frusta  = frustum(cells, field.dirs, heights)           # parts: Solid
-labeled = deboss(frusta, ids(cells))                    # parts: Solid
-carved  = carve(labeled, pin_cutters(cells, field))     # parts: Optional[Solid]
-plates  = pack(carved, machines)                        # plates: Plate
+# wall.cic — top layer (each binding is a node; this IS the canvas)
+amps = slider(value=12.0, min=0.0, max=30.0)
+field = solve_field(coil=coil, samples=samples, current=amps)
+cells: parts = voronoi(seeds=seeds, boundary=board)
+frusta = frustum(profile=each(cells), direction=each(field.dirs), height=each(heights))
+labels = ids(cell=each(cells))
+labeled = deboss(solid=each(frusta), text=each(labels))   # zip over parts
+cutters = pin_cutters(cell=each(cells), field=field)
+carved = carve(solid=each(labeled), cutter=each(cutters))  # parts: Solid?
+plates = pack(parts=carved, machines=machines)
 ```
 
-- **Node bodies — arbitrary code.** Ordinary typed Python functions (in the
-  same file or imported modules). The canvas never tries to render their
-  internals; a node is its signature, title, and status.
+- **Node bodies — arbitrary code.** Stdlib nodes are typed Rust functions
+  compiled into the engine. User code enters at two tiers (§4):
+  expressions live inline in the pipeline file; script nodes (Rust→WASM
+  by default; Python 3 available) live in sibling source files the
+  binding references. The canvas never renders their internals; a node
+  is its signature, title, and status.
 
-- **Layout sidecar.** Node positions/colors/groups live in a sidecar block
-  or `wall.ci.layout.json` that the differ ignores. Deleting it loses
-  nothing but aesthetics; auto-layout regenerates it.
+- **Layout sidecar.** Node positions/colors/groups live in
+  `wall.cic.layout.json`, which the differ ignores. Deleting it loses
+  nothing but aesthetics; auto-layout regenerates it (doc 10).
 
 Consequences: the file is git-diffable, the graph can never drift from the
 code (it is *derived* from it), and there is exactly one place logic lives —
@@ -53,18 +60,34 @@ bugs that matter are **shape errors**, and GH resolves them silently
   `parts`, `plates`, `colors`; naming them makes cross-axis mistakes
   unrepresentable and turns "loft base to cap" into literally
   `zip over parts(base, cap)`.
-- **Broadcasting is always explicit**: `map`, `zip`, `flatten`, `graft`
-  combinators, never inference. When you wire `[Curve]` into a
-  `Curve`-taking node, the UI offers a one-click `map` lift — but the lift
-  is recorded in the text, visible forever.
+- **Broadcasting is always explicit**: `map`, strict `zip`, `cross`,
+  `flatten`, `nest`, `squeeze`, `transpose`, `compact` — never inference
+  (GH's tree vocabulary is retired; doc 09). Wiring `[Curve]` into a
+  `Curve`-taking node offers a one-click `map` lift, recorded in the
+  text and worn by the port as a persistent iteration badge (`map`,
+  `×2` when nested). Scalars close over a map (one `motion` against
+  1,500 geometries); two lists pair only by `zip`, and length mismatch
+  is an error with opt-in policies (`pad_last`, `cycle`, `truncate`).
+- **Incompatible wires cannot be drawn**: during drag, incompatible
+  ports are blocked with a reason; liftable ones connect only through
+  the recorded adapter chip. The wrong wire never exists, even
+  transiently.
 - **Nulls are typed and slot-preserving**: `parts: Optional[Solid]` is the
   honest type of a carve stage's output. Dropping a null (and silently
   shifting every later element onto the wrong part — the wall's nastiest
   bug class) is not something a combinator can do; removing elements
   requires an explicit `compact` that also returns the index map.
-- The checker is **Cicada's own**, independent of the runtime language. It
-  checks domain types (shapes, axes, geometry kinds, units), so it can be
-  airtight while v1's runtime is Python.
+- The checker is **Cicada's own**, independent of implementation language
+  (Rust engine, Python script nodes). The kind hierarchy
+  (`Circle <: Curve <: Geometry`) is a subtype lattice inside the
+  checker, not host-language inheritance — so generics are
+  **kind-preserving**: `Move: (T: Transformable, Vector) → T` returns
+  `[Circle]` for `[Circle]`, not an anonymous Geometry.
+- **Refinements, not subclasses, for data-dependent properties**:
+  closedness and planarity are properties of the data, so `Closed<Curve>`
+  and `Planar<Curve>` are wrapper types entered only through explicit
+  checked conversions — red with the offending element IDs on failure.
+  Total upcasts (Circle → Curve) are implicit and free.
 
 ## 3. The scheduler: why it feels fast
 
@@ -90,8 +113,32 @@ thread, uncancellable. The Cicada runtime contract:
 
 ## 4. Script nodes: the signature is the ports
 
-- Typed parameters → input ports; a returned dataclass → named output
-  ports; the docstring's first line → the node title.
+Stdlib nodes get their ports from the struct-in/struct-out node ABI
+(`#[node]` + `#[derive(Ports)]`, docs/08) at compile time — input-struct
+fields are the input ports, and the same field names run end to end:
+Rust call sites, JSON catalog, canvas labels, dialect kwargs. User code
+gets ports from parsing at save. Everything registers into one typed
+catalog (serialized as JSON) that drives the palette, the checker, and
+the AI.
+
+User code enters at two tiers, ports auto-derived in both:
+
+1. **Expression nodes** — one formula in language-neutral math syntax
+   (`z = x^2 + y^2`, `^` is power). Free variables become input ports;
+   the assignment target names the output. Compiled to a typed IR
+   evaluated natively.
+2. **Script nodes** — real code in sibling source files. **Rust by
+   default — including AI-generated nodes** — compiled to sandboxed
+   WASM (wasmtime): near-native speed, a crash costs one node, epoch
+   preemption gives hard cancellation. A **Python 3 script node** (full
+   CPython in a subprocess pool: numpy/scipy/rhino3dm) exists like
+   Grasshopper's, with typed marshalling at the boundary — an option at
+   the edges, never the core representation.
+
+- Input-struct fields → input ports; output-struct fields → named
+  output ports (bare return = single `out` port; Python script nodes
+  mirror the ABI with dataclasses); the doc comment's first line → the
+  node title.
 - Re-parse on save (hot reload). When a signature changes, stale wires
   become **type errors, not silent deletions** — GH dropping wires on
   param edits was one of its worst behaviors.
@@ -117,9 +164,10 @@ The graph view is generated, live, and honest:
   to say the same thing).
 - Click a node → contract, parameters, runtime stats, warnings, prompt
   provenance, test status.
-- **Tap any wire → inspect**: cached data summary (counts, bounds, samples)
-  plus geometry preview in the viewer. GH's best feature, systematized —
-  it's a caching feature, not a canvas feature.
+- **Tap any wire → inspect**: cached data summary (counts, bounds,
+  samples) plus geometry preview in the viewer; on lifted wires, the
+  exact pairing (what mapped/zipped over what, with counts). GH's best
+  feature, systematized — it's a caching feature, not a canvas feature.
 - **Backward picking**: click an object in the viewport → the producing
   node and element index light up (with the named-axis index: `parts[412]`,
   id `C12`). Code-first tools all lack this; it is a launch requirement.
@@ -130,13 +178,18 @@ The graph view is generated, live, and honest:
   per node, instanced rendering for thousands-of-objects scenes, and the
   profiler shows display cost next to compute cost (the wall lesson:
   display was half the pain).
-- v1 graph view is read-only + parameter-editable. Structural edits happen
-  in text (or via the AI); an editable canvas whose edits materialize as
-  code diffs is deferred until the read-only view proves insufficient.
+- The canvas is **fully editable, GH-style**: search-to-place, drag wires
+  with live type-compatibility highlighting, sliders and panels on
+  canvas, groups. Every canvas edit materializes as a text edit to the
+  dialect layer — safe because the dialect is restricted (the Enso trap
+  requires an arbitrary language). Canvas and text editor are two views
+  over one file; neither can drift.
 
 ## 6. The AI integration model
 
-The AI is a collaborator over the whole program, not a node-inserter:
+The AI is a collaborator over the whole program, not a node-inserter
+(the concrete editing loop, read tools, refactor primitives, and
+permission tiers are doc 11):
 
 - Generate: prompt → new typed function + node + test, diffed for review.
 - Refactor: rename axes, split stages, change signatures — whole-file

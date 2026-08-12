@@ -19,12 +19,14 @@ Conversions are explicit, costed nodes (`tessellate: Solid → Mesh`,
 
 | Library | Role | Notes |
 |---|---|---|
-| **Manifold** | Mesh booleans, offsets, hulls | Guaranteed-watertight, parallel, milliseconds; would eat the wall's 1,961-part carve (a half-hour Rhino ordeal) in seconds. The mesh workhorse |
-| **scipy.spatial** + numpy | Voronoi, Delaunay, KD-trees, all array math | The wall's field/cell stages already live here |
-| **OCCT via build123d** (or CadQuery) | Procedural B-rep: extrude/revolve/loft/sweep, booleans, chamfers, modest fillets; **STEP import/export** | The only serious open B-rep kernel; its STEP support is the best open implementation. Known ceilings: pathological booleans, ambitious fillets, big-model perf |
-| **libfive** (implicits/SDFs) | Blends, lattices, organic forms | The operations that are nightmares in B-rep are one-liners here — a fillet is a smooth-minimum. Pairs naturally with mesh output; no STEP |
-| **fonttools / freetype** | Text → outlines | Replaces the wall's DimStyle-fighting glyph pipeline |
-| **trimesh / rhino3dm** | Mesh IO utilities; .3dm read/write | Interop, not modeling |
+| **Manifold** (via `manifold3d` bindings) | Mesh booleans, offsets, hulls | Guaranteed-watertight, parallel, milliseconds; would eat the wall's 1,961-part carve (a half-hour Rhino ordeal) in seconds. The mesh workhorse |
+| **spade / delaunator / kiddo** | Voronoi, Delaunay, spatial indices | Rust-native; the wall's numpy/scipy field+cell stages keep running as Python script nodes until promoted |
+| **glam / curvo / lyon / cavalier_contours / i_overlay** | Vector math, NURBS curves+surfaces, 2D paths, offsets, planar booleans | The math tier under the stdlib; analytic primitives (lines, arcs, frusta) are Cicada's own easy math |
+| **OCCT via `opencascade-rs`** | Procedural B-rep: extrude/revolve/loft/sweep, booleans, chamfers, modest fillets; **STEP import/export** (v0.2) | The only serious open B-rep kernel; its STEP support is the best open implementation. Bindings are young — fallback is a thin C++ shim; build123d/CadQuery remain the API prior art to imitate. Known ceilings: pathological booleans, ambitious fillets, big-model perf |
+| **fidget** (implicits/SDFs) | Blends, lattices, organic forms; JIT-compiled evaluation | Pure-Rust successor to libfive by the same author. The operations that are nightmares in B-rep are one-liners here — a fillet is a smooth-minimum. Pairs naturally with mesh output; no STEP |
+| **ttf-parser / rustybuzz** | Text → outlines (+ shaping) | Rust-native; replaces the wall's DimStyle-fighting glyph pipeline |
+| **wasmtime** | Sandboxed WASM host for script nodes | Near-native compute; epoch preemption gives hard cancellation; a crashing script costs one node, never the engine |
+| **rhino3dm / trimesh** (Python side) | .3dm read/write; mesh IO utilities | Interop via the script-node boundary, not modeling |
 | **planegcs or SolveSpace's libslvs** | 2D constraint solving (deferred sketcher) | The solver is rentable; the sketcher work is UI |
 | **Rhino.Compute** | Optional rescue backend | A kernel seat already owned; use only if OCCT's robustness ceiling is hit on real geometry. Demoted from "the middle path" to an escape hatch |
 | **Blender (bpy)** | Photorealistic rendering | See doc 04 |
@@ -34,8 +36,12 @@ Conversions are explicit, costed nodes (`tessellate: Solid → Mesh`,
 - The dataflow dialect parser and **shape/axis type checker**.
 - The **scheduler**: hashing, caching, parallel execution, cancellation,
   disk memoization, profiling.
-- The node registry + signature reflection (ports from types).
-- The viewer glue: instancing, picking, per-node preview, inspectors.
+- The node registry + signature reflection (ports from types, via the
+  `#[node]` proc-macro) and the **stdlib catalog** itself (~130 typed
+  node functions; docs/08).
+- The expression compiler (typed IR) and the WASM script host.
+- The Tauri app: canvas, params panel, inspectors, and viewer glue
+  (instancing, picking, per-node preview).
 - **Fabrication exporters**, ported from the wall repo where they already
   exist and are production-proven: Bambu-flavored 3MF project writer
   (multi-plate, per-object settings, height ranges, dual-nozzle metadata),
