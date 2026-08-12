@@ -265,3 +265,8 @@ framework.
 - Remote/distributed solve (a fleet of workers for farm-scale
   pipelines) — the content-addressed, client-server design permits
   it; explicitly out of scope until a real project demands it.
+- Automatic fusion of hot mapped chains (compute `map(f) ∘ map(g)` as
+  `map(f∘g)` without materializing intermediates) — a later
+  optimization taken on profiling evidence; it must preserve wire
+  inspection (fall back to unfused when inspected) and stays
+  orthogonal to visual groups, which are aesthetics only (doc 16).

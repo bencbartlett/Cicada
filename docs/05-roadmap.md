@@ -30,7 +30,8 @@ are the library.
 
 If the spike hits these, the "should I build the whole thing" question is
 answered empirically. If not, the failure mode tells us which assumption
-was wrong — cheap either way.
+was wrong — cheap either way. (Stage-level task plan, definitions of
+done, and the measurement protocol: doc 15.)
 
 ## v0.1 — the core is real
 

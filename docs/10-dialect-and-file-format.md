@@ -112,6 +112,13 @@ name = node_fn(port=value, other=value2)
   (`points, tangents, t = divide_curve(curve=rail, count=40)`) or bind
   one name and select ports (`d.points`). Port selection (`field.dirs`)
   is a reference, not a node.
+- **Disabled bindings**: prefixing a statement with `#off ` disables
+  the node. To generic tools it is a comment; Cicada parses the
+  binding, renders the node ghosted with its wiring intact, and skips
+  it in solves. Downstream nodes go red with the precise reason
+  ("fed by disabled node `frusta`") — never unknown-name. Re-enabling
+  is usually free: content addressing means the prior results are
+  still cached.
 
 ### 2 · Lifts — `each()` marks iteration on the argument
 
@@ -211,6 +218,7 @@ Every canvas gesture is specified as a text edit:
 | Accept adapter chip | Insert adapter binding (`outline_c = as_closed(curve=outline)`) + rewire |
 | Drag slider | Rewrite one numeric literal |
 | Delete node | Delete its statement; downstream references become red unknown-name errors — **never cascade deletion** |
+| Toggle disable | Prefix / unprefix the statement with `#off ` |
 | Rename node | Rename binding + all references + sidecar key, atomically |
 | Reorder ports / move / group / recolor / toggle preview | Sidecar only; text untouched |
 
@@ -246,7 +254,8 @@ aesthetics is ever at stake.
                 "port_order": ["cutter", "solid"], "preview": false }
   },
   "groups": [
-    { "title": "Carve stage", "members": ["cutters", "carved"] }
+    { "title": "Carve stage", "members": ["cutters", "carved"],
+      "collapsed": false }
   ],
   "views": { "bookmarks": [] }
 }

@@ -45,6 +45,8 @@ hour that project lost to Grasshopper's failure modes.
 | [docs/12-scheduler.md](docs/12-scheduler.md) | Scheduler internals: values and hashing, cache keys, solve generations, execution, cancellation, persistence |
 | [docs/13-app-architecture.md](docs/13-app-architecture.md) | Engine server ⇄ browser protocol: sessions, sync, binary frames, undo, security |
 | [docs/14-engineering-foundations.md](docs/14-engineering-foundations.md) | Workspace, representations, tolerances, script ABI, testing, CI, agent operating standards |
+| [docs/15-spike-plan.md](docs/15-spike-plan.md) | The vertical-slice spike: stages, definitions of done, measurement protocol, kill criteria |
+| [docs/16-ui.md](docs/16-ui.md) | UI contracts: layout, canvas/viewport conventions, inspector, keyboard map |
 
 ## Status
 

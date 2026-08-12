@@ -167,7 +167,9 @@ from it, and nothing is hand-maintained in parallel:
 Standards that keep this alive: every node's doc comment has a title
 line, a description, and at least one example; `add-stdlib-node` and
 script-authoring flows regenerate the catalog in the same commit; a
-stale CATALOG.md fails CI.
+stale CATALOG.md fails CI. Node icons are generated assets in the
+same spirit (doc 16): produced by the AI icon pipeline from
+NodeSpecs, committed, CI-warned when missing.
 
 ## Testing standards
 
