@@ -43,6 +43,8 @@ hour that project lost to Grasshopper's failure modes.
 | [docs/10-dialect-and-file-format.md](docs/10-dialect-and-file-format.md) | The dialect grammar, canvas round-trip contract, layout sidecar, and git integration |
 | [docs/11-ai-integration.md](docs/11-ai-integration.md) | The AI editing loop: read tools, checker-driven iteration, refactor primitives, permission tiers |
 | [docs/12-scheduler.md](docs/12-scheduler.md) | Scheduler internals: values and hashing, cache keys, solve generations, execution, cancellation, persistence |
+| [docs/13-app-architecture.md](docs/13-app-architecture.md) | Engine server ⇄ browser protocol: sessions, sync, binary frames, undo, security |
+| [docs/14-engineering-foundations.md](docs/14-engineering-foundations.md) | Workspace, representations, tolerances, script ABI, testing, CI, agent operating standards |
 
 ## Status
 
@@ -51,4 +53,5 @@ from the wall-piece project (2026). The first code milestone is the
 [vertical-slice spike](docs/05-roadmap.md): the wall pipeline's hardest
 stretch running on the Rust + Tauri stack, measured.
 
-License: TBD (private repository).
+License: all rights reserved while private; a public license will be
+chosen at first public release.

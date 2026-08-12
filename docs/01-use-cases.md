@@ -62,7 +62,18 @@ the scene (geometry + ids + material bins + cameras) to Blender over USD
 and drive headless Cycles renders. One command from pipeline to beauty
 shot.
 
-### 6. Later: light manual sketching
+### 6. Animated and kinetic models
+
+Kinetic mechanical art is a first-class workload. A looping `cycle`
+param (0→1, adjustable period) drives mechanisms, orbits, and phase
+offsets downstream; the loop is frame-quantized, so one pass warms
+every cache and playback runs at display rate thereafter. An
+unbounded `clock` covers open-ended motion. Play/pause/speed live in
+a global transport bar; time is never ambient — the player feeds
+values, so determinism, caching, and export reproducibility survive
+animation (docs 08, 12, 13).
+
+### 7. Later: light manual sketching
 
 A 2D constrained-sketch → extrude workflow for the traditional-CAD tier.
 The constraint solver is rented (planegcs or SolveSpace's libslvs); the

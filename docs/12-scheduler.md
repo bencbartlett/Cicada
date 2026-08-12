@@ -97,11 +97,15 @@ operations keyed like everything else (display is a first-class edge).
 - Dirtiness is exact: the edited nodes' keys change; the dirty set is
   their downstream cone. Everything outside it is untouched by
   construction.
-- Solves are **generations**: an edit starts one after a ~30 ms
-  debounce; a newer edit cancels and supersedes the in-flight
-  generation. Supersession is cheap because completed work landed in
-  the cache — a slider drag is a stream of generations, each reusing
-  everything the previous one finished.
+- Solves are **generations**: a structural edit starts one after a
+  ~30 ms debounce; a newer edit cancels and supersedes the in-flight
+  generation. Continuous param streams (slider drags, animation
+  playback) skip the debounce entirely and run **latest-wins**: each
+  completed generation immediately starts the next with the newest
+  value, discarding stale intermediates (doc 13). Supersession is
+  cheap because completed work landed in the cache — a slider drag is
+  a stream of generations, each reusing everything the previous one
+  finished.
 - **Esc always cancels the current generation.** Per node, the viewer
   and inspectors keep the last *complete* value until a newer one
   exists — no torn state, and a cancelled solve leaves the last
@@ -174,6 +178,28 @@ Thresholds below are defaults to be tuned by measurement.
   **model-estimated progress** (elapsed vs predicted, styled as an
   estimate). Script nodes may report real progress through a throttled
   host API.
+
+## Speculative warming (scrub caching)
+
+Idle compute is spent making future interactions instant — always at
+the lowest priority, preempted by any real work.
+
+- **Slider ranges**: a slider with scrub caching enabled (per-param
+  toggle) warms the dirty cone for its step-quantized range during
+  idle time — nearest the current value first, walking outward (the
+  values you're most likely to scrub to). Content addressing makes
+  warming trivially incremental: it evaluates NodeKeys for
+  hypothetical values and skips anything already stored. Warmed
+  entries are ordinary cache entries — evictable, budget-bounded. The
+  slider renders a **buffer bar** (video-player style) showing the
+  warmed span.
+- **Cycle loops**: a `cycle` time param (docs/08) is a scrub over a
+  fixed range by construction; its frames warm the same way,
+  playhead-ahead first, so a loop becomes pure cache playback after
+  at most one pass.
+- Any other param change alters the hypothetical NodeKeys, so stale
+  warm entries simply stop matching — **no invalidation bookkeeping
+  exists at all**.
 
 ## Element failures
 

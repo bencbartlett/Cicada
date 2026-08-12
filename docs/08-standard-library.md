@@ -157,6 +157,8 @@ variants ("/") compress sibling nodes.
 | Number Slider | `() → Number` | S | min/max/step/precision on node; the GH workhorse |
 | Literals: Number, Integer, Boolean, Text, Color, Point, Vector, Plane | `() → T` | S | typed constant params |
 | Value List | `() → T` | 1 | dropdown enum param |
+| Cycle | `(period: Number = 4, frames: Integer = 120) → Number` | 1 | looping time 0→1, transport-driven (play/pause/speed); frame-quantized so one full loop warms the cache — subsequent loops are pure playback (docs 12, 13) |
+| Clock | `(speed: Number = 1) → Number` | 1 | unbounded time 0→∞, transport-driven (play/pause/reset); deterministic per value, uncached by design |
 | Panel | `(data: [Any]) → ()` | S | display sink; shows counts + samples |
 
 ### 2 · Sequences & random
@@ -284,7 +286,7 @@ it (doc 09).
 | Weld / Smooth / Reduce | `(mesh: Mesh, …) → Mesh` | 1 | |
 | Field primitives | `(…) → Field` | 2 | sphere/box/gyroid/from-mesh SDF; fidget |
 | Field ops | `(a: Field, b: Field, k: Number) → Field` | 2 | union/smooth-union/offset/shell |
-| Isosurface | `(field: Field, bounds: Solid, resolution: Number) → Mesh` | 2 | marching cubes; GPU path |
+| Isosurface | `(field: Field, bounds: Solid, resolution: Number) → Mesh` | 2 | marching cubes; CPU first, GPU optimization later |
 
 ### 9 · Intersect & regions
 
@@ -334,8 +336,11 @@ All kind-preserving over `T: Transformable`.
 - **Path Mapper, flatten/graft/simplify port toggles, implicit tree
   matching** — standard combinators and named axes replace the entire
   mechanism (docs 02 & 09).
-- **Data Dam, Timer, triggers** — scheduling is the runtime's job;
-  caching makes re-runs cheap; nothing fires on a clock.
+- **Data Dam, triggers, and GH's Timer** (the ambient re-solve hack) —
+  scheduling is the runtime's job and nothing fires on an ambient
+  clock. `Cycle`/`Clock` transport-driven params are the sanctioned
+  replacement: pure values fed by an explicit player, so determinism
+  and caching survive animation.
 - **Latching state (GH-style gates that persist ON)** — runs are explicit
   actions (wall lesson 7).
 - **Kangaroo-tier physics, Galapagos-tier solvers** — ecosystem
