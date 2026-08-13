@@ -42,7 +42,8 @@ Worked examples: `crates/cicada-stdlib/src/maths.rs` (multi-output:
    tolerance row), `name = "…"` (dialect-name override — note `fn move_`
    auto-registers as `move`; the underscore never reaches the dialect).
 3. **Placement**: `crates/cicada-stdlib/src/<category>.rs`, keeping fns in
-   docs/08 row order. Catalog order within a category is module path
+   docs/08 row order; a multi-node row (`Add / Subtract / Multiply / …`)
+   orders left-to-right. Catalog order within a category is module path
    (alphabetical), then source line — so inside one module, source order
    is catalog order.
 4. **Tests, all three kinds** (see the worked examples):
