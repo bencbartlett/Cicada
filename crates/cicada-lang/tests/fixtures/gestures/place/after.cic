@@ -1,0 +1,5 @@
+# cicada 1
+amps = slider(value=12.0)
+add_1 = add()
+final = collect(items=amps)
+panel_1 = panel()

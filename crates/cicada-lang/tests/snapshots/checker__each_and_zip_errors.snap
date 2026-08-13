@@ -1,0 +1,62 @@
+---
+source: crates/cicada-lang/tests/checker.rs
+expression: "check(\"# cicada 1\\n\\\n         amps = slider(value=1.0)\\n\\\n         bad_each = move(geometry=each(amps), motion=amps)\\n\\\n         zip_bad = move(geometry=each([1, 2, 3]), motion=each([1, 2]))\\n\")"
+---
+[
+  {
+    "kind": "each_on_scalar",
+    "message": "each() needs a list at depth 1; `amps` is Number",
+    "node": "bad_each",
+    "span": {
+      "col_end": 35,
+      "col_start": 25,
+      "line": 3
+    }
+  },
+  {
+    "actual": "Number",
+    "expected": "Vector",
+    "kind": "type_mismatch",
+    "message": "Number into a Vector port",
+    "node": "bad_each",
+    "span": {
+      "col_end": 48,
+      "col_start": 44,
+      "line": 3
+    }
+  },
+  {
+    "actual": "Integer",
+    "expected": "Point",
+    "kind": "type_mismatch",
+    "message": "Integer into a Point port",
+    "node": "zip_bad",
+    "span": {
+      "col_end": 39,
+      "col_start": 24,
+      "line": 4
+    }
+  },
+  {
+    "actual": "Integer",
+    "expected": "Vector",
+    "kind": "type_mismatch",
+    "message": "Integer into a Vector port",
+    "node": "zip_bad",
+    "span": {
+      "col_end": 60,
+      "col_start": 48,
+      "line": 4
+    }
+  },
+  {
+    "kind": "zip_length_mismatch",
+    "message": "zip is strict: 3 vs 2 elements — pad_last / cycle / truncate are the opt-in policies",
+    "node": "zip_bad",
+    "span": {
+      "col_end": 60,
+      "col_start": 48,
+      "line": 4
+    }
+  }
+]

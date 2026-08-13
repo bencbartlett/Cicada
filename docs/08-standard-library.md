@@ -186,7 +186,7 @@ variants ("/") compress sibling nodes.
 | Add / Subtract / Multiply / Divide / Modulo / Power | `(a: Number, b: Number) → Number` | S | overloads for Vector where sensible (Vector+Vector, Vector×Number) |
 | Negative / Absolute / Round / Floor / Ceiling / Min / Max | `(x: Number…) → Number` | 1 | |
 | Sin / Cos / Tan / Asin / Acos / Atan2 / Radians / Degrees | `(x: Number) → Number` | 1 | |
-| Expression | `(free variables…) → Number` | S | math syntax: write `z = x^2 + y^2` (`^` = power); `x`, `y` auto-become input ports, `z` names the output |
+| Expression | `(free variables…) → Number` | S | math syntax: write `z = x^2 + y^2` (`^` = power); `x`, `y` auto-become input ports, `z` names the output; the checker infers Integer for `+ − ×` over all-Integer inputs (so computed counts feed Integer ports), `/` and `^` always Number |
 | Remap | `(value: Number, source: Domain, target: Domain) → Number` | S | the wall used this constantly |
 | Construct / Deconstruct Domain | `(start, end) ↔ Domain` | S | |
 | Smaller / Larger / Equals | `(a: Number, b: Number, tolerance…) → Boolean` | 1 | |

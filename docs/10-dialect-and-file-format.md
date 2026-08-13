@@ -212,7 +212,7 @@ Every canvas gesture is specified as a text edit:
 
 | Gesture | Text edit |
 |---|---|
-| Place node | Append `name = fn(…)` after last dependency (or EOF); auto-name `fn_2`-style, renameable |
+| Place node | Append `name = fn(…)` after last dependency (or EOF); auto-name `fn_1`/`fn_2`-style — a binding never takes the bare callable name, which would shadow it for later calls (§5 resolution order); renameable |
 | Draw wire | Rewrite one kwarg in the target binding |
 | Accept lift chip | Wrap that kwarg's value in `each(…)` |
 | Accept adapter chip | Insert adapter binding (`outline_c = as_closed(curve=outline)`) + rewire |

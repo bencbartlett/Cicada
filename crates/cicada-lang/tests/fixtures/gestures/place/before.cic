@@ -1,0 +1,3 @@
+# cicada 1
+amps = slider(value=12.0)
+final = collect(items=amps)

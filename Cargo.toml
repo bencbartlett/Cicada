@@ -30,6 +30,7 @@ blake3 = "1"
 cargo_metadata = "0.19"
 clap = { version = "4", features = ["derive"] }
 glam = "0.30"
+insta = { version = "1", features = ["json"] }
 inventory = "0.3"
 proc-macro2 = "1"
 proptest = "1"

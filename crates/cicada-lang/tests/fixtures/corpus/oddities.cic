@@ -1,0 +1,14 @@
+# cicada 1
+
+# comment block that attaches
+# to the binding below
+
+spaced   =   slider( value = 3.5 ,  min = -1.0 )
+neg = -42
+sci = 6.02e23
+esc = concat(a="say \"hi\"", b="back\\slash")
+
+broken here because this is not a statement
+after = add(a=spaced, b=neg)
+
+x = (a + b) * -c / d ^ 2

@@ -1,0 +1,6 @@
+# cicada 1
+seeds = scatter(count=100, seed=7)
+cells = voronoi(seeds=seeds, boundary=board)
+grown = grow(cells=each(cells), rate=seeds_rate)
+pair = join(a=cells, b=cells)
+total = seeds_rate + 1

@@ -1,0 +1,21 @@
+---
+source: crates/cicada-lang/tests/checker.rs
+expression: "check(\"# cicada 1\\nnn = nested()\\nr = add(a=each(nn), b=1.0)\\n\")"
+---
+[
+  {
+    "actual": "[Number]",
+    "expected": "Number",
+    "fix": {
+      "label": "add each() ×1 more"
+    },
+    "kind": "needs_lift",
+    "message": "[Number] into a Number port — map over it?",
+    "node": "r",
+    "span": {
+      "col_end": 18,
+      "col_start": 10,
+      "line": 3
+    }
+  }
+]

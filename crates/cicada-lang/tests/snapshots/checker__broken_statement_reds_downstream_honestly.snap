@@ -1,0 +1,26 @@
+---
+source: crates/cicada-lang/tests/checker.rs
+expression: "check(\"# cicada 1\\n\\\n         glitch = slider(value=)\\n\\\n         after = add(a=glitch, b=1.0)\\n\")"
+---
+[
+  {
+    "kind": "parse_error",
+    "message": "expected a value: literal, reference, or each(…)",
+    "node": "glitch",
+    "span": {
+      "col_end": 23,
+      "col_start": 22,
+      "line": 2
+    }
+  },
+  {
+    "kind": "unknown_name",
+    "message": "`glitch` failed to parse — fix that statement first",
+    "node": "after",
+    "span": {
+      "col_end": 20,
+      "col_start": 14,
+      "line": 3
+    }
+  }
+]

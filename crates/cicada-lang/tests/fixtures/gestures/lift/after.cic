@@ -1,0 +1,2 @@
+# cicada 1
+labeled = deboss(solid=each(frusta), text=each(labels))

@@ -19,10 +19,11 @@ system; the current work order is the vertical-slice spike
    [docs/15-spike-plan.md](docs/15-spike-plan.md), and the docs it lists for
    that stage.
 
-**Current status: stage 1 complete — values and registry.** The value model
-(hashing, interning, Merkle lists/axes/Optional slots, ProjectConfig) and
-the `#[node]`/`#[derive(Ports)]` registration pipeline are live. The
-parser, scheduler, geometry, server, and web app do not exist yet.
+**Current status: stage 2 complete — dialect and checker-lite.** The value
+model + `#[node]` registry (stage 1) and the `.cic` toolchain (stage 2:
+lossless parser with total error recovery, minimal-edit writer for the six
+spike gestures, catalog-driven checker with doc-11 JSON diagnostics) are
+live. The scheduler, geometry, server, and web app do not exist yet.
 `cicada catalog` is the only live subcommand. Commands below marked
 *(stage N)* arrive with that stage; do not reference them in code or docs
 as if they work today.
@@ -34,7 +35,7 @@ as if they work today.
 | `crates/cicada-core` | Value model (blake3 hash-at-construction, interning, Merkle lists/axes/Optional, ProjectConfig) + node/port specs, registry, catalog renderer |
 | `crates/cicada-macros` | `#[node]`, `#[derive(Ports)]` proc macros — zero workspace deps by design; compile-fail tests live in cicada-stdlib |
 | `crates/cicada-geom` | Geometry types, tolerance ops, rented-kernel FFI seams (stage 4) |
-| `crates/cicada-lang` | `.cic` lexer/parser/AST, minimal-edit writer, checker, diagnostics (stage 2) |
+| `crates/cicada-lang` | `.cic` dialect: lossless parser, minimal-edit writer (place/wire/lift/set-param/delete/rename), checker-lite, doc-11 diagnostics |
 | `crates/cicada-stdlib` | The node catalog — pure functions, never depends on sched |
 | `crates/cicada-sched` | Generations, stores, executor, cost models (stage 3) |
 | `crates/cicada-script` | WASM host (v0.1) + Python worker pool (stage 4) |
@@ -63,7 +64,7 @@ as if they work today.
 | Web checks (bash; PS 5.1 has no `&&` — use `;`) | `cd web && npm run check && npm run lint && npm test` |
 | Serve *(stage 5)* | `cicada serve` |
 | Headless run *(stage 3+)* | `cicada run <pipeline> --node <name> --time` |
-| Bless goldens *(insta arrives stage 2)* | `cargo insta review` |
+| Bless insta snapshots (checker diagnostics) | `cargo insta review` (cargo-insta installed 2026-08-12) — or `$env:INSTA_UPDATE = "always"; cargo test -p cicada-lang; Remove-Item Env:\INSTA_UPDATE` |
 
 Web work needs Node ≥ 20 (CI uses 22).
 
@@ -87,6 +88,13 @@ Web work needs Node ≥ 20 (CI uses 22).
   re-mark it if it is ever deleted and reinstalled:
   `Set-Content -Path web\node_modules -Stream com.dropbox.ignored -Value 1`.
   CI is unaffected (no Dropbox on runners; no committed target-dir config).
+- **Git worktrees must NOT share the main checkout's `CARGO_TARGET_DIR`**
+  — cargo fingerprints collide across workspaces sharing a target dir,
+  and a worktree's build can silently masquerade as the main checkout's
+  (observed: a worktree-built `cicada.exe` wrote the worktree's registry
+  into the main repo's generated catalog). In a worktree, set a private
+  dir per shell:
+  `$env:CARGO_TARGET_DIR = "$env:LOCALAPPDATA\cargo-target-wt\<worktree-name>"`.
 - The engine cache itself never has this problem — it lives in the user
   cache directory, never the project folder (DECISIONS.md).
 
@@ -149,6 +157,7 @@ for anything user-visible.
 |---|---|
 | `.claude/skills/verify-change` | The evidence loop before declaring any change done |
 | `.claude/skills/add-stdlib-node` | Adding or modifying a node in `cicada-stdlib`, end to end |
+| `.claude/skills/dialect-change` | Any change to `cicada-lang` — grammar, writer, checker, diagnostics |
 
-More arrive with their workflows (doc 14): `dialect-change` (stage 2),
-`protocol-change` (stage 5), `perf-check` (first benchmarks).
+More arrive with their workflows (doc 14): `protocol-change` (stage 5),
+`perf-check` (first benchmarks).

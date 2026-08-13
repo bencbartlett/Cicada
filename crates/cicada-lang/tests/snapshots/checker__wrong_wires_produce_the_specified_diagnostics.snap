@@ -1,0 +1,60 @@
+---
+source: crates/cicada-lang/tests/checker.rs
+expression: "check(\"# cicada 1\\n\\\n         pts = scatter(count=100, seed=7)\\n\\\n         bad_scalar = move(geometry=pts, motion=pts)\\n\\\n         c = circle(radius=1.0)\\n\\\n         needs_refined = extrude(profile=c, height=2.0)\\n\\\n         wrong = circle(radius=c)\\n\")"
+---
+[
+  {
+    "actual": "[Point]",
+    "expected": "Point",
+    "fix": {
+      "label": "wrap in each()"
+    },
+    "kind": "needs_lift",
+    "message": "[Point] into a Point port — map over it?",
+    "node": "bad_scalar",
+    "span": {
+      "col_end": 30,
+      "col_start": 27,
+      "line": 3
+    }
+  },
+  {
+    "actual": "[Point]",
+    "expected": "Vector",
+    "kind": "type_mismatch",
+    "message": "[Point] into a Vector port",
+    "node": "bad_scalar",
+    "span": {
+      "col_end": 42,
+      "col_start": 39,
+      "line": 3
+    }
+  },
+  {
+    "actual": "Curve",
+    "expected": "Closed<Curve>",
+    "fix": {
+      "label": "insert `as_closed`"
+    },
+    "kind": "needs_adapter",
+    "message": "`profile` wants Closed<Curve> — a checked conversion; insert `as_closed`",
+    "node": "needs_refined",
+    "span": {
+      "col_end": 33,
+      "col_start": 32,
+      "line": 5
+    }
+  },
+  {
+    "actual": "Curve",
+    "expected": "Number",
+    "kind": "type_mismatch",
+    "message": "Curve into a Number port",
+    "node": "wrong",
+    "span": {
+      "col_end": 23,
+      "col_start": 22,
+      "line": 6
+    }
+  }
+]

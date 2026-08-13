@@ -1,12 +1,25 @@
-//! The `.cic` dialect: lexer, parser, AST, the minimal-edit writer, `fmt`,
-//! and the checker — kind lattice, unification, axis rules, diagnostics
-//! (docs/10, docs/11 diagnostic shape).
+//! The `.cic` dialect (docs/10): lossless parser, minimal-edit writer, and
+//! checker-lite with doc-11 diagnostics — the spike subset (doc 15 stage 2):
+//! pragma, comments, bindings, kwargs-only calls, literals, `each()`,
+//! expression RHS, multi-output unpack, port selection; writer gestures
+//! place / wire / lift / set-param / delete / rename.
 //!
-//! Parser and checker share this crate because they share the AST and
-//! diagnostics types and co-evolve; splitting them would put an interface
-//! boundary through the highest-churn seam (doc 14).
+//! Parsing is total: a broken statement reds ITS node, never the file.
+//! Emission of untouched lines is byte-identical by construction — the
+//! [`Document`](document::Document) stores raw text per line and the writer
+//! splices at spans, never reformatting.
 //!
-//! Stage 0 (doc 15): empty. The spike-subset parser, writer, and
-//! checker-lite land in stage 2.
+//! Later stages add: axis annotations, `#off` disabled bindings, `fmt`,
+//! adapters/`insert_between`, the tree-sitter grammar (docs/10, doc 15).
 
-pub use cicada_core as core;
+pub mod ast;
+pub mod check;
+pub mod diag;
+pub mod document;
+pub mod parse;
+pub mod writer;
+
+pub use check::{
+    BindingType, Catalog, Resolution, WireType, check, compatible, diagnostics, resolve,
+};
+pub use document::{DIALECT_VERSION, Document, Line};

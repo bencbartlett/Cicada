@@ -59,8 +59,8 @@ Worked examples: `crates/cicada-stdlib/src/maths.rs` (multi-output:
    - *Determinism*: golden blake3 hash of the output built as a
      `HashedValue` (lists via `ValueData::List`). Bless by running once
      with a placeholder, copying the actual from the failure message, and
-     saying so in the commit — that IS the blessed path until insta lands
-     (stage 2).
+     saying so in the commit — that IS the blessed path for blake3
+     constants (insta covers checker-diagnostic snapshots only).
    - Float comparison: geometry values ALWAYS use tolerance-aware asserts
      (doc 14's sanctioned API), never raw `==`. Exact `==` (under
      `#[allow(clippy::float_cmp)]`) is sanctioned in determinism/hash

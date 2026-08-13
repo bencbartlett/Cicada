@@ -64,10 +64,10 @@ Run everything headless first; touch the browser only for UI-facing changes.
 ## Golden hashes
 
 Determinism goldens update ONLY through the blessed path, and the commit
-body explains why the hash legitimately changed. What "blessed" means by
-stage: until insta lands (stage 2), the blake3 constants in stdlib tests
-are blessed by running the test once and copying the actual from the
-failure message — declared in the commit (see `add-stdlib-node`). From
-stage 2 on, `cargo insta review` / explicit golden regeneration. What is
-never blessed: silently editing an expected value to make a red test green
-without explaining the change.
+body explains why the hash legitimately changed. The blessed paths:
+blake3 hash constants (core/stdlib determinism tests) are blessed by
+running the test once and copying the actual from the failure message —
+declared in the commit (see `add-stdlib-node`); insta snapshots (checker
+diagnostics) via `cargo insta review` or an `INSTA_UPDATE=always` run,
+reviewing the .snap diff. What is never blessed: silently editing an
+expected value to make a red test green without explaining the change.

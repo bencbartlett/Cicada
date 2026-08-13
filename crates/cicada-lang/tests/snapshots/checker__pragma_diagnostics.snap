@@ -1,0 +1,15 @@
+---
+source: crates/cicada-lang/tests/checker.rs
+expression: "check(\"amps = slider(value=1.0)\\n\")"
+---
+[
+  {
+    "kind": "missing_pragma",
+    "message": "first line must be the version pragma `# cicada 1`",
+    "span": {
+      "col_end": 24,
+      "col_start": 0,
+      "line": 1
+    }
+  }
+]

@@ -1,0 +1,15 @@
+---
+source: crates/cicada-lang/tests/checker.rs
+expression: "check(\"# cicada 99\\namps = slider(value=1.0)\\n\")"
+---
+[
+  {
+    "kind": "future_version",
+    "message": "this file needs a newer Cicada (dialect 99; this build reads 1)",
+    "span": {
+      "col_end": 11,
+      "col_start": 0,
+      "line": 1
+    }
+  }
+]

@@ -1,0 +1,3 @@
+# cicada 1
+seeds = scatter(count=100)
+frusta = frustum(profile=each(cells))

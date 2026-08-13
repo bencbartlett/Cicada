@@ -1,0 +1,38 @@
+---
+source: crates/cicada-lang/tests/checker.rs
+expression: "check(\"# cicada 1\\n\\\n         pts = scatter(count=10, seed=1)\\n\\\n         c = circle(radius=1.0)\\n\\\n         d = divide_curve(curve=c)\\n\\\n         bad = pts * 2 + missing_var - d\\n\")"
+---
+[
+  {
+    "actual": "[Point]",
+    "expected": "Number",
+    "kind": "type_mismatch",
+    "message": "expressions work on numbers; `pts` is not one",
+    "node": "bad",
+    "span": {
+      "col_end": 9,
+      "col_start": 6,
+      "line": 5
+    }
+  },
+  {
+    "kind": "unknown_name",
+    "message": "nothing binds `missing_var`",
+    "node": "bad",
+    "span": {
+      "col_end": 27,
+      "col_start": 16,
+      "line": 5
+    }
+  },
+  {
+    "kind": "unknown_port",
+    "message": "`d` has outputs (points, tangents, parameters) — expressions need a single number; unpack the outputs first (`a, b = …`)",
+    "node": "bad",
+    "span": {
+      "col_end": 31,
+      "col_start": 30,
+      "line": 5
+    }
+  }
+]

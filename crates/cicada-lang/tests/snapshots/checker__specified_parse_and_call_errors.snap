@@ -1,0 +1,105 @@
+---
+source: crates/cicada-lang/tests/checker.rs
+expression: "check(\"# cicada 1\\n\\\n         p1 = circle(1.0)\\n\\\n         n1 = move(geometry=circle(radius=1.0), motion=v)\\n\\\n         n2 = 1 + circle(radius=2.0)\\n\\\n         for x in range\\n\\\n         export_dxf(path=\\\"out.dxf\\\")\\n\\\n         missing = circle()\\n\\\n         zip_depth = move(geometry=each(each(nn)), motion=each(nn))\\n\\\n         nn = nested()\\n\")"
+---
+[
+  {
+    "kind": "positional_argument",
+    "message": "ports are named — write `port=value`",
+    "node": "p1",
+    "span": {
+      "col_end": 13,
+      "col_start": 12,
+      "line": 2
+    }
+  },
+  {
+    "kind": "nested_call",
+    "message": "nested node call `circle(…)` — name the intermediate",
+    "node": "n1",
+    "span": {
+      "col_end": 25,
+      "col_start": 19,
+      "line": 3
+    }
+  },
+  {
+    "kind": "nested_call",
+    "message": "`circle(…)` — node calls don't nest in expressions; name the intermediate",
+    "node": "n2",
+    "span": {
+      "col_end": 15,
+      "col_start": 9,
+      "line": 4
+    }
+  },
+  {
+    "kind": "parse_error",
+    "message": "`for` is not a binding — multi-statement logic goes in a script node; loops are `each()`",
+    "node": "for",
+    "span": {
+      "col_end": 3,
+      "col_start": 0,
+      "line": 5
+    }
+  },
+  {
+    "kind": "parse_error",
+    "message": "bare calls are not statements — bind the result: `name = fn(…)`",
+    "node": "export_dxf",
+    "span": {
+      "col_end": 10,
+      "col_start": 0,
+      "line": 6
+    }
+  },
+  {
+    "actual": "nothing",
+    "expected": "Number",
+    "fix": {
+      "label": "add `radius=…`"
+    },
+    "kind": "missing_kwarg",
+    "message": "required port `radius` is not wired",
+    "node": "missing",
+    "span": {
+      "col_end": 16,
+      "col_start": 10,
+      "line": 7
+    }
+  },
+  {
+    "actual": "Number",
+    "expected": "Point",
+    "kind": "type_mismatch",
+    "message": "Number into a Point port",
+    "node": "zip_depth",
+    "span": {
+      "col_end": 40,
+      "col_start": 26,
+      "line": 8
+    }
+  },
+  {
+    "actual": "[Number]",
+    "expected": "Vector",
+    "kind": "type_mismatch",
+    "message": "[Number] into a Vector port",
+    "node": "zip_depth",
+    "span": {
+      "col_end": 57,
+      "col_start": 49,
+      "line": 8
+    }
+  },
+  {
+    "kind": "type_mismatch",
+    "message": "each() depths differ (2 vs 1) — zip pairs elements at one depth",
+    "node": "zip_depth",
+    "span": {
+      "col_end": 57,
+      "col_start": 49,
+      "line": 8
+    }
+  }
+]

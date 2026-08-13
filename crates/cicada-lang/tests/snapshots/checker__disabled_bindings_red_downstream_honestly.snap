@@ -1,0 +1,16 @@
+---
+source: crates/cicada-lang/tests/checker.rs
+expression: "check(\"# cicada 1\\n#off amps = slider(value=1.0)\\nc = circle(radius=amps)\\n\")"
+---
+[
+  {
+    "kind": "unknown_name",
+    "message": "`amps` is disabled (`#off`) — re-enable it to solve downstream",
+    "node": "c",
+    "span": {
+      "col_end": 22,
+      "col_start": 18,
+      "line": 3
+    }
+  }
+]

@@ -1,0 +1,18 @@
+---
+source: crates/cicada-lang/tests/checker.rs
+expression: "check(\"# cicada 1\\nn = 6 / 2\\npts = scatter(count=n, seed=7)\\n\")"
+---
+[
+  {
+    "actual": "Number",
+    "expected": "Integer",
+    "kind": "type_mismatch",
+    "message": "Number into an Integer port",
+    "node": "pts",
+    "span": {
+      "col_end": 21,
+      "col_start": 20,
+      "line": 3
+    }
+  }
+]
