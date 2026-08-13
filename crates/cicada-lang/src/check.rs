@@ -330,9 +330,12 @@ impl<'a> Checker<'a> {
         for (line, statement, _) in self.document.statements() {
             let mut lines = BTreeSet::new();
             for reference in statement.references() {
-                if let Some(&definition) = self.definitions.get(reference.name.as_str())
-                    && definition != line
-                {
+                // Self-edges included: `x = x + 1` is a length-1 cycle and
+                // must earn the SAME Cycle diagnostic as `a → b → a` — an
+                // excluded self-edge made it resolve silently and surface
+                // downstream as an internal lowering error (regression:
+                // adversarial review, stage 3).
+                if let Some(&definition) = self.definitions.get(reference.name.as_str()) {
                     lines.insert(definition);
                 }
             }

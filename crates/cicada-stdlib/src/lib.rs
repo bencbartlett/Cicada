@@ -175,6 +175,45 @@ mod tests {
         assert!(!specs.iter().any(|s| s.name == "some_other_ident"));
     }
 
+    // Stage 3: the erased invoke shim — registry dispatch with wire values,
+    // no hand-written glue (the scheduler's calling convention).
+    #[test]
+    fn erased_invoke_dispatches_with_defaults_and_multi_outputs() {
+        use cicada_core::marshal::InvokeError;
+        use cicada_core::value::{HashedValue, ValueData};
+
+        let number = |x: f64| Some(HashedValue::new(ValueData::Number(x)).expect("valid number"));
+        let integer =
+            |i: i64| Some(HashedValue::new(ValueData::Integer(i)).expect("valid integer"));
+
+        let add = cicada_core::spec::invoker("add").expect("add invoker registered");
+        let out = add(&[number(1.5), number(2.25)]).expect("add invokes");
+        assert_eq!(*out[0].data(), ValueData::Number(3.75));
+
+        // Absent slots take the TYPED defaults (start=0.0, step=1.0).
+        let series = cicada_core::spec::invoker("series").expect("series invoker");
+        let out = series(&[None, None, integer(3)]).expect("series invokes");
+        let ValueData::List(list) = out[0].data() else {
+            panic!("series returns a list")
+        };
+        assert_eq!(list.slots.len(), 3);
+
+        // Multi-output nodes return one value per output port, spec order.
+        let construct = cicada_core::spec::invoker("construct_domain").expect("construct");
+        let domain = construct(&[number(2.0), number(5.0)]).expect("constructs")[0].clone();
+        let deconstruct = cicada_core::spec::invoker("deconstruct_domain").expect("deconstruct");
+        let out = deconstruct(&[Some(domain)]).expect("deconstructs");
+        assert_eq!(*out[0].data(), ValueData::Number(2.0));
+        assert_eq!(*out[1].data(), ValueData::Number(5.0));
+
+        // A required port with no value refuses loudly.
+        let err = add(&[number(1.0), None]).expect_err("missing b must refuse");
+        assert_eq!(err, InvokeError::Missing { port: "b" });
+
+        // Unknown names resolve to nothing — never a silent fallback.
+        assert!(cicada_core::spec::invoker("no_such_node").is_none());
+    }
+
     #[test]
     fn registry_order_is_category_then_source_order() {
         let specs = registry();

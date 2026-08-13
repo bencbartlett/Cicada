@@ -19,28 +19,33 @@ system; the current work order is the vertical-slice spike
    [docs/15-spike-plan.md](docs/15-spike-plan.md), and the docs it lists for
    that stage.
 
-**Current status: stage 2 complete — dialect and checker-lite.** The value
-model + `#[node]` registry (stage 1) and the `.cic` toolchain (stage 2:
-lossless parser with total error recovery, minimal-edit writer for the six
-spike gestures, catalog-driven checker with doc-11 JSON diagnostics) are
-live. The scheduler, geometry, server, and web app do not exist yet.
-`cicada catalog` is the only live subcommand. Commands below marked
-*(stage N)* arrive with that stage; do not reference them in code or docs
-as if they work today.
+**Current status: stage 3 complete — scheduler-lite and the first
+end-to-end surface.** Live: the value model + `#[node]` registry (stage 1,
+now also registering type-erased invokers + `FromValues`/`IntoValues`
+marshalling), the `.cic` toolchain (stage 2: lossless parser, minimal-edit
+writer, checker-lite with doc-11 JSON diagnostics), and the scheduler
+(stage 3: content-addressed `NodeKey`s, two-level disk store in the USER
+cache dir, rayon wavefront with chunked `each()` fan-out, cancellation
+tokens, latest-wins preview sessions, cost sampling — all tested on
+virtual-time fake nodes). Geometry, the server, and the web app do not
+exist yet. Live subcommands: `cicada catalog` and `cicada run` (headless
+solve of the spike dialect subset; always pass `--cache-dir` in tests so
+the user cache stays clean). Commands below marked *(stage N)* arrive with
+that stage; do not reference them in code or docs as if they work today.
 
 ## Project map
 
 | Path | Contents |
 |---|---|
-| `crates/cicada-core` | Value model (blake3 hash-at-construction, interning, Merkle lists/axes/Optional, ProjectConfig) + node/port specs, registry, catalog renderer |
+| `crates/cicada-core` | Value model (blake3 hash-at-construction, interning, Merkle lists/axes/Optional, ProjectConfig) + node/port specs, registry (specs + erased invokers), marshalling traits, catalog renderer |
 | `crates/cicada-macros` | `#[node]`, `#[derive(Ports)]` proc macros — zero workspace deps by design; compile-fail tests live in cicada-stdlib |
 | `crates/cicada-geom` | Geometry types, tolerance ops, rented-kernel FFI seams (stage 4) |
 | `crates/cicada-lang` | `.cic` dialect: lossless parser, minimal-edit writer (place/wire/lift/set-param/delete/rename), checker-lite, doc-11 diagnostics |
 | `crates/cicada-stdlib` | The node catalog — pure functions, never depends on sched |
-| `crates/cicada-sched` | Generations, stores, executor, cost models (stage 3) |
+| `crates/cicada-sched` | Scheduler-lite: solve graph + `NodeKey`s, two-level disk store (memo log + zstd blobs), rayon wavefront executor with `each()` fan-out, cancellation, latest-wins previews, cost sampling |
 | `crates/cicada-script` | WASM host (v0.1) + Python worker pool (stage 4) |
 | `crates/cicada-server` | axum app: protocol, sessions, op log (stage 5) |
-| `crates/cicada-cli` | The `cicada` binary; also hosts the dependency-DAG test |
+| `crates/cicada-cli` | The `cicada` binary + the `.cic`→`SolveGraph` lowering (moves into the server at stage 5); also hosts the dependency-DAG test |
 | `web/` | SPA: React + TypeScript + Vite (canvas/viewport land in stage 5) |
 | `corpus/` | Wall-pipeline corpus + golden hashes (stage 6) |
 | `docs/` | Design docs 01–16 + `docs/generated/` |
@@ -63,7 +68,7 @@ as if they work today.
 | Bless macro compile-fail snapshots (PowerShell) | `$env:TRYBUILD = "overwrite"; cargo test -p cicada-stdlib --test macro_ui; Remove-Item Env:\TRYBUILD` |
 | Web checks (bash; PS 5.1 has no `&&` — use `;`) | `cd web && npm run check && npm run lint && npm test` |
 | Serve *(stage 5)* | `cicada serve` |
-| Headless run *(stage 3+)* | `cicada run <pipeline> --node <name> --time` |
+| Headless run | `cicada run <pipeline.cic> [--node <name>]… [--time] [--hashes] [--cache-dir <dir>] [--threads N]` — no `--node` = every leaf; `--hashes` = stable scriptable output; tests/CI always pass `--cache-dir` |
 | Bless insta snapshots (checker diagnostics) | `cargo insta review` (cargo-insta installed 2026-08-12) — or `$env:INSTA_UPDATE = "always"; cargo test -p cicada-lang; Remove-Item Env:\INSTA_UPDATE` |
 
 Web work needs Node ≥ 20 (CI uses 22).

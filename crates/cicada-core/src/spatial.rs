@@ -52,6 +52,20 @@ impl Xform {
         Self(DAffine3::IDENTITY)
     }
 
+    /// Rebuild from [`Self::coefficients`] order — the persistence loading
+    /// path (keeps glam out of downstream crates).
+    #[must_use]
+    pub fn from_coefficients(c: [f64; 12]) -> Self {
+        Self(DAffine3 {
+            matrix3: glam::DMat3::from_cols(
+                DVec3::new(c[0], c[1], c[2]),
+                DVec3::new(c[3], c[4], c[5]),
+                DVec3::new(c[6], c[7], c[8]),
+            ),
+            translation: DVec3::new(c[9], c[10], c[11]),
+        })
+    }
+
     /// The transform's 12 coefficients in canonical hash order:
     /// matrix columns x, y, z then translation, each xyz.
     #[must_use]

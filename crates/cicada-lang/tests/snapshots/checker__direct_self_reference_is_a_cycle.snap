@@ -1,0 +1,26 @@
+---
+source: crates/cicada-lang/tests/checker.rs
+expression: "check(\"# cicada 1\\n\\\n         x = x + 1\\n\\\n         y = loop_a(x=y)\\n\")"
+---
+[
+  {
+    "kind": "cycle",
+    "message": "cycle — the graph must be a DAG: x → x",
+    "node": "x",
+    "span": {
+      "col_end": 1,
+      "col_start": 0,
+      "line": 2
+    }
+  },
+  {
+    "kind": "cycle",
+    "message": "cycle — the graph must be a DAG: y → y",
+    "node": "y",
+    "span": {
+      "col_end": 1,
+      "col_start": 0,
+      "line": 3
+    }
+  }
+]

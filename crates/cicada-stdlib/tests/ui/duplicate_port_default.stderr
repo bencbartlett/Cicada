@@ -1,0 +1,5 @@
+error: duplicate `default` — the second would silently win
+ --> tests/ui/duplicate_port_default.rs:6:27
+  |
+6 |     #[port(default = 1.0, default = 2.0)]
+  |                           ^^^^^^^

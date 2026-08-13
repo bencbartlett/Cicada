@@ -43,6 +43,12 @@ pub enum KindTag {
     /// `ProjectConfig` tolerances (participates in `NodeKey`s —
     /// DECISIONS.md tolerance row)
     ProjectConfig = 14,
+    /// A scheduler cache key (docs/12 §Cache keys) — not a value; tagged
+    /// here so every hash in the system shares one versioned format.
+    NodeKey = 15,
+    /// Normalized expression-node IR (docs/12: expression `node_version` =
+    /// "hash of the normalized expression IR").
+    ExprIr = 16,
 }
 
 /// A 32-byte blake3 content hash.
@@ -54,6 +60,13 @@ impl ValueHash {
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+
+    /// Rebuild from raw bytes — the persistence loading path (stage 3's
+    /// memo log and value store address values by hash on disk).
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
     }
 
     /// Lowercase hex, 64 chars.

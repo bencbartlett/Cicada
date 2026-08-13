@@ -50,6 +50,29 @@ pub enum ValueData {
     Nothing,
 }
 
+impl ValueData {
+    /// The kind's catalog name (`Number`, `List`, …) — error-message
+    /// currency for marshalling and scheduler diagnostics.
+    #[must_use]
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            Self::Number(_) => "Number",
+            Self::Integer(_) => "Integer",
+            Self::Boolean(_) => "Boolean",
+            Self::Text(_) => "Text",
+            Self::Color(_) => "Color",
+            Self::Domain(_) => "Domain",
+            Self::IndexMap(_) => "IndexMap",
+            Self::Point(_) => "Point",
+            Self::Vector(_) => "Vector",
+            Self::Plane(_) => "Plane",
+            Self::Xform(_) => "Xform",
+            Self::List(_) => "List",
+            Self::Nothing => "Nothing",
+        }
+    }
+}
+
 /// A list level: optional axis name + slots. Slots hold already-constructed
 /// [`HashedValue`]s, so the list hash is a hash of hashes — changing one
 /// element re-hashes one leaf plus the spine, never the world.

@@ -281,6 +281,9 @@ impl_port_leaf!(crate::spatial::Xform, "Xform");
 pub struct NodeRegistration {
     /// The registered spec.
     pub spec: &'static NodeSpec,
+    /// The type-erased invocation shim (stage 3) — how the scheduler calls
+    /// the node with wire values, no hand-written dispatch anywhere.
+    pub invoke: crate::marshal::ErasedInvoke,
 }
 
 inventory::collect!(NodeRegistration);
@@ -324,6 +327,26 @@ pub fn registered() -> &'static [&'static NodeSpec] {
             specs
         })
         .as_slice()
+}
+
+/// The registered invocation shim for a dialect name, if any. Computed once;
+/// the duplicate-name panic in [`registered`] runs first, so the map can
+/// never silently shadow one node with another.
+#[must_use]
+pub fn invoker(name: &str) -> Option<crate::marshal::ErasedInvoke> {
+    static INVOKERS: std::sync::OnceLock<
+        std::collections::HashMap<&'static str, crate::marshal::ErasedInvoke>,
+    > = std::sync::OnceLock::new();
+    INVOKERS
+        .get_or_init(|| {
+            let _ = registered(); // enforce name uniqueness loudly first
+            inventory::iter::<NodeRegistration>
+                .into_iter()
+                .map(|registration| (registration.spec.name, registration.invoke))
+                .collect()
+        })
+        .get(name)
+        .copied()
 }
 
 #[cfg(test)]

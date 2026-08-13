@@ -13,6 +13,7 @@ pub mod catalog;
 pub mod config;
 pub mod hash;
 pub mod intern;
+pub mod marshal;
 pub mod scalar;
 pub mod spatial;
 pub mod spec;

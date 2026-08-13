@@ -198,6 +198,19 @@ fn unknown_names_nodes_kwargs_with_did_you_mean() {
     ));
 }
 
+// Regression (adversarial review, stage 3): a DIRECT self-reference is a
+// length-1 cycle and must earn the same Cycle diagnostic as `a → b → a` —
+// the excluded self-edge used to let `x = x + 1` resolve with ZERO
+// diagnostics and surface downstream as an internal lowering error.
+#[test]
+fn direct_self_reference_is_a_cycle() {
+    insta::assert_json_snapshot!(check(
+        "# cicada 1\n\
+         x = x + 1\n\
+         y = loop_a(x=y)\n"
+    ));
+}
+
 #[test]
 fn structure_errors_rebinding_cycle_unpack_ports() {
     insta::assert_json_snapshot!(check(

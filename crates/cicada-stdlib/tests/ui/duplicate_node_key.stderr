@@ -1,0 +1,5 @@
+error: duplicate key — the second would silently win
+  --> tests/ui/duplicate_node_key.rs:11:61
+   |
+11 | #[node(category = "Maths & logic", tier = "S", version = 1, version = 2)]
+   |                                                             ^^^^^^^^^^^

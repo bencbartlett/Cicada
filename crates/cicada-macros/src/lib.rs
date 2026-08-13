@@ -70,7 +70,9 @@ fn expand_ports(input: &DeriveInput) -> syn::Result<TokenStream2> {
     };
 
     let mut port_specs = Vec::new();
-    for field in &fields.named {
+    let mut from_fields = Vec::new();
+    let mut into_fields = Vec::new();
+    for (index, field) in fields.named.iter().enumerate() {
         let ident = field
             .ident
             .as_ref()
@@ -90,7 +92,13 @@ fn expand_ports(input: &DeriveInput) -> syn::Result<TokenStream2> {
             ));
         }
         let PortAttrs { default, dimension } = parse_port_attrs(&field.attrs)?;
-        let default_tokens = default.map_or_else(|| quote!(None), |text| quote!(Some(#text)));
+
+        let (from_field, into_field) =
+            marshal_field_tokens(ident, &name, ty, index, default.as_ref());
+        from_fields.push(from_field);
+        into_fields.push(into_field);
+
+        let default_tokens = default.map_or_else(|| quote!(None), |(_, text)| quote!(Some(#text)));
         let dimension_tokens = match dimension.as_deref() {
             Some("length") => quote!(Some(cicada_core::spec::Dimension::Length)),
             Some("angle") => quote!(Some(cicada_core::spec::Dimension::Angle)),
@@ -114,7 +122,7 @@ fn expand_ports(input: &DeriveInput) -> syn::Result<TokenStream2> {
     }
 
     let ident = &input.ident;
-    Ok(quote! {
+    let ports = quote! {
         #[automatically_derived]
         impl cicada_core::spec::Ports for #ident {
             const PORTS: &'static [cicada_core::spec::PortSpec] = &[ #(#port_specs),* ];
@@ -124,11 +132,94 @@ fn expand_ports(input: &DeriveInput) -> syn::Result<TokenStream2> {
             const OUTPUTS: &'static [cicada_core::spec::PortSpec] =
                 <#ident as cicada_core::spec::Ports>::PORTS;
         }
+    };
+    let marshal = marshal_impls(input, fields.named.len(), &from_fields, &into_fields);
+    Ok(quote! {
+        #ports
+        #marshal
     })
 }
 
+/// The `FromValues`/`IntoValues` conversion of ONE port field (stage 3's
+/// marshalling layer): an absent slot takes the default TYPED — the
+/// original Rust expression (via `Into`, so `&str` defaults fill `String`
+/// ports), never a re-parse of the catalog string; a required port with no
+/// value refuses loudly.
+fn marshal_field_tokens(
+    ident: &syn::Ident,
+    name: &str,
+    ty: &Type,
+    index: usize,
+    default: Option<&(Expr, String)>,
+) -> (TokenStream2, TokenStream2) {
+    let absent = default.map_or_else(
+        || {
+            quote! {
+                return Err(cicada_core::marshal::InvokeError::Missing { port: #name })
+            }
+        },
+        |(expr, _)| quote!(::std::convert::Into::into(#expr)),
+    );
+    let from_field = quote! {
+        #ident: match &values[#index] {
+            Some(value) => {
+                <#ty as cicada_core::marshal::FromValue>::from_value(value).map_err(
+                    |source| cicada_core::marshal::InvokeError::Input { port: #name, source },
+                )?
+            }
+            None => #absent,
+        }
+    };
+    let into_field = quote! {
+        cicada_core::marshal::IntoValue::into_value(self.#ident).map_err(
+            |source| cicada_core::marshal::InvokeError::Output { port: #name, source },
+        )?
+    };
+    (from_field, into_field)
+}
+
+/// The `FromValues`/`IntoValues` impls of one Ports struct (stage 3's
+/// marshalling layer — see the crate docs).
+fn marshal_impls(
+    input: &DeriveInput,
+    port_count: usize,
+    from_fields: &[TokenStream2],
+    into_fields: &[TokenStream2],
+) -> TokenStream2 {
+    let ident = &input.ident;
+    quote! {
+        #[automatically_derived]
+        impl cicada_core::marshal::FromValues for #ident {
+            fn from_values(
+                values: &[Option<::std::sync::Arc<cicada_core::value::HashedValue>>],
+            ) -> Result<Self, cicada_core::marshal::InvokeError> {
+                if values.len() != #port_count {
+                    return Err(cicada_core::marshal::InvokeError::Arity {
+                        want: #port_count,
+                        got: values.len(),
+                    });
+                }
+                Ok(Self { #(#from_fields),* })
+            }
+        }
+        #[automatically_derived]
+        impl cicada_core::marshal::IntoValues for #ident {
+            fn into_values(
+                self,
+            ) -> Result<
+                Vec<::std::sync::Arc<cicada_core::value::HashedValue>>,
+                cicada_core::marshal::InvokeError,
+            > {
+                Ok(vec![ #(#into_fields),* ])
+            }
+        }
+    }
+}
+
 struct PortAttrs {
-    default: Option<String>,
+    /// The default, both as the original typed expression (marshalling
+    /// inlines it) and its rendered catalog literal.
+    default: Option<(Expr, String)>,
     dimension: Option<String>,
 }
 
@@ -143,10 +234,17 @@ fn parse_port_attrs(attrs: &[Attribute]) -> syn::Result<PortAttrs> {
         }
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("default") {
+                if out.default.is_some() {
+                    return Err(meta.error("duplicate `default` — the second would silently win"));
+                }
                 let expr: Expr = meta.value()?.parse()?;
-                out.default = Some(render_default(&expr)?);
+                let rendered = render_default(&expr)?;
+                out.default = Some((expr, rendered));
                 Ok(())
             } else if meta.path.is_ident("dimension") {
+                if out.dimension.is_some() {
+                    return Err(meta.error("duplicate `dimension` — the second would silently win"));
+                }
                 let ident: syn::Ident = meta.value()?.parse()?;
                 out.dimension = Some(ident.to_string());
                 Ok(())
@@ -242,19 +340,32 @@ fn parse_node_args(args: &TokenStream2) -> syn::Result<NodeArgs> {
         effectful: false,
         uses_tolerance: false,
     };
+    // Duplicate keys are errors — a silently-last-winning `version = 1,
+    // version = 2` would corrupt cache-key semantics.
     let parser = syn::meta::parser(|meta| {
+        fn set_once<T>(
+            slot: &mut Option<T>,
+            value: T,
+            meta: &syn::meta::ParseNestedMeta<'_>,
+        ) -> syn::Result<()> {
+            if slot.is_some() {
+                return Err(meta.error("duplicate key — the second would silently win"));
+            }
+            *slot = Some(value);
+            Ok(())
+        }
         if meta.path.is_ident("category") {
-            parsed.category = Some(meta.value()?.parse()?);
-            Ok(())
+            let value = meta.value()?.parse()?;
+            set_once(&mut parsed.category, value, &meta)
         } else if meta.path.is_ident("tier") {
-            parsed.tier = Some(meta.value()?.parse()?);
-            Ok(())
+            let value = meta.value()?.parse()?;
+            set_once(&mut parsed.tier, value, &meta)
         } else if meta.path.is_ident("version") {
-            parsed.version = Some(meta.value()?.parse()?);
-            Ok(())
+            let value = meta.value()?.parse()?;
+            set_once(&mut parsed.version, value, &meta)
         } else if meta.path.is_ident("name") {
-            parsed.name = Some(meta.value()?.parse()?);
-            Ok(())
+            let value = meta.value()?.parse()?;
+            set_once(&mut parsed.name, value, &meta)
         } else if meta.path.is_ident("effectful") {
             parsed.effectful = true;
             Ok(())
@@ -373,6 +484,8 @@ fn expand_node(args: &TokenStream2, function: &ItemFn) -> syn::Result<TokenStrea
         "__CICADA_NODE_SPEC_{}",
         fn_ident.unraw().to_string().to_uppercase()
     );
+    let invoke_ident = format_ident!("__cicada_invoke_{}", fn_ident.unraw());
+    let invoke_shim = invoke_shim(&invoke_ident, fn_ident, input_ty);
 
     Ok(quote! {
         #function
@@ -394,8 +507,36 @@ fn expand_node(args: &TokenStream2, function: &ItemFn) -> syn::Result<TokenStrea
             line: line!(),
         };
 
+        #invoke_shim
+
         cicada_core::spec::inventory::submit! {
-            cicada_core::spec::NodeRegistration { spec: &#spec_ident }
+            cicada_core::spec::NodeRegistration {
+                spec: &#spec_ident,
+                invoke: #invoke_ident,
+            }
         }
     })
+}
+
+/// The type-erased invocation shim (stage 3): marshal in, call the real fn,
+/// marshal out. Panics are NOT caught here — the scheduler `catch_unwind`s
+/// and turns them into red nodes (docs/12).
+fn invoke_shim(
+    invoke_ident: &proc_macro2::Ident,
+    fn_ident: &proc_macro2::Ident,
+    input_ty: &Type,
+) -> TokenStream2 {
+    quote! {
+        #[doc(hidden)]
+        #[allow(missing_docs)]
+        fn #invoke_ident(
+            inputs: &[Option<::std::sync::Arc<cicada_core::value::HashedValue>>],
+        ) -> Result<
+            Vec<::std::sync::Arc<cicada_core::value::HashedValue>>,
+            cicada_core::marshal::InvokeError,
+        > {
+            let input = <#input_ty as cicada_core::marshal::FromValues>::from_values(inputs)?;
+            cicada_core::marshal::IntoValues::into_values(#fn_ident(input))
+        }
+    }
 }

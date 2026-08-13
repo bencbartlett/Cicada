@@ -1,12 +1,11 @@
 //! The `cicada` binary (doc 14): `serve`, `run`, `fmt`, `docs`, `catalog`,
-//! `cache`. Subcommands appear as their stages land (doc 15); stage 1 ships
-//! `catalog` only — inventing stubs for the rest would lie to `--help`.
+//! `cache`. Subcommands appear as their stages land (doc 15); stage 3
+//! ships `catalog` and `run` — inventing stubs for the rest would lie to
+//! `--help`. Logic lives in the library ([`cicada_cli`]); this file only
+//! parses arguments.
 
-use std::fs;
 use std::path::PathBuf;
 
-use anyhow::{Context, bail};
-use cicada_core::spec::{Dimension, NodeSpec, PortSpec, Tier};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -33,133 +32,48 @@ enum Command {
         #[arg(long)]
         dir: Option<PathBuf>,
     },
+    /// Solve a pipeline headlessly and print the requested outputs
+    /// (doc 15 stage 3; the agent verification loop's first stop).
+    Run {
+        /// The .cic pipeline file.
+        pipeline: PathBuf,
+        /// Binding to compute (repeatable); defaults to every leaf.
+        #[arg(long = "node")]
+        nodes: Vec<String>,
+        /// Print per-node compute times and a solve summary.
+        #[arg(long)]
+        time: bool,
+        /// Print stable `binding<TAB>port<TAB>hash` lines instead of
+        /// values (scriptable; doc 14's verification currency).
+        #[arg(long)]
+        hashes: bool,
+        /// Cache directory override. Default: the per-project store in the
+        /// USER cache dir — never the project folder (DECISIONS.md).
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        /// Worker threads; 0 = all cores minus two.
+        #[arg(long, default_value_t = 0)]
+        threads: usize,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
-        Command::Catalog { check, dir } => catalog(check, dir),
+        Command::Catalog { check, dir } => cicada_cli::catalog::catalog(check, dir),
+        Command::Run {
+            pipeline,
+            nodes,
+            time,
+            hashes,
+            cache_dir,
+            threads,
+        } => cicada_cli::run::run(&cicada_cli::run::RunArgs {
+            pipeline,
+            nodes,
+            time,
+            hashes,
+            cache_dir,
+            threads,
+        }),
     }
-}
-
-/// Repo-root generated-docs dir, resolved from this crate's manifest
-/// directory so `cargo run -p cicada-cli` works from any working directory.
-fn default_generated_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/generated")
-}
-
-fn catalog(check: bool, dir: Option<PathBuf>) -> anyhow::Result<()> {
-    let dir = dir.unwrap_or_else(default_generated_dir);
-    let specs = cicada_stdlib::registry();
-    let markdown = cicada_core::catalog::render_markdown(specs);
-    let json = catalog_json(specs)?;
-
-    let outputs: [(&str, &str); 2] = [("CATALOG.md", &markdown), ("catalog.json", &json)];
-    if check {
-        for (file, rendered) in outputs {
-            let path = dir.join(file);
-            // Byte-exact on purpose: .gitattributes pins LF everywhere, so
-            // any difference — including line endings — is real staleness.
-            let committed =
-                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-            if committed != rendered {
-                bail!(
-                    "{} is stale — regenerate with `cargo run -p cicada-cli -- catalog` \
-                     and commit the diff",
-                    path.display()
-                );
-            }
-            println!("catalog fresh: {}", path.display());
-        }
-    } else {
-        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-        for (file, rendered) in outputs {
-            let path = dir.join(file);
-            fs::write(&path, rendered).with_context(|| format!("writing {}", path.display()))?;
-            println!("catalog written: {}", path.display());
-        }
-    }
-    Ok(())
-}
-
-/// The machine-readable catalog (DECISIONS.md: consumed by the palette, the
-/// checker, and the AI). Format field bumps on breaking shape changes.
-fn catalog_json(specs: &[&NodeSpec]) -> anyhow::Result<String> {
-    #[derive(serde::Serialize)]
-    struct Catalog<'a> {
-        format: u32,
-        nodes: Vec<Node<'a>>,
-    }
-    #[derive(serde::Serialize)]
-    struct Node<'a> {
-        name: &'a str,
-        title: &'a str,
-        description: &'a str,
-        category: &'a str,
-        tier: &'a str,
-        version: u32,
-        pure: bool,
-        uses_tolerance: bool,
-        inputs: Vec<Port<'a>>,
-        outputs: Vec<Port<'a>>,
-    }
-    #[derive(serde::Serialize)]
-    struct Port<'a> {
-        name: &'a str,
-        // Both forms: the rendered notation for humans/AI, the structured
-        // fields so the palette/checker never parse bracket syntax
-        // (DECISIONS.md: the JSON catalog drives palette, checker, AI).
-        #[serde(rename = "type")]
-        ty: String,
-        base: &'a str,
-        list_depth: u8,
-        optional: bool,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        default: Option<&'a str>,
-        #[serde(skip_serializing_if = "str::is_empty")]
-        doc: &'a str,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        dimension: Option<&'a str>,
-    }
-
-    fn port(spec: &PortSpec) -> Port<'_> {
-        Port {
-            name: spec.name,
-            ty: spec.ty.render(),
-            base: spec.ty.base,
-            list_depth: spec.ty.list_depth,
-            optional: spec.ty.optional,
-            default: spec.default,
-            doc: spec.doc,
-            dimension: spec.dimension.map(|d| match d {
-                Dimension::Length => "length",
-                Dimension::Angle => "angle",
-            }),
-        }
-    }
-
-    let catalog = Catalog {
-        format: 1,
-        nodes: specs
-            .iter()
-            .map(|spec| Node {
-                name: spec.name,
-                title: spec.title,
-                description: spec.description,
-                category: spec.category,
-                tier: match spec.tier {
-                    Tier::S => "S",
-                    Tier::V01 => "1",
-                    Tier::V02 => "2",
-                },
-                version: spec.version,
-                pure: spec.pure,
-                uses_tolerance: spec.uses_tolerance,
-                inputs: spec.inputs.iter().map(port).collect(),
-                outputs: spec.outputs.iter().map(port).collect(),
-            })
-            .collect(),
-    };
-    let mut json = serde_json::to_string_pretty(&catalog).context("serializing catalog.json")?;
-    json.push('\n');
-    Ok(json)
 }
