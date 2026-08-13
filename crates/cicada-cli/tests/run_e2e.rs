@@ -331,14 +331,26 @@ fn direct_self_reference_is_a_cycle_diagnostic() {
 }
 
 #[test]
-fn red_nodes_exit_nonzero_with_element_ids() {
+fn red_nodes_exit_nonzero_with_element_ids_and_name_their_blast_radius() {
     let dir = tempfile::tempdir().unwrap();
     // series panics on count < 0 → the scheduler turns it into a red node
-    // (the sequences.rs doc comment's promise, kept at stage 3).
-    write_demo(dir.path(), "# cicada 1\nnums = series(count=-1)\n");
+    // (the sequences.rs doc comment's promise, kept at stage 3). The
+    // downstream consumer must be NAMED as blocked, not silently absent
+    // (probe friction: the report never said what was skipped, or why).
+    write_demo(
+        dir.path(),
+        "# cicada 1\nnums = series(count=-1)\nbumped = add(a=each(nums), b=1)\n",
+    );
     let output = cicada(
         dir.path(),
-        &["run", "demo.cic", "--cache-dir", "cache", "--node", "nums"],
+        &[
+            "run",
+            "demo.cic",
+            "--cache-dir",
+            "cache",
+            "--node",
+            "bumped",
+        ],
     );
     assert!(!output.status.success(), "a red node fails the run");
     let err = stderr(&output);
@@ -347,4 +359,9 @@ fn red_nodes_exit_nonzero_with_element_ids() {
         err.contains("count must be >= 0"),
         "panic message surfaces: {err}"
     );
+    assert!(
+        err.contains("blocked: `bumped` — fed by red `nums`"),
+        "the blast radius is spelled out: {err}"
+    );
+    assert!(err.contains("1 blocked downstream"), "{err}");
 }

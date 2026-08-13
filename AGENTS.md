@@ -14,7 +14,9 @@ system; the current work order is the vertical-slice spike
    never silently.
 2. **`docs/generated/CATALOG.md` for node signatures** instead of grepping
    crates — context is expensive; the catalog is a few KB and CI-checked
-   fresh.
+   fresh. (Known gap: runtime contracts — e.g. a node's `# Panics` rules —
+   still live only in the node's rustdoc; the catalog carries them from
+   stage 4.)
 3. The stage you are working in, from
    [docs/15-spike-plan.md](docs/15-spike-plan.md), and the docs it lists for
    that stage.
@@ -68,7 +70,7 @@ that stage; do not reference them in code or docs as if they work today.
 | Bless macro compile-fail snapshots (PowerShell) | `$env:TRYBUILD = "overwrite"; cargo test -p cicada-stdlib --test macro_ui; Remove-Item Env:\TRYBUILD` |
 | Web checks (bash; PS 5.1 has no `&&` — use `;`) | `cd web && npm run check && npm run lint && npm test` |
 | Serve *(stage 5)* | `cicada serve` |
-| Headless run | `cicada run <pipeline.cic> [--node <name>]… [--time] [--hashes] [--cache-dir <dir>] [--threads N]` — no `--node` = every leaf; `--hashes` = stable scriptable output; tests/CI always pass `--cache-dir` |
+| Headless run | `cargo run -p cicada-cli -- run <pipeline.cic> [--node <name>]… [--time] [--hashes] [--cache-dir <dir>] [--threads N]` — no `--node` = every leaf; `--hashes` prints stable hash lines INSTEAD of values; dialect syntax: [docs/10](docs/10-dialect-and-file-format.md); tests/CI always pass `--cache-dir` |
 | Bless insta snapshots (checker diagnostics) | `cargo insta review` (cargo-insta installed 2026-08-12) — or `$env:INSTA_UPDATE = "always"; cargo test -p cicada-lang; Remove-Item Env:\INSTA_UPDATE` |
 
 Web work needs Node ≥ 20 (CI uses 22).

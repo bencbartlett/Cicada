@@ -99,7 +99,7 @@ pub fn run(args: &RunArgs) -> anyhow::Result<()> {
     )?;
     let wall = started.elapsed();
 
-    report_failures(&report)?;
+    report_failures(&lowered, &report)?;
     print_outputs(&scheduler, &lowered, &targets, &report, args)?;
     if args.time {
         print_times(&lowered, &report, wall);
@@ -186,8 +186,10 @@ fn target_node_ids(lowered: &Lowered, targets: &[String]) -> Vec<NodeId> {
     ids
 }
 
-/// Red nodes end the run loudly, element IDs included (docs/12).
-fn report_failures(report: &SolveReport) -> anyhow::Result<()> {
+/// Red nodes end the run loudly, element IDs included (docs/12) — and the
+/// blast radius is spelled out: every blocked downstream node gets its own
+/// "fed by" line (doc 10's honest-reasons discipline; probe friction).
+fn report_failures(lowered: &Lowered, report: &SolveReport) -> anyhow::Result<()> {
     let failures = report.failures();
     if failures.is_empty() {
         return Ok(());
@@ -201,6 +203,22 @@ fn report_failures(report: &SolveReport) -> anyhow::Result<()> {
                 failure.node, failure.message, failure.element_ids
             );
         }
+    }
+    let mut blocked = 0_usize;
+    for (index, outcome) in report.outcomes.iter().enumerate() {
+        if let NodeOutcome::Blocked { upstream } = outcome {
+            blocked += 1;
+            eprintln!(
+                "blocked: `{}` — fed by red `{upstream}`, did not run",
+                lowered.graph.node(NodeId(index)).name
+            );
+        }
+    }
+    if blocked > 0 {
+        bail!(
+            "{} node(s) red, {blocked} blocked downstream — nothing exported",
+            failures.len()
+        );
     }
     bail!("{} node(s) red — nothing exported", failures.len());
 }
