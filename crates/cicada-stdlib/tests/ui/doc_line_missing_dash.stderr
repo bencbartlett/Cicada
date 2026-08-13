@@ -1,0 +1,5 @@
+error: node doc comment must start with `Title — description.` (em dash, spaces) — it feeds the catalog, canvas, and AI
+  --> tests/ui/doc_line_missing_dash.rs:11:5
+   |
+11 | pub fn bad(input: In) -> f64 {
+   |     ^^

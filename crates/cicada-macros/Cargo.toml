@@ -9,7 +9,13 @@ publish.workspace = true
 [lib]
 proc-macro = true
 
+# No workspace dependencies, ever (dependency-DAG law): the macros emit
+# paths into cicada_core but never link against it. Their compile-fail UX
+# is tested from cicada-stdlib (trybuild), where core is a real dep.
 [dependencies]
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
 
 [lints]
 workspace = true

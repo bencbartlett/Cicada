@@ -19,17 +19,20 @@ system; the current work order is the vertical-slice spike
    [docs/15-spike-plan.md](docs/15-spike-plan.md), and the docs it lists for
    that stage.
 
-**Current status: stage 0 complete — scaffold only.** The parser, scheduler,
-geometry, server, and web app do not exist yet. `cicada catalog` is the only
-live subcommand. Commands below marked *(stage N)* arrive with that stage;
-do not reference them in code or docs as if they work today.
+**Current status: stage 1 complete — values and registry.** The value model
+(hashing, interning, Merkle lists/axes/Optional slots, ProjectConfig) and
+the `#[node]`/`#[derive(Ports)]` registration pipeline are live. The
+parser, scheduler, geometry, server, and web app do not exist yet.
+`cicada catalog` is the only live subcommand. Commands below marked
+*(stage N)* arrive with that stage; do not reference them in code or docs
+as if they work today.
 
 ## Project map
 
 | Path | Contents |
 |---|---|
-| `crates/cicada-core` | Node/port specs + catalog renderer; value model — hashing, interning, axes, Optional slots, ProjectConfig — lands stage 1 |
-| `crates/cicada-macros` | `#[node]`, `#[derive(Ports)]` proc macros (stage 1) |
+| `crates/cicada-core` | Value model (blake3 hash-at-construction, interning, Merkle lists/axes/Optional, ProjectConfig) + node/port specs, registry, catalog renderer |
+| `crates/cicada-macros` | `#[node]`, `#[derive(Ports)]` proc macros — zero workspace deps by design; compile-fail tests live in cicada-stdlib |
 | `crates/cicada-geom` | Geometry types, tolerance ops, rented-kernel FFI seams (stage 4) |
 | `crates/cicada-lang` | `.cic` lexer/parser/AST, minimal-edit writer, checker, diagnostics (stage 2) |
 | `crates/cicada-stdlib` | The node catalog — pure functions, never depends on sched |
@@ -54,9 +57,10 @@ do not reference them in code or docs as if they work today.
 | Test (one crate) | `cargo test -p cicada-core` |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` |
 | Format | `cargo fmt --all` (check: `--check`) |
-| Regenerate catalog | `cargo run -p cicada-cli -- catalog` |
+| Regenerate catalog (CATALOG.md + catalog.json) | `cargo run -p cicada-cli -- catalog` |
 | Catalog freshness (CI mode) | `cargo run -p cicada-cli -- catalog --check` |
-| Web checks | `cd web && npm run check && npm run lint && npm test` |
+| Bless macro compile-fail snapshots (PowerShell) | `$env:TRYBUILD = "overwrite"; cargo test -p cicada-stdlib --test macro_ui; Remove-Item Env:\TRYBUILD` |
+| Web checks (bash; PS 5.1 has no `&&` — use `;`) | `cd web && npm run check && npm run lint && npm test` |
 | Serve *(stage 5)* | `cicada serve` |
 | Headless run *(stage 3+)* | `cicada run <pipeline> --node <name> --time` |
 | Bless goldens *(insta arrives stage 2)* | `cargo insta review` |
@@ -65,21 +69,24 @@ Web work needs Node ≥ 20 (CI uses 22).
 
 ### Dev machine notes (Windows)
 
-- The repo lives in a **Dropbox-synced folder**. Build dirs must be excluded
-  from sync or Dropbox's file handles break builds (observed: cargo failing
-  to finalize `target/incremental`, os error 32). `target/` and
-  `web/node_modules/` are marked with the `com.dropbox.ignored` NTFS
-  stream. **In a fresh clone or worktree, create and mark the dir BEFORE
-  the first build** — marking an already-populated dir does not release
-  Dropbox's handles on existing files:
+- The repo lives in a **Dropbox-synced folder**, and Dropbox's file
+  handles break builds run inside it (observed twice: cargo failing to
+  finalize `target/` files, os error 32 — even with the
+  `com.dropbox.ignored` NTFS stream set). The durable fix: cargo builds
+  OUTSIDE the synced tree via a user-level environment variable, set on
+  this machine since 2026-08-12:
 
   ```powershell
-  New-Item -ItemType Directory target
-  Set-Content -Path target -Stream com.dropbox.ignored -Value 1
+  [Environment]::SetEnvironmentVariable("CARGO_TARGET_DIR", "$env:LOCALAPPDATA\cargo-target", "User")
   ```
 
-  If builds hit os error 32 under an already-populated `target/`: delete
-  the directory, recreate it empty, mark it, rebuild.
+  Fresh shells inherit it; agent shells with stale environments must set
+  `$env:CARGO_TARGET_DIR = "$env:LOCALAPPDATA\cargo-target"` per command.
+  There must be no in-repo `target/`. `web/node_modules/` stays in-repo
+  (npm needs it in place) with the `com.dropbox.ignored` stream set —
+  re-mark it if it is ever deleted and reinstalled:
+  `Set-Content -Path web\node_modules -Stream com.dropbox.ignored -Value 1`.
+  CI is unaffected (no Dropbox on runners; no committed target-dir config).
 - The engine cache itself never has this problem — it lives in the user
   cache directory, never the project folder (DECISIONS.md).
 
@@ -99,8 +106,10 @@ Web work needs Node ≥ 20 (CI uses 22).
 - **Determinism is a unit test.** Golden hashes update only through the
   blessed path, never by hand, and the diff gets explained in the commit.
 - **Tolerance is explicit state** — the sanctioned comparison API is the
-  only float-comparison path in geometry code; raw float `==` only in
-  hash/determinism tests.
+  only float-comparison path in geometry code. Exact float `==` is
+  sanctioned in hash/determinism tests and in stdlib tests whose node
+  contract is exact IEEE arithmetic (pure maths; ledger revision
+  2026-08-12); geometry tests always use tolerance-aware asserts.
 - **The cache never lives in the project folder** (project dirs are
   Dropbox-synced): user cache directory only; `.cicada-cache/` is an
   opt-in override and stays gitignored.
@@ -108,7 +117,10 @@ Web work needs Node ≥ 20 (CI uses 22).
   `verify-change`). The human reviews evidence; the human is never the
   feedback loop.
 - Tests are deterministic — no sleeps, no wall-clock, no network. No
-  `#[ignore]` without a linked issue.
+  `#[ignore]` without a linked issue. One sanctioned exception: property
+  tests draw fresh random inputs each run by design; a found failure
+  persists as a committed `proptest-regressions/` file, which IS the
+  deterministic regression test.
 
 ## Definition of done
 

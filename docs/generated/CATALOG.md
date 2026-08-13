@@ -4,6 +4,12 @@
 
 One line per registered node: `signature` — Title — description.
 
+## Sequences & random
+
+- `series(start: Number = 0.0, step: Number = 1.0, count: Integer) → [Number]` — Series — an arithmetic sequence of numbers.
+
 ## Maths & logic
 
-- `add(a: Number, b: Number) → Number` — Add — Sum of two numbers.
+- `add(a: Number, b: Number) → Number` — Add — sum of two numbers.
+- `construct_domain(start: Number, end: Number) → Domain` — Construct Domain — a numeric interval from its endpoints.
+- `deconstruct_domain(domain: Domain) → (start: Number, end: Number)` — Deconstruct Domain — the endpoints of an interval.

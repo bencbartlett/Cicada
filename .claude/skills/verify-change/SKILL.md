@@ -35,10 +35,10 @@ Run everything headless first; touch the browser only for UI-facing changes.
    If stale: regenerate (drop `--check`), review the diff, commit it with
    the change.
 
-4. **Web changes** (`web/` touched):
+4. **Web changes** (`web/` touched) — PowerShell form (bash: `&&` chain):
 
-   ```
-   cd web && npm run check && npm run lint && npm test
+   ```powershell
+   cd web; npm run check; if ($?) { npm run lint }; if ($?) { npm test }
    ```
 
 5. **Pipeline-facing changes** *(stage 3+, once `cicada run` exists)*:

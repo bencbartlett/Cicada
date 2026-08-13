@@ -1,0 +1,5 @@
+error: #[node] requires version = N — the semantic node version in cache keys (doc 12); bump it on any behavior change
+  --> tests/ui/missing_version.rs:11:5
+   |
+11 | pub fn bad(input: In) -> f64 {
+   |     ^^

@@ -8,10 +8,13 @@ publish.workspace = true
 
 [dependencies]
 cicada-core.workspace = true
+cicada-macros.workspace = true
 
 [dev-dependencies]
-blake3.workspace = true
 proptest.workspace = true
+# The macros crate keeps zero workspace deps (DAG law), so its compile-fail
+# UX is tested from here, where cicada-core is a real dependency.
+trybuild.workspace = true
 
 [lints]
 workspace = true

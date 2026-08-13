@@ -1,0 +1,5 @@
+error: generic Ports structs arrive with the generic-node work (stage 4); stage-1 port structs must be concrete
+ --> tests/ui/generic_ports.rs:5:14
+  |
+5 | pub struct In<T> {
+  |              ^

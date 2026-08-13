@@ -1,0 +1,5 @@
+error: a node takes exactly one argument: its input struct (struct-in/struct-out ABI, DECISIONS.md) — e.g. `fn add(input: AddIn) -> f64`
+  --> tests/ui/two_arguments.rs:11:5
+   |
+11 | pub fn bad(input: In, extra: f64) -> f64 {
+   |     ^^

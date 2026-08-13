@@ -1,0 +1,5 @@
+error: #[port(default = …)] takes a literal (or negated literal) for now — non-literal defaults arrive with the stage-4 nodes that need them (their catalog rendering is undesigned)
+ --> tests/ui/nonliteral_default.rs:7:22
+  |
+7 |     #[port(default = f64::consts_something())]
+  |                      ^^^

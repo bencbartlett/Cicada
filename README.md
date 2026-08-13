@@ -54,9 +54,10 @@ Pre-v0, spike in progress. The founding documents synthesize design
 conversations from the wall-piece project (2026). The current milestone is
 the [vertical-slice spike](docs/15-spike-plan.md): the wall pipeline's
 hardest stretch running on the Rust engine + web UI stack (DECISIONS.md
-web-first row), measured. Stage 0 (workspace scaffold, CI, operating
-manual) is complete; the repo's agent manual lives in
-[AGENTS.md](AGENTS.md).
+web-first row), measured. Stages 0–1 are complete (workspace + CI +
+operating manual; value model, hashing, `#[node]` registry, catalog
+pipeline); the current stage lives in [AGENTS.md](AGENTS.md)'s status
+line.
 
 License: all rights reserved while private; a public license will be
 chosen at first public release.

@@ -1,0 +1,164 @@
+{
+  "format": 1,
+  "nodes": [
+    {
+      "name": "series",
+      "title": "Series",
+      "description": "an arithmetic sequence of numbers.",
+      "category": "Sequences & random",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "start",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "0.0",
+          "doc": "First value."
+        },
+        {
+          "name": "step",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "1.0",
+          "doc": "Increment between consecutive values."
+        },
+        {
+          "name": "count",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Number of values."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[Number]",
+          "base": "Number",
+          "list_depth": 1,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "add",
+      "title": "Add",
+      "description": "sum of two numbers.",
+      "category": "Maths & logic",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "First addend."
+        },
+        {
+          "name": "b",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Second addend."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "construct_domain",
+      "title": "Construct Domain",
+      "description": "a numeric interval from its endpoints.",
+      "category": "Maths & logic",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "start",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Interval start."
+        },
+        {
+          "name": "end",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Interval end."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Domain",
+          "base": "Domain",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "deconstruct_domain",
+      "title": "Deconstruct Domain",
+      "description": "the endpoints of an interval.",
+      "category": "Maths & logic",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "domain",
+          "type": "Domain",
+          "base": "Domain",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The interval."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "start",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Interval start."
+        },
+        {
+          "name": "end",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Interval end."
+        }
+      ]
+    }
+  ]
+}

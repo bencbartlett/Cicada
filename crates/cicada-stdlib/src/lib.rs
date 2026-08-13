@@ -5,21 +5,56 @@
 //! Every node ships with table + property + determinism-hash tests and doc
 //! comments that feed the generated catalog (DECISIONS.md).
 //!
-//! Stage 0 (doc 15): one hand-registered stub node (`add`) proves the
-//! registry → `CATALOG.md` pipeline. Stage 1 replaces hand-rolled specs with
-//! `#[node]` reflection; stage 4 brings the ~30 spike nodes.
+//! Nodes register at compile time via `#[node]` + `#[derive(Ports)]`
+//! (cicada-macros); the registry is queried through [`registry`]. Stage 4
+//! brings the full ~30-node spike set.
 
 use cicada_core::spec::NodeSpec;
 
 pub mod maths;
+pub mod sequences;
 
-/// Every node the stdlib registers, in stable catalog order.
-///
-/// Stage 1 replaces this hand-maintained list with compile-time registration
-/// via `#[node]` (docs/08 §The node registry).
+/// Every node registered in this binary, in canonical catalog order
+/// (docs/08 category order, then module path + source line within a
+/// category).
 #[must_use]
-pub fn registry() -> Vec<&'static NodeSpec> {
-    vec![&maths::ADD_SPEC]
+pub fn registry() -> &'static [&'static NodeSpec] {
+    cicada_core::spec::registered()
+}
+
+// Naming-contract fixtures: registered only in test builds, asserting the
+// macro behaviors the manuals document (keyword-dodging underscore strip,
+// raw-ident unraw, explicit name override). They never reach the shipped
+// catalog — `cicada catalog` runs without cfg(test).
+#[cfg(test)]
+#[allow(dead_code)] // fixtures exist to be REGISTERED (inventory), not called
+mod naming_fixtures {
+    use cicada_macros::{Ports, node};
+
+    /// Inputs for the naming fixtures.
+    #[derive(Ports, Clone, Copy, Debug)]
+    pub struct FixtureIn {
+        /// Truthy value (raw identifier — must register as port `true`).
+        #[port(default = 1.5)]
+        pub r#true: f64,
+    }
+
+    /// Loop Fixture — keyword-dodging fn name must register as `loop`.
+    #[node(category = "Maths & logic", tier = "S", version = 1)]
+    pub fn loop_(input: FixtureIn) -> f64 {
+        input.r#true
+    }
+
+    /// Renamed Fixture — the explicit name override must win.
+    #[node(
+        category = "Maths & logic",
+        tier = "S",
+        version = 1,
+        name = "fixture_renamed"
+    )]
+    pub fn some_other_ident(input: FixtureIn) -> f64 {
+        input.r#true
+    }
 }
 
 #[cfg(test)]
@@ -27,12 +62,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_names_are_unique() {
-        let mut names: Vec<&str> = registry().iter().map(|spec| spec.name).collect();
-        let before = names.len();
-        names.sort_unstable();
-        names.dedup();
-        assert_eq!(before, names.len(), "duplicate node names in registry");
+    fn registry_is_nonempty_and_names_unique() {
+        // registered() panics on duplicate names; reaching the assert means
+        // uniqueness held.
+        let specs = registry();
+        assert!(!specs.is_empty());
     }
 
     #[test]
@@ -45,5 +79,111 @@ mod tests {
                 spec.category
             );
         }
+    }
+
+    // Stage-1 DoD (doc 15): a #[node] function round-trips into the catalog
+    // with ports, defaults, and doc lines intact.
+    #[test]
+    fn add_spec_roundtrips_ports_and_docs() {
+        let specs = registry();
+        let add = specs
+            .iter()
+            .find(|s| s.name == "add")
+            .expect("add registered");
+        assert_eq!(add.title, "Add");
+        // Lowercase after the em dash, per docs/08's own doc-comment style
+        // ("Move — translate geometry along a vector.").
+        assert_eq!(add.description, "sum of two numbers.");
+        assert_eq!(add.category, "Maths & logic");
+        assert_eq!(add.version, 1);
+        assert!(add.pure && !add.uses_tolerance);
+        let [a, b] = add.inputs else {
+            panic!("add has two inputs")
+        };
+        assert_eq!(
+            (a.name, a.ty.render().as_str(), a.default),
+            ("a", "Number", None)
+        );
+        assert_eq!(
+            (b.name, b.ty.render().as_str(), b.default),
+            ("b", "Number", None)
+        );
+        assert_eq!(a.doc, "First addend.");
+        assert_eq!(add.signature(), "add(a: Number, b: Number) → Number");
+    }
+
+    #[test]
+    fn series_spec_roundtrips_defaults_and_list_output() {
+        let specs = registry();
+        let series = specs
+            .iter()
+            .find(|s| s.name == "series")
+            .expect("series registered");
+        assert_eq!(
+            series.signature(),
+            "series(start: Number = 0.0, step: Number = 1.0, count: Integer) → [Number]"
+        );
+        let [start, _, count] = series.inputs else {
+            panic!("series has three inputs")
+        };
+        assert_eq!(start.default, Some("0.0"));
+        assert_eq!(start.doc, "First value.");
+        assert_eq!(count.default, None);
+    }
+
+    #[test]
+    fn deconstruct_domain_spec_roundtrips_multi_output() {
+        let specs = registry();
+        let node = specs
+            .iter()
+            .find(|s| s.name == "deconstruct_domain")
+            .expect("deconstruct_domain registered");
+        assert_eq!(
+            node.signature(),
+            "deconstruct_domain(domain: Domain) → (start: Number, end: Number)"
+        );
+        assert_eq!(node.outputs.len(), 2);
+        assert_eq!(node.outputs[0].doc, "Interval start.");
+    }
+
+    // The naming contracts the manuals document, exercised through the
+    // real macro (docs/10: the dialect name never carries Rust's
+    // keyword-dodging underscore; DECISIONS.md one-nomenclature row).
+    #[test]
+    fn naming_contracts_roundtrip() {
+        let specs = registry();
+        let loop_node = specs
+            .iter()
+            .find(|s| s.name == "loop")
+            .expect("fn loop_ registers as `loop`");
+        assert!(
+            !specs.iter().any(|s| s.name == "loop_"),
+            "trailing underscore must not reach the dialect name"
+        );
+        let [port] = loop_node.inputs else {
+            panic!("fixture has one input")
+        };
+        assert_eq!(
+            port.name, "true",
+            "r#true field must register as port `true`"
+        );
+        assert_eq!(port.default, Some("1.5"));
+        assert!(
+            specs.iter().any(|s| s.name == "fixture_renamed"),
+            "name override must win over the fn ident"
+        );
+        assert!(!specs.iter().any(|s| s.name == "some_other_ident"));
+    }
+
+    #[test]
+    fn registry_order_is_category_then_source_order() {
+        let specs = registry();
+        let names: Vec<&str> = specs.iter().map(|s| s.name).collect();
+        let series_pos = names.iter().position(|n| *n == "series").expect("series");
+        let add_pos = names.iter().position(|n| *n == "add").expect("add");
+        assert!(
+            series_pos < add_pos,
+            "Sequences & random (docs/08 §2) precedes Maths & logic (§3): {names:?}"
+        );
     }
 }

@@ -23,7 +23,18 @@ pub const CATEGORY_ORDER: &[&str] = &[
     "Output, display & export",
 ];
 
-/// Render the full catalog document from registered specs.
+/// Sort rank for a category: docs/08 position, unknowns after (then sorted
+/// by name via the second tuple slot).
+#[must_use]
+pub fn category_rank(category: &'static str) -> (usize, &'static str) {
+    CATEGORY_ORDER
+        .iter()
+        .position(|known| *known == category)
+        .map_or((CATEGORY_ORDER.len(), category), |i| (i, ""))
+}
+
+/// Render the full catalog document from registered specs (pre-sorted by
+/// [`crate::spec::registered`]).
 ///
 /// Deterministic: given the same specs in the same order, the output is
 /// byte-identical (the freshness CI check depends on this).
@@ -37,18 +48,14 @@ pub fn render_markdown(specs: &[&NodeSpec]) -> String {
          One line per registered node: `signature` — Title — description.\n",
     );
 
-    let mut categories: Vec<&str> = Vec::new();
+    let mut categories: Vec<&'static str> = Vec::new();
     for spec in specs {
         if !categories.contains(&spec.category) {
             categories.push(spec.category);
         }
     }
-    categories.sort_by_key(|category| {
-        CATEGORY_ORDER
-            .iter()
-            .position(|known| known == category)
-            .map_or_else(|| (CATEGORY_ORDER.len(), *category), |i| (i, ""))
-    });
+    // One ordering rule, shared with registered(): category_rank.
+    categories.sort_by_key(|category| category_rank(category));
 
     for category in categories {
         // write! to a String is infallible; the discarded Result is fmt noise.
@@ -69,45 +76,41 @@ pub fn render_markdown(specs: &[&NodeSpec]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec::PortSpec;
+    use crate::spec::{PortSpec, PortType, Tier};
 
     static OUT_NUMBER: &[PortSpec] = &[PortSpec {
         name: "out",
-        ty: "Number",
+        ty: PortType::named("Number"),
         default: None,
+        doc: "",
+        dimension: None,
     }];
+
+    const fn spec(name: &'static str, title: &'static str, category: &'static str) -> NodeSpec {
+        NodeSpec {
+            name,
+            title,
+            description: "Test node.",
+            category,
+            tier: Tier::S,
+            version: 1,
+            pure: true,
+            uses_tolerance: false,
+            inputs: &[],
+            outputs: OUT_NUMBER,
+            module: "test",
+            line: 0,
+        }
+    }
 
     // Note: the DIALECT name has no underscore even when the Rust fn needs
     // one to dodge a keyword (`fn move_` registers as `move` — docs/10).
-    static TRANSFORM_NODE: NodeSpec = NodeSpec {
-        name: "move",
-        title: "Move",
-        description: "Translate geometry along a vector.",
-        category: "Transform",
-        inputs: &[],
-        outputs: OUT_NUMBER,
-    };
-    static MATHS_NODE: NodeSpec = NodeSpec {
-        name: "add",
-        title: "Add",
-        description: "Sum of two numbers.",
-        category: "Maths & logic",
-        inputs: &[],
-        outputs: OUT_NUMBER,
-    };
-    static UNKNOWN_NODE: NodeSpec = NodeSpec {
-        name: "mystery",
-        title: "Mystery",
-        description: "Not in any known category.",
-        category: "Zebra category",
-        inputs: &[],
-        outputs: OUT_NUMBER,
-    };
+    static TRANSFORM_NODE: NodeSpec = spec("move", "Move", "Transform");
+    static MATHS_NODE: NodeSpec = spec("add", "Add", "Maths & logic");
+    static UNKNOWN_NODE: NodeSpec = spec("mystery", "Mystery", "Zebra category");
 
     #[test]
     fn categories_follow_docs08_order_with_unknowns_last() {
-        // Registered out of order: Transform, unknown, Maths — the doc must
-        // come out Maths (3) before Transform (10), unknown last.
         let rendered = render_markdown(&[&TRANSFORM_NODE, &UNKNOWN_NODE, &MATHS_NODE]);
         let maths = rendered.find("## Maths & logic").unwrap();
         let transform = rendered.find("## Transform").unwrap();
@@ -118,7 +121,14 @@ mod tests {
     #[test]
     fn node_line_is_signature_title_description() {
         let rendered = render_markdown(&[&MATHS_NODE]);
-        assert!(rendered.contains("- `add() → Number` — Add — Sum of two numbers.\n"));
+        assert!(rendered.contains("- `add() → Number` — Add — Test node.\n"));
+    }
+
+    #[test]
+    fn category_rank_orders_known_before_unknown() {
+        assert!(category_rank("Maths & logic") < category_rank("Transform"));
+        assert!(category_rank("Transform") < category_rank("Zebra category"));
+        assert!(category_rank("Alpha unknown") < category_rank("Zebra category"));
     }
 
     #[test]

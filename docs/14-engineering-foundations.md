@@ -116,8 +116,10 @@ struct Mesh {
   state, never ambient (the no-ambient-state rule survives CAD).
 - No scattered epsilons: the sanctioned comparison API
   (`approx_eq`, `coincident`, `is_closed_within`) is the only float
-  comparison path in geometry code. Raw `==` on floats is
-  lint-banned except in hash/determinism tests.
+  comparison path in geometry code. Raw `==` on floats is lint-banned in
+  geometry code; exact `==` is sanctioned in hash/determinism tests and
+  in stdlib tests whose node contract is exact IEEE arithmetic (pure
+  maths — ledger revision 2026-08-12).
 - **Units are changeable after the fact**, two ways: **relabel**
   (1 mm → 1 in; numbers untouched) or **convert** (1 mm → 0.03937 in;
   numbers rescaled). Convert rewrites the literals of params feeding
@@ -193,9 +195,12 @@ review` / `--bless`), never by hand.
 ## CI pipeline (GitHub Actions)
 
 - **Every PR / push**: `rustfmt --check`; `clippy -D warnings`;
-  workspace tests (Linux); `cargo check` on Windows + macOS; web
-  `tsc` + eslint + vitest; WASM guest build check; Playwright smoke.
-  Rust build caching via `rust-cache`.
+  workspace tests (Linux); workspace tests on Windows + macOS too while
+  the suite stays fast — the determinism-hash DoD is cross-platform, so
+  it should hold at merge time, not nightly-after (demote to
+  `cargo check` when suite runtime demands); web `tsc` + eslint +
+  vitest; WASM guest build check; Playwright smoke. Rust build caching
+  via `rust-cache`.
 - **Nightly**: full test matrix (Linux/Windows/macOS); wall-corpus
   end-to-end with hash comparison; criterion benchmarks against
   stored baselines (fail on >10% regression); `cargo deny` +

@@ -1,0 +1,5 @@
+error: port `x` needs a doc comment — it becomes the catalog/canvas port doc (doc comments are the single documentation source, doc 14)
+ --> tests/ui/missing_field_doc.rs:6:5
+  |
+6 |     pub x: f64,
+  |     ^^^
