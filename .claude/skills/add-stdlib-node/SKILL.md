@@ -34,7 +34,9 @@ Worked examples: `crates/cicada-stdlib/src/maths.rs` (multi-output:
 2. **Node function** with `#[node(category = "…", tier = "S", version = 1)]`
    taking exactly one argument (the input struct). Doc comment first line
    is `` Title — description. `` (em dash; lowercase description, docs/08
-   style) — the macro parses it into the catalog. Output: return a bare
+   style) — the macro parses it into the catalog. When the docs/08 row
+   gives only a signature (multi-node rows), write the one-liner yourself
+   in the style of the neighbors (`add` → "sum of two numbers."). Output: return a bare
    value for single-output (`-> f64` becomes port `out`), or a
    `#[derive(Ports)]` output struct for multi-output. `version` is the
    semantic cache-key version (doc 12): bump it on ANY behavior change.
@@ -48,7 +50,9 @@ Worked examples: `crates/cicada-stdlib/src/maths.rs` (multi-output:
    is catalog order.
 4. **Tests, all three kinds** (see the worked examples):
    - *Table*: hand-picked cases including edges (zeros, negatives,
-     extremes) and a `#[should_panic]` case for each loud refusal.
+     extremes) and a `#[should_panic]` case for each loud refusal. A node
+     whose whole input domain is valid (like `add`) has no refusals and
+     needs no `#[should_panic]` case — don't invent one.
    - *Property*: a `proptest` invariant (symmetry, identity, round-trip,
      shape). If proptest ever finds a failure it writes a
      `proptest-regressions/` file: **commit it with the fix**.
