@@ -240,6 +240,10 @@ pub enum BindingType {
         node: String,
         /// The call's lift depth.
         lift: u8,
+        /// Each output port's resolved wire type, by port name: the call's
+        /// type variables substituted and the lift applied — `cull.kept` is
+        /// `[Point]`, not `[E]` (the view-model renders these).
+        outputs: HashMap<String, WireType>,
     },
     /// Errored — downstream stays quiet about it.
     Poisoned,
@@ -348,9 +352,14 @@ impl<'a> Checker<'a> {
                             ty: ty.clone(),
                             from_single_out: *from_single_out,
                         },
-                        BindingKind::Node { spec, lift, .. } => BindingType::Node {
+                        BindingKind::Node { spec, lift, vars } => BindingType::Node {
                             node: spec.name.to_owned(),
                             lift: *lift,
+                            outputs: spec
+                                .outputs
+                                .iter()
+                                .map(|out| (out.name.to_owned(), resolved_output(out, vars, *lift)))
+                                .collect(),
                         },
                         BindingKind::Poisoned => BindingType::Poisoned,
                     },
@@ -1198,7 +1207,7 @@ impl<'a> Checker<'a> {
     ) -> Option<WireType> {
         let port = port_ref.port.as_ref()?;
         if let Some(out) = spec.outputs.iter().find(|p| p.name == port.name) {
-            return Some(substitute_vars(WireType::from_port(&out.ty), vars).lifted(lift));
+            return Some(resolved_output(out, vars, lift));
         }
         if spec.outputs.is_empty() {
             self.diagnostics.push(
@@ -1325,6 +1334,12 @@ fn bind_var(port: &PortSpec, value: &WireType, bindable: bool, vars: &mut VarBin
         None => {}
     }
     absorbs
+}
+
+/// The wire type an output port carries out of ONE call: its variables
+/// substituted ([`substitute_vars`]), the call's lift applied.
+fn resolved_output(out: &PortSpec, vars: &VarBindings, lift: u8) -> WireType {
+    substitute_vars(WireType::from_port(&out.ty), vars).lifted(lift)
 }
 
 /// A variable-typed output carries the kind its variable bound to in THIS

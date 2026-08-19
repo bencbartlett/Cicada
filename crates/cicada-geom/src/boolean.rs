@@ -73,11 +73,21 @@ pub fn union(meshes: &[Mesh]) -> Result<Mesh, GeomError> {
 /// [`GeomError::Kernel`] when Manifold refuses the mesh, a cutter (named
 /// by index), or the result.
 pub fn difference(mesh: &Mesh, cutters: &[Mesh]) -> Result<Mesh, GeomError> {
-    let mut result = to_manifold(mesh, "the mesh")?;
+    let mut operands = Vec::with_capacity(cutters.len() + 1);
+    operands.push(to_manifold(mesh, "the mesh")?);
     for (index, cutter) in cutters.iter().enumerate() {
-        let cutter = to_manifold(cutter, &format!("cutter {index}"))?;
-        result = result.difference(&cutter);
+        operands.push(to_manifold(cutter, &format!("cutter {index}"))?);
     }
+    // One batch call instead of a chain of differences: Manifold unions
+    // the cutters in a balanced tree and subtracts once, so the growing
+    // result is not re-cut per cutter. The wall's labeled carve (~25
+    // cutters per part) measured 41 ms/part chained vs (see commit body)
+    // batched. The tree shape is fixed by operand order → deterministic.
+    let result = if operands.len() == 1 {
+        operands.remove(0)
+    } else {
+        Manifold::batch_difference(&operands)
+    };
     from_manifold(&result, "difference")
 }
 

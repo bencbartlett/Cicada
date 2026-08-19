@@ -1,0 +1,644 @@
+{
+ "anomalies": [
+  "DXF layer table lacks layers that carry entities: ['TEXT'] (board_final_dxf.py only lists OUTLINES/SEAM when it regenerates TEXT; CAM imports still show the layer)",
+  "plates_f0_emerald_X1C_v1.4.3mf: duplicate object names ['C97']",
+  "coil_2.3mf: coil manifest parts missing from the file ['I59']; extra objects []",
+  "ported physics (at the seeds) with the contract core radius 0.1 vs production lean: median 2.275 deg, max 147.904 deg; at the fitted core radius 243.84 mm: median 0.0011, max 0.0047",
+  "20 coil-captured parts have their apex trimmed away in every coil 3MF; heights estimated from the fitted H(|B|) law (|residual| max 0.285, median 0.042 mm over the exported parts): ['B11', 'I41', 'A82', 'I72', 'I57', 'A129', 'A83', 'I56', 'I71', 'I60', 'A97', 'I58', 'I24', 'A84', 'I70', 'I39', 'A126', 'I25', 'I22', 'A127']",
+  "26 parts have no 1.4.1-geometry cap measurement (5 dropped parts with 1.4 triangle caps, trimmed coil parts); lean_length from the poly5 L(height) law (|residual| max 0.012, median 0.000 mm; 4 of them below the fitted height range -> extrapolated): ['B11', 'I41', 'A82', 'G101', 'I72', 'F111', 'I57', 'A129', 'A83', 'G122', 'I56', 'I71', 'I60', 'A97', 'I58', 'I24', 'A84', 'F109', 'I70', 'I39', 'A126', 'I25', 'G83', 'I22', 'I59', 'A127']",
+  "production plate meshes are yawed so the lean is NOT exactly +Y: |yaw - lean yaw| up to 6.882 deg (median 0.574); plate_packer.py's Apexes input differed from the geometric apex",
+  "21 coil-captured parts have neither pins nor a surviving cap: lean direction from the ported field at the fitted core radius: ['B11', 'I41', 'A82', 'I72', 'I57', 'A129', 'A83', 'I56', 'I71', 'I60', 'A97', 'I58', 'I24', 'A84', 'I70', 'I39', 'A126', 'I25', 'I22', 'I59', 'A127']"
+ ],
+ "checks": {
+  "centroid_pin_match_max_mm": 0.0011,
+  "coil_base_translation_err_mm": {
+   "count": 8,
+   "max": 0.0008,
+   "mean": 0.0005,
+   "median": 0.0006,
+   "min": 0.0001,
+   "p90": 0.0008,
+   "p99": 0.0008
+  },
+  "coil_part_cap_kinds": {
+   "missing": 12,
+   "scaled_cell_0.07": 37,
+   "triangle": 1,
+   "trimmed_or_unknown": 8
+  },
+  "coil_parts_with_measured_height": 38,
+  "coil_rings": [
+   {
+    "center": [585.4480, 879.3050],
+    "cylinder_radius": 121.9201,
+    "hole_angles_deg": [-120.0000, -60.0000, 0.0000, 60.0000, 120.0000, 180.0000],
+    "ring_radius": 60.9601
+   },
+   {
+    "center": [1848.0740, 269.0850],
+    "cylinder_radius": 121.9201,
+    "hole_angles_deg": [-120.0000, -60.0000, 0.0000, 60.0000, 120.0000, 180.0000],
+    "ring_radius": 60.9601
+   }
+  ],
+  "dropped_in_1_4_1": [
+   {
+    "bin": 0,
+    "file_1_4": "plates_f0_emerald_X1C.3mf",
+    "height_mm": 57.0000,
+    "id": "G101",
+    "idx": 130,
+    "plate_1_4": 3
+   },
+   {
+    "bin": 0,
+    "file_1_4": "plates_f0_emerald_X1C.3mf",
+    "height_mm": 46.4000,
+    "id": "G122",
+    "idx": 422,
+    "plate_1_4": 4
+   },
+   {
+    "bin": 1,
+    "file_1_4": "plates_f1_forest_green_X1C.3mf",
+    "height_mm": 78.1000,
+    "id": "F109",
+    "idx": 829,
+    "plate_1_4": 12
+   },
+   {
+    "bin": 1,
+    "file_1_4": "plates_f1_forest_green_X1C.3mf",
+    "height_mm": 57.2000,
+    "id": "G83",
+    "idx": 1113,
+    "plate_1_4": 20
+   },
+   {
+    "bin": 2,
+    "file_1_4": "plates_f2_sea_green_X1C.3mf",
+    "height_mm": 82.0000,
+    "id": "F111",
+    "idx": 151,
+    "plate_1_4": 25
+   }
+  ],
+  "dxf_entity_counts": {
+   "BOARDCUT": 1,
+   "OUTLINES": 1200,
+   "PINHOLES": 2296,
+   "STOCK": 1,
+   "TEXT": 3828
+  },
+  "dxf_layer_table": [
+   "OUTLINES",
+   "PINHOLES",
+   "BOARDCUT",
+   "STOCK"
+  ],
+  "dxf_order_equals_pipeline_idx": "verified: recomputed banded-reading-order IDs match all 1200 manifest ids; the 58 outlines without pins are exactly the coil idx set",
+  "ghost_outlines_with_repeated_closing_vertex": 1200,
+  "heights_estimated_from_field_law": [
+   "B11",
+   "I41",
+   "A82",
+   "I72",
+   "I57",
+   "A129",
+   "A83",
+   "I56",
+   "I71",
+   "I60",
+   "A97",
+   "I58",
+   "I24",
+   "A84",
+   "I70",
+   "I39",
+   "A126",
+   "I25",
+   "I22",
+   "A127"
+  ],
+  "ids_recomputed_vs_manifest_mismatches": 0,
+  "lean_directions_from_field": [
+   "B11",
+   "I41",
+   "A82",
+   "I72",
+   "I57",
+   "A129",
+   "A83",
+   "I56",
+   "I71",
+   "I60",
+   "A97",
+   "I58",
+   "I24",
+   "A84",
+   "I70",
+   "I39",
+   "A126",
+   "I25",
+   "I22",
+   "I59",
+   "A127"
+  ],
+  "lean_lengths_estimated_from_law": [
+   "B11",
+   "I41",
+   "A82",
+   "G101",
+   "I72",
+   "F111",
+   "I57",
+   "A129",
+   "A83",
+   "G122",
+   "I56",
+   "I71",
+   "I60",
+   "A97",
+   "I58",
+   "I24",
+   "A84",
+   "F109",
+   "I70",
+   "I39",
+   "A126",
+   "I25",
+   "G83",
+   "I22",
+   "I59",
+   "A127"
+  ],
+  "lean_lengths_extrapolated_below_fitted_height_range": [
+   "I41",
+   "A97",
+   "I58",
+   "I59"
+  ],
+  "mesh_base_vs_dxf_cell_fit_residual_mm": {
+   "count": 1142,
+   "max": 0.0018,
+   "mean": 0.0007,
+   "median": 0.0007,
+   "min": 0.0003,
+   "p90": 0.0009,
+   "p99": 0.0011
+  },
+  "mesh_height_minus_manifest_mm": {
+   "count": 1142,
+   "max": 0.0498,
+   "mean": -0.0001,
+   "median": 0.0004,
+   "min": -0.0500,
+   "p90": 0.0396,
+   "p99": 0.0488
+  },
+  "parts_with_pins": 1142,
+  "pin_spacing_mm": {
+   "count": 1142,
+   "max": 12.0009,
+   "mean": 11.9991,
+   "median": 12.0000,
+   "min": 11.5361,
+   "p90": 12.0004,
+   "p99": 12.0007
+  },
+  "pin_spacing_rule_max_err_mm": 0.0012,
+  "triangle_caps_export_1_4": {
+   "F109": {
+    "lean_length_triangle_cap": 66.7225,
+    "lean_length_used": 69.7055,
+    "triangle_cap_direction_vs_pins_deg": 0.3878
+   },
+   "F111": {
+    "lean_length_triangle_cap": 74.5979,
+    "lean_length_used": 74.8044,
+    "triangle_cap_direction_vs_pins_deg": -2.4026
+   },
+   "G101": {
+    "lean_length_triangle_cap": 44.1239,
+    "lean_length_used": 43.7911,
+    "triangle_cap_direction_vs_pins_deg": 0.4039
+   },
+   "G122": {
+    "lean_length_triangle_cap": 35.6869,
+    "lean_length_used": 32.2163,
+    "triangle_cap_direction_vs_pins_deg": 1.2012
+   },
+   "G83": {
+    "lean_length_triangle_cap": 44.8706,
+    "lean_length_used": 44.0051,
+    "triangle_cap_direction_vs_pins_deg": 1.7221
+   },
+   "I59": {
+    "lean_length_triangle_cap": 4.0829,
+    "lean_length_used": 6.0078,
+    "triangle_cap_direction_vs_pins_deg": null
+   }
+  }
+ },
+ "counts": {
+  "coil": 58,
+  "coil_1": 29,
+  "coil_2": 29,
+  "coil_board_points": 12,
+  "dropped": 5,
+  "exported": 1137,
+  "parts": 1200,
+  "pin_holes_in_dxf": 2296,
+  "wires": 2
+ },
+ "extracted": "2026-08-19",
+ "sources": {
+  "coil_manifest": "export/coil_manifest.csv",
+  "dxf": "export/solenoid_art_export_1.4.1/board_postprocessed.dxf",
+  "heights": {
+   "estimated from the H(|B|) law at the seeds (cap trimmed away in the coil mesh)": 20,
+   "mesh coil_1.3mf (coil mesh world zmax (base plane z = 0))": 21,
+   "mesh coil_2.3mf (coil mesh world zmax (base plane z = 0))": 17,
+   "mesh plates_f0_emerald_X1C_v1.4.1_.3mf (mesh zmax - zmin)": 128,
+   "mesh plates_f0_emerald_X1C_v1.4.3mf (mesh zmax - zmin)": 2,
+   "mesh plates_f1_forest_green_X1C_v1.4.1_.3mf (mesh zmax - zmin)": 221,
+   "mesh plates_f1_forest_green_X1C_v1.4.3mf (mesh zmax - zmin)": 2,
+   "mesh plates_f2_sea_green_X1C_v1.4.1_.3mf (mesh zmax - zmin)": 227,
+   "mesh plates_f2_sea_green_X1C_v1.4.3mf (mesh zmax - zmin)": 1,
+   "mesh plates_f3_teal_H2_v1.4.1_.3mf (mesh zmax - zmin)": 258,
+   "mesh plates_f4_sky_blue_H2_v1.4.1_.3mf (mesh zmax - zmin)": 303
+  },
+  "lean_directions": {
+   "coil mesh cap": 37,
+   "field at fitted core at the seeds (no production evidence)": 21,
+   "pins": 1142
+  },
+  "lean_lengths": {
+   "estimated from the poly5 L(height) law": 26,
+   "mesh coil_1.3mf (coil cap centroid (scaled_cell_0.07))": 21,
+   "mesh coil_2.3mf (coil cap centroid (scaled_cell_0.07))": 16,
+   "mesh plates_f0_emerald_X1C_v1.4.1_.3mf (plate cap centroid (scaled_cell_0.07))": 128,
+   "mesh plates_f1_forest_green_X1C_v1.4.1_.3mf (plate cap centroid (scaled_cell_0.07))": 221,
+   "mesh plates_f2_sea_green_X1C_v1.4.1_.3mf (plate cap centroid (scaled_cell_0.07))": 227,
+   "mesh plates_f3_teal_H2_v1.4.1_.3mf (plate cap centroid (scaled_cell_0.07))": 258,
+   "mesh plates_f4_sky_blue_H2_v1.4.1_.3mf (plate cap centroid (scaled_cell_0.07))": 303
+  },
+  "manifest_1_4": "export/solenoid_art_export_1.4/manifest.csv",
+  "manifest_1_4_1": "export/solenoid_art_export_1.4.1/manifest.csv"
+ },
+ "stats": {
+  "cap_kinds_1_4": {
+   "triangle": 6
+  },
+  "cap_kinds_1_4_1": {
+   "scaled_cell_0.07": 1137
+  },
+  "cap_scale_implied_1_4_1": {
+   "count": 1137,
+   "max": 0.0700,
+   "mean": 0.0700,
+   "median": 0.0700,
+   "min": 0.0700,
+   "p90": 0.0700,
+   "p99": 0.0700
+  },
+  "cap_vertex_count_minus_cell_vertex_count_1_4_1": {
+   "count": 1137,
+   "max": 0,
+   "mean": 0.0000,
+   "median": 0,
+   "min": 0,
+   "p90": 0.0000,
+   "p99": 0.0000
+  },
+  "field_direction_vs_production_lean_deg": {
+   "at_candidate_core": {
+    "count": 1179,
+    "max": 0.0047,
+    "mean": 0.0013,
+    "median": 0.0011,
+    "min": 0.0000,
+    "p90": 0.0025,
+    "p99": 0.0038
+   },
+   "at_centroids_for_reference": {
+    "at_candidate_core": {
+     "count": 1179,
+     "max": 1.9284,
+     "mean": 0.1626,
+     "median": 0.1027,
+     "min": 0.0000,
+     "p90": 0.3726,
+     "p99": 0.8829
+    },
+    "at_contract_core": {
+     "count": 1179,
+     "max": 149.1866,
+     "mean": 3.4097,
+     "median": 2.2462,
+     "min": 0.0019,
+     "p90": 7.1112,
+     "p99": 17.3556
+    },
+    "pins_only_at_candidate_core": {
+     "count": 1142,
+     "max": 1.3144,
+     "mean": 0.1498,
+     "median": 0.1000,
+     "min": 0.0000,
+     "p90": 0.3473,
+     "p99": 0.8216
+    }
+   },
+   "at_contract_core": {
+    "count": 1179,
+    "max": 147.9035,
+    "mean": 3.3946,
+    "median": 2.2746,
+    "min": 0.0017,
+    "p90": 7.0762,
+    "p99": 17.0185
+   },
+   "at_fitted_core": {
+    "count": 1179,
+    "max": 0.0047,
+    "mean": 0.0013,
+    "median": 0.0011,
+    "min": 0.0000,
+    "p90": 0.0025,
+    "p99": 0.0038
+   },
+   "by_lean_source_at_fitted_core": {
+    "coil mesh cap": {
+     "count": 37,
+     "max": 0.0026,
+     "mean": 0.0004,
+     "median": 0.0002,
+     "min": 0.0000,
+     "p90": 0.0009,
+     "p99": 0.0022
+    },
+    "pins": {
+     "count": 1142,
+     "max": 0.0047,
+     "mean": 0.0013,
+     "median": 0.0011,
+     "min": 0.0000,
+     "p90": 0.0026,
+     "p99": 0.0038
+    }
+   },
+   "by_sign_combo_at_contract_core_0.1": {
+    "left+1_right+1": {
+     "count": 1179,
+     "max": 179.7787,
+     "mean": 87.4911,
+     "median": 82.9562,
+     "min": 0.0170,
+     "p90": 159.5006,
+     "p99": 178.2437
+    },
+    "left+1_right-1": {
+     "count": 1179,
+     "max": 147.9035,
+     "mean": 3.3946,
+     "median": 2.2746,
+     "min": 0.0017,
+     "p90": 7.0762,
+     "p99": 17.0185
+    },
+    "left-1_right+1": {
+     "count": 1179,
+     "max": 179.9983,
+     "mean": 176.6054,
+     "median": 177.7254,
+     "min": 32.0965,
+     "p90": 179.6767,
+     "p99": 179.9799
+    },
+    "left-1_right-1": {
+     "count": 1179,
+     "max": 179.9830,
+     "mean": 92.5089,
+     "median": 97.0438,
+     "min": 0.2213,
+     "p90": 162.9115,
+     "p99": 178.2236
+    }
+   },
+   "chosen_signs": "left+1_right-1",
+   "core_radius_candidate_0.1x96in": 243.8400,
+   "core_radius_contract": 0.1000,
+   "core_radius_fit": 243.8392,
+   "evaluation_points": "seeds",
+   "note": "evaluated at the recovered Voronoi seeds (recover_seeds.py): the production field was solved at the seeds with CoreRadius 0.1 x 96 in = 243.84 mm; the residual there is pin-rounding noise",
+   "pins_only_at_candidate_core": {
+    "count": 1142,
+    "max": 0.0047,
+    "mean": 0.0013,
+    "median": 0.0011,
+    "min": 0.0000,
+    "p90": 0.0025,
+    "p99": 0.0038
+   },
+   "pins_only_at_contract_core": {
+    "count": 1142,
+    "max": 14.5278,
+    "mean": 2.8510,
+    "median": 2.2108,
+    "min": 0.0017,
+    "p90": 6.2260,
+    "p99": 12.1819
+   }
+  },
+  "height_vs_field_magnitude_law": {
+   "core_radius": 243.8392,
+   "n": 1142,
+   "poly1": {
+    "coef_low_to_high_in_u": [80.4729, 67.8889],
+    "residual_abs_max": 22.8888,
+    "residual_abs_median": 4.6069,
+    "u": "(log|B| - -6.555806) / 0.705791"
+   },
+   "poly3": {
+    "coef_low_to_high_in_u": [75.6448, 58.5792, 22.3548, 3.6622],
+    "residual_abs_max": 0.2854,
+    "residual_abs_median": 0.0422,
+    "u": "(log|B| - -6.555806) / 0.705791"
+   },
+   "x": "log(|B|) with unit antiparallel currents at the seeds"
+  },
+  "lean_length_law": {
+   "binned": [
+    {
+     "height_mean": 41.8558,
+     "height_mid": 40.6656,
+     "lean_mean": 27.7727,
+     "n": 41,
+     "ratio_mean": 0.6620
+    },
+    {
+     "height_mean": 51.5142,
+     "height_mid": 51.0512,
+     "lean_mean": 37.6745,
+     "n": 100,
+     "ratio_mean": 0.7303
+    },
+    {
+     "height_mean": 61.3118,
+     "height_mid": 61.4368,
+     "lean_mean": 48.7930,
+     "n": 120,
+     "ratio_mean": 0.7948
+    },
+    {
+     "height_mean": 72.2540,
+     "height_mid": 71.8224,
+     "lean_mean": 62.2234,
+     "n": 125,
+     "ratio_mean": 0.8605
+    },
+    {
+     "height_mean": 81.8815,
+     "height_mid": 82.2080,
+     "lean_mean": 74.7299,
+     "n": 125,
+     "ratio_mean": 0.9121
+    },
+    {
+     "height_mean": 92.5398,
+     "height_mid": 92.5936,
+     "lean_mean": 89.0976,
+     "n": 94,
+     "ratio_mean": 0.9624
+    },
+    {
+     "height_mean": 102.9020,
+     "height_mid": 102.9792,
+     "lean_mean": 103.3953,
+     "n": 88,
+     "ratio_mean": 1.0045
+    },
+    {
+     "height_mean": 113.0316,
+     "height_mid": 113.3648,
+     "lean_mean": 117.4928,
+     "n": 97,
+     "ratio_mean": 1.0392
+    },
+    {
+     "height_mean": 123.9504,
+     "height_mid": 123.7504,
+     "lean_mean": 132.6263,
+     "n": 86,
+     "ratio_mean": 1.0698
+    },
+    {
+     "height_mean": 134.3763,
+     "height_mid": 134.1360,
+     "lean_mean": 146.8438,
+     "n": 90,
+     "ratio_mean": 1.0927
+    },
+    {
+     "height_mean": 143.8033,
+     "height_mid": 144.5216,
+     "lean_mean": 159.3658,
+     "n": 110,
+     "ratio_mean": 1.1081
+    },
+    {
+     "height_mean": 154.6721,
+     "height_mid": 154.9072,
+     "lean_mean": 173.2771,
+     "n": 61,
+     "ratio_mean": 1.1202
+    }
+   ],
+   "coil_parts_in_range_abs_deviation_from_poly5": {
+    "count": 35,
+    "max": 0.0037,
+    "mean": 0.0009,
+    "median": 0.0005,
+    "min": 0.0000,
+    "p90": 0.0023,
+    "p99": 0.0037
+   },
+   "fitted_over": "exported parts with a measured 7%-scaled-cell cap (1.4.1 plate meshes)",
+   "height_range": [35.4728, 160.1000],
+   "linear": {
+    "a": 1.3266,
+    "b": -32.3156,
+    "formula": "lean_length = 1.326619 * height + -32.315557",
+    "residual_abs_max": 7.0758,
+    "residual_abs_median": 0.9417
+   },
+   "linear_as_a_times_height_minus_h0": {
+    "a": 1.3266,
+    "h0": 24.3593
+   },
+   "n": 1137,
+   "poly5": {
+    "coef_low_to_high_in_u": [96.3015, 86.0828, 3.9220, -7.0631, 0.6924, 0.0647],
+    "note": "lean_length IS a smooth deterministic function of height (coil-part measurements land on the same curve within 0.005 mm) but not a linear or quadratic one; no closed form found -- the degree-5 polynomial reproduces it inside height_range; outside it extrapolates",
+    "residual_abs_max": 0.0122,
+    "residual_abs_median": 0.0004,
+    "u": "(height - 97.786401) / 62.313599"
+   },
+   "quadratic": {
+    "a0": -22.8967,
+    "a1": 1.1127,
+    "a2": 0.0011,
+    "formula": "lean_length = 0.00107725 * height^2 + 1.112699 * height + -22.896675",
+    "residual_abs_max": 3.8898,
+    "residual_abs_median": 0.7353
+   },
+   "ratio_lean_over_height": {
+    "count": 1137,
+    "max": 1.1243,
+    "mean": 0.9475,
+    "median": 0.9666,
+    "min": 0.6151,
+    "p90": 1.1079,
+    "p99": 1.1224
+   }
+  },
+  "mesh_lean_direction_vs_pin_lean_abs_deg": {
+   "count": 1142,
+   "max": 2.4026,
+   "mean": 0.0067,
+   "median": 0.0012,
+   "min": 0.0000,
+   "p90": 0.0027,
+   "p99": 0.0041
+  },
+  "production_plate_yaw_minus_lean_yaw_abs_deg": {
+   "count": 1137,
+   "max": 6.8824,
+   "mean": 0.9530,
+   "median": 0.5736,
+   "min": 0.0007,
+   "p90": 2.2550,
+   "p99": 5.2318
+  },
+  "production_plate_yaw_minus_lean_yaw_deg": {
+   "count": 1137,
+   "max": 6.8824,
+   "mean": -0.0010,
+   "median": 0.0334,
+   "min": -6.5515,
+   "p90": 1.3668,
+   "p99": 4.6275
+  },
+  "production_plate_yaw_minus_seed_apex_yaw_abs_deg": {
+   "count": 1137,
+   "max": 0.0050,
+   "mean": 0.0014,
+   "median": 0.0012,
+   "min": 0.0000,
+   "p90": 0.0027,
+   "p99": 0.0039
+  }
+ },
+ "tool": "corpus/tools/extract_layout.py"
+}

@@ -302,10 +302,7 @@ impl WorkerPool {
     pub fn describe(&self, path: &Path, source: &str) -> Result<Described, ScriptError> {
         let request = Wire::Map(vec![
             (Wire::from("op"), Wire::from("describe")),
-            (
-                Wire::from("path"),
-                Wire::from(path.to_string_lossy().as_ref()),
-            ),
+            (Wire::from("path"), Wire::from(plain_path(path).as_str())),
             (Wire::from("source"), Wire::from(source)),
         ]);
         let reply = self.call(&request, &KillSwitch::new())?;
@@ -354,10 +351,7 @@ impl WorkerPool {
         }
         let request = Wire::Map(vec![
             (Wire::from("op"), Wire::from("invoke")),
-            (
-                Wire::from("path"),
-                Wire::from(path.to_string_lossy().as_ref()),
-            ),
+            (Wire::from("path"), Wire::from(plain_path(path).as_str())),
             (Wire::from("source"), Wire::from(source)),
             (Wire::from("fn"), Wire::from(fn_name)),
             (Wire::from("inputs"), Wire::Map(wire_inputs)),
@@ -375,6 +369,25 @@ fn write_request(worker: &mut Worker, length: u32, frame: &[u8]) -> Result<(), S
     worker.stdin.write_all(frame)?;
     worker.stdin.flush()?;
     Ok(())
+}
+
+/// The script path as Python should see it: Windows' verbatim `\\?\`
+/// prefix stripped. The CLI canonicalizes the pipeline path (verbatim on
+/// Windows) and the script path inherits it; Python's `ntpath.normpath`
+/// leaves verbatim paths untouched, so a script joining `__file__`'s
+/// directory with `"inputs/layout.json"` would hand the OS a verbatim path
+/// containing a forward slash — `OSError: Invalid argument` (stage-6
+/// corpus, first run). Scripts resolve relative paths against their own
+/// directory by contract (docs/10 §7), so the path they get must be plain.
+fn plain_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        rest.to_owned()
+    } else {
+        text.into_owned()
+    }
 }
 
 fn map_get<'w>(wire: &'w Wire, key: &str) -> Option<&'w Wire> {

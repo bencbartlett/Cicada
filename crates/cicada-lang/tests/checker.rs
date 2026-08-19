@@ -10,7 +10,7 @@
 #![allow(clippy::expect_used)]
 
 use cicada_core::spec::{NodeSpec, PortSpec, PortType, Tier};
-use cicada_lang::check::BindingType;
+use cicada_lang::check::{BindingType, WireType};
 use cicada_lang::{Catalog, Document};
 
 const fn port(name: &'static str, base: &'static str, depth: u8) -> PortSpec {
@@ -356,12 +356,24 @@ fn element_variable_binds_across_depths_outputs_and_optionality() {
         "[[Point?]]",
         "optionality rides through nesting"
     );
-    assert!(
-        matches!(
-            resolution.bindings.get("culled"),
-            Some(BindingType::Node { node, lift: 0 }) if node == "cull"
-        ),
-        "the multi-output binding keeps its public shape"
+    let Some(BindingType::Node {
+        node,
+        lift: 0,
+        outputs,
+    }) = resolution.bindings.get("culled")
+    else {
+        panic!("the multi-output binding keeps its public shape");
+    };
+    assert_eq!(node, "cull");
+    // The public binding carries each output as THIS call resolved it —
+    // what the canvas renders on the port (`[Point]`, never `[E]`).
+    assert_eq!(
+        outputs.get("kept").map(WireType::render).as_deref(),
+        Some("[Point]")
+    );
+    assert_eq!(
+        outputs.get("map").map(WireType::render).as_deref(),
+        Some("IndexMap")
     );
 }
 

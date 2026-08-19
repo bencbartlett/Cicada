@@ -1,0 +1,73 @@
+# cicada 1
+# corpus/wall.cic — the wall slice (docs/15 stage 6): the production
+# magnetic-field pyramid wall's hardest stretch on the Cicada engine,
+# measured against the shipped fabrication files (corpus/README.md).
+#
+#   frozen production layout (seeds, per-cell shrink, heights, lean lengths)
+#   → Voronoi → area centroids → per-cell shrink → field solve (Python)
+#   → tip caps (Python) → frusta (loft) → label deboss (text solids)
+#   → pin cutters (Python) → ONE Manifold carve per part → pack (Python)
+#   → orient → Bambu 3MF + board DXF (Python, effectful).
+#
+# The carve (the carve-speed criterion; cold = a fresh --cache-dir):
+#   cargo run --release -p cicada-cli -- run corpus/wall.cic --node carved --time --cache-dir <fresh-dir>
+# The fabrication files (explicit runs, never on a plain solve — wall lesson 7):
+#   cargo run --release -p cicada-cli -- run corpus/wall.cic --node bambu --node dxf --cache-dir <dir>
+# Compare against production:  python corpus/tools/normalize.py all --help
+# In the app (serve a SCRATCH copy for experiments — the canvas writes the served files):
+#   cargo run --release -p cicada-cli -- serve corpus/wall.cic
+
+# --- the frozen production layout (corpus/inputs/layout.json) ---------------
+# What the pipeline consumes: the recovered Voronoi seeds, the per-cell shrink
+# factors (the wall's density modulation: cells shrink with field strength),
+# the vertical heights and apex lean lengths (the GH graph-mapper chain that
+# produced them is not ported), colour bins, and the export flags. The
+# production cells/centroids/leans/IDs come along as CHECKS, never as inputs.
+layout = wall_layout(path="inputs/layout.json")
+
+# --- the partition: Voronoi of the seeds inside the workable rectangle ------
+wmin = deconstruct_point(point=layout.workable_min)
+wmax = deconstruct_point(point=layout.workable_max)
+wx = construct_domain(start=wmin.x, end=wmax.x)
+wy = construct_domain(start=wmin.y, end=wmax.y)
+board = rectangle(x=wx, y=wy)
+voro = voronoi(seeds=layout.seeds, boundary=board)
+geom = area(curve=each(voro))
+cells = scale(geometry=each(voro), center=each(geom.centroid), factor=each(layout.cell_scales))
+
+# --- field solve: the ported magnetic_field.py physics, at the seeds --------
+# Production solved the 2D Biot–Savart field at the Voronoi seeds with a soft
+# core radius of 0.1 × 96 in (243.84 mm); the unit field direction is the lean.
+amps = slider(value=1.0, min=0.1, max=5.0, step=0.1)
+field = solve_field(points=layout.seeds, wires_out=layout.wires_out, wires_in=layout.wires_in, current=amps, core_radius=243.84)
+
+# --- frusta: cell → tip cap, lofted and capped ------------------------------
+# The printed tip is the base cell scaled by 0.07 about the apex (the production
+# 1.4.1 caps; tip_caps.py's triangles were the earlier 1.4 export).
+caps = tip_caps(cells=cells, centroids=geom.centroid, directions=field.directions, lean_lengths=layout.lean_lengths, heights=layout.heights, cell_scale=0.07)
+cap_rings = polyline(vertices=each(caps), closed=True)
+cap_curves = as_closed(curve=each(cap_rings))
+frusta = loft(start=each(cells), end=each(cap_curves))
+
+# --- labels: IDs + deboss placement (labels.py), glyph solids from the bundled font
+labels = wall_labels(cells=cells, centroids=geom.centroid, directions=field.directions, board_min=layout.board_min, ids_expected=layout.ids_production)
+glyphs = text_solids(text=each(labels.deboss_text), plane=each(labels.deboss_plane), size=each(labels.deboss_size), depth=2.0, segments=4)
+
+# --- pin cutters (pin_holes.py): bore + chamfer + cone ceiling per pin, slot on the lean pin
+pins = pin_cutters(centroids=geom.centroid, directions=field.directions, cells=cells)
+
+# --- the carve: every part minus its glyphs and its pin cutters, one Manifold call each
+cutters = concat(a=each(glyphs), b=each(pins.cutters))
+carved = mesh_difference(mesh=each(frusta), cutters=each(cutters))
+
+# --- pack (plate_packer.py terrain packing) and orient onto the plates ------
+# step=2 and the 320 mm H2 bed width are what production ran with; the packer's
+# apexes were seed-based (the field was solved there), hence apex_origins; the
+# shipped X1C plates were packed WITHOUT the X1-series bed-exclude block (the
+# production packer never found the X1C settings reference), hence bed_exclude.
+plates = pack_plates(cells=cells, centroids=geom.centroid, directions=field.directions, heights=layout.heights, lean_lengths=layout.lean_lengths, ids=labels.ids, bins=layout.bins, exported=layout.exported, apex_origins=layout.seeds, bed_exclude=False, settings_dir="inputs/bambu", step=2.0, h2_width=320.0)
+oriented = orient(geometry=each(carved), source=each(plates.part_frames), target=each(plates.plate_frames))
+
+# --- exporters: explicit runs only (wall lesson 7) ---------------------------
+bambu = export_bambu(meshes=oriented, ids=labels.ids, bins=layout.bins, exported=layout.exported, plates=plates.plate, slots=plates.slot, manifest=plates.manifest, settings_dir="inputs/bambu", out_dir="out")
+dxf = export_dxf(ghosts=labels.ghosts, strokes=labels.board_strokes, strokes_closed=labels.board_strokes_closed, holes=pins.board_points, coil_holes=layout.coil_board_points, skip_holes=layout.coil_captured, board_min=layout.board_min, board_max=layout.board_max, path="out/board.dxf")

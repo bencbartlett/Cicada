@@ -1,0 +1,126 @@
+{
+ "outcome": "OK: 1200 seeds (1200 kept + 0 culled) reproduce every production cell vertex within 0.0020 mm (max 0.0011) after the per-cell shrink",
+ "scipy": true,
+ "steps": {
+  "1_shrink": {
+   "cells_constrained": 1200,
+   "gap_residual_abs_max_mm": 0.0016320730967267494,
+   "gap_residual_abs_median_mm": 0.0002874694058574434,
+   "neighbour_edge_pairs": 3422,
+   "scale_max": 0.9536031563165205,
+   "scale_median": 0.893228633698217,
+   "scale_min": 0.8181607414219444,
+   "scale_vs_height_linear_fit": {
+    "a": 0.0008883839452342963,
+    "abs_residual_max": 0.004490384300422479,
+    "abs_residual_median": 0.00019786046911746125,
+    "b": 0.8109853026070787
+   }
+  },
+  "2_unscale": {
+   "their_max_deviation_mm": 0.20269935470234302,
+   "their_median_deviation_mm": 0.0003576285057960149,
+   "unscaled_vertices_within_0.5mm_of_rectangle": 294
+  },
+  "3_edges": {
+   "clip_edges": 148,
+   "edges": 7056,
+   "orphan_edges_to_culled_cells": 0,
+   "shared_endpoint_mismatch_max_mm": 0.0027188820931094283,
+   "shared_endpoint_mismatch_median_mm": 0.000932102655545289,
+   "shared_pairs": 3430,
+   "unpaired_sub_mm_edges": 48,
+   "unscaled_gap_abs_max_mm": 0.0018118931270461047
+  },
+  "3_seeds": {
+   "cells_without_shared_edges": [],
+   "midpoint_residual_abs_max_mm": 0.007057725452114028,
+   "midpoint_residual_abs_median_mm": 0.0003477866029015786,
+   "seed_minus_centroid_mm": {
+    "max": 6.032255476186381,
+    "median": 1.7311597890233665
+   }
+  },
+  "4_culled": {
+   "culled_seeds": 0,
+   "culled_seeds_outside_workable": 0,
+   "orphan_edges": 0,
+   "reflection_cluster_spread_max_mm": null,
+   "reflection_cluster_spread_median_mm": null
+  },
+  "5_verify_initial": {
+   "parts_over_tolerance": 4,
+   "vertex_count_mismatch_total": 0,
+   "vertex_deviation_max_mm": 0.002754974081754933,
+   "vertex_deviation_median_mm": 0.00047990617801856364
+  },
+  "6_refine": [
+   {
+    "iteration": 1,
+    "max_scale_change": 2.5787723366800184e-05,
+    "max_seed_move_mm": 0.002382333523693186,
+    "parts_over_tolerance": 0,
+    "vertex_deviation_max_mm": 0.001103681608244723,
+    "vertex_deviation_median_mm": 0.00040732555495130534
+   }
+  ],
+  "7_verify": {
+   "culled": 0,
+   "kept": 1200,
+   "parts_over_tolerance": 0,
+   "scale_max": 0.9536028885714405,
+   "scale_min": 0.818159928220139,
+   "seed_minus_centroid_mm": {
+    "max": 6.032438933596468,
+    "median": 1.7312625539684126
+   },
+   "seeds_total": 1200,
+   "vertex_count_mismatch_total": 0,
+   "vertex_deviation_max_mm": 0.001103681608244723,
+   "vertex_deviation_median_mm": 0.00040732555495130534,
+   "vertex_deviation_p99_mm": 0.0008621643772751962,
+   "worst_parts": []
+  },
+  "8_verify_rounded": {
+   "parts_over_tolerance": 0,
+   "scale_decimals": 6,
+   "seeds_decimals": 4,
+   "vertex_count_mismatch_total": 0,
+   "vertex_deviation_max_mm": 0.0011271698676025297,
+   "vertex_deviation_median_mm": 0.000407920977537178
+  },
+  "9_field_at_seeds": {
+   "angle_error_deg_at_centroids_core_round": {
+    "max": 1.3143322627511815,
+    "median": 0.10000160078484188
+   },
+   "angle_error_deg_at_seeds_core_0.1": {
+    "max": 14.527753255245283,
+    "median": 2.210796666926311
+   },
+   "angle_error_deg_at_seeds_core_round": {
+    "max": 0.004691144064670961,
+    "median": 0.0011433715539068382,
+    "p99": 0.0037731797431500864
+   },
+   "core_radius_fit_at_seeds_mm": 243.83295616249347,
+   "core_radius_round_mm": 243.84000000000003,
+   "parts_compared": 1142
+  },
+  "9_shrink_law": {
+   "abs_residual_max": 2.4716723596940327e-05,
+   "abs_residual_median": 3.8313290072755635e-06,
+   "scale = a + b*|B|": {
+    "a": 0.8051964545957689,
+    "b": 51.53140104863803
+   },
+   "scale = a + c*(|B|/|B|max)": {
+    "a": 0.8051964545957689,
+    "c": 0.14840279005888793,
+    "|B|max": 0.0028798516446082575
+   }
+  }
+ },
+ "tolerance_mm": 0.002,
+ "tool": "corpus/tools/recover_seeds.py"
+}

@@ -603,6 +603,47 @@ fn none_return_runs_the_effect_and_yields_no_outputs() {
     assert!(message.contains("declared `-> None`"), "{message}");
 }
 
+// Regression (stage-6 corpus, first run): the CLI canonicalizes the
+// pipeline path — verbatim `\?\` on Windows — and the script path
+// inherited it; Python's ntpath.normpath leaves verbatim paths alone, so a
+// script joining its directory with "inputs/data.txt" handed the OS a
+// verbatim path with a forward slash: OSError 22. Scripts resolve relative
+// paths against their own directory by contract, so the path they are given
+// must be plain.
+#[test]
+fn canonical_script_path_lets_scripts_resolve_siblings() {
+    const READER: &str = r#"
+import os
+import cicada
+
+@cicada.node(title="Read Sibling", description="the sibling file's text.")
+def read_sibling(name: "Text") -> "Text":
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.normpath(os.path.join(here, "..", "inputs/" + name)), "r") as f:
+        return f.read()
+"#;
+    let pool = WorkerPool::new().expect("pool");
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+    std::fs::create_dir_all(dir.path().join("inputs")).unwrap();
+    std::fs::write(dir.path().join("inputs").join("data.txt"), "sibling bytes").unwrap();
+    let script = dir.path().join("scripts").join("reader.py");
+    std::fs::write(&script, READER).unwrap();
+    // What the CLI hands the host: the canonical (verbatim on Windows) path.
+    let canonical = std::fs::canonicalize(&script).unwrap();
+    let inputs = BTreeMap::from([("name".to_owned(), text("data.txt"))]);
+    let outs = pool
+        .invoke(
+            &canonical,
+            READER,
+            "read_sibling",
+            &inputs,
+            &KillSwitch::new(),
+        )
+        .expect("the script resolves its sibling");
+    assert_eq!(outs[0].data(), &ValueData::Text(Arc::from("sibling bytes")));
+}
+
 // Budget (stage-6 contract §1): a 7,200-mesh list of ~100-vertex meshes
 // must cross Python → Rust in well under a second. The test asserts the
 // data (counts, a sampled vertex, hash-stability of the list across two

@@ -470,21 +470,14 @@ fn binding_type(resolution: &Resolution, name: &str) -> Option<WireType> {
     }
 }
 
-/// The type of `binding.port` on a multi-output node binding.
-fn node_port_type(
-    resolution: &Resolution,
-    spec_by_name: &HashMap<&str, &'static NodeSpec>,
-    binding: &str,
-    port: &str,
-) -> Option<WireType> {
-    let Some(BindingType::Node { node, lift }) = resolution.bindings.get(binding) else {
+/// The type of `binding.port` on a multi-output node binding — as the
+/// checker resolved it for THAT call (type variables substituted, lift
+/// applied: `cull.kept` reads `[Point]`, not `[E]`).
+fn node_port_type(resolution: &Resolution, binding: &str, port: &str) -> Option<WireType> {
+    let Some(BindingType::Node { outputs, .. }) = resolution.bindings.get(binding) else {
         return None;
     };
-    let spec = spec_by_name.get(node.as_str())?;
-    let output = spec.outputs.iter().find(|output| output.name == port)?;
-    let mut ty = WireType::from_port(&output.ty);
-    ty.depth = ty.depth.saturating_add(*lift);
-    Some(ty)
+    outputs.get(port).cloned()
 }
 
 /// Does `diagnostic` sit on line `line` (0-based) overlapping `span`?
@@ -576,7 +569,7 @@ fn statement_node(
         };
         let (source_ty, source_port) = match &port_ref.port {
             Some(port) => (
-                node_port_type(resolution, spec_by_name, &port_ref.binding.name, &port.name),
+                node_port_type(resolution, &port_ref.binding.name, &port.name),
                 port.name.clone(),
             ),
             None => (
@@ -718,12 +711,7 @@ fn statement_node(
                                     let source_ty = if end.port == "out" {
                                         binding_type(resolution, &end.node)
                                     } else {
-                                        node_port_type(
-                                            resolution,
-                                            spec_by_name,
-                                            &end.node,
-                                            &end.port,
-                                        )
+                                        node_port_type(resolution, &end.node, &end.port)
                                     };
                                     if let Some(source_ty) = source_ty
                                         && TRANSFORMABLE_KINDS.contains(&source_ty.base.as_str())
@@ -814,7 +802,7 @@ fn statement_node(
                         } else if spec.outputs.len() == 1 {
                             binding_type(resolution, &name)
                         } else {
-                            node_port_type(resolution, spec_by_name, &name, output.name)
+                            node_port_type(resolution, &name, output.name)
                         };
                         let mut declared = WireType::from_port(&output.ty);
                         if let Some(bound) = &bound_var
@@ -1111,5 +1099,32 @@ mod tests {
         assert!(moved.preview);
         let wire = g.wires.iter().find(|w| w.to.node == "moved").unwrap();
         assert_eq!((wire.lift, wire.depth), (1, 1));
+    }
+
+    // A generic output port of a multi-output node renders the kind its
+    // variable bound to in THAT call (the checker's resolution), while the
+    // declared notation stays `[E]`; the wire it feeds carries the same.
+    #[test]
+    fn generic_output_ports_render_resolved_kinds() {
+        let g = view(
+            "# cicada 1\n\
+             c = circle(radius=2.0)\n\
+             d = divide_curve(curve=c, count=4)\n\
+             culled = cull(list=d.points, pattern=[True, False, True, False])\n\
+             first = item(list=culled.kept, index=0)\n",
+        );
+        let culled = g.node("culled").unwrap();
+        let kept = culled.outputs.iter().find(|o| o.name == "kept").unwrap();
+        assert_eq!(kept.ty, "[E]", "declared notation stays generic");
+        assert_eq!(kept.resolved.as_deref(), Some("[Point]"));
+        assert_eq!(kept.base, "Point");
+        assert!(kept.displayable, "a resolved Point list previews");
+        let map = culled.outputs.iter().find(|o| o.name == "map").unwrap();
+        assert_eq!(map.resolved.as_deref(), Some("IndexMap"));
+        let wire = g.wires.iter().find(|w| w.to.node == "first").unwrap();
+        assert_eq!(wire.ty.as_deref(), Some("[Point]"));
+        assert!(!wire.red);
+        let first = g.node("first").unwrap();
+        assert_eq!(first.outputs[0].resolved.as_deref(), Some("Point"));
     }
 }

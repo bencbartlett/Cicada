@@ -1,0 +1,7340 @@
+{
+ "assemble_equals_items": false,
+ "entries": [
+  "3D/3dmodel.model",
+  "3D/Objects/object_1.model",
+  "3D/Objects/object_10.model",
+  "3D/Objects/object_100.model",
+  "3D/Objects/object_101.model",
+  "3D/Objects/object_102.model",
+  "3D/Objects/object_103.model",
+  "3D/Objects/object_104.model",
+  "3D/Objects/object_105.model",
+  "3D/Objects/object_106.model",
+  "3D/Objects/object_107.model",
+  "3D/Objects/object_108.model",
+  "3D/Objects/object_109.model",
+  "3D/Objects/object_11.model",
+  "3D/Objects/object_110.model",
+  "3D/Objects/object_111.model",
+  "3D/Objects/object_112.model",
+  "3D/Objects/object_113.model",
+  "3D/Objects/object_114.model",
+  "3D/Objects/object_115.model",
+  "3D/Objects/object_116.model",
+  "3D/Objects/object_117.model",
+  "3D/Objects/object_118.model",
+  "3D/Objects/object_119.model",
+  "3D/Objects/object_12.model",
+  "3D/Objects/object_120.model",
+  "3D/Objects/object_121.model",
+  "3D/Objects/object_122.model",
+  "3D/Objects/object_123.model",
+  "3D/Objects/object_124.model",
+  "3D/Objects/object_125.model",
+  "3D/Objects/object_126.model",
+  "3D/Objects/object_127.model",
+  "3D/Objects/object_128.model",
+  "3D/Objects/object_129.model",
+  "3D/Objects/object_13.model",
+  "3D/Objects/object_130.model",
+  "3D/Objects/object_131.model",
+  "3D/Objects/object_132.model",
+  "3D/Objects/object_133.model",
+  "3D/Objects/object_134.model",
+  "3D/Objects/object_135.model",
+  "3D/Objects/object_136.model",
+  "3D/Objects/object_137.model",
+  "3D/Objects/object_138.model",
+  "3D/Objects/object_139.model",
+  "3D/Objects/object_14.model",
+  "3D/Objects/object_140.model",
+  "3D/Objects/object_141.model",
+  "3D/Objects/object_142.model",
+  "3D/Objects/object_143.model",
+  "3D/Objects/object_144.model",
+  "3D/Objects/object_145.model",
+  "3D/Objects/object_146.model",
+  "3D/Objects/object_147.model",
+  "3D/Objects/object_148.model",
+  "3D/Objects/object_149.model",
+  "3D/Objects/object_15.model",
+  "3D/Objects/object_150.model",
+  "3D/Objects/object_151.model",
+  "3D/Objects/object_152.model",
+  "3D/Objects/object_153.model",
+  "3D/Objects/object_154.model",
+  "3D/Objects/object_155.model",
+  "3D/Objects/object_156.model",
+  "3D/Objects/object_157.model",
+  "3D/Objects/object_158.model",
+  "3D/Objects/object_159.model",
+  "3D/Objects/object_16.model",
+  "3D/Objects/object_160.model",
+  "3D/Objects/object_161.model",
+  "3D/Objects/object_162.model",
+  "3D/Objects/object_163.model",
+  "3D/Objects/object_164.model",
+  "3D/Objects/object_165.model",
+  "3D/Objects/object_166.model",
+  "3D/Objects/object_167.model",
+  "3D/Objects/object_168.model",
+  "3D/Objects/object_169.model",
+  "3D/Objects/object_17.model",
+  "3D/Objects/object_170.model",
+  "3D/Objects/object_171.model",
+  "3D/Objects/object_172.model",
+  "3D/Objects/object_173.model",
+  "3D/Objects/object_174.model",
+  "3D/Objects/object_175.model",
+  "3D/Objects/object_176.model",
+  "3D/Objects/object_177.model",
+  "3D/Objects/object_178.model",
+  "3D/Objects/object_179.model",
+  "3D/Objects/object_18.model",
+  "3D/Objects/object_180.model",
+  "3D/Objects/object_181.model",
+  "3D/Objects/object_182.model",
+  "3D/Objects/object_183.model",
+  "3D/Objects/object_184.model",
+  "3D/Objects/object_185.model",
+  "3D/Objects/object_186.model",
+  "3D/Objects/object_187.model",
+  "3D/Objects/object_188.model",
+  "3D/Objects/object_189.model",
+  "3D/Objects/object_19.model",
+  "3D/Objects/object_190.model",
+  "3D/Objects/object_191.model",
+  "3D/Objects/object_192.model",
+  "3D/Objects/object_193.model",
+  "3D/Objects/object_194.model",
+  "3D/Objects/object_195.model",
+  "3D/Objects/object_196.model",
+  "3D/Objects/object_197.model",
+  "3D/Objects/object_198.model",
+  "3D/Objects/object_199.model",
+  "3D/Objects/object_2.model",
+  "3D/Objects/object_20.model",
+  "3D/Objects/object_200.model",
+  "3D/Objects/object_201.model",
+  "3D/Objects/object_202.model",
+  "3D/Objects/object_203.model",
+  "3D/Objects/object_204.model",
+  "3D/Objects/object_205.model",
+  "3D/Objects/object_206.model",
+  "3D/Objects/object_207.model",
+  "3D/Objects/object_208.model",
+  "3D/Objects/object_209.model",
+  "3D/Objects/object_21.model",
+  "3D/Objects/object_210.model",
+  "3D/Objects/object_211.model",
+  "3D/Objects/object_212.model",
+  "3D/Objects/object_213.model",
+  "3D/Objects/object_214.model",
+  "3D/Objects/object_215.model",
+  "3D/Objects/object_216.model",
+  "3D/Objects/object_217.model",
+  "3D/Objects/object_218.model",
+  "3D/Objects/object_219.model",
+  "3D/Objects/object_22.model",
+  "3D/Objects/object_220.model",
+  "3D/Objects/object_221.model",
+  "3D/Objects/object_222.model",
+  "3D/Objects/object_223.model",
+  "3D/Objects/object_224.model",
+  "3D/Objects/object_225.model",
+  "3D/Objects/object_226.model",
+  "3D/Objects/object_227.model",
+  "3D/Objects/object_23.model",
+  "3D/Objects/object_24.model",
+  "3D/Objects/object_25.model",
+  "3D/Objects/object_26.model",
+  "3D/Objects/object_27.model",
+  "3D/Objects/object_28.model",
+  "3D/Objects/object_29.model",
+  "3D/Objects/object_3.model",
+  "3D/Objects/object_30.model",
+  "3D/Objects/object_31.model",
+  "3D/Objects/object_32.model",
+  "3D/Objects/object_33.model",
+  "3D/Objects/object_34.model",
+  "3D/Objects/object_35.model",
+  "3D/Objects/object_36.model",
+  "3D/Objects/object_37.model",
+  "3D/Objects/object_38.model",
+  "3D/Objects/object_39.model",
+  "3D/Objects/object_4.model",
+  "3D/Objects/object_40.model",
+  "3D/Objects/object_41.model",
+  "3D/Objects/object_42.model",
+  "3D/Objects/object_43.model",
+  "3D/Objects/object_44.model",
+  "3D/Objects/object_45.model",
+  "3D/Objects/object_46.model",
+  "3D/Objects/object_47.model",
+  "3D/Objects/object_48.model",
+  "3D/Objects/object_49.model",
+  "3D/Objects/object_5.model",
+  "3D/Objects/object_50.model",
+  "3D/Objects/object_51.model",
+  "3D/Objects/object_52.model",
+  "3D/Objects/object_53.model",
+  "3D/Objects/object_54.model",
+  "3D/Objects/object_55.model",
+  "3D/Objects/object_56.model",
+  "3D/Objects/object_57.model",
+  "3D/Objects/object_58.model",
+  "3D/Objects/object_59.model",
+  "3D/Objects/object_6.model",
+  "3D/Objects/object_60.model",
+  "3D/Objects/object_61.model",
+  "3D/Objects/object_62.model",
+  "3D/Objects/object_63.model",
+  "3D/Objects/object_64.model",
+  "3D/Objects/object_65.model",
+  "3D/Objects/object_66.model",
+  "3D/Objects/object_67.model",
+  "3D/Objects/object_68.model",
+  "3D/Objects/object_69.model",
+  "3D/Objects/object_7.model",
+  "3D/Objects/object_70.model",
+  "3D/Objects/object_71.model",
+  "3D/Objects/object_72.model",
+  "3D/Objects/object_73.model",
+  "3D/Objects/object_74.model",
+  "3D/Objects/object_75.model",
+  "3D/Objects/object_76.model",
+  "3D/Objects/object_77.model",
+  "3D/Objects/object_78.model",
+  "3D/Objects/object_79.model",
+  "3D/Objects/object_8.model",
+  "3D/Objects/object_80.model",
+  "3D/Objects/object_81.model",
+  "3D/Objects/object_82.model",
+  "3D/Objects/object_83.model",
+  "3D/Objects/object_84.model",
+  "3D/Objects/object_85.model",
+  "3D/Objects/object_86.model",
+  "3D/Objects/object_87.model",
+  "3D/Objects/object_88.model",
+  "3D/Objects/object_89.model",
+  "3D/Objects/object_9.model",
+  "3D/Objects/object_90.model",
+  "3D/Objects/object_91.model",
+  "3D/Objects/object_92.model",
+  "3D/Objects/object_93.model",
+  "3D/Objects/object_94.model",
+  "3D/Objects/object_95.model",
+  "3D/Objects/object_96.model",
+  "3D/Objects/object_97.model",
+  "3D/Objects/object_98.model",
+  "3D/Objects/object_99.model",
+  "3D/_rels/3dmodel.model.rels",
+  "Metadata/cut_information.xml",
+  "Metadata/filament_sequence.json",
+  "Metadata/layer_config_ranges.xml",
+  "Metadata/model_settings.config",
+  "Metadata/pick_1.png",
+  "Metadata/pick_10.png",
+  "Metadata/pick_11.png",
+  "Metadata/pick_12.png",
+  "Metadata/pick_13.png",
+  "Metadata/pick_14.png",
+  "Metadata/pick_15.png",
+  "Metadata/pick_16.png",
+  "Metadata/pick_17.png",
+  "Metadata/pick_18.png",
+  "Metadata/pick_2.png",
+  "Metadata/pick_3.png",
+  "Metadata/pick_4.png",
+  "Metadata/pick_5.png",
+  "Metadata/pick_6.png",
+  "Metadata/pick_7.png",
+  "Metadata/pick_8.png",
+  "Metadata/pick_9.png",
+  "Metadata/plate_1.json",
+  "Metadata/plate_1.png",
+  "Metadata/plate_10.json",
+  "Metadata/plate_10.png",
+  "Metadata/plate_10_small.png",
+  "Metadata/plate_11.json",
+  "Metadata/plate_11.png",
+  "Metadata/plate_11_small.png",
+  "Metadata/plate_12.json",
+  "Metadata/plate_12.png",
+  "Metadata/plate_12_small.png",
+  "Metadata/plate_13.json",
+  "Metadata/plate_13.png",
+  "Metadata/plate_13_small.png",
+  "Metadata/plate_14.json",
+  "Metadata/plate_14.png",
+  "Metadata/plate_14_small.png",
+  "Metadata/plate_15.json",
+  "Metadata/plate_15.png",
+  "Metadata/plate_15_small.png",
+  "Metadata/plate_16.json",
+  "Metadata/plate_16.png",
+  "Metadata/plate_16_small.png",
+  "Metadata/plate_17.json",
+  "Metadata/plate_17.png",
+  "Metadata/plate_17_small.png",
+  "Metadata/plate_18.json",
+  "Metadata/plate_18.png",
+  "Metadata/plate_18_small.png",
+  "Metadata/plate_1_small.png",
+  "Metadata/plate_2.json",
+  "Metadata/plate_2.png",
+  "Metadata/plate_2_small.png",
+  "Metadata/plate_3.json",
+  "Metadata/plate_3.png",
+  "Metadata/plate_3_small.png",
+  "Metadata/plate_4.json",
+  "Metadata/plate_4.png",
+  "Metadata/plate_4_small.png",
+  "Metadata/plate_5.json",
+  "Metadata/plate_5.png",
+  "Metadata/plate_5_small.png",
+  "Metadata/plate_6.json",
+  "Metadata/plate_6.png",
+  "Metadata/plate_6_small.png",
+  "Metadata/plate_7.json",
+  "Metadata/plate_7.png",
+  "Metadata/plate_7_small.png",
+  "Metadata/plate_8.json",
+  "Metadata/plate_8.png",
+  "Metadata/plate_8_small.png",
+  "Metadata/plate_9.json",
+  "Metadata/plate_9.png",
+  "Metadata/plate_9_small.png",
+  "Metadata/plate_no_light_1.png",
+  "Metadata/plate_no_light_10.png",
+  "Metadata/plate_no_light_11.png",
+  "Metadata/plate_no_light_12.png",
+  "Metadata/plate_no_light_13.png",
+  "Metadata/plate_no_light_14.png",
+  "Metadata/plate_no_light_15.png",
+  "Metadata/plate_no_light_16.png",
+  "Metadata/plate_no_light_17.png",
+  "Metadata/plate_no_light_18.png",
+  "Metadata/plate_no_light_2.png",
+  "Metadata/plate_no_light_3.png",
+  "Metadata/plate_no_light_4.png",
+  "Metadata/plate_no_light_5.png",
+  "Metadata/plate_no_light_6.png",
+  "Metadata/plate_no_light_7.png",
+  "Metadata/plate_no_light_8.png",
+  "Metadata/plate_no_light_9.png",
+  "Metadata/project_settings.config",
+  "Metadata/slice_info.config",
+  "Metadata/top_1.png",
+  "Metadata/top_10.png",
+  "Metadata/top_11.png",
+  "Metadata/top_12.png",
+  "Metadata/top_13.png",
+  "Metadata/top_14.png",
+  "Metadata/top_15.png",
+  "Metadata/top_16.png",
+  "Metadata/top_17.png",
+  "Metadata/top_18.png",
+  "Metadata/top_2.png",
+  "Metadata/top_3.png",
+  "Metadata/top_4.png",
+  "Metadata/top_5.png",
+  "Metadata/top_6.png",
+  "Metadata/top_7.png",
+  "Metadata/top_8.png",
+  "Metadata/top_9.png",
+  "[Content_Types].xml",
+  "_rels/.rels"
+ ],
+ "file": "plates_f2_sea_green_X1C_v1.4.1_.3mf",
+ "format": "cicada-corpus-3mf-summary-1",
+ "objects": [
+  {
+   "bbox": [
+    [
+     -24.79,
+     -72.64,
+     -55.2
+    ],
+    [
+     24.79,
+     72.64,
+     55.2
+    ]
+   ],
+   "extruder": "1",
+   "id": 2,
+   "k": 1,
+   "name": "D48",
+   "plate": 1,
+   "sha256_raw": "12d6e9707f573e25f32a44076c561743a726b95c4a402aad05b19a19bc338abc",
+   "translation": [
+    36.789,
+    97.641,
+    55.198
+   ],
+   "triangles": 31032,
+   "volume": 78643.7
+  },
+  {
+   "bbox": [
+    [
+     -20.75,
+     -68.25,
+     -54.85
+    ],
+    [
+     20.75,
+     68.25,
+     54.85
+    ]
+   ],
+   "extruder": "1",
+   "id": 4,
+   "k": 2,
+   "name": "D8",
+   "plate": 1,
+   "sha256_raw": "1ff90d9aaffdb41cf1188ab03b3cbd9d717d087bc22da62010beb43a18b98c8d",
+   "translation": [
+    86.748,
+    93.25,
+    54.852
+   ],
+   "triangles": 30874,
+   "volume": 52612.7
+  },
+  {
+   "bbox": [
+    [
+     -25.58,
+     -67.98,
+     -53.9
+    ],
+    [
+     25.58,
+     67.98,
+     53.9
+    ]
+   ],
+   "extruder": "1",
+   "id": 6,
+   "k": 3,
+   "name": "A19",
+   "plate": 1,
+   "sha256_raw": "6f512f903a819978f17ba81d9f77b2d4b08cb0efe97757192f8a87c923701f06",
+   "translation": [
+    137.575,
+    92.984,
+    53.902
+   ],
+   "triangles": 36816,
+   "volume": 69211.8
+  },
+  {
+   "bbox": [
+    [
+     -23.92,
+     -69.3,
+     -53.67
+    ],
+    [
+     23.92,
+     69.3,
+     53.67
+    ]
+   ],
+   "extruder": "1",
+   "id": 8,
+   "k": 4,
+   "name": "I118",
+   "plate": 1,
+   "sha256_raw": "ab4e4b7748c11652a9e3d0c2b3008312ff88a44ea3e3fd3312d819fe24aeb583",
+   "translation": [
+    191.917,
+    94.301,
+    53.674
+   ],
+   "triangles": 31052,
+   "volume": 71041.9
+  },
+  {
+   "bbox": [
+    [
+     -34.0,
+     -71.01,
+     -53.36
+    ],
+    [
+     34.0,
+     71.01,
+     53.36
+    ]
+   ],
+   "extruder": "1",
+   "id": 10,
+   "k": 5,
+   "name": "H75",
+   "plate": 1,
+   "sha256_raw": "c07c83b55f3e3aa1415f28d1bada446d9f7ef53a3e94b553cdc6a4d9be99c11c",
+   "translation": [
+    98.003,
+    139.363,
+    53.358
+   ],
+   "triangles": 37784,
+   "volume": 99141.0
+  },
+  {
+   "bbox": [
+    [
+     -29.12,
+     -70.95,
+     -53.25
+    ],
+    [
+     29.12,
+     70.95,
+     53.25
+    ]
+   ],
+   "extruder": "1",
+   "id": 12,
+   "k": 6,
+   "name": "H24",
+   "plate": 1,
+   "sha256_raw": "f38f28bec2cabfb2f4e3aacb5c9d1e9f163358861b3a78c4364b34137d7b1ce5",
+   "translation": [
+    165.12,
+    142.365,
+    53.255
+   ],
+   "triangles": 37812,
+   "volume": 77113.8
+  },
+  {
+   "bbox": [
+    [
+     -29.41,
+     -67.04,
+     -52.48
+    ],
+    [
+     29.41,
+     67.04,
+     52.48
+    ]
+   ],
+   "extruder": "1",
+   "id": 14,
+   "k": 7,
+   "name": "F99",
+   "plate": 1,
+   "sha256_raw": "faa40cc248ba03c8c41306c7c2ba47e3303e67d836e0e9328fea30aa69fc8a71",
+   "translation": [
+    41.406,
+    166.141,
+    52.481
+   ],
+   "triangles": 30926,
+   "volume": 72411.4
+  },
+  {
+   "bbox": [
+    [
+     -27.71,
+     -64.14,
+     -52.13
+    ],
+    [
+     27.71,
+     64.14,
+     52.13
+    ]
+   ],
+   "extruder": "1",
+   "id": 16,
+   "k": 8,
+   "name": "G126",
+   "plate": 1,
+   "sha256_raw": "0cec3149aa48b4e59f5fc62cb5feca4931749c0c909ace621a4dfbe4e1b3b350",
+   "translation": [
+    215.713,
+    172.741,
+    52.132
+   ],
+   "triangles": 31896,
+   "volume": 59176.9
+  },
+  {
+   "bbox": [
+    [
+     -26.0,
+     -57.26,
+     -47.52
+    ],
+    [
+     26.0,
+     57.26,
+     47.52
+    ]
+   ],
+   "extruder": "1",
+   "id": 18,
+   "k": 9,
+   "name": "F43",
+   "plate": 1,
+   "sha256_raw": "92b81057abb1046db3549ffe1c78ce81493f6419a9106ab7dc197ec9b14db636",
+   "translation": [
+    95.996,
+    188.509,
+    47.519
+   ],
+   "triangles": 31348,
+   "volume": 62124.4
+  },
+  {
+   "bbox": [
+    [
+     -29.42,
+     -57.91,
+     -47.03
+    ],
+    [
+     29.42,
+     57.91,
+     47.03
+    ]
+   ],
+   "extruder": "1",
+   "id": 20,
+   "k": 10,
+   "name": "H26",
+   "plate": 1,
+   "sha256_raw": "3470ea2e9e1013c09deeee9d66e323f231e1224f2ff978b54857fc25fd77219e",
+   "translation": [
+    155.423,
+    186.197,
+    47.029
+   ],
+   "triangles": 30834,
+   "volume": 61682.1
+  },
+  {
+   "bbox": [
+    [
+     -25.9,
+     -48.17,
+     -39.74
+    ],
+    [
+     25.9,
+     48.17,
+     39.74
+    ]
+   ],
+   "extruder": "1",
+   "id": 22,
+   "k": 11,
+   "name": "B58",
+   "plate": 1,
+   "sha256_raw": "8101140335709f66862269ee15676f81046a6371fd90200464152def973af4ce",
+   "translation": [
+    37.902,
+    197.79,
+    39.745
+   ],
+   "triangles": 37868,
+   "volume": 42050.1
+  },
+  {
+   "bbox": [
+    [
+     -27.49,
+     -44.17,
+     -38.97
+    ],
+    [
+     27.49,
+     44.17,
+     38.97
+    ]
+   ],
+   "extruder": "1",
+   "id": 24,
+   "k": 12,
+   "name": "A110",
+   "plate": 1,
+   "sha256_raw": "6a1e8de914edddf24628555c09a7746460bca7f743e80b0cb97d20fb20fd4da7",
+   "translation": [
+    215.49,
+    198.137,
+    38.975
+   ],
+   "triangles": 32098,
+   "volume": 42303.6
+  },
+  {
+   "bbox": [
+    [
+     -27.53,
+     -34.6,
+     -29.75
+    ],
+    [
+     27.53,
+     34.6,
+     29.75
+    ]
+   ],
+   "extruder": "1",
+   "id": 26,
+   "k": 13,
+   "name": "B89",
+   "plate": 1,
+   "sha256_raw": "aee07b4311cd6817d7196b62d7e217ef3e08fd0ba0c8f6f2a2234605f717af19",
+   "translation": [
+    139.528,
+    210.546,
+    29.746
+   ],
+   "triangles": 38558,
+   "volume": 34244.2
+  },
+  {
+   "bbox": [
+    [
+     -26.58,
+     -60.18,
+     -51.93
+    ],
+    [
+     26.58,
+     60.18,
+     51.93
+    ]
+   ],
+   "extruder": "1",
+   "id": 28,
+   "k": 14,
+   "name": "F120",
+   "plate": 2,
+   "sha256_raw": "27f35e14689b20098899d5f248ffc48b6f25676070af6869cba001cd889db58f",
+   "translation": [
+    345.785,
+    85.177,
+    51.932
+   ],
+   "triangles": 31192,
+   "volume": 50643.5
+  },
+  {
+   "bbox": [
+    [
+     -28.39,
+     -67.2,
+     -51.89
+    ],
+    [
+     28.39,
+     67.2,
+     51.89
+    ]
+   ],
+   "extruder": "1",
+   "id": 30,
+   "k": 15,
+   "name": "D102",
+   "plate": 2,
+   "sha256_raw": "67c0b20e78dfed8693d1378eba65277795d48b3f4643f80cdb3f3895645e5b57",
+   "translation": [
+    403.591,
+    92.196,
+    51.891
+   ],
+   "triangles": 36722,
+   "volume": 68762.2
+  },
+  {
+   "bbox": [
+    [
+     -27.51,
+     -68.57,
+     -51.7
+    ],
+    [
+     27.51,
+     68.57,
+     51.7
+    ]
+   ],
+   "extruder": "1",
+   "id": 32,
+   "k": 16,
+   "name": "H122",
+   "plate": 2,
+   "sha256_raw": "ad8c1f54c69a2b66b74e7aef696216fdbdcbf6dc1c2b0a8442961606702ed49e",
+   "translation": [
+    462.711,
+    93.566,
+    51.704
+   ],
+   "triangles": 30902,
+   "volume": 67645.6
+  },
+  {
+   "bbox": [
+    [
+     -29.53,
+     -65.54,
+     -51.64
+    ],
+    [
+     29.53,
+     65.54,
+     51.64
+    ]
+   ],
+   "extruder": "1",
+   "id": 34,
+   "k": 17,
+   "name": "A53",
+   "plate": 2,
+   "sha256_raw": "73b74ff083844a35e4cfb3d72ae7cbd655c976a592e3e54d9837637ce68b4507",
+   "translation": [
+    520.731,
+    97.746,
+    51.64
+   ],
+   "triangles": 42444,
+   "volume": 61788.9
+  },
+  {
+   "bbox": [
+    [
+     -24.93,
+     -66.14,
+     -51.63
+    ],
+    [
+     24.93,
+     66.14,
+     51.63
+    ]
+   ],
+   "extruder": "1",
+   "id": 36,
+   "k": 18,
+   "name": "C14",
+   "plate": 2,
+   "sha256_raw": "5cdfe14e75b9016a457ee9093f74b087603ff04eda35324538e7cbc6c1ef6025",
+   "translation": [
+    344.132,
+    123.362,
+    51.627
+   ],
+   "triangles": 31820,
+   "volume": 65442.0
+  },
+  {
+   "bbox": [
+    [
+     -32.06,
+     -64.14,
+     -51.58
+    ],
+    [
+     32.06,
+     64.14,
+     51.58
+    ]
+   ],
+   "extruder": "1",
+   "id": 38,
+   "k": 19,
+   "name": "H121",
+   "plate": 2,
+   "sha256_raw": "d051797d9b7ca1cbac551d0da364749d0f107874f70c12a8116db72def5bcceb",
+   "translation": [
+    403.256,
+    143.082,
+    51.58
+   ],
+   "triangles": 36836,
+   "volume": 76069.3
+  },
+  {
+   "bbox": [
+    [
+     -24.39,
+     -66.8,
+     -51.5
+    ],
+    [
+     24.39,
+     66.8,
+     51.5
+    ]
+   ],
+   "extruder": "1",
+   "id": 40,
+   "k": 20,
+   "name": "B133",
+   "plate": 2,
+   "sha256_raw": "a58722929d8fb76fdbfe826f34abbf744b7a93c744520d17374aa503610a5546",
+   "translation": [
+    491.593,
+    147.865,
+    51.5
+   ],
+   "triangles": 31680,
+   "volume": 65748.8
+  },
+  {
+   "bbox": [
+    [
+     -25.46,
+     -63.33,
+     -51.23
+    ],
+    [
+     25.46,
+     63.33,
+     51.23
+    ]
+   ],
+   "extruder": "1",
+   "id": 42,
+   "k": 21,
+   "name": "B96",
+   "plate": 2,
+   "sha256_raw": "6cce1bc485fb8d311729b4600c61e307f95ce16d6eeac646b0b04d7f6da4efa1",
+   "translation": [
+    364.661,
+    172.744,
+    51.231
+   ],
+   "triangles": 37746,
+   "volume": 57678.4
+  },
+  {
+   "bbox": [
+    [
+     -27.76,
+     -64.68,
+     -50.99
+    ],
+    [
+     27.76,
+     64.68,
+     50.99
+    ]
+   ],
+   "extruder": "1",
+   "id": 44,
+   "k": 22,
+   "name": "A37",
+   "plate": 2,
+   "sha256_raw": "4c79420465e8997176c96eb6e9bd6e2571bee4c60cd4a6291d9ce0c3ab0db8df",
+   "translation": [
+    446.963,
+    175.904,
+    50.992
+   ],
+   "triangles": 37556,
+   "volume": 58514.6
+  },
+  {
+   "bbox": [
+    [
+     -17.91,
+     -64.06,
+     -49.44
+    ],
+    [
+     17.91,
+     64.06,
+     49.44
+    ]
+   ],
+   "extruder": "1",
+   "id": 46,
+   "k": 23,
+   "name": "A16",
+   "plate": 2,
+   "sha256_raw": "eb50236f69cb9a79f205c03c17ddd1bcf7bd0184e07583aa29feb4b96c08e48d",
+   "translation": [
+    533.11,
+    160.385,
+    49.438
+   ],
+   "triangles": 31800,
+   "volume": 46590.2
+  },
+  {
+   "bbox": [
+    [
+     -14.44,
+     -54.32,
+     -44.42
+    ],
+    [
+     14.44,
+     54.32,
+     44.42
+    ]
+   ],
+   "extruder": "1",
+   "id": 48,
+   "k": 24,
+   "name": "I122",
+   "plate": 2,
+   "sha256_raw": "8591acac17c164f3d51a495d51da671c109c9dc1f2b04fdfcf56c8a8e4ea8879",
+   "translation": [
+    407.643,
+    184.142,
+    44.416
+   ],
+   "triangles": 30504,
+   "volume": 29802.0
+  },
+  {
+   "bbox": [
+    [
+     -30.41,
+     -52.59,
+     -43.39
+    ],
+    [
+     30.41,
+     52.59,
+     43.39
+    ]
+   ],
+   "extruder": "1",
+   "id": 50,
+   "k": 25,
+   "name": "B6",
+   "plate": 2,
+   "sha256_raw": "fdc0c2eef66d3470623ddcf3635903364b07a1b70e33d540aa586a664db51c74",
+   "translation": [
+    501.607,
+    189.953,
+    43.39
+   ],
+   "triangles": 37136,
+   "volume": 60546.1
+  },
+  {
+   "bbox": [
+    [
+     -22.33,
+     -46.18,
+     -38.26
+    ],
+    [
+     22.33,
+     46.18,
+     38.26
+    ]
+   ],
+   "extruder": "1",
+   "id": 52,
+   "k": 26,
+   "name": "G96",
+   "plate": 2,
+   "sha256_raw": "a0e7cb8414bf069628a657789cfae8a165156f2d58ebb93d5527aef566443598",
+   "translation": [
+    341.527,
+    199.288,
+    38.258
+   ],
+   "triangles": 31984,
+   "volume": 40503.6
+  },
+  {
+   "bbox": [
+    [
+     -23.86,
+     -40.9,
+     -35.32
+    ],
+    [
+     23.86,
+     40.9,
+     35.32
+    ]
+   ],
+   "extruder": "1",
+   "id": 54,
+   "k": 27,
+   "name": "H111",
+   "plate": 2,
+   "sha256_raw": "fce54d576da6a4615ac2cfdf9d9904e1005265aabbb5dd921ab2e2d7050e369a",
+   "translation": [
+    443.061,
+    203.484,
+    35.315
+   ],
+   "triangles": 35800,
+   "volume": 40165.1
+  },
+  {
+   "bbox": [
+    [
+     -20.42,
+     -68.51,
+     -51.49
+    ],
+    [
+     20.42,
+     68.51,
+     51.49
+    ]
+   ],
+   "extruder": "1",
+   "id": 56,
+   "k": 28,
+   "name": "F79",
+   "plate": 3,
+   "sha256_raw": "74c9e226406a7f40a296a5749d7e94d0ff2491580888d60109abfa921c0d09ee",
+   "translation": [
+    646.816,
+    93.508,
+    51.493
+   ],
+   "triangles": 36944,
+   "volume": 68884.3
+  },
+  {
+   "bbox": [
+    [
+     -26.5,
+     -62.5,
+     -51.17
+    ],
+    [
+     26.5,
+     62.5,
+     51.17
+    ]
+   ],
+   "extruder": "1",
+   "id": 58,
+   "k": 29,
+   "name": "B114",
+   "plate": 3,
+   "sha256_raw": "e7c4aeb03494ac01d854458db86368bec4430dfc4d4dbdc5882ff43a88615c93",
+   "translation": [
+    696.9,
+    87.504,
+    51.175
+   ],
+   "triangles": 32190,
+   "volume": 61113.0
+  },
+  {
+   "bbox": [
+    [
+     -25.77,
+     -64.71,
+     -51.17
+    ],
+    [
+     25.77,
+     64.71,
+     51.17
+    ]
+   ],
+   "extruder": "1",
+   "id": 60,
+   "k": 30,
+   "name": "B76",
+   "plate": 3,
+   "sha256_raw": "6e9acd27ee9c57bd10a92b583dc9e6e03828ddaeb4dd1a252514f3e1d6d06a0e",
+   "translation": [
+    754.171,
+    89.713,
+    51.172
+   ],
+   "triangles": 32526,
+   "volume": 64420.7
+  },
+  {
+   "bbox": [
+    [
+     -24.29,
+     -66.66,
+     -51.14
+    ],
+    [
+     24.29,
+     66.66,
+     51.14
+    ]
+   ],
+   "extruder": "1",
+   "id": 62,
+   "k": 31,
+   "name": "H91",
+   "plate": 3,
+   "sha256_raw": "e872020ea2bf4a6de4190ac5d0035ddbfc5735b9eb69b58d362c100540a3169e",
+   "translation": [
+    808.692,
+    91.658,
+    51.138
+   ],
+   "triangles": 37514,
+   "volume": 74364.9
+  },
+  {
+   "bbox": [
+    [
+     -24.59,
+     -65.98,
+     -51.04
+    ],
+    [
+     24.59,
+     65.98,
+     51.04
+    ]
+   ],
+   "extruder": "1",
+   "id": 64,
+   "k": 32,
+   "name": "F44",
+   "plate": 3,
+   "sha256_raw": "04578cfd2f1d4f347e6c4d04e0b08eaab98860a50af2ef2329c8978a9f3f43d6",
+   "translation": [
+    722.994,
+    135.268,
+    51.039
+   ],
+   "triangles": 32268,
+   "volume": 81990.8
+  },
+  {
+   "bbox": [
+    [
+     -28.19,
+     -63.49,
+     -51.03
+    ],
+    [
+     28.19,
+     63.49,
+     51.03
+    ]
+   ],
+   "extruder": "1",
+   "id": 66,
+   "k": 33,
+   "name": "G107",
+   "plate": 3,
+   "sha256_raw": "4bf2a4d81d794f86de16f098b6da88bb025eb87a3e7a7196445d592eb520bd3f",
+   "translation": [
+    780.588,
+    141.618,
+    51.035
+   ],
+   "triangles": 31450,
+   "volume": 70332.6
+  },
+  {
+   "bbox": [
+    [
+     -26.92,
+     -67.64,
+     -50.69
+    ],
+    [
+     26.92,
+     67.64,
+     50.69
+    ]
+   ],
+   "extruder": "1",
+   "id": 68,
+   "k": 34,
+   "name": "D66",
+   "plate": 3,
+   "sha256_raw": "4e04d59a8cdc2191fcc362f7a0df31f0c987f1ba4e96b2b001c3fb2e4e324ea3",
+   "translation": [
+    667.318,
+    148.94,
+    50.688
+   ],
+   "triangles": 37386,
+   "volume": 78834.4
+  },
+  {
+   "bbox": [
+    [
+     -25.77,
+     -66.76,
+     -50.08
+    ],
+    [
+     25.77,
+     66.76,
+     50.08
+    ]
+   ],
+   "extruder": "1",
+   "id": 70,
+   "k": 35,
+   "name": "F45",
+   "plate": 3,
+   "sha256_raw": "06da18e73269c091ed7233f4092768df3eaf4ae546d9abca18188131a5baaec2",
+   "translation": [
+    832.172,
+    172.878,
+    50.083
+   ],
+   "triangles": 36328,
+   "volume": 76552.3
+  },
+  {
+   "bbox": [
+    [
+     -28.03,
+     -61.84,
+     -50.05
+    ],
+    [
+     28.03,
+     61.84,
+     50.05
+    ]
+   ],
+   "extruder": "1",
+   "id": 72,
+   "k": 36,
+   "name": "D11",
+   "plate": 3,
+   "sha256_raw": "ddb6816e22c2d07b9762174d200bffecb596eb4342cbe3a6ba00fee338f42ae6",
+   "translation": [
+    756.433,
+    178.421,
+    50.053
+   ],
+   "triangles": 30866,
+   "volume": 53327.5
+  },
+  {
+   "bbox": [
+    [
+     -21.05,
+     -60.06,
+     -47.24
+    ],
+    [
+     21.05,
+     60.06,
+     47.24
+    ]
+   ],
+   "extruder": "1",
+   "id": 74,
+   "k": 37,
+   "name": "I120",
+   "plate": 3,
+   "sha256_raw": "8167691c191540d238613c5c6f81e1c14d3130f6504f3ed62f3e34387a9fa120",
+   "translation": [
+    703.445,
+    183.049,
+    47.244
+   ],
+   "triangles": 31250,
+   "volume": 37675.9
+  },
+  {
+   "bbox": [
+    [
+     -25.99,
+     -52.34,
+     -43.05
+    ],
+    [
+     25.99,
+     52.34,
+     43.05
+    ]
+   ],
+   "extruder": "1",
+   "id": 76,
+   "k": 38,
+   "name": "H10",
+   "plate": 3,
+   "sha256_raw": "5e17d976792314fd2e90edea98dd6b7fa725bc3efbc97370ae2cddd9ac61799e",
+   "translation": [
+    652.387,
+    192.74,
+    43.053
+   ],
+   "triangles": 37048,
+   "volume": 56977.1
+  },
+  {
+   "bbox": [
+    [
+     -21.49,
+     -46.72,
+     -38.0
+    ],
+    [
+     21.49,
+     46.72,
+     38.0
+    ]
+   ],
+   "extruder": "1",
+   "id": 78,
+   "k": 39,
+   "name": "F107",
+   "plate": 3,
+   "sha256_raw": "0a5ed20600d78c95d7ee9a3ba8739674a370bcc9b504e37a9c55a97834bd838b",
+   "translation": [
+    803.887,
+    197.694,
+    37.999
+   ],
+   "triangles": 32316,
+   "volume": 31296.5
+  },
+  {
+   "bbox": [
+    [
+     -26.87,
+     -44.22,
+     -37.11
+    ],
+    [
+     26.87,
+     44.22,
+     37.11
+    ]
+   ],
+   "extruder": "1",
+   "id": 80,
+   "k": 40,
+   "name": "G2",
+   "plate": 3,
+   "sha256_raw": "b5e691bf73d0c7a5a94d60cee464da197003da7c73c58f8fd3858a1e39ceff5a",
+   "translation": [
+    751.273,
+    201.589,
+    37.112
+   ],
+   "triangles": 29992,
+   "volume": 45287.0
+  },
+  {
+   "bbox": [
+    [
+     -33.37,
+     -65.47,
+     -49.77
+    ],
+    [
+     33.37,
+     65.47,
+     49.77
+    ]
+   ],
+   "extruder": "1",
+   "id": 82,
+   "k": 41,
+   "name": "D51",
+   "plate": 4,
+   "sha256_raw": "639c6a66bb281628c1e4c1cd6520d6eb8b420ebe094a300de206ec7a6ef0a285",
+   "translation": [
+    966.974,
+    90.468,
+    49.772
+   ],
+   "triangles": 30528,
+   "volume": 86660.4
+  },
+  {
+   "bbox": [
+    [
+     -29.66,
+     -62.81,
+     -49.36
+    ],
+    [
+     29.66,
+     62.81,
+     49.36
+    ]
+   ],
+   "extruder": "1",
+   "id": 84,
+   "k": 42,
+   "name": "C13",
+   "plate": 4,
+   "sha256_raw": "a734de10d513d50c5aa0ea2dec562d3f4689270dd9df2df5cf5e3d5c1deb0faf",
+   "translation": [
+    1033.258,
+    87.81,
+    49.36
+   ],
+   "triangles": 30720,
+   "volume": 70159.2
+  },
+  {
+   "bbox": [
+    [
+     -26.92,
+     -62.65,
+     -49.24
+    ],
+    [
+     26.92,
+     62.65,
+     49.24
+    ]
+   ],
+   "extruder": "1",
+   "id": 86,
+   "k": 43,
+   "name": "H25",
+   "plate": 4,
+   "sha256_raw": "5efd32de37739e44d12677eb31c9139f5e9a43150ca44e61ccfd9e71fb3eb28f",
+   "translation": [
+    1094.523,
+    87.647,
+    49.241
+   ],
+   "triangles": 30692,
+   "volume": 59705.0
+  },
+  {
+   "bbox": [
+    [
+     -25.36,
+     -62.05,
+     -49.17
+    ],
+    [
+     25.36,
+     62.05,
+     49.17
+    ]
+   ],
+   "extruder": "1",
+   "id": 88,
+   "k": 44,
+   "name": "F118",
+   "plate": 4,
+   "sha256_raw": "9e47ca5c99dfcd1831ef990395b3593f37644f7c10f24fe0fac51224936ac416",
+   "translation": [
+    1138.965,
+    130.038,
+    49.17
+   ],
+   "triangles": 30736,
+   "volume": 71793.9
+  },
+  {
+   "bbox": [
+    [
+     -26.84,
+     -60.82,
+     -49.01
+    ],
+    [
+     26.84,
+     60.82,
+     49.01
+    ]
+   ],
+   "extruder": "1",
+   "id": 90,
+   "k": 45,
+   "name": "G109",
+   "plate": 4,
+   "sha256_raw": "67dcca6a146959e4388b35126fc393aceb8beb0f725b02fa44ef9fdfafc383b9",
+   "translation": [
+    1066.437,
+    133.416,
+    49.014
+   ],
+   "triangles": 38316,
+   "volume": 57198.3
+  },
+  {
+   "bbox": [
+    [
+     -21.01,
+     -64.02,
+     -48.98
+    ],
+    [
+     21.01,
+     64.02,
+     48.98
+    ]
+   ],
+   "extruder": "1",
+   "id": 92,
+   "k": 46,
+   "name": "C46",
+   "plate": 4,
+   "sha256_raw": "036c5e9cf81304c828396ee159338e15570d5b345f92069c158b4e96a5cb596f",
+   "translation": [
+    996.608,
+    135.088,
+    48.98
+   ],
+   "triangles": 31392,
+   "volume": 59184.8
+  },
+  {
+   "bbox": [
+    [
+     -25.45,
+     -61.41,
+     -48.66
+    ],
+    [
+     25.45,
+     61.41,
+     48.66
+    ]
+   ],
+   "extruder": "1",
+   "id": 94,
+   "k": 47,
+   "name": "C12",
+   "plate": 4,
+   "sha256_raw": "fb75e40f1588fce67fe379cacce0a04a9233480456dc66c23172b2f73c7db17e",
+   "translation": [
+    1035.049,
+    168.084,
+    48.658
+   ],
+   "triangles": 31320,
+   "volume": 60099.4
+  },
+  {
+   "bbox": [
+    [
+     -29.77,
+     -63.57,
+     -48.55
+    ],
+    [
+     29.77,
+     63.57,
+     48.55
+    ]
+   ],
+   "extruder": "1",
+   "id": 96,
+   "k": 48,
+   "name": "F95",
+   "plate": 4,
+   "sha256_raw": "a507fc0798dfc7a809c03f530ac3b55da47600bcfb360d4c9088e68044871736",
+   "translation": [
+    1101.369,
+    181.496,
+    48.553
+   ],
+   "triangles": 31520,
+   "volume": 87879.9
+  },
+  {
+   "bbox": [
+    [
+     -21.35,
+     -61.9,
+     -48.39
+    ],
+    [
+     21.35,
+     61.9,
+     48.39
+    ]
+   ],
+   "extruder": "1",
+   "id": 98,
+   "k": 49,
+   "name": "B8",
+   "plate": 4,
+   "sha256_raw": "3a14580b465f83284a81c6aa7aae4d7621d559d9a085e0d0fcb72a8fa7986de8",
+   "translation": [
+    954.952,
+    175.553,
+    48.389
+   ],
+   "triangles": 31840,
+   "volume": 51482.7
+  },
+  {
+   "bbox": [
+    [
+     -26.35,
+     -51.59,
+     -40.2
+    ],
+    [
+     26.35,
+     51.59,
+     40.2
+    ]
+   ],
+   "extruder": "1",
+   "id": 100,
+   "k": 50,
+   "name": "H11",
+   "plate": 4,
+   "sha256_raw": "870256373d8daff38facd7af1da4407b86460994846b7efcaaf497ea96e6540d",
+   "translation": [
+    1001.953,
+    191.449,
+    40.2
+   ],
+   "triangles": 30408,
+   "volume": 50330.0
+  },
+  {
+   "bbox": [
+    [
+     -24.46,
+     -44.65,
+     -36.96
+    ],
+    [
+     24.46,
+     44.65,
+     36.96
+    ]
+   ],
+   "extruder": "1",
+   "id": 102,
+   "k": 51,
+   "name": "A77",
+   "plate": 4,
+   "sha256_raw": "8e37b629c7d9cc3b4b21267e7f3cf80ac787f0086df8db1e076a1f7db88c5c4c",
+   "translation": [
+    1060.061,
+    199.94,
+    36.962
+   ],
+   "triangles": 36412,
+   "volume": 37289.3
+  },
+  {
+   "bbox": [
+    [
+     -23.33,
+     -41.86,
+     -33.03
+    ],
+    [
+     23.33,
+     41.86,
+     33.03
+    ]
+   ],
+   "extruder": "1",
+   "id": 104,
+   "k": 52,
+   "name": "C38",
+   "plate": 4,
+   "sha256_raw": "4e04ae494f2aa95bc37809d300e380147d5c80b4d49f3bfc140e3184e22bc02d",
+   "translation": [
+    1140.925,
+    203.998,
+    33.029
+   ],
+   "triangles": 36558,
+   "volume": 39335.2
+  },
+  {
+   "bbox": [
+    [
+     -26.81,
+     -39.93,
+     -30.21
+    ],
+    [
+     26.81,
+     39.93,
+     30.21
+    ]
+   ],
+   "extruder": "1",
+   "id": 106,
+   "k": 53,
+   "name": "G100",
+   "plate": 4,
+   "sha256_raw": "e42192976ce1e9c298a7ab0dc6294b735f1d7258a095d951ba8fb106f5a1871a",
+   "translation": [
+    960.412,
+    207.073,
+    30.207
+   ],
+   "triangles": 42646,
+   "volume": 42348.3
+  },
+  {
+   "bbox": [
+    [
+     -26.76,
+     -59.09,
+     -48.35
+    ],
+    [
+     26.76,
+     59.09,
+     48.35
+    ]
+   ],
+   "extruder": "1",
+   "id": 108,
+   "k": 54,
+   "name": "C11",
+   "plate": 5,
+   "sha256_raw": "cfeaee3877f2bf28314a0313742d70bbe01f79d2d9934b94cbc63e41a7200a9e",
+   "translation": [
+    1267.56,
+    84.094,
+    48.348
+   ],
+   "triangles": 30946,
+   "volume": 58850.5
+  },
+  {
+   "bbox": [
+    [
+     -31.58,
+     -61.9,
+     -48.34
+    ],
+    [
+     31.58,
+     61.9,
+     48.34
+    ]
+   ],
+   "extruder": "1",
+   "id": 110,
+   "k": 55,
+   "name": "F94",
+   "plate": 5,
+   "sha256_raw": "cf50a46bf842c209f9990d3ffc1dd74ad38b8184076f9eb0d2708a315e137225",
+   "translation": [
+    1324.384,
+    86.897,
+    48.339
+   ],
+   "triangles": 30522,
+   "volume": 80540.4
+  },
+  {
+   "bbox": [
+    [
+     -26.63,
+     -61.34,
+     -48.05
+    ],
+    [
+     26.63,
+     61.34,
+     48.05
+    ]
+   ],
+   "extruder": "1",
+   "id": 112,
+   "k": 56,
+   "name": "B61",
+   "plate": 5,
+   "sha256_raw": "c2174921f060ea4b49ffa13f219cfac90016e927f1ad277b4344917dfa760a36",
+   "translation": [
+    1387.428,
+    86.339,
+    48.053
+   ],
+   "triangles": 32120,
+   "volume": 63742.4
+  },
+  {
+   "bbox": [
+    [
+     -33.84,
+     -61.9,
+     -48.01
+    ],
+    [
+     33.84,
+     61.9,
+     48.01
+    ]
+   ],
+   "extruder": "1",
+   "id": 114,
+   "k": 57,
+   "name": "F78",
+   "plate": 5,
+   "sha256_raw": "bcf5f4e71877ca532bde67c68a2c90e7d55364f250e85227ae695440ceb633d5",
+   "translation": [
+    1438.637,
+    119.528,
+    48.014
+   ],
+   "triangles": 37382,
+   "volume": 83695.8
+  },
+  {
+   "bbox": [
+    [
+     -25.99,
+     -57.5,
+     -47.93
+    ],
+    [
+     25.99,
+     57.5,
+     47.93
+    ]
+   ],
+   "extruder": "1",
+   "id": 116,
+   "k": 58,
+   "name": "B95",
+   "plate": 5,
+   "sha256_raw": "c4695e9f28817efa683edb5b807e135d61de412cb8c50f1b1e48945695632943",
+   "translation": [
+    1290.791,
+    130.912,
+    47.93
+   ],
+   "triangles": 31718,
+   "volume": 52584.4
+  },
+  {
+   "bbox": [
+    [
+     -26.98,
+     -60.19,
+     -47.62
+    ],
+    [
+     26.98,
+     60.19,
+     47.62
+    ]
+   ],
+   "extruder": "1",
+   "id": 118,
+   "k": 59,
+   "name": "H92",
+   "plate": 5,
+   "sha256_raw": "78704541dba90b7d8acdf1b42bafad38298d903cfa04a4d50f969fb8421453ee",
+   "translation": [
+    1361.776,
+    131.762,
+    47.623
+   ],
+   "triangles": 36666,
+   "volume": 63927.1
+  },
+  {
+   "bbox": [
+    [
+     -23.84,
+     -58.11,
+     -47.47
+    ],
+    [
+     23.84,
+     58.11,
+     47.47
+    ]
+   ],
+   "extruder": "1",
+   "id": 120,
+   "k": 60,
+   "name": "F117",
+   "plate": 5,
+   "sha256_raw": "e94eb4f16f073e718204ed970c6f84382c0d7a7cb104f8e5ac218a916e8f79b2",
+   "translation": [
+    1264.644,
+    168.228,
+    47.469
+   ],
+   "triangles": 30980,
+   "volume": 52991.6
+  },
+  {
+   "bbox": [
+    [
+     -20.82,
+     -58.02,
+     -47.35
+    ],
+    [
+     20.82,
+     58.02,
+     47.35
+    ]
+   ],
+   "extruder": "1",
+   "id": 122,
+   "k": 61,
+   "name": "D14",
+   "plate": 5,
+   "sha256_raw": "c13a244874cc1f6f74d32150cec680fbf9e9928c19df56e1bf1fe9a1c7760461",
+   "translation": [
+    1399.616,
+    166.863,
+    47.347
+   ],
+   "triangles": 31532,
+   "volume": 46546.2
+  },
+  {
+   "bbox": [
+    [
+     -20.81,
+     -62.57,
+     -47.3
+    ],
+    [
+     20.81,
+     62.57,
+     47.3
+    ]
+   ],
+   "extruder": "1",
+   "id": 124,
+   "k": 62,
+   "name": "B132",
+   "plate": 5,
+   "sha256_raw": "5e0ea4b01bc7da6dc5af69674d33834816179448d5810dc1719f44690250e4ac",
+   "translation": [
+    1319.614,
+    169.204,
+    47.297
+   ],
+   "triangles": 37988,
+   "volume": 61021.6
+  },
+  {
+   "bbox": [
+    [
+     -23.59,
+     -61.06,
+     -47.16
+    ],
+    [
+     23.59,
+     61.06,
+     47.16
+    ]
+   ],
+   "extruder": "1",
+   "id": 126,
+   "k": 63,
+   "name": "B94",
+   "plate": 5,
+   "sha256_raw": "59c843ea6bfaace971592686fa2ad7fd3d32c2e679c3db47f8cab1f407f87b2d",
+   "translation": [
+    1448.385,
+    171.599,
+    47.161
+   ],
+   "triangles": 37526,
+   "volume": 53392.3
+  },
+  {
+   "bbox": [
+    [
+     -26.42,
+     -49.95,
+     -39.76
+    ],
+    [
+     26.42,
+     49.95,
+     39.76
+    ]
+   ],
+   "extruder": "1",
+   "id": 128,
+   "k": 64,
+   "name": "G77",
+   "plate": 5,
+   "sha256_raw": "3eb8e18b5e5d8e7e150e8cbb65b48eb6b27045ca04e811ceef2593fc6e477546",
+   "translation": [
+    1369.222,
+    194.443,
+    39.765
+   ],
+   "triangles": 31092,
+   "volume": 50252.4
+  },
+  {
+   "bbox": [
+    [
+     -23.2,
+     -43.83,
+     -36.57
+    ],
+    [
+     23.2,
+     43.83,
+     36.57
+    ]
+   ],
+   "extruder": "1",
+   "id": 130,
+   "k": 65,
+   "name": "B56",
+   "plate": 5,
+   "sha256_raw": "77e6d685adccab0502fd0955d99ab9bf782015b8b3a9918607c6c794b2440f8b",
+   "translation": [
+    1421.995,
+    199.605,
+    36.575
+   ],
+   "triangles": 31558,
+   "volume": 40223.2
+  },
+  {
+   "bbox": [
+    [
+     -26.84,
+     -46.03,
+     -36.49
+    ],
+    [
+     26.84,
+     46.03,
+     36.49
+    ]
+   ],
+   "extruder": "1",
+   "id": 132,
+   "k": 66,
+   "name": "B38",
+   "plate": 5,
+   "sha256_raw": "36bd44289d5860d6037c5e640db36a1c2bcd75e23f920a360d751ba8120a0b19",
+   "translation": [
+    1287.645,
+    197.743,
+    36.489
+   ],
+   "triangles": 32360,
+   "volume": 43863.8
+  },
+  {
+   "bbox": [
+    [
+     -24.84,
+     -61.24,
+     -47.07
+    ],
+    [
+     24.84,
+     61.24,
+     47.07
+    ]
+   ],
+   "extruder": "1",
+   "id": 134,
+   "k": 67,
+   "name": "D35",
+   "plate": 6,
+   "sha256_raw": "f916a8defac4f5d49c34f2b76b32a05f826f4ec127b38c18dce8af07ca533095",
+   "translation": [
+    36.84,
+    -220.964,
+    47.071
+   ],
+   "triangles": 31298,
+   "volume": 65901.0
+  },
+  {
+   "bbox": [
+    [
+     -28.06,
+     -61.86,
+     -47.02
+    ],
+    [
+     28.06,
+     61.86,
+     47.02
+    ]
+   ],
+   "extruder": "1",
+   "id": 136,
+   "k": 68,
+   "name": "C45",
+   "plate": 6,
+   "sha256_raw": "eb97a7142a2d4aa4168c82a31051b655ecf519057b7ba160e88aee59b5d3a05f",
+   "translation": [
+    94.061,
+    -220.343,
+    47.024
+   ],
+   "triangles": 31584,
+   "volume": 51028.3
+  },
+  {
+   "bbox": [
+    [
+     -26.28,
+     -62.33,
+     -46.72
+    ],
+    [
+     26.28,
+     62.33,
+     46.72
+    ]
+   ],
+   "extruder": "1",
+   "id": 138,
+   "k": 69,
+   "name": "D37",
+   "plate": 6,
+   "sha256_raw": "337c9dbc6a811610a3cf9dec82e1c2170f672ddfc6d0b54e40290cd71d26a72f",
+   "translation": [
+    152.281,
+    -219.875,
+    46.724
+   ],
+   "triangles": 32484,
+   "volume": 88998.6
+  },
+  {
+   "bbox": [
+    [
+     -26.14,
+     -58.76,
+     -46.41
+    ],
+    [
+     26.14,
+     58.76,
+     46.41
+    ]
+   ],
+   "extruder": "1",
+   "id": 140,
+   "k": 70,
+   "name": "D69",
+   "plate": 6,
+   "sha256_raw": "68b70c6d15421943c49198aaedf94b7a20330446dff827cc7cedf5ebf0797a78",
+   "translation": [
+    208.143,
+    -223.437,
+    46.412
+   ],
+   "triangles": 36632,
+   "volume": 66361.7
+  },
+  {
+   "bbox": [
+    [
+     -28.83,
+     -57.41,
+     -46.25
+    ],
+    [
+     28.83,
+     57.41,
+     46.25
+    ]
+   ],
+   "extruder": "1",
+   "id": 142,
+   "k": 71,
+   "name": "G110",
+   "plate": 6,
+   "sha256_raw": "7a156e437d3184347fe3cf00f6d37b910e3e4e51561d8a4e8cd48c197e933f3b",
+   "translation": [
+    86.831,
+    -175.848,
+    46.251
+   ],
+   "triangles": 44346,
+   "volume": 52634.5
+  },
+  {
+   "bbox": [
+    [
+     -20.34,
+     -60.24,
+     -46.25
+    ],
+    [
+     20.34,
+     60.24,
+     46.25
+    ]
+   ],
+   "extruder": "1",
+   "id": 144,
+   "k": 72,
+   "name": "H42",
+   "plate": 6,
+   "sha256_raw": "a72143418441ee0e3685d897d5617cfd30ca26de17eb60ed45f1ad9a723cd858",
+   "translation": [
+    184.337,
+    -171.691,
+    46.249
+   ],
+   "triangles": 31440,
+   "volume": 50396.9
+  },
+  {
+   "bbox": [
+    [
+     -30.21,
+     -57.72,
+     -46.24
+    ],
+    [
+     30.21,
+     57.72,
+     46.24
+    ]
+   ],
+   "extruder": "1",
+   "id": 146,
+   "k": 73,
+   "name": "C44",
+   "plate": 6,
+   "sha256_raw": "b23d688bba26478822f372c23ffb1a29cbecb9ded5787672af748d7803d14dcd",
+   "translation": [
+    134.211,
+    -151.214,
+    46.24
+   ],
+   "triangles": 32276,
+   "volume": 66587.1
+  },
+  {
+   "bbox": [
+    [
+     -30.17,
+     -62.7,
+     -46.09
+    ],
+    [
+     30.17,
+     62.7,
+     46.09
+    ]
+   ],
+   "extruder": "1",
+   "id": 148,
+   "k": 74,
+   "name": "H8",
+   "plate": 6,
+   "sha256_raw": "1ba449868df6d7f42b0fcd3803e56200a98ec79114b208c6e1af4d99b4e11404",
+   "translation": [
+    42.167,
+    -150.116,
+    46.092
+   ],
+   "triangles": 37306,
+   "volume": 71629.3
+  },
+  {
+   "bbox": [
+    [
+     -26.22,
+     -58.46,
+     -46.07
+    ],
+    [
+     26.22,
+     58.46,
+     46.07
+    ]
+   ],
+   "extruder": "1",
+   "id": 150,
+   "k": 75,
+   "name": "F116",
+   "plate": 6,
+   "sha256_raw": "0b31f6019e0289513fd28cc4dc19e3549eea09fdcdd68973ea60f002a0da5779",
+   "translation": [
+    180.218,
+    -119.64,
+    46.073
+   ],
+   "triangles": 31308,
+   "volume": 64572.9
+  },
+  {
+   "bbox": [
+    [
+     -21.32,
+     -56.05,
+     -45.89
+    ],
+    [
+     21.32,
+     56.05,
+     45.89
+    ]
+   ],
+   "extruder": "1",
+   "id": 152,
+   "k": 76,
+   "name": "I121",
+   "plate": 6,
+   "sha256_raw": "01dffc1651cb5ec5e630f201ac0d4cfaad3dd2b2dc603fc52d3df6cf63775932",
+   "translation": [
+    85.319,
+    -119.386,
+    45.887
+   ],
+   "triangles": 30926,
+   "volume": 39874.3
+  },
+  {
+   "bbox": [
+    [
+     -18.56,
+     -53.49,
+     -43.7
+    ],
+    [
+     18.56,
+     53.49,
+     43.7
+    ]
+   ],
+   "extruder": "1",
+   "id": 154,
+   "k": 77,
+   "name": "D17",
+   "plate": 6,
+   "sha256_raw": "050c0d8c83c5009fd7034a3db081c14841487c802b9a7bc391cf037aa3b43ed1",
+   "translation": [
+    224.559,
+    -124.493,
+    43.695
+   ],
+   "triangles": 29934,
+   "volume": 36079.4
+  },
+  {
+   "bbox": [
+    [
+     -23.72,
+     -44.98,
+     -37.39
+    ],
+    [
+     23.72,
+     44.98,
+     37.39
+    ]
+   ],
+   "extruder": "1",
+   "id": 156,
+   "k": 78,
+   "name": "B129",
+   "plate": 6,
+   "sha256_raw": "00460d3854becc06f06f2770f1c5469b589af632db9c043c4993487d983e82b9",
+   "translation": [
+    125.723,
+    -107.815,
+    37.393
+   ],
+   "triangles": 31036,
+   "volume": 39537.4
+  },
+  {
+   "bbox": [
+    [
+     -28.41,
+     -45.57,
+     -35.28
+    ],
+    [
+     28.41,
+     45.57,
+     35.28
+    ]
+   ],
+   "extruder": "1",
+   "id": 158,
+   "k": 79,
+   "name": "C133",
+   "plate": 6,
+   "sha256_raw": "eec432f1e3cbde735b9ae8e749caba12ef96e3e4c887c6cf0e9c1cf94dcf046b",
+   "translation": [
+    40.412,
+    -109.774,
+    35.28
+   ],
+   "triangles": 31458,
+   "volume": 35970.1
+  },
+  {
+   "bbox": [
+    [
+     -27.15,
+     -56.41,
+     -45.82
+    ],
+    [
+     27.15,
+     56.41,
+     45.82
+    ]
+   ],
+   "extruder": "1",
+   "id": 160,
+   "k": 80,
+   "name": "B24",
+   "plate": 7,
+   "sha256_raw": "299be91d9c1e73271ace313afb0487303abe6250320b37c5797777acf2bafe58",
+   "translation": [
+    346.35,
+    -225.794,
+    45.822
+   ],
+   "triangles": 31402,
+   "volume": 61386.1
+  },
+  {
+   "bbox": [
+    [
+     -31.15,
+     -57.45,
+     -45.7
+    ],
+    [
+     31.15,
+     57.45,
+     45.7
+    ]
+   ],
+   "extruder": "1",
+   "id": 162,
+   "k": 81,
+   "name": "D71",
+   "plate": 7,
+   "sha256_raw": "6b383cfec39f29d3427be8a72b76207382f9ecf327aaec0d43bd53af6fdd1b84",
+   "translation": [
+    406.345,
+    -224.754,
+    45.698
+   ],
+   "triangles": 30908,
+   "volume": 65168.6
+  },
+  {
+   "bbox": [
+    [
+     -20.21,
+     -58.07,
+     -45.69
+    ],
+    [
+     20.21,
+     58.07,
+     45.69
+    ]
+   ],
+   "extruder": "1",
+   "id": 164,
+   "k": 82,
+   "name": "C65",
+   "plate": 7,
+   "sha256_raw": "870ca747c6aee44be46aaf1ab7ffea11c0a7129c5e273d5331de63b39d62f043",
+   "translation": [
+    461.415,
+    -224.13,
+    45.693
+   ],
+   "triangles": 37518,
+   "volume": 52562.8
+  },
+  {
+   "bbox": [
+    [
+     -24.53,
+     -58.67,
+     -45.45
+    ],
+    [
+     24.53,
+     58.67,
+     45.45
+    ]
+   ],
+   "extruder": "1",
+   "id": 166,
+   "k": 83,
+   "name": "C10",
+   "plate": 7,
+   "sha256_raw": "d9b32d801792c99ea0d24ab3e8875620dbd3d3ee5f3236e432f25b73fcc2da2d",
+   "translation": [
+    509.725,
+    -223.529,
+    45.452
+   ],
+   "triangles": 31814,
+   "volume": 60822.6
+  },
+  {
+   "bbox": [
+    [
+     -27.21,
+     -60.1,
+     -45.37
+    ],
+    [
+     27.21,
+     60.1,
+     45.37
+    ]
+   ],
+   "extruder": "1",
+   "id": 168,
+   "k": 84,
+   "name": "G111",
+   "plate": 7,
+   "sha256_raw": "026c8cc9578371256badbe21c04b700935a762de905a48c85c6e05163fb080bf",
+   "translation": [
+    362.413,
+    -184.061,
+    45.375
+   ],
+   "triangles": 31992,
+   "volume": 70477.6
+  },
+  {
+   "bbox": [
+    [
+     -28.06,
+     -56.1,
+     -45.19
+    ],
+    [
+     28.06,
+     56.1,
+     45.19
+    ]
+   ],
+   "extruder": "1",
+   "id": 170,
+   "k": 85,
+   "name": "G91",
+   "plate": 7,
+   "sha256_raw": "998e3ee4ee679aadbdbaa1f66fa0ae2693bdba581e297100699519cfcbb3f102",
+   "translation": [
+    445.264,
+    -178.937,
+    45.188
+   ],
+   "triangles": 36296,
+   "volume": 61884.8
+  },
+  {
+   "bbox": [
+    [
+     -25.8,
+     -54.96,
+     -45.17
+    ],
+    [
+     25.8,
+     54.96,
+     45.17
+    ]
+   ],
+   "extruder": "1",
+   "id": 172,
+   "k": 86,
+   "name": "D53",
+   "plate": 7,
+   "sha256_raw": "94557f5b66dc60a91256179c9000709c8969f55a9382f777c33724c3fe54ac62",
+   "translation": [
+    524.997,
+    -173.175,
+    45.165
+   ],
+   "triangles": 30356,
+   "volume": 56833.0
+  },
+  {
+   "bbox": [
+    [
+     -27.07,
+     -58.18,
+     -45.11
+    ],
+    [
+     27.07,
+     58.18,
+     45.11
+    ]
+   ],
+   "extruder": "1",
+   "id": 174,
+   "k": 87,
+   "name": "H77",
+   "plate": 7,
+   "sha256_raw": "afca6f72a828a7d3ba7a2386ab429c1fe7f2fb1d240ad1058a7ce324d2236847",
+   "translation": [
+    408.271,
+    -146.689,
+    45.109
+   ],
+   "triangles": 42730,
+   "volume": 63772.7
+  },
+  {
+   "bbox": [
+    [
+     -23.44,
+     -57.61,
+     -44.86
+    ],
+    [
+     23.44,
+     57.61,
+     44.86
+    ]
+   ],
+   "extruder": "1",
+   "id": 176,
+   "k": 88,
+   "name": "I103",
+   "plate": 7,
+   "sha256_raw": "b286c94ec18c8f7af12f7eca89a4d2f55b6838d38f8bdd7dd7a68eeade203110",
+   "translation": [
+    484.642,
+    -139.308,
+    44.861
+   ],
+   "triangles": 31682,
+   "volume": 53595.4
+  },
+  {
+   "bbox": [
+    [
+     -25.35,
+     -56.26,
+     -44.85
+    ],
+    [
+     25.35,
+     56.26,
+     44.85
+    ]
+   ],
+   "extruder": "1",
+   "id": 178,
+   "k": 89,
+   "name": "F75",
+   "plate": 7,
+   "sha256_raw": "152b188fd66230f7b2417d0301738c5e787e9a7f3fd956b6e1081a0de78d18cf",
+   "translation": [
+    344.553,
+    -131.944,
+    44.846
+   ],
+   "triangles": 38648,
+   "volume": 54737.8
+  },
+  {
+   "bbox": [
+    [
+     -28.41,
+     -58.07,
+     -44.46
+    ],
+    [
+     28.41,
+     58.07,
+     44.46
+    ]
+   ],
+   "extruder": "1",
+   "id": 180,
+   "k": 90,
+   "name": "A125",
+   "plate": 7,
+   "sha256_raw": "f7d3d8621faa51e05681c8ee3474b464eba596cf603566cc14b8bb4bd8e29f8c",
+   "translation": [
+    521.608,
+    -120.106,
+    44.459
+   ],
+   "triangles": 31484,
+   "volume": 53185.9
+  },
+  {
+   "bbox": [
+    [
+     -25.81,
+     -52.78,
+     -40.34
+    ],
+    [
+     25.81,
+     52.78,
+     40.34
+    ]
+   ],
+   "extruder": "1",
+   "id": 182,
+   "k": 91,
+   "name": "B73",
+   "plate": 7,
+   "sha256_raw": "1a06f8831da767ca8ed1b61926e3e751732d158d279600630a3bde3871ab8478",
+   "translation": [
+    433.013,
+    -116.256,
+    40.338
+   ],
+   "triangles": 30904,
+   "volume": 50087.5
+  },
+  {
+   "bbox": [
+    [
+     -26.67,
+     -37.81,
+     -33.3
+    ],
+    [
+     26.67,
+     37.81,
+     33.3
+    ]
+   ],
+   "extruder": "1",
+   "id": 184,
+   "k": 92,
+   "name": "B37",
+   "plate": 7,
+   "sha256_raw": "67287dfe820327456d4e575b3153390eb4eb27e63336fee4ff891370689fc226",
+   "translation": [
+    375.873,
+    -103.612,
+    33.298
+   ],
+   "triangles": 37312,
+   "volume": 39397.7
+  },
+  {
+   "bbox": [
+    [
+     -26.27,
+     -59.12,
+     -44.77
+    ],
+    [
+     26.27,
+     59.12,
+     44.77
+    ]
+   ],
+   "extruder": "1",
+   "id": 186,
+   "k": 93,
+   "name": "F76",
+   "plate": 8,
+   "sha256_raw": "af81f023d22343eca1a7b368f0c308b9fae69bc4d0bc3b34574e490ad6b0b7d1",
+   "translation": [
+    652.671,
+    -223.084,
+    44.769
+   ],
+   "triangles": 42434,
+   "volume": 65932.9
+  },
+  {
+   "bbox": [
+    [
+     -27.65,
+     -58.24,
+     -44.75
+    ],
+    [
+     27.65,
+     58.24,
+     44.75
+    ]
+   ],
+   "extruder": "1",
+   "id": 188,
+   "k": 94,
+   "name": "F115",
+   "plate": 8,
+   "sha256_raw": "0fc21d7a9953d998662ef03fcad1f4ed37474bf68d674c455a5c20c643d0d54d",
+   "translation": [
+    710.045,
+    -223.961,
+    44.754
+   ],
+   "triangles": 31662,
+   "volume": 74723.2
+  },
+  {
+   "bbox": [
+    [
+     -25.89,
+     -56.97,
+     -44.64
+    ],
+    [
+     25.89,
+     56.97,
+     44.64
+    ]
+   ],
+   "extruder": "1",
+   "id": 190,
+   "k": 95,
+   "name": "G58",
+   "plate": 8,
+   "sha256_raw": "deee4858c62c3564f8f0f2bd22f89c0fbd6f068740460658d8d6779effdca3bb",
+   "translation": [
+    764.295,
+    -225.228,
+    44.638
+   ],
+   "triangles": 30860,
+   "volume": 60299.4
+  },
+  {
+   "bbox": [
+    [
+     -29.74,
+     -54.02,
+     -44.54
+    ],
+    [
+     29.74,
+     54.02,
+     44.54
+    ]
+   ],
+   "extruder": "1",
+   "id": 192,
+   "k": 96,
+   "name": "B60",
+   "plate": 8,
+   "sha256_raw": "a687eb479a12d112806bb42a049eda1fafac1d3eda8685b35bdd0c4776274570",
+   "translation": [
+    822.144,
+    -228.184,
+    44.544
+   ],
+   "triangles": 31578,
+   "volume": 62244.0
+  },
+  {
+   "bbox": [
+    [
+     -25.81,
+     -55.3,
+     -44.42
+    ],
+    [
+     25.81,
+     55.3,
+     44.42
+    ]
+   ],
+   "extruder": "1",
+   "id": 194,
+   "k": 97,
+   "name": "A35",
+   "plate": 8,
+   "sha256_raw": "a2ef0fe3615a870ebe98c04785e7dd5b6b91cb70360db61c9dfe7a23ce028a97",
+   "translation": [
+    806.209,
+    -184.111,
+    44.416
+   ],
+   "triangles": 31064,
+   "volume": 55425.7
+  },
+  {
+   "bbox": [
+    [
+     -28.89,
+     -55.63,
+     -44.39
+    ],
+    [
+     28.89,
+     55.63,
+     44.39
+    ]
+   ],
+   "extruder": "1",
+   "id": 196,
+   "k": 98,
+   "name": "C63",
+   "plate": 8,
+   "sha256_raw": "991f48dea91db8e58c7172797b206323ed50309296789e5492fbc102bdadbdfa",
+   "translation": [
+    731.287,
+    -171.344,
+    44.39
+   ],
+   "triangles": 37862,
+   "volume": 67782.8
+  },
+  {
+   "bbox": [
+    [
+     -26.05,
+     -54.71,
+     -44.34
+    ],
+    [
+     26.05,
+     54.71,
+     44.34
+    ]
+   ],
+   "extruder": "1",
+   "id": 198,
+   "k": 99,
+   "name": "G74",
+   "plate": 8,
+   "sha256_raw": "eceee181092b717933638608c052964cbcd242aa106524d6be85f9b8bf8ecea4",
+   "translation": [
+    672.453,
+    -172.576,
+    44.338
+   ],
+   "triangles": 36466,
+   "volume": 49771.7
+  },
+  {
+   "bbox": [
+    [
+     -20.55,
+     -57.35,
+     -44.22
+    ],
+    [
+     20.55,
+     57.35,
+     44.22
+    ]
+   ],
+   "extruder": "1",
+   "id": 200,
+   "k": 100,
+   "name": "H93",
+   "plate": 8,
+   "sha256_raw": "497b299c3c88ce5cc0c4e149bc743f4db3860be823156b4fe75f5e1ea49a8eae",
+   "translation": [
+    836.953,
+    -145.078,
+    44.225
+   ],
+   "triangles": 30570,
+   "volume": 53613.0
+  },
+  {
+   "bbox": [
+    [
+     -22.6,
+     -54.18,
+     -43.85
+    ],
+    [
+     22.6,
+     54.18,
+     43.85
+    ]
+   ],
+   "extruder": "1",
+   "id": 202,
+   "k": 101,
+   "name": "B40",
+   "plate": 8,
+   "sha256_raw": "3db365a4d4d26a5c73054bfcaef481cd816b5703088a398f6fd8b0bb32eee9b9",
+   "translation": [
+    775.0,
+    -135.422,
+    43.852
+   ],
+   "triangles": 31814,
+   "volume": 44880.5
+  },
+  {
+   "bbox": [
+    [
+     -25.07,
+     -54.35,
+     -43.59
+    ],
+    [
+     25.07,
+     54.35,
+     43.59
+    ]
+   ],
+   "extruder": "1",
+   "id": 204,
+   "k": 102,
+   "name": "C79",
+   "plate": 8,
+   "sha256_raw": "56d2dd6a9c3cf7669b1f6ff752ca90c3e87319c08ac13dc583108e2d0761ae62",
+   "translation": [
+    705.475,
+    -130.361,
+    43.588
+   ],
+   "triangles": 30804,
+   "volume": 59483.5
+  },
+  {
+   "bbox": [
+    [
+     -21.81,
+     -54.31,
+     -43.4
+    ],
+    [
+     21.81,
+     54.31,
+     43.4
+    ]
+   ],
+   "extruder": "1",
+   "id": 206,
+   "k": 103,
+   "name": "C43",
+   "plate": 8,
+   "sha256_raw": "77513374925c59b1fca3336cec707a216da1c28a8d37bfb26d37705c7f16f724",
+   "translation": [
+    648.212,
+    -118.622,
+    43.399
+   ],
+   "triangles": 30642,
+   "volume": 50080.6
+  },
+  {
+   "bbox": [
+    [
+     -23.47,
+     -44.5,
+     -36.24
+    ],
+    [
+     23.47,
+     44.5,
+     36.24
+    ]
+   ],
+   "extruder": "1",
+   "id": 208,
+   "k": 104,
+   "name": "G46",
+   "plate": 8,
+   "sha256_raw": "0f5794d373154c122229f4a51d3dc763c7fb7a7f5d79bbc97bcdd368cf6e6cd6",
+   "translation": [
+    755.874,
+    -105.983,
+    36.239
+   ],
+   "triangles": 30704,
+   "volume": 46912.8
+  },
+  {
+   "bbox": [
+    [
+     -24.28,
+     -42.17,
+     -34.48
+    ],
+    [
+     24.28,
+     42.17,
+     34.48
+    ]
+   ],
+   "extruder": "1",
+   "id": 210,
+   "k": 105,
+   "name": "H80",
+   "plate": 8,
+   "sha256_raw": "6235bb663153f4fa88ee54ee2099633c8a8ecdbf2e347f3179e11e88e44d6b67",
+   "translation": [
+    810.678,
+    -105.083,
+    34.484
+   ],
+   "triangles": 32106,
+   "volume": 43189.2
+  },
+  {
+   "bbox": [
+    [
+     -27.73,
+     -37.07,
+     -30.2
+    ],
+    [
+     27.73,
+     37.07,
+     30.2
+    ]
+   ],
+   "extruder": "1",
+   "id": 212,
+   "k": 106,
+   "name": "G118",
+   "plate": 8,
+   "sha256_raw": "976e1358f88e94859f02c7a501afde53aabc66e15bd2a0fdad8dcfbf359c88ab",
+   "translation": [
+    698.127,
+    -97.97,
+    30.201
+   ],
+   "triangles": 31124,
+   "volume": 44755.1
+  },
+  {
+   "bbox": [
+    [
+     -25.7,
+     -54.55,
+     -43.36
+    ],
+    [
+     25.7,
+     54.55,
+     43.36
+    ]
+   ],
+   "extruder": "1",
+   "id": 214,
+   "k": 107,
+   "name": "H27",
+   "plate": 9,
+   "sha256_raw": "80eeb142eeb81fb550c10d51e24364d15429b1c92794a67630d55d5c1d14f9ca",
+   "translation": [
+    959.297,
+    -227.648,
+    43.359
+   ],
+   "triangles": 30056,
+   "volume": 51331.7
+  },
+  {
+   "bbox": [
+    [
+     -28.49,
+     -53.46,
+     -43.08
+    ],
+    [
+     28.49,
+     53.46,
+     43.08
+    ]
+   ],
+   "extruder": "1",
+   "id": 216,
+   "k": 108,
+   "name": "A13",
+   "plate": 9,
+   "sha256_raw": "378b19bc493f3f3134f860236f017f4857421d6fa8a7941fc354ada295702768",
+   "translation": [
+    1018.092,
+    -228.74,
+    43.076
+   ],
+   "triangles": 32070,
+   "volume": 55579.7
+  },
+  {
+   "bbox": [
+    [
+     -27.62,
+     -56.87,
+     -43.05
+    ],
+    [
+     27.62,
+     56.87,
+     43.05
+    ]
+   ],
+   "extruder": "1",
+   "id": 218,
+   "k": 109,
+   "name": "B93",
+   "plate": 9,
+   "sha256_raw": "2b1ef75dc9a8f81b84cfbd477c6a8d9a5facc7f204adee6bb19db6bca132429e",
+   "translation": [
+    1077.223,
+    -225.333,
+    43.054
+   ],
+   "triangles": 32360,
+   "volume": 49909.2
+  },
+  {
+   "bbox": [
+    [
+     -26.54,
+     -53.41,
+     -42.99
+    ],
+    [
+     26.54,
+     53.41,
+     42.99
+    ]
+   ],
+   "extruder": "1",
+   "id": 220,
+   "k": 110,
+   "name": "D54",
+   "plate": 9,
+   "sha256_raw": "01b5f4f84b6a372c890a4bbbd5c3c1adb9169db2af54fbdd682ec2a9fe864b74",
+   "translation": [
+    1136.142,
+    -228.785,
+    42.99
+   ],
+   "triangles": 36902,
+   "volume": 57406.0
+  },
+  {
+   "bbox": [
+    [
+     -27.44,
+     -55.2,
+     -42.97
+    ],
+    [
+     27.44,
+     55.2,
+     42.97
+    ]
+   ],
+   "extruder": "1",
+   "id": 222,
+   "k": 111,
+   "name": "G75",
+   "plate": 9,
+   "sha256_raw": "66fdb12a87775ba27376ea5a9b610f2fab82677d3d896fd042789210441a8a51",
+   "translation": [
+    1029.035,
+    -183.739,
+    42.973
+   ],
+   "triangles": 36160,
+   "volume": 59137.2
+  },
+  {
+   "bbox": [
+    [
+     -23.31,
+     -52.79,
+     -42.7
+    ],
+    [
+     23.31,
+     52.79,
+     42.7
+    ]
+   ],
+   "extruder": "1",
+   "id": 224,
+   "k": 112,
+   "name": "C95",
+   "plate": 9,
+   "sha256_raw": "aed66a00775e0c85622f81ffe21844892c547e7578f630d7a2dc0bfd846b0b38",
+   "translation": [
+    1106.905,
+    -180.687,
+    42.697
+   ],
+   "triangles": 31722,
+   "volume": 46480.4
+  },
+  {
+   "bbox": [
+    [
+     -28.58,
+     -53.72,
+     -42.61
+    ],
+    [
+     28.58,
+     53.72,
+     42.61
+    ]
+   ],
+   "extruder": "1",
+   "id": 226,
+   "k": 113,
+   "name": "A50",
+   "plate": 9,
+   "sha256_raw": "804c329df48594f0bacf3ece09dc196f0b27931bbe2ddeef271802c90a072b4f",
+   "translation": [
+    962.184,
+    -171.257,
+    42.61
+   ],
+   "triangles": 31328,
+   "volume": 52148.3
+  },
+  {
+   "bbox": [
+    [
+     -25.18,
+     -56.16,
+     -42.39
+    ],
+    [
+     25.18,
+     56.16,
+     42.39
+    ]
+   ],
+   "extruder": "1",
+   "id": 228,
+   "k": 114,
+   "name": "D20",
+   "plate": 9,
+   "sha256_raw": "329a4aa044eff20c5e1728d1eaf4583b98d6c6f7106edb05c8626c4d9c7f38d3",
+   "translation": [
+    1080.775,
+    -150.174,
+    42.386
+   ],
+   "triangles": 31462,
+   "volume": 57714.0
+  },
+  {
+   "bbox": [
+    [
+     -25.08,
+     -55.48,
+     -42.35
+    ],
+    [
+     25.08,
+     55.48,
+     42.35
+    ]
+   ],
+   "extruder": "1",
+   "id": 230,
+   "k": 115,
+   "name": "C9",
+   "plate": 9,
+   "sha256_raw": "31cfa3ec6fdf33dee19e0089d7563d2614c65ff2d2359a885f9d1caf2dc69aea",
+   "translation": [
+    1138.681,
+    -138.306,
+    42.345
+   ],
+   "triangles": 31680,
+   "volume": 60071.2
+  },
+  {
+   "bbox": [
+    [
+     -21.53,
+     -53.78,
+     -42.32
+    ],
+    [
+     21.53,
+     53.78,
+     42.32
+    ]
+   ],
+   "extruder": "1",
+   "id": 232,
+   "k": 116,
+   "name": "C62",
+   "plate": 9,
+   "sha256_raw": "4e81a0a655fa9b209d02f4bb8844336f34cd8765e8a784ff412940f94d1489ff",
+   "translation": [
+    1033.132,
+    -127.701,
+    42.319
+   ],
+   "triangles": 37644,
+   "volume": 59852.7
+  },
+  {
+   "bbox": [
+    [
+     -22.57,
+     -50.3,
+     -42.3
+    ],
+    [
+     22.57,
+     50.3,
+     42.3
+    ]
+   ],
+   "extruder": "1",
+   "id": 234,
+   "k": 117,
+   "name": "I124",
+   "plate": 9,
+   "sha256_raw": "62e9bc632bb2230a90d2da64123f57083294ae1833f2d2497b7e38a37d2233f4",
+   "translation": [
+    984.174,
+    -128.593,
+    42.299
+   ],
+   "triangles": 37040,
+   "volume": 39128.7
+  },
+  {
+   "bbox": [
+    [
+     -22.61,
+     -43.82,
+     -36.23
+    ],
+    [
+     22.61,
+     43.82,
+     36.23
+    ]
+   ],
+   "extruder": "1",
+   "id": 236,
+   "k": 118,
+   "name": "G79",
+   "plate": 9,
+   "sha256_raw": "f6edb46a42839d5904f290e59b6c38c85f3a6b131ac698eb9720f6b143c843cf",
+   "translation": [
+    1094.214,
+    -110.055,
+    36.226
+   ],
+   "triangles": 37890,
+   "volume": 37980.5
+  },
+  {
+   "bbox": [
+    [
+     -25.09,
+     -37.21,
+     -31.76
+    ],
+    [
+     25.09,
+     37.21,
+     31.76
+    ]
+   ],
+   "extruder": "1",
+   "id": 238,
+   "k": 119,
+   "name": "H64",
+   "plate": 9,
+   "sha256_raw": "35d16ae1a2cd4824e05c9c793d578c9c916da2e1cc1d2c6cd2a3d90812de0dcb",
+   "translation": [
+    958.689,
+    -99.747,
+    31.764
+   ],
+   "triangles": 43512,
+   "volume": 36369.3
+  },
+  {
+   "bbox": [
+    [
+     -21.98,
+     -52.02,
+     -42.18
+    ],
+    [
+     21.98,
+     52.02,
+     42.18
+    ]
+   ],
+   "extruder": "1",
+   "id": 240,
+   "k": 120,
+   "name": "H94",
+   "plate": 10,
+   "sha256_raw": "4b52255b84b3d59b413b32423c59ef089b7f44ab6052d0479aa8dcb9adf05857",
+   "translation": [
+    1262.782,
+    -230.18,
+    42.179
+   ],
+   "triangles": 31466,
+   "volume": 46143.0
+  },
+  {
+   "bbox": [
+    [
+     -25.74,
+     -54.17,
+     -42.17
+    ],
+    [
+     25.74,
+     54.17,
+     42.17
+    ]
+   ],
+   "extruder": "1",
+   "id": 242,
+   "k": 121,
+   "name": "F74",
+   "plate": 10,
+   "sha256_raw": "53cc362b525cb8b9b73d4064c4125960e286e9aa9528b7205e29f28359929272",
+   "translation": [
+    1314.536,
+    -228.033,
+    42.168
+   ],
+   "triangles": 37128,
+   "volume": 51607.5
+  },
+  {
+   "bbox": [
+    [
+     -27.39,
+     -54.72,
+     -42.06
+    ],
+    [
+     27.39,
+     54.72,
+     42.06
+    ]
+   ],
+   "extruder": "1",
+   "id": 244,
+   "k": 122,
+   "name": "G130",
+   "plate": 10,
+   "sha256_raw": "1e1f787ee5b50f5c8d0303f81f00fb997053ee8b58a5ed9188fafbf201bf6237",
+   "translation": [
+    1370.186,
+    -227.477,
+    42.064
+   ],
+   "triangles": 32198,
+   "volume": 55221.2
+  },
+  {
+   "bbox": [
+    [
+     -29.2,
+     -52.47,
+     -42.01
+    ],
+    [
+     29.2,
+     52.47,
+     42.01
+    ]
+   ],
+   "extruder": "1",
+   "id": 246,
+   "k": 123,
+   "name": "D39",
+   "plate": 10,
+   "sha256_raw": "ae594db32ba9d80b24cbf31577b70f27fcc03da45370743961abd3bf71edbe43",
+   "translation": [
+    1429.996,
+    -229.732,
+    42.014
+   ],
+   "triangles": 31768,
+   "volume": 54861.7
+  },
+  {
+   "bbox": [
+    [
+     -25.34,
+     -52.74,
+     -41.98
+    ],
+    [
+     25.34,
+     52.74,
+     41.98
+    ]
+   ],
+   "extruder": "1",
+   "id": 248,
+   "k": 124,
+   "name": "G42",
+   "plate": 10,
+   "sha256_raw": "f2062a99df5d60291825f829ebf1157558e4ef56239a1a1540a3a1e271042931",
+   "translation": [
+    1402.144,
+    -184.111,
+    41.978
+   ],
+   "triangles": 31056,
+   "volume": 51363.8
+  },
+  {
+   "bbox": [
+    [
+     -27.63,
+     -53.05,
+     -41.97
+    ],
+    [
+     27.63,
+     53.05,
+     41.97
+    ]
+   ],
+   "extruder": "1",
+   "id": 250,
+   "k": 125,
+   "name": "C26",
+   "plate": 10,
+   "sha256_raw": "1f071f8572cf3dd3523b3e3c8caac3ac93a4d35cf9654ae2d15532addf7caeb6",
+   "translation": [
+    1284.429,
+    -182.918,
+    41.969
+   ],
+   "triangles": 42768,
+   "volume": 56430.3
+  },
+  {
+   "bbox": [
+    [
+     -24.79,
+     -52.29,
+     -41.94
+    ],
+    [
+     24.79,
+     52.29,
+     41.94
+    ]
+   ],
+   "extruder": "1",
+   "id": 252,
+   "k": 126,
+   "name": "H44",
+   "plate": 10,
+   "sha256_raw": "0ea4583cbf8937df1b42d3497f60d3065212c17a3041b274326f56abb8f02f76",
+   "translation": [
+    1339.59,
+    -177.291,
+    41.938
+   ],
+   "triangles": 36520,
+   "volume": 48353.9
+  },
+  {
+   "bbox": [
+    [
+     -26.56,
+     -53.87,
+     -41.93
+    ],
+    [
+     26.56,
+     53.87,
+     41.93
+    ]
+   ],
+   "extruder": "1",
+   "id": 254,
+   "k": 127,
+   "name": "G76",
+   "plate": 10,
+   "sha256_raw": "c121b68516e1350454aa897b199ab23d3a6ee9bd77dd6dc4cdabf68f8e1dfc5e",
+   "translation": [
+    1445.359,
+    -154.451,
+    41.928
+   ],
+   "triangles": 31134,
+   "volume": 57172.8
+  },
+  {
+   "bbox": [
+    [
+     -25.55,
+     -52.29,
+     -41.55
+    ],
+    [
+     25.55,
+     52.29,
+     41.55
+    ]
+   ],
+   "extruder": "1",
+   "id": 256,
+   "k": 128,
+   "name": "A34",
+   "plate": 10,
+   "sha256_raw": "7c9331e713a6643af574c1687481610304ca48fd90acced5181c27bb8a17a567",
+   "translation": [
+    1378.347,
+    -139.059,
+    41.55
+   ],
+   "triangles": 37224,
+   "volume": 50352.3
+  },
+  {
+   "bbox": [
+    [
+     -30.45,
+     -54.74,
+     -41.45
+    ],
+    [
+     30.45,
+     54.74,
+     41.45
+    ]
+   ],
+   "extruder": "1",
+   "id": 258,
+   "k": 129,
+   "name": "A33",
+   "plate": 10,
+   "sha256_raw": "4de8e66c0006265e9ee717f9adc15684a98b2e1d14a259dd1ebd994e702270cf",
+   "translation": [
+    1313.251,
+    -131.429,
+    41.454
+   ],
+   "triangles": 30546,
+   "volume": 64843.5
+  },
+  {
+   "bbox": [
+    [
+     -26.25,
+     -52.9,
+     -40.71
+    ],
+    [
+     26.25,
+     52.9,
+     40.71
+    ]
+   ],
+   "extruder": "1",
+   "id": 260,
+   "k": 130,
+   "name": "A109",
+   "plate": 10,
+   "sha256_raw": "e8f897047ddb3d72bc953921c1f1644187362728655a56cc3f19a9ef7bca2e8f",
+   "translation": [
+    1413.054,
+    -113.895,
+    40.707
+   ],
+   "triangles": 36858,
+   "volume": 54021.6
+  },
+  {
+   "bbox": [
+    [
+     -21.51,
+     -47.31,
+     -39.07
+    ],
+    [
+     21.51,
+     47.31,
+     39.07
+    ]
+   ],
+   "extruder": "1",
+   "id": 262,
+   "k": 131,
+   "name": "I126",
+   "plate": 10,
+   "sha256_raw": "9ccd16a6556c3e9f052e2eff4a6839f63d9f360c6ac984564b99d21bde5628c7",
+   "translation": [
+    1262.315,
+    -115.945,
+    39.07
+   ],
+   "triangles": 30682,
+   "volume": 31057.5
+  },
+  {
+   "bbox": [
+    [
+     -25.36,
+     -40.22,
+     -32.33
+    ],
+    [
+     25.36,
+     40.22,
+     32.33
+    ]
+   ],
+   "extruder": "1",
+   "id": 264,
+   "k": 132,
+   "name": "G116",
+   "plate": 10,
+   "sha256_raw": "917bdb96734572c50d212ef9c0220aee7cdc21a0ef43f9c19fddfe5f7b365753",
+   "translation": [
+    1344.162,
+    -102.362,
+    32.328
+   ],
+   "triangles": 42526,
+   "volume": 33322.0
+  },
+  {
+   "bbox": [
+    [
+     -21.96,
+     -50.72,
+     -41.44
+    ],
+    [
+     21.96,
+     50.72,
+     41.44
+    ]
+   ],
+   "extruder": "1",
+   "id": 266,
+   "k": 133,
+   "name": "G43",
+   "plate": 11,
+   "sha256_raw": "f6de4ddf35241286313f232b52f5ec428bdef3b1f419464bf3ab24cf77655244",
+   "translation": [
+    33.961,
+    -538.679,
+    41.442
+   ],
+   "triangles": 30850,
+   "volume": 45687.9
+  },
+  {
+   "bbox": [
+    [
+     -23.8,
+     -53.78,
+     -41.33
+    ],
+    [
+     23.8,
+     53.78,
+     41.33
+    ]
+   ],
+   "extruder": "1",
+   "id": 268,
+   "k": 134,
+   "name": "G131",
+   "plate": 11,
+   "sha256_raw": "6f30f8e03d39bb40f94aa01e36d43f31e094de7a2c87d2968fc4b6e406d67f83",
+   "translation": [
+    83.801,
+    -535.619,
+    41.332
+   ],
+   "triangles": 31738,
+   "volume": 56999.3
+  },
+  {
+   "bbox": [
+    [
+     -24.68,
+     -52.67,
+     -41.22
+    ],
+    [
+     24.68,
+     52.67,
+     41.22
+    ]
+   ],
+   "extruder": "1",
+   "id": 270,
+   "k": 135,
+   "name": "I105",
+   "plate": 11,
+   "sha256_raw": "4edf246e2f8b451cb4a23c23f8f9191ff1cebde5faa663d3a11091318fe79e82",
+   "translation": [
+    136.677,
+    -536.729,
+    41.217
+   ],
+   "triangles": 31966,
+   "volume": 51297.3
+  },
+  {
+   "bbox": [
+    [
+     -33.58,
+     -50.84,
+     -41.19
+    ],
+    [
+     33.58,
+     50.84,
+     41.19
+    ]
+   ],
+   "extruder": "1",
+   "id": 272,
+   "k": 136,
+   "name": "A124",
+   "plate": 11,
+   "sha256_raw": "8d0b9c847d16d08597b557361179a553c6bc4a628c0fc09993767d150ef55276",
+   "translation": [
+    199.576,
+    -538.558,
+    41.19
+   ],
+   "triangles": 37964,
+   "volume": 54276.1
+  },
+  {
+   "bbox": [
+    [
+     -30.59,
+     -52.68,
+     -41.06
+    ],
+    [
+     30.59,
+     52.68,
+     41.06
+    ]
+   ],
+   "extruder": "1",
+   "id": 274,
+   "k": 137,
+   "name": "I13",
+   "plate": 11,
+   "sha256_raw": "1565055b050fb9052235b5cb6ad1b02c71bec228850836e13fccdcdb95ea358f",
+   "translation": [
+    174.595,
+    -491.059,
+    41.063
+   ],
+   "triangles": 30188,
+   "volume": 67638.3
+  },
+  {
+   "bbox": [
+    [
+     -24.72,
+     -51.21,
+     -40.96
+    ],
+    [
+     24.72,
+     51.21,
+     40.96
+    ]
+   ],
+   "extruder": "1",
+   "id": 276,
+   "k": 138,
+   "name": "B110",
+   "plate": 11,
+   "sha256_raw": "59a86eec11ce2a976cbf341ce5e7e309bc65274714a1c0934cc721601425ff50",
+   "translation": [
+    44.72,
+    -489.931,
+    40.964
+   ],
+   "triangles": 37714,
+   "volume": 49453.6
+  },
+  {
+   "bbox": [
+    [
+     -23.64,
+     -50.62,
+     -40.83
+    ],
+    [
+     23.64,
+     50.62,
+     40.83
+    ]
+   ],
+   "extruder": "1",
+   "id": 278,
+   "k": 139,
+   "name": "H78",
+   "plate": 11,
+   "sha256_raw": "7ac9392ec13bf3210c025e4a1702dbb129d4113a348f19e8a800902a5ebaf3fd",
+   "translation": [
+    115.638,
+    -481.854,
+    40.833
+   ],
+   "triangles": 37502,
+   "volume": 54860.2
+  },
+  {
+   "bbox": [
+    [
+     -23.3,
+     -49.2,
+     -40.73
+    ],
+    [
+     23.3,
+     49.2,
+     40.73
+    ]
+   ],
+   "extruder": "1",
+   "id": 280,
+   "k": 140,
+   "name": "C77",
+   "plate": 11,
+   "sha256_raw": "15bb14d2402fb46419e0c56cc0ff93db427d3327bccddb206b64b023bcd08a91",
+   "translation": [
+    219.302,
+    -443.932,
+    40.732
+   ],
+   "triangles": 36912,
+   "volume": 53701.8
+  },
+  {
+   "bbox": [
+    [
+     -21.25,
+     -48.57,
+     -40.66
+    ],
+    [
+     21.25,
+     48.57,
+     40.66
+    ]
+   ],
+   "extruder": "1",
+   "id": 282,
+   "k": 141,
+   "name": "I125",
+   "plate": 11,
+   "sha256_raw": "434dc9ac4450e00b3ea5532ad58b0d46577b7d42b8d2b29f7a390ab87166579f",
+   "translation": [
+    71.255,
+    -445.038,
+    40.656
+   ],
+   "triangles": 31228,
+   "volume": 36830.1
+  },
+  {
+   "bbox": [
+    [
+     -25.76,
+     -50.76,
+     -40.4
+    ],
+    [
+     25.76,
+     50.76,
+     40.4
+    ]
+   ],
+   "extruder": "1",
+   "id": 284,
+   "k": 142,
+   "name": "G61",
+   "plate": 11,
+   "sha256_raw": "ff7e0df18d25f32b3ab28ef9f4ef93a039537d4243c4c9fbf5dcf8bbe010fa1a",
+   "translation": [
+    167.756,
+    -438.157,
+    40.395
+   ],
+   "triangles": 36820,
+   "volume": 47672.9
+  },
+  {
+   "bbox": [
+    [
+     -30.49,
+     -49.21,
+     -39.86
+    ],
+    [
+     30.49,
+     49.21,
+     39.86
+    ]
+   ],
+   "extruder": "1",
+   "id": 286,
+   "k": 143,
+   "name": "D21",
+   "plate": 11,
+   "sha256_raw": "132a99399d8fe2e137664a7c4b7cd13984ce7e50e0f9e60c78fe48b696b03d9b",
+   "translation": [
+    108.492,
+    -422.978,
+    39.857
+   ],
+   "triangles": 36628,
+   "volume": 48371.4
+  },
+  {
+   "bbox": [
+    [
+     -23.87,
+     -47.95,
+     -37.99
+    ],
+    [
+     23.87,
+     47.95,
+     37.99
+    ]
+   ],
+   "extruder": "1",
+   "id": 288,
+   "k": 144,
+   "name": "G63",
+   "plate": 11,
+   "sha256_raw": "920e3ec2907c39f8c055c2e8720942a2105291b7fc16c490a92122954de00e73",
+   "translation": [
+    35.867,
+    -431.825,
+    37.987
+   ],
+   "triangles": 36302,
+   "volume": 42050.5
+  },
+  {
+   "bbox": [
+    [
+     -26.43,
+     -40.24,
+     -32.16
+    ],
+    [
+     26.43,
+     40.24,
+     32.16
+    ]
+   ],
+   "extruder": "1",
+   "id": 290,
+   "k": 145,
+   "name": "H97",
+   "plate": 11,
+   "sha256_raw": "3f256a8f317d3f9ef887fa12c1372f7b1f69929506e166e731f2ec262f18b159",
+   "translation": [
+    204.425,
+    -407.253,
+    32.162
+   ],
+   "triangles": 36652,
+   "volume": 48373.9
+  },
+  {
+   "bbox": [
+    [
+     -22.65,
+     -50.6,
+     -40.39
+    ],
+    [
+     22.65,
+     50.6,
+     40.39
+    ]
+   ],
+   "extruder": "1",
+   "id": 292,
+   "k": 146,
+   "name": "B39",
+   "plate": 12,
+   "sha256_raw": "5c2052a890ef67bc88c0044cb85e0e8c9c0b146f35db4217a6ea6cc364e3be84",
+   "translation": [
+    341.845,
+    -538.8,
+    40.394
+   ],
+   "triangles": 31534,
+   "volume": 46956.0
+  },
+  {
+   "bbox": [
+    [
+     -28.7,
+     -51.12,
+     -40.31
+    ],
+    [
+     28.7,
+     51.12,
+     40.31
+    ]
+   ],
+   "extruder": "1",
+   "id": 294,
+   "k": 147,
+   "name": "H45",
+   "plate": 12,
+   "sha256_raw": "064c4708e9eff9a8ac5d14a09f057ab4d6040910d5ab65915813639ae5872c89",
+   "translation": [
+    395.902,
+    -538.281,
+    40.305
+   ],
+   "triangles": 37056,
+   "volume": 62875.9
+  },
+  {
+   "bbox": [
+    [
+     -27.57,
+     -50.18,
+     -40.23
+    ],
+    [
+     27.57,
+     50.18,
+     40.23
+    ]
+   ],
+   "extruder": "1",
+   "id": 296,
+   "k": 148,
+   "name": "C111",
+   "plate": 12,
+   "sha256_raw": "1c9719e470b709ce3362b8ac63cecfccd3f6ed90a4e4e7eb3c96e9dcbd426969",
+   "translation": [
+    456.768,
+    -539.216,
+    40.234
+   ],
+   "triangles": 31778,
+   "volume": 51758.8
+  },
+  {
+   "bbox": [
+    [
+     -28.9,
+     -47.34,
+     -40.09
+    ],
+    [
+     28.9,
+     47.34,
+     40.09
+    ]
+   ],
+   "extruder": "1",
+   "id": 298,
+   "k": 149,
+   "name": "D40",
+   "plate": 12,
+   "sha256_raw": "3c0178f34b4c6551875530ee9cdc0b829c36b08009f3ff29254a5b08024fd645",
+   "translation": [
+    518.101,
+    -542.057,
+    40.094
+   ],
+   "triangles": 37022,
+   "volume": 54608.0
+  },
+  {
+   "bbox": [
+    [
+     -25.31,
+     -50.76,
+     -40.08
+    ],
+    [
+     25.31,
+     50.76,
+     40.08
+    ]
+   ],
+   "extruder": "1",
+   "id": 300,
+   "k": 150,
+   "name": "C94",
+   "plate": 12,
+   "sha256_raw": "ddbff0478784da604357d2ad7d658e6d57ed6d82d1f23883f7e4f51b509fc3b5",
+   "translation": [
+    490.507,
+    -501.726,
+    40.078
+   ],
+   "triangles": 30788,
+   "volume": 51516.1
+  },
+  {
+   "bbox": [
+    [
+     -27.99,
+     -49.03,
+     -40.06
+    ],
+    [
+     27.99,
+     49.03,
+     40.06
+    ]
+   ],
+   "extruder": "1",
+   "id": 302,
+   "k": 151,
+   "name": "B109",
+   "plate": 12,
+   "sha256_raw": "0040558471b5f6386852988d3eaf35f79c89111e4c6ece357f218dfaee3e504c",
+   "translation": [
+    425.187,
+    -491.107,
+    40.057
+   ],
+   "triangles": 37176,
+   "volume": 52958.1
+  },
+  {
+   "bbox": [
+    [
+     -25.58,
+     -48.49,
+     -39.91
+    ],
+    [
+     25.58,
+     48.49,
+     39.91
+    ]
+   ],
+   "extruder": "1",
+   "id": 304,
+   "k": 152,
+   "name": "C78",
+   "plate": 12,
+   "sha256_raw": "c79e81d335ebf17482d6ecba713d3179eb94ae8e34150dc2867c82fe8404de78",
+   "translation": [
+    344.784,
+    -487.414,
+    39.909
+   ],
+   "triangles": 37824,
+   "volume": 57238.7
+  },
+  {
+   "bbox": [
+    [
+     -28.53,
+     -49.3,
+     -39.76
+    ],
+    [
+     28.53,
+     49.3,
+     39.76
+    ]
+   ],
+   "extruder": "1",
+   "id": 306,
+   "k": 153,
+   "name": "A93",
+   "plate": 12,
+   "sha256_raw": "6279e16dd7860d82b7309e508bbce58e9fbb9856766cca47e3319c106724e5d8",
+   "translation": [
+    389.73,
+    -462.094,
+    39.758
+   ],
+   "triangles": 38040,
+   "volume": 55480.4
+  },
+  {
+   "bbox": [
+    [
+     -27.48,
+     -49.91,
+     -39.74
+    ],
+    [
+     27.48,
+     49.91,
+     39.74
+    ]
+   ],
+   "extruder": "1",
+   "id": 308,
+   "k": 154,
+   "name": "I106",
+   "plate": 12,
+   "sha256_raw": "e79f347a87c3bebd314659f4cefe3ef786ef903b1d9a6be433f61d1adf54cc2d",
+   "translation": [
+    522.682,
+    -463.596,
+    39.742
+   ],
+   "triangles": 33102,
+   "volume": 53052.0
+  },
+  {
+   "bbox": [
+    [
+     -25.71,
+     -49.97,
+     -39.73
+    ],
+    [
+     25.71,
+     49.97,
+     39.73
+    ]
+   ],
+   "extruder": "1",
+   "id": 310,
+   "k": 155,
+   "name": "A47",
+   "plate": 12,
+   "sha256_raw": "e8b0ad17205804f47a9c1e4a2c6b3d77fc4f00dd7dfbdc5c794eca96cd6ed1da",
+   "translation": [
+    470.91,
+    -448.468,
+    39.73
+   ],
+   "triangles": 36944,
+   "volume": 53509.1
+  },
+  {
+   "bbox": [
+    [
+     -27.48,
+     -54.04,
+     -39.66
+    ],
+    [
+     27.48,
+     54.04,
+     39.66
+    ]
+   ],
+   "extruder": "1",
+   "id": 312,
+   "k": 156,
+   "name": "A32",
+   "plate": 12,
+   "sha256_raw": "72d9884c8109867f9fca8bff6310c7c472c6dfb83e415f4dee82a767f8257cf2",
+   "translation": [
+    348.678,
+    -428.652,
+    39.658
+   ],
+   "triangles": 31028,
+   "volume": 63899.0
+  },
+  {
+   "bbox": [
+    [
+     -29.11,
+     -49.04,
+     -39.33
+    ],
+    [
+     29.11,
+     49.04,
+     39.33
+    ]
+   ],
+   "extruder": "1",
+   "id": 314,
+   "k": 157,
+   "name": "I89",
+   "plate": 12,
+   "sha256_raw": "c9943de23308569168a65c4d3958001ddac92d73bb19da17dea9e5e5f97e82bd",
+   "translation": [
+    412.305,
+    -420.305,
+    39.335
+   ],
+   "triangles": 30182,
+   "volume": 55387.3
+  },
+  {
+   "bbox": [
+    [
+     -24.82,
+     -46.21,
+     -38.11
+    ],
+    [
+     24.82,
+     46.21,
+     38.11
+    ]
+   ],
+   "extruder": "1",
+   "id": 316,
+   "k": 158,
+   "name": "C76",
+   "plate": 12,
+   "sha256_raw": "003b8b2edb845cf16c779da4236703509b9848ffadd6b86732fe2e67df2b90e0",
+   "translation": [
+    518.021,
+    -415.673,
+    38.11
+   ],
+   "triangles": 31586,
+   "volume": 52278.8
+  },
+  {
+   "bbox": [
+    [
+     -27.85,
+     -49.11,
+     -39.63
+    ],
+    [
+     27.85,
+     49.11,
+     39.63
+    ]
+   ],
+   "extruder": "1",
+   "id": 318,
+   "k": 159,
+   "name": "H126",
+   "plate": 13,
+   "sha256_raw": "8e83ba42eaf1319c9a9a00a4a277b519697063cdb0f84624ad6f3d1f0cfc7ea4",
+   "translation": [
+    654.254,
+    -540.292,
+    39.628
+   ],
+   "triangles": 30838,
+   "volume": 54730.3
+  },
+  {
+   "bbox": [
+    [
+     -25.03,
+     -47.82,
+     -39.49
+    ],
+    [
+     25.03,
+     47.82,
+     39.49
+    ]
+   ],
+   "extruder": "1",
+   "id": 320,
+   "k": 160,
+   "name": "G25",
+   "plate": 13,
+   "sha256_raw": "bcb70c2988eafb3e9c828459607383e0d65c081244f1dda9242a26f8d9424e5d",
+   "translation": [
+    711.433,
+    -541.583,
+    39.49
+   ],
+   "triangles": 31438,
+   "volume": 45566.1
+  },
+  {
+   "bbox": [
+    [
+     -24.66,
+     -48.35,
+     -39.34
+    ],
+    [
+     24.66,
+     48.35,
+     39.34
+    ]
+   ],
+   "extruder": "1",
+   "id": 322,
+   "k": 161,
+   "name": "I30",
+   "plate": 13,
+   "sha256_raw": "44fd858a9832a68e86e89d86fdcb735fae5dbff32ad3142dc3c027c296c30dc2",
+   "translation": [
+    765.063,
+    -541.049,
+    39.337
+   ],
+   "triangles": 31186,
+   "volume": 54091.4
+  },
+  {
+   "bbox": [
+    [
+     -23.8,
+     -48.27,
+     -39.28
+    ],
+    [
+     23.8,
+     48.27,
+     39.28
+    ]
+   ],
+   "extruder": "1",
+   "id": 324,
+   "k": 162,
+   "name": "A79",
+   "plate": 13,
+   "sha256_raw": "d78143add3a2bcbfaf4f8ce0f68dd2a1ca8158d75c9e15884aaf137dfc4e10d9",
+   "translation": [
+    816.199,
+    -541.13,
+    39.281
+   ],
+   "triangles": 30812,
+   "volume": 39094.8
+  },
+  {
+   "bbox": [
+    [
+     -26.1,
+     -48.22,
+     -39.25
+    ],
+    [
+     26.1,
+     48.22,
+     39.25
+    ]
+   ],
+   "extruder": "1",
+   "id": 326,
+   "k": 163,
+   "name": "I63",
+   "plate": 13,
+   "sha256_raw": "a2845b80187a4aae3090ca0d4c5a280378d6ef1d682ba187d769de7a6915ad7f",
+   "translation": [
+    668.496,
+    -500.033,
+    39.255
+   ],
+   "triangles": 31440,
+   "volume": 49416.8
+  },
+  {
+   "bbox": [
+    [
+     -22.24,
+     -50.5,
+     -39.13
+    ],
+    [
+     22.24,
+     50.5,
+     39.13
+    ]
+   ],
+   "extruder": "1",
+   "id": 328,
+   "k": 164,
+   "name": "G133",
+   "plate": 13,
+   "sha256_raw": "0f13cc2f002287da072fd0bda8abf767bee3d68211b851e4a18596c863115270",
+   "translation": [
+    808.643,
+    -495.351,
+    39.131
+   ],
+   "triangles": 31704,
+   "volume": 51342.1
+  },
+  {
+   "bbox": [
+    [
+     -26.51,
+     -49.43,
+     -39.1
+    ],
+    [
+     26.51,
+     49.43,
+     39.1
+    ]
+   ],
+   "extruder": "1",
+   "id": 330,
+   "k": 165,
+   "name": "C61",
+   "plate": 13,
+   "sha256_raw": "5fb6c838d5e62ee4afeb3c6956693b4e1a6498faa79bed0f94240ff83c07df8b",
+   "translation": [
+    740.909,
+    -494.857,
+    39.099
+   ],
+   "triangles": 30744,
+   "volume": 60491.6
+  },
+  {
+   "bbox": [
+    [
+     -27.58,
+     -49.31,
+     -38.96
+    ],
+    [
+     27.58,
+     49.31,
+     38.96
+    ]
+   ],
+   "extruder": "1",
+   "id": 332,
+   "k": 166,
+   "name": "I87",
+   "plate": 13,
+   "sha256_raw": "f0100ff57bb6ce5335cebcff64c72a8eaf37fe903be47d51c0c4cf3ae0fff270",
+   "translation": [
+    691.975,
+    -453.779,
+    38.958
+   ],
+   "triangles": 32132,
+   "volume": 56624.3
+  },
+  {
+   "bbox": [
+    [
+     -28.41,
+     -47.92,
+     -38.84
+    ],
+    [
+     28.41,
+     47.92,
+     38.84
+    ]
+   ],
+   "extruder": "1",
+   "id": 334,
+   "k": 167,
+   "name": "A63",
+   "plate": 13,
+   "sha256_raw": "669527a64981c5e1b8eb5fba6587fca38c9c7f5e09a5729c4574a57a2107a6b6",
+   "translation": [
+    784.815,
+    -444.299,
+    38.843
+   ],
+   "triangles": 42536,
+   "volume": 54052.4
+  },
+  {
+   "bbox": [
+    [
+     -26.64,
+     -47.97,
+     -38.52
+    ],
+    [
+     26.64,
+     47.97,
+     38.52
+    ]
+   ],
+   "extruder": "1",
+   "id": 336,
+   "k": 168,
+   "name": "G114",
+   "plate": 13,
+   "sha256_raw": "5311367bb71270a700c5c096516f1c691a72db5f04c33b9b33a4ae71fcc65c06",
+   "translation": [
+    735.041,
+    -423.533,
+    38.517
+   ],
+   "triangles": 36506,
+   "volume": 43635.7
+  },
+  {
+   "bbox": [
+    [
+     -23.56,
+     -46.6,
+     -38.28
+    ],
+    [
+     23.56,
+     46.6,
+     38.28
+    ]
+   ],
+   "extruder": "1",
+   "id": 338,
+   "k": 169,
+   "name": "C40",
+   "plate": 13,
+   "sha256_raw": "9b6ca885f3eb561f2982d360664dea5bb4ef03b5c373268b4b97b09314bce7d5",
+   "translation": [
+    649.964,
+    -415.345,
+    38.28
+   ],
+   "triangles": 36760,
+   "volume": 51502.0
+  },
+  {
+   "bbox": [
+    [
+     -21.12,
+     -49.61,
+     -37.75
+    ],
+    [
+     21.12,
+     49.61,
+     37.75
+    ]
+   ],
+   "extruder": "1",
+   "id": 340,
+   "k": 170,
+   "name": "F106",
+   "plate": 13,
+   "sha256_raw": "b5e82bbe4ba5901b3d98b5eecc88aab3ba90bcc291f9a9c56dbcaef6368f41ca",
+   "translation": [
+    835.521,
+    -444.22,
+    37.747
+   ],
+   "triangles": 32424,
+   "volume": 39928.4
+  },
+  {
+   "bbox": [
+    [
+     -28.18,
+     -47.67,
+     -38.84
+    ],
+    [
+     28.18,
+     47.67,
+     38.84
+    ]
+   ],
+   "extruder": "1",
+   "id": 342,
+   "k": 171,
+   "name": "I75",
+   "plate": 14,
+   "sha256_raw": "ba49efe5eeb1220dee429ef2d869ee0b2bd11d9685e78fd08f63482f1d63cd2a",
+   "translation": [
+    961.784,
+    -541.73,
+    38.837
+   ],
+   "triangles": 37144,
+   "volume": 57409.4
+  },
+  {
+   "bbox": [
+    [
+     -30.2,
+     -48.43,
+     -38.5
+    ],
+    [
+     30.2,
+     48.43,
+     38.5
+    ]
+   ],
+   "extruder": "1",
+   "id": 344,
+   "k": 172,
+   "name": "I91",
+   "plate": 14,
+   "sha256_raw": "049e642bb41ea0d6a4d5fa2271bdbc2f86332f798fe68e239e7831fc23117561",
+   "translation": [
+    1019.804,
+    -540.969,
+    38.498
+   ],
+   "triangles": 30618,
+   "volume": 61886.7
+  },
+  {
+   "bbox": [
+    [
+     -25.1,
+     -49.68,
+     -38.48
+    ],
+    [
+     25.1,
+     49.68,
+     38.48
+    ]
+   ],
+   "extruder": "1",
+   "id": 346,
+   "k": 173,
+   "name": "I46",
+   "plate": 14,
+   "sha256_raw": "0a6901f9da72f4aa908b50cbeacba3499fe772f88a444e63bbfa30492ef8917a",
+   "translation": [
+    1076.705,
+    -539.716,
+    38.481
+   ],
+   "triangles": 37164,
+   "volume": 57454.8
+  },
+  {
+   "bbox": [
+    [
+     -28.76,
+     -49.3,
+     -38.44
+    ],
+    [
+     28.76,
+     49.3,
+     38.44
+    ]
+   ],
+   "extruder": "1",
+   "id": 348,
+   "k": 174,
+   "name": "I107",
+   "plate": 14,
+   "sha256_raw": "94342e4656b153126b3e61c249e46928b6cedbcdc76617f34cdb6d22559f0b8f",
+   "translation": [
+    1134.356,
+    -540.101,
+    38.438
+   ],
+   "triangles": 32018,
+   "volume": 52198.8
+  },
+  {
+   "bbox": [
+    [
+     -22.28,
+     -49.18,
+     -38.35
+    ],
+    [
+     22.28,
+     49.18,
+     38.35
+    ]
+   ],
+   "extruder": "1",
+   "id": 350,
+   "k": 175,
+   "name": "H62",
+   "plate": 14,
+   "sha256_raw": "21315438f676e4f93d6ea797ed76eb1c71e39037103b3fce64d87bbea093ccd2",
+   "translation": [
+    977.883,
+    -492.89,
+    38.351
+   ],
+   "triangles": 36282,
+   "volume": 57160.6
+  },
+  {
+   "bbox": [
+    [
+     -26.32,
+     -48.59,
+     -38.14
+    ],
+    [
+     26.32,
+     48.59,
+     38.14
+    ]
+   ],
+   "extruder": "1",
+   "id": 352,
+   "k": 176,
+   "name": "G78",
+   "plate": 14,
+   "sha256_raw": "6a83394bfe0519493822ddabbe7de065ccd029530deddcd77139ac8cd85e466f",
+   "translation": [
+    1105.921,
+    -491.473,
+    38.144
+   ],
+   "triangles": 31658,
+   "volume": 49802.3
+  },
+  {
+   "bbox": [
+    [
+     -23.02,
+     -48.29,
+     -37.98
+    ],
+    [
+     23.02,
+     48.29,
+     37.98
+    ]
+   ],
+   "extruder": "1",
+   "id": 354,
+   "k": 177,
+   "name": "B92",
+   "plate": 14,
+   "sha256_raw": "7e38ec2df624b0d3404af79ce014ac150de29a839d0e3085eeb2dfc8d6adf87a",
+   "translation": [
+    1038.624,
+    -484.652,
+    37.981
+   ],
+   "triangles": 30824,
+   "volume": 55778.3
+  },
+  {
+   "bbox": [
+    [
+     -29.53,
+     -45.42,
+     -37.72
+    ],
+    [
+     29.53,
+     45.42,
+     37.72
+    ]
+   ],
+   "extruder": "1",
+   "id": 356,
+   "k": 178,
+   "name": "I64",
+   "plate": 14,
+   "sha256_raw": "7e7d9e61042cc60be636094a58a1696f9ffb1c1eb0582f4bb7e944aa06ccf576",
+   "translation": [
+    1135.134,
+    -443.334,
+    37.722
+   ],
+   "triangles": 31708,
+   "volume": 58944.9
+  },
+  {
+   "bbox": [
+    [
+     -20.07,
+     -46.72,
+     -37.72
+    ],
+    [
+     20.07,
+     46.72,
+     37.72
+    ]
+   ],
+   "extruder": "1",
+   "id": 358,
+   "k": 179,
+   "name": "G132",
+   "plate": 14,
+   "sha256_raw": "60e7128766d5cf4c520c6f222b402ca835014f44fab80620c1b89be736848074",
+   "translation": [
+    1071.666,
+    -445.994,
+    37.72
+   ],
+   "triangles": 32214,
+   "volume": 43340.9
+  },
+  {
+   "bbox": [
+    [
+     -29.81,
+     -46.68,
+     -37.7
+    ],
+    [
+     29.81,
+     46.68,
+     37.7
+    ]
+   ],
+   "extruder": "1",
+   "id": 360,
+   "k": 180,
+   "name": "G45",
+   "plate": 14,
+   "sha256_raw": "5a5faf37e3e9cd566762949b4e42602cd041e1ab1ccbd7d8164a36da8a8545ea",
+   "translation": [
+    963.405,
+    -438.293,
+    37.702
+   ],
+   "triangles": 37806,
+   "volume": 52250.7
+  },
+  {
+   "bbox": [
+    [
+     -25.77,
+     -47.86,
+     -37.55
+    ],
+    [
+     25.77,
+     47.86,
+     37.55
+    ]
+   ],
+   "extruder": "1",
+   "id": 362,
+   "k": 181,
+   "name": "C134",
+   "plate": 14,
+   "sha256_raw": "26e317439f5b29791e92da7e9549763ebf8c86ac8c02a9f196636813f02590fa",
+   "translation": [
+    1021.371,
+    -420.388,
+    37.546
+   ],
+   "triangles": 31600,
+   "volume": 49474.5
+  },
+  {
+   "bbox": [
+    [
+     -28.68,
+     -39.77,
+     -32.89
+    ],
+    [
+     28.68,
+     39.77,
+     32.89
+    ]
+   ],
+   "extruder": "1",
+   "id": 364,
+   "k": 182,
+   "name": "C129",
+   "plate": 14,
+   "sha256_raw": "ccb11df37bba9ab06b6bfe6f6f1f11cf4ab47d7f92045e4f22355d0cbd33fc7a",
+   "translation": [
+    1092.277,
+    -410.109,
+    32.895
+   ],
+   "triangles": 31218,
+   "volume": 35225.7
+  },
+  {
+   "bbox": [
+    [
+     -31.75,
+     -46.5,
+     -37.62
+    ],
+    [
+     31.75,
+     46.5,
+     37.62
+    ]
+   ],
+   "extruder": "1",
+   "id": 366,
+   "k": 183,
+   "name": "C109",
+   "plate": 15,
+   "sha256_raw": "8ddef5103c7e0fb6eb17f0685302bd4435391380eee72f9810901905a83512bc",
+   "translation": [
+    1272.555,
+    -542.899,
+    37.618
+   ],
+   "triangles": 38112,
+   "volume": 58220.1
+  },
+  {
+   "bbox": [
+    [
+     -27.36,
+     -49.01,
+     -37.4
+    ],
+    [
+     27.36,
+     49.01,
+     37.4
+    ]
+   ],
+   "extruder": "1",
+   "id": 368,
+   "k": 184,
+   "name": "C60",
+   "plate": 15,
+   "sha256_raw": "ee6fe8db9148fd55405720275d9205bcfb775a8357a0d7e179edb02c29d207c6",
+   "translation": [
+    1332.162,
+    -540.395,
+    37.396
+   ],
+   "triangles": 31440,
+   "volume": 52944.9
+  },
+  {
+   "bbox": [
+    [
+     -21.37,
+     -45.28,
+     -37.39
+    ],
+    [
+     21.37,
+     45.28,
+     37.39
+    ]
+   ],
+   "extruder": "1",
+   "id": 370,
+   "k": 185,
+   "name": "H110",
+   "plate": 15,
+   "sha256_raw": "e435cdff7a5ebdaa48a765be5ca1e65c726bc09159f2afc036e7ac8be2b0c12a",
+   "translation": [
+    1384.174,
+    -544.122,
+    37.395
+   ],
+   "triangles": 36386,
+   "volume": 42885.7
+  },
+  {
+   "bbox": [
+    [
+     -24.28,
+     -48.01,
+     -37.36
+    ],
+    [
+     24.28,
+     48.01,
+     37.36
+    ]
+   ],
+   "extruder": "1",
+   "id": 372,
+   "k": 186,
+   "name": "I43",
+   "plate": 15,
+   "sha256_raw": "63a38baf29241074e55518b55aeb02810d3ef704df3dcbf0c10e519c5d39f5e3",
+   "translation": [
+    1433.082,
+    -541.395,
+    37.362
+   ],
+   "triangles": 31378,
+   "volume": 50689.8
+  },
+  {
+   "bbox": [
+    [
+     -24.49,
+     -45.02,
+     -37.09
+    ],
+    [
+     24.49,
+     45.02,
+     37.09
+    ]
+   ],
+   "extruder": "1",
+   "id": 374,
+   "k": 187,
+   "name": "B128",
+   "plate": 15,
+   "sha256_raw": "fdf8d2f7442860647336e8f4d1facf78c3b6f5936d2c3500400a0985828b0928",
+   "translation": [
+    1375.285,
+    -498.275,
+    37.093
+   ],
+   "triangles": 32512,
+   "volume": 44381.0
+  },
+  {
+   "bbox": [
+    [
+     -28.25,
+     -45.99,
+     -36.61
+    ],
+    [
+     28.25,
+     45.99,
+     36.61
+    ]
+   ],
+   "extruder": "1",
+   "id": 376,
+   "k": 188,
+   "name": "I92",
+   "plate": 15,
+   "sha256_raw": "347f023da4aa7ad7e07f24346180ffdb632e07d329f3c5600d8ceb3185c93310",
+   "translation": [
+    1295.05,
+    -496.312,
+    36.612
+   ],
+   "triangles": 29940,
+   "volume": 55802.2
+  },
+  {
+   "bbox": [
+    [
+     -26.15,
+     -44.69,
+     -36.48
+    ],
+    [
+     26.15,
+     44.69,
+     36.48
+    ]
+   ],
+   "extruder": "1",
+   "id": 378,
+   "k": 189,
+   "name": "H29",
+   "plate": 15,
+   "sha256_raw": "a4621cc661454ac6d7f9e92351efd8116e9e11e55a09b4049337aaf7627f727c",
+   "translation": [
+    1444.95,
+    -486.295,
+    36.48
+   ],
+   "triangles": 36688,
+   "volume": 51360.2
+  },
+  {
+   "bbox": [
+    [
+     -29.9,
+     -45.62,
+     -36.46
+    ],
+    [
+     29.9,
+     45.62,
+     36.46
+    ]
+   ],
+   "extruder": "1",
+   "id": 380,
+   "k": 190,
+   "name": "I128",
+   "plate": 15,
+   "sha256_raw": "60aab695c588eb6c7da9e7130982a3b7dffdd1f1a7e9cb00563d6cba3c055ec4",
+   "translation": [
+    1342.704,
+    -454.035,
+    36.465
+   ],
+   "triangles": 31498,
+   "volume": 54545.2
+  },
+  {
+   "bbox": [
+    [
+     -20.89,
+     -46.31,
+     -36.12
+    ],
+    [
+     20.89,
+     46.31,
+     36.12
+    ]
+   ],
+   "extruder": "1",
+   "id": 382,
+   "k": 191,
+   "name": "A30",
+   "plate": 15,
+   "sha256_raw": "35a3e5a8d1aa317c86461b4b7213c988ad9dfd32135a95bafef2cdf442b24540",
+   "translation": [
+    1393.686,
+    -442.207,
+    36.123
+   ],
+   "triangles": 32094,
+   "volume": 42237.4
+  },
+  {
+   "bbox": [
+    [
+     -23.42,
+     -44.37,
+     -35.98
+    ],
+    [
+     23.42,
+     44.37,
+     35.98
+    ]
+   ],
+   "extruder": "1",
+   "id": 384,
+   "k": 192,
+   "name": "G115",
+   "plate": 15,
+   "sha256_raw": "9f8b7c20bc0e2e5595bdb761d9192396ec5a4d98cce941ad83fe14249c33d75b",
+   "translation": [
+    1264.217,
+    -450.553,
+    35.977
+   ],
+   "triangles": 38722,
+   "volume": 45599.8
+  },
+  {
+   "bbox": [
+    [
+     -22.41,
+     -44.15,
+     -35.97
+    ],
+    [
+     22.41,
+     44.15,
+     35.97
+    ]
+   ],
+   "extruder": "1",
+   "id": 386,
+   "k": 193,
+   "name": "C39",
+   "plate": 15,
+   "sha256_raw": "bfd906370e6b8c4cc40206dfbda6513a42d65d31581fdeb66e309274326909d8",
+   "translation": [
+    1441.207,
+    -429.996,
+    35.97
+   ],
+   "triangles": 31008,
+   "volume": 43222.1
+  },
+  {
+   "bbox": [
+    [
+     -20.95,
+     -47.21,
+     -35.49
+    ],
+    [
+     20.95,
+     47.21,
+     35.49
+    ]
+   ],
+   "extruder": "1",
+   "id": 388,
+   "k": 194,
+   "name": "C108",
+   "plate": 15,
+   "sha256_raw": "e8b65ad4e1bd9e9797e5bb06c343b3b5bfcfe993f29784f59339684b84e83098",
+   "translation": [
+    1305.747,
+    -419.766,
+    35.492
+   ],
+   "triangles": 37802,
+   "volume": 44596.7
+  },
+  {
+   "bbox": [
+    [
+     -26.08,
+     -41.02,
+     -31.71
+    ],
+    [
+     26.08,
+     41.02,
+     31.71
+    ]
+   ],
+   "extruder": "1",
+   "id": 390,
+   "k": 195,
+   "name": "H81",
+   "plate": 15,
+   "sha256_raw": "a22294c9babb3033c03127bc2b61c529cb14248c4ff0a50366c9ec1aaa85b718",
+   "translation": [
+    1358.88,
+    -409.313,
+    31.715
+   ],
+   "triangles": 36368,
+   "volume": 37907.2
+  },
+  {
+   "bbox": [
+    [
+     -27.77,
+     -44.77,
+     -35.93
+    ],
+    [
+     27.77,
+     44.77,
+     35.93
+    ]
+   ],
+   "extruder": "1",
+   "id": 392,
+   "k": 196,
+   "name": "A9",
+   "plate": 16,
+   "sha256_raw": "ede758e36ef029ad6f9d132215f93ec2917c57e276f84996b445684c5b91c08d",
+   "translation": [
+    39.773,
+    -851.831,
+    35.932
+   ],
+   "triangles": 30636,
+   "volume": 43695.6
+  },
+  {
+   "bbox": [
+    [
+     -29.56,
+     -41.19,
+     -35.75
+    ],
+    [
+     29.56,
+     41.19,
+     35.75
+    ]
+   ],
+   "extruder": "1",
+   "id": 394,
+   "k": 197,
+   "name": "G1",
+   "plate": 16,
+   "sha256_raw": "6b06f53233f738c2ebe83e9cba4fa01568cdada588682d77904ae227c88cb2f1",
+   "translation": [
+    101.557,
+    -855.408,
+    35.75
+   ],
+   "triangles": 37594,
+   "volume": 38092.0
+  },
+  {
+   "bbox": [
+    [
+     -22.45,
+     -43.8,
+     -35.7
+    ],
+    [
+     22.45,
+     43.8,
+     35.7
+    ]
+   ],
+   "extruder": "1",
+   "id": 396,
+   "k": 198,
+   "name": "C7",
+   "plate": 16,
+   "sha256_raw": "7177f289363cf0d75623dd90af229a81a235555b2d92fbb01309d4926ce15ee9",
+   "translation": [
+    158.453,
+    -852.8,
+    35.698
+   ],
+   "triangles": 37376,
+   "volume": 45959.4
+  },
+  {
+   "bbox": [
+    [
+     -26.92,
+     -46.06,
+     -35.38
+    ],
+    [
+     26.92,
+     46.06,
+     35.38
+    ]
+   ],
+   "extruder": "1",
+   "id": 398,
+   "k": 199,
+   "name": "C91",
+   "plate": 16,
+   "sha256_raw": "c6fbddad87d0b238cfdef135fa096380e26c2fb42533290d8484000b90cd76d2",
+   "translation": [
+    208.918,
+    -850.541,
+    35.379
+   ],
+   "triangles": 31036,
+   "volume": 52666.3
+  },
+  {
+   "bbox": [
+    [
+     -26.32,
+     -47.14,
+     -35.29
+    ],
+    [
+     26.32,
+     47.14,
+     35.29
+    ]
+   ],
+   "extruder": "1",
+   "id": 400,
+   "k": 200,
+   "name": "B72",
+   "plate": 16,
+   "sha256_raw": "bf61506c7c35d760a107a1e7c3dba3530967f54a1041e88e456b97331c84e77e",
+   "translation": [
+    78.318,
+    -823.641,
+    35.291
+   ],
+   "triangles": 37346,
+   "volume": 55712.5
+  },
+  {
+   "bbox": [
+    [
+     -27.49,
+     -43.05,
+     -35.17
+    ],
+    [
+     27.49,
+     43.05,
+     35.17
+    ]
+   ],
+   "extruder": "1",
+   "id": 402,
+   "k": 201,
+   "name": "I77",
+   "plate": 16,
+   "sha256_raw": "ec92e356095ac4b5ea686ed2c659d61fc30cda7d578de8d4ec47822fc0a65826",
+   "translation": [
+    131.49,
+    -803.083,
+    35.168
+   ],
+   "triangles": 30262,
+   "volume": 47801.3
+  },
+  {
+   "bbox": [
+    [
+     -25.81,
+     -45.06,
+     -35.14
+    ],
+    [
+     25.81,
+     45.06,
+     35.14
+    ]
+   ],
+   "extruder": "1",
+   "id": 404,
+   "k": 202,
+   "name": "G29",
+   "plate": 16,
+   "sha256_raw": "f30c3bc18c8f0a140453c98e9546ed0686a37e2f5cc0d4bc662e1b999c402feb",
+   "translation": [
+    183.814,
+    -796.57,
+    35.139
+   ],
+   "triangles": 37172,
+   "volume": 51432.7
+  },
+  {
+   "bbox": [
+    [
+     -26.16,
+     -45.74,
+     -34.9
+    ],
+    [
+     26.16,
+     45.74,
+     34.9
+    ]
+   ],
+   "extruder": "1",
+   "id": 406,
+   "k": 203,
+   "name": "I129",
+   "plate": 16,
+   "sha256_raw": "d0e673cfef2207eafbeb68774bd43c27814a1258baaea5e3b97cdc9752d2e76e",
+   "translation": [
+    38.165,
+    -781.897,
+    34.897
+   ],
+   "triangles": 30786,
+   "volume": 37936.4
+  },
+  {
+   "bbox": [
+    [
+     -28.6,
+     -40.9,
+     -34.75
+    ],
+    [
+     28.6,
+     40.9,
+     34.75
+    ]
+   ],
+   "extruder": "1",
+   "id": 408,
+   "k": 204,
+   "name": "G3",
+   "plate": 16,
+   "sha256_raw": "cfcb26ee25c369d4a1cce979cdaf4261fed74bcb8bef5b52bb43fc41277d9ab6",
+   "translation": [
+    132.603,
+    -750.837,
+    34.754
+   ],
+   "triangles": 30430,
+   "volume": 44455.0
+  },
+  {
+   "bbox": [
+    [
+     -26.62,
+     -43.06,
+     -34.32
+    ],
+    [
+     26.62,
+     43.06,
+     34.32
+    ]
+   ],
+   "extruder": "1",
+   "id": 410,
+   "k": 205,
+   "name": "B126",
+   "plate": 16,
+   "sha256_raw": "ffa1da1a79d912ca8570714675c7edbd0b2a7340fb7b76d65871cb9b961a4442",
+   "translation": [
+    192.617,
+    -743.821,
+    34.322
+   ],
+   "triangles": 38574,
+   "volume": 46856.6
+  },
+  {
+   "bbox": [
+    [
+     -23.0,
+     -45.19,
+     -34.19
+    ],
+    [
+     23.0,
+     45.19,
+     34.19
+    ]
+   ],
+   "extruder": "1",
+   "id": 412,
+   "k": 206,
+   "name": "A29",
+   "plate": 16,
+   "sha256_raw": "4dc0ee5294e99899f323e7f780c710ab4cf64261789b7c194da67e960fb6afc7",
+   "translation": [
+    89.003,
+    -736.517,
+    34.195
+   ],
+   "triangles": 42356,
+   "volume": 47874.8
+  },
+  {
+   "bbox": [
+    [
+     -25.25,
+     -44.99,
+     -33.39
+    ],
+    [
+     25.25,
+     44.99,
+     33.39
+    ]
+   ],
+   "extruder": "1",
+   "id": 414,
+   "k": 207,
+   "name": "G135",
+   "plate": 16,
+   "sha256_raw": "9b263b08eca3a5419ce4aa5fc9c2009a7cbf65dcecaaaafa637f9958a20c4709",
+   "translation": [
+    37.247,
+    -728.801,
+    33.387
+   ],
+   "triangles": 31036,
+   "volume": 45698.5
+  },
+  {
+   "bbox": [
+    [
+     -27.99,
+     -45.91,
+     -34.13
+    ],
+    [
+     27.99,
+     45.91,
+     34.13
+    ]
+   ],
+   "extruder": "1",
+   "id": 416,
+   "k": 208,
+   "name": "I108",
+   "plate": 17,
+   "sha256_raw": "61d967a98984e71eec2b12b92d768a1da41f6ccc9c5177775c7f785aee2cbb93",
+   "translation": [
+    347.192,
+    -850.687,
+    34.135
+   ],
+   "triangles": 37668,
+   "volume": 59507.6
+  },
+  {
+   "bbox": [
+    [
+     -30.69,
+     -43.95,
+     -33.93
+    ],
+    [
+     30.69,
+     43.95,
+     33.93
+    ]
+   ],
+   "extruder": "1",
+   "id": 418,
+   "k": 209,
+   "name": "A106",
+   "plate": 17,
+   "sha256_raw": "a1e856fa5b3d6b6a51852806aeb8b32088d3968a7ea733ede51527c95989905f",
+   "translation": [
+    409.886,
+    -852.648,
+    33.932
+   ],
+   "triangles": 31414,
+   "volume": 44872.6
+  },
+  {
+   "bbox": [
+    [
+     -28.05,
+     -41.27,
+     -33.61
+    ],
+    [
+     28.05,
+     41.27,
+     33.61
+    ]
+   ],
+   "extruder": "1",
+   "id": 420,
+   "k": 210,
+   "name": "G47",
+   "plate": 17,
+   "sha256_raw": "080815910f696d55bdc896ed2d981ca26875eb74e1df27e8dcf3e0d5a53885d9",
+   "translation": [
+    473.252,
+    -855.327,
+    33.609
+   ],
+   "triangles": 31746,
+   "volume": 49683.3
+  },
+  {
+   "bbox": [
+    [
+     -27.84,
+     -43.23,
+     -33.49
+    ],
+    [
+     27.84,
+     43.23,
+     33.49
+    ]
+   ],
+   "extruder": "1",
+   "id": 422,
+   "k": 211,
+   "name": "A43",
+   "plate": 17,
+   "sha256_raw": "b24da70697b362094b26f1bfc292a34af4a28dc190c453582d2273e16c228863",
+   "translation": [
+    523.043,
+    -835.774,
+    33.491
+   ],
+   "triangles": 37116,
+   "volume": 44824.4
+  },
+  {
+   "bbox": [
+    [
+     -30.06,
+     -42.9,
+     -33.4
+    ],
+    [
+     30.06,
+     42.9,
+     33.4
+    ]
+   ],
+   "extruder": "1",
+   "id": 424,
+   "k": 212,
+   "name": "A75",
+   "plate": 17,
+   "sha256_raw": "8790488afafffb8b67e637a1ec5bcd1ff2e3b4240b54b08707967281a12aa115",
+   "translation": [
+    447.26,
+    -809.579,
+    33.397
+   ],
+   "triangles": 38384,
+   "volume": 50691.0
+  },
+  {
+   "bbox": [
+    [
+     -25.92,
+     -40.92,
+     -33.12
+    ],
+    [
+     25.92,
+     40.92,
+     33.12
+    ]
+   ],
+   "extruder": "1",
+   "id": 426,
+   "k": 213,
+   "name": "G99",
+   "plate": 17,
+   "sha256_raw": "826252b23ebc56399143c3d07170b6ba2af315979d979c6d19ccee69b2ab0b26",
+   "translation": [
+    383.123,
+    -803.4,
+    33.122
+   ],
+   "triangles": 36420,
+   "volume": 42005.3
+  },
+  {
+   "bbox": [
+    [
+     -27.55,
+     -40.52,
+     -32.84
+    ],
+    [
+     27.55,
+     40.52,
+     32.84
+    ]
+   ],
+   "extruder": "1",
+   "id": 428,
+   "k": 214,
+   "name": "C90",
+   "plate": 17,
+   "sha256_raw": "f0285d80e8cd68865205f862dab1ef82dba73ae5c477f9f03099c722596a4a69",
+   "translation": [
+    522.751,
+    -779.838,
+    32.844
+   ],
+   "triangles": 30438,
+   "volume": 50617.1
+  },
+  {
+   "bbox": [
+    [
+     -29.86,
+     -42.72,
+     -32.52
+    ],
+    [
+     29.86,
+     42.72,
+     32.52
+    ]
+   ],
+   "extruder": "1",
+   "id": 430,
+   "k": 215,
+   "name": "I109",
+   "plate": 17,
+   "sha256_raw": "32f90880c2451672344316f03b6f5eca90ecc3c486a3c6ea96c8d8722874fdda",
+   "translation": [
+    411.063,
+    -764.603,
+    32.516
+   ],
+   "triangles": 30454,
+   "volume": 54461.6
+  },
+  {
+   "bbox": [
+    [
+     -24.29,
+     -39.51,
+     -32.44
+    ],
+    [
+     24.29,
+     39.51,
+     32.44
+    ]
+   ],
+   "extruder": "1",
+   "id": 432,
+   "k": 216,
+   "name": "G30",
+   "plate": 17,
+   "sha256_raw": "8de504adeba73873781f5cdb63d6b37b44444af5d761c4153173ce712b0d2a3c",
+   "translation": [
+    343.492,
+    -759.8,
+    32.443
+   ],
+   "triangles": 31104,
+   "volume": 40258.5
+  },
+  {
+   "bbox": [
+    [
+     -21.8,
+     -39.42,
+     -32.32
+    ],
+    [
+     21.8,
+     39.42,
+     32.32
+    ]
+   ],
+   "extruder": "1",
+   "id": 434,
+   "k": 217,
+   "name": "C127",
+   "plate": 17,
+   "sha256_raw": "73cdd6a1a8c147fe61d64b94c162e86f93769b4897bb5170ec9b056fd9a98f8a",
+   "translation": [
+    473.0,
+    -759.05,
+    32.32
+   ],
+   "triangles": 31484,
+   "volume": 36826.9
+  },
+  {
+   "bbox": [
+    [
+     -20.37,
+     -41.03,
+     -31.94
+    ],
+    [
+     20.37,
+     41.03,
+     31.94
+    ]
+   ],
+   "extruder": "1",
+   "id": 436,
+   "k": 218,
+   "name": "H48",
+   "plate": 17,
+   "sha256_raw": "5f10da1c0c7a059842fede3bc8a7ee187b5c92096f070b353fb9573709916078",
+   "translation": [
+    529.571,
+    -727.087,
+    31.939
+   ],
+   "triangles": 36832,
+   "volume": 38824.9
+  },
+  {
+   "bbox": [
+    [
+     -24.86,
+     -41.27,
+     -31.53
+    ],
+    [
+     24.86,
+     41.27,
+     31.53
+    ]
+   ],
+   "extruder": "1",
+   "id": 438,
+   "k": 219,
+   "name": "G66",
+   "plate": 17,
+   "sha256_raw": "aacb796f29f7d54b0de5a1e51cb19c8ad47dbd38c84eed935fc388ce45999c5e",
+   "translation": [
+    450.059,
+    -724.29,
+    31.528
+   ],
+   "triangles": 36856,
+   "volume": 37632.0
+  },
+  {
+   "bbox": [
+    [
+     -27.81,
+     -36.98,
+     -31.19
+    ],
+    [
+     27.81,
+     36.98,
+     31.19
+    ]
+   ],
+   "extruder": "1",
+   "id": 440,
+   "k": 220,
+   "name": "C5",
+   "plate": 17,
+   "sha256_raw": "3f8ce3b5bb436274ac8dcfa473a27582ccd4d95531fbdb85525f3b7a1a863cde",
+   "translation": [
+    371.006,
+    -718.102,
+    31.185
+   ],
+   "triangles": 30390,
+   "volume": 37281.9
+  },
+  {
+   "bbox": [
+    [
+     -21.71,
+     -36.68,
+     -31.48
+    ],
+    [
+     21.71,
+     36.68,
+     31.48
+    ]
+   ],
+   "extruder": "1",
+   "id": 442,
+   "k": 221,
+   "name": "B54",
+   "plate": 18,
+   "sha256_raw": "10a91a8edf934078851a7c2b5b1214eacb0e6124be420a9615aee014f75b8fe9",
+   "translation": [
+    783.521,
+    -771.982,
+    31.476
+   ],
+   "triangles": 31136,
+   "volume": 35230.3
+  },
+  {
+   "bbox": [
+    [
+     -24.29,
+     -38.48,
+     -31.27
+    ],
+    [
+     24.29,
+     38.48,
+     31.27
+    ]
+   ],
+   "extruder": "1",
+   "id": 444,
+   "k": 222,
+   "name": "I33",
+   "plate": 18,
+   "sha256_raw": "8f77029a81e32e95eebd15b950ba3dffc5784be05c2413f43701e8252872aa2f",
+   "translation": [
+    696.692,
+    -858.12,
+    31.27
+   ],
+   "triangles": 29896,
+   "volume": 41253.8
+  },
+  {
+   "bbox": [
+    [
+     -25.27,
+     -37.81,
+     -31.02
+    ],
+    [
+     25.27,
+     37.81,
+     31.02
+    ]
+   ],
+   "extruder": "1",
+   "id": 446,
+   "k": 223,
+   "name": "G8",
+   "plate": 18,
+   "sha256_raw": "783e53f617cc3373648e8d921e5f432f6af395a098c46123a9b03ecaebc838a9",
+   "translation": [
+    749.668,
+    -858.79,
+    31.017
+   ],
+   "triangles": 36150,
+   "volume": 33248.8
+  },
+  {
+   "bbox": [
+    [
+     -27.26,
+     -38.93,
+     -30.68
+    ],
+    [
+     27.26,
+     38.93,
+     30.68
+    ]
+   ],
+   "extruder": "1",
+   "id": 448,
+   "k": 224,
+   "name": "G31",
+   "plate": 18,
+   "sha256_raw": "3276fe50de3622b980b401ef04b9b22e026b37da778fac84b4c5ebf9fcd1f9eb",
+   "translation": [
+    799.661,
+    -857.669,
+    30.677
+   ],
+   "triangles": 35804,
+   "volume": 36913.5
+  },
+  {
+   "bbox": [
+    [
+     -30.3,
+     -37.71,
+     -30.52
+    ],
+    [
+     30.3,
+     37.71,
+     30.52
+    ]
+   ],
+   "extruder": "1",
+   "id": 450,
+   "k": 225,
+   "name": "C56",
+   "plate": 18,
+   "sha256_raw": "f31b58e74b3f0302f3a03551db7bb0ed404a12ca54be0d482cc366059def400b",
+   "translation": [
+    664.697,
+    -815.977,
+    30.521
+   ],
+   "triangles": 30540,
+   "volume": 41006.2
+  },
+  {
+   "bbox": [
+    [
+     -27.24,
+     -41.68,
+     -30.4
+    ],
+    [
+     27.24,
+     41.68,
+     30.4
+    ]
+   ],
+   "extruder": "1",
+   "id": 452,
+   "k": 226,
+   "name": "C72",
+   "plate": 18,
+   "sha256_raw": "485e95dbf9b2be2afc4502fa8c888579a353cef1ae0e765194a6c33ef5f9ae01",
+   "translation": [
+    731.641,
+    -807.32,
+    30.402
+   ],
+   "triangles": 39088,
+   "volume": 49827.2
+  },
+  {
+   "bbox": [
+    [
+     -23.27,
+     -39.39,
+     -29.93
+    ],
+    [
+     23.27,
+     39.39,
+     29.93
+    ]
+   ],
+   "extruder": "1",
+   "id": 454,
+   "k": 227,
+   "name": "H31",
+   "plate": 18,
+   "sha256_raw": "fdc1b1842eb1cf1331596494889d35c9e9397386ee62f661fb594ee89cb8ee68",
+   "translation": [
+    833.671,
+    -812.41,
+    29.933
+   ],
+   "triangles": 36938,
+   "volume": 36993.7
+  }
+ ],
+ "plates": [
+  [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13
+  ],
+  [
+   14,
+   15,
+   16,
+   17,
+   18,
+   19,
+   20,
+   21,
+   22,
+   23,
+   24,
+   25,
+   26,
+   27
+  ],
+  [
+   28,
+   29,
+   30,
+   31,
+   32,
+   33,
+   34,
+   35,
+   36,
+   37,
+   38,
+   39,
+   40
+  ],
+  [
+   41,
+   42,
+   43,
+   44,
+   45,
+   46,
+   47,
+   48,
+   49,
+   50,
+   51,
+   52,
+   53
+  ],
+  [
+   54,
+   55,
+   56,
+   57,
+   58,
+   59,
+   60,
+   61,
+   62,
+   63,
+   64,
+   65,
+   66
+  ],
+  [
+   67,
+   68,
+   69,
+   70,
+   71,
+   72,
+   73,
+   74,
+   75,
+   76,
+   77,
+   78,
+   79
+  ],
+  [
+   80,
+   81,
+   82,
+   83,
+   84,
+   85,
+   86,
+   87,
+   88,
+   89,
+   90,
+   91,
+   92
+  ],
+  [
+   93,
+   94,
+   95,
+   96,
+   97,
+   98,
+   99,
+   100,
+   101,
+   102,
+   103,
+   104,
+   105,
+   106
+  ],
+  [
+   107,
+   108,
+   109,
+   110,
+   111,
+   112,
+   113,
+   114,
+   115,
+   116,
+   117,
+   118,
+   119
+  ],
+  [
+   120,
+   121,
+   122,
+   123,
+   124,
+   125,
+   126,
+   127,
+   128,
+   129,
+   130,
+   131,
+   132
+  ],
+  [
+   133,
+   134,
+   135,
+   136,
+   137,
+   138,
+   139,
+   140,
+   141,
+   142,
+   143,
+   144,
+   145
+  ],
+  [
+   146,
+   147,
+   148,
+   149,
+   150,
+   151,
+   152,
+   153,
+   154,
+   155,
+   156,
+   157,
+   158
+  ],
+  [
+   159,
+   160,
+   161,
+   162,
+   163,
+   164,
+   165,
+   166,
+   167,
+   168,
+   169,
+   170
+  ],
+  [
+   171,
+   172,
+   173,
+   174,
+   175,
+   176,
+   177,
+   178,
+   179,
+   180,
+   181,
+   182
+  ],
+  [
+   183,
+   184,
+   185,
+   186,
+   187,
+   188,
+   189,
+   190,
+   191,
+   192,
+   193,
+   194,
+   195
+  ],
+  [
+   196,
+   197,
+   198,
+   199,
+   200,
+   201,
+   202,
+   203,
+   204,
+   205,
+   206,
+   207
+  ],
+  [
+   208,
+   209,
+   210,
+   211,
+   212,
+   213,
+   214,
+   215,
+   216,
+   217,
+   218,
+   219,
+   220
+  ],
+  [
+   221,
+   222,
+   223,
+   224,
+   225,
+   226,
+   227
+  ]
+ ],
+ "xml": {
+  "3D/3dmodel.model": {
+   "sha256_normalized": "8034266e13b59d802214656d7d462fe1a53b2a9ac66e3ddd903aae7c2f2625d2",
+   "sha256_raw": "dc89471a76bf3ee7f11585f061b13cb58b8a423e42faafd7a95df553e07b33aa",
+   "size": 95825
+  },
+  "3D/_rels/3dmodel.model.rels": {
+   "sha256_normalized": "4a31e6ea286476e4e1f0c93da75cf9b38cfbce0336a38f2acbe49ab25dcd478b",
+   "sha256_raw": "4a31e6ea286476e4e1f0c93da75cf9b38cfbce0336a38f2acbe49ab25dcd478b",
+   "size": 30796
+  },
+  "Metadata/cut_information.xml": {
+   "sha256_normalized": "46c8c77bbdf20c5b59b8d51809449360b7ac960c1bc14205091194fd90ad50e6",
+   "sha256_raw": "46c8c77bbdf20c5b59b8d51809449360b7ac960c1bc14205091194fd90ad50e6",
+   "size": 18565
+  },
+  "Metadata/filament_sequence.json": {
+   "sha256_normalized": "ce2cbd46709d5c44dac25264af7648db8682b7be8a1d31c473ef098f5fccad6f",
+   "sha256_raw": "ce2cbd46709d5c44dac25264af7648db8682b7be8a1d31c473ef098f5fccad6f",
+   "size": 1288
+  },
+  "Metadata/layer_config_ranges.xml": {
+   "sha256_normalized": "25fb1c0a509e43b4cdc11328a3f5add812255cb4c0d46c5eea95a8c0ebcae2de",
+   "sha256_raw": "25fb1c0a509e43b4cdc11328a3f5add812255cb4c0d46c5eea95a8c0ebcae2de",
+   "size": 83941
+  },
+  "Metadata/model_settings.config": {
+   "sha256_normalized": "dd6fe036f2e000914d5f71a4c5cfe029881a55faa44ad164afc5c821135aaa68",
+   "sha256_raw": "09596c4abdc835c5906660be51bad10988e50a53289fc1a675226052c4ff846f",
+   "size": 263289
+  },
+  "Metadata/pick_1.png": {
+   "sha256_normalized": "dfa9104e1f81ef7f1b17bbe3f2ddbf77a219487eb01bcb034dbd148f417b4422",
+   "sha256_raw": "dfa9104e1f81ef7f1b17bbe3f2ddbf77a219487eb01bcb034dbd148f417b4422",
+   "size": 7690
+  },
+  "Metadata/pick_10.png": {
+   "sha256_normalized": "095b0f8b6af302fd7660f16b143dc8a8e799de19936459e19503d60be1fd5dd3",
+   "sha256_raw": "095b0f8b6af302fd7660f16b143dc8a8e799de19936459e19503d60be1fd5dd3",
+   "size": 7426
+  },
+  "Metadata/pick_11.png": {
+   "sha256_normalized": "654e1b9430d02179243ccb8cebf443a87318ddf415e52c8ad626610db3a0247c",
+   "sha256_raw": "654e1b9430d02179243ccb8cebf443a87318ddf415e52c8ad626610db3a0247c",
+   "size": 7495
+  },
+  "Metadata/pick_12.png": {
+   "sha256_normalized": "0b16a4b42bbb19cd1c253527e50e4ede2fae3fb905ec4e73e08929b97e746cff",
+   "sha256_raw": "0b16a4b42bbb19cd1c253527e50e4ede2fae3fb905ec4e73e08929b97e746cff",
+   "size": 7584
+  },
+  "Metadata/pick_13.png": {
+   "sha256_normalized": "ea4fee729d16031f2d71ca210b72c9f7b693e35a3abec572b763b65a2efeed7b",
+   "sha256_raw": "ea4fee729d16031f2d71ca210b72c9f7b693e35a3abec572b763b65a2efeed7b",
+   "size": 7046
+  },
+  "Metadata/pick_14.png": {
+   "sha256_normalized": "e645b4359d2423e64eba85ca8315ea6938983d98f94ce50e70fe93f554f08b85",
+   "sha256_raw": "e645b4359d2423e64eba85ca8315ea6938983d98f94ce50e70fe93f554f08b85",
+   "size": 7132
+  },
+  "Metadata/pick_15.png": {
+   "sha256_normalized": "cd1f8a356d683fd51e8dc6110272bf5179f1fc86c8da56625347096fa162ac33",
+   "sha256_raw": "cd1f8a356d683fd51e8dc6110272bf5179f1fc86c8da56625347096fa162ac33",
+   "size": 7493
+  },
+  "Metadata/pick_16.png": {
+   "sha256_normalized": "52fba2a234356f356d5e25600b028b2ef1168b431bb4b694a0b98aba27816b12",
+   "sha256_raw": "52fba2a234356f356d5e25600b028b2ef1168b431bb4b694a0b98aba27816b12",
+   "size": 6845
+  },
+  "Metadata/pick_17.png": {
+   "sha256_normalized": "d0a6c49e66f733edd7498d4e3e305b10fdacfd2cb89a0a5839f807379c559f8a",
+   "sha256_raw": "d0a6c49e66f733edd7498d4e3e305b10fdacfd2cb89a0a5839f807379c559f8a",
+   "size": 6916
+  },
+  "Metadata/pick_18.png": {
+   "sha256_normalized": "47d589be4d1ac98d05327241cc3421a05557ccc8c028af50fe8ec385771b5d39",
+   "sha256_raw": "47d589be4d1ac98d05327241cc3421a05557ccc8c028af50fe8ec385771b5d39",
+   "size": 4451
+  },
+  "Metadata/pick_2.png": {
+   "sha256_normalized": "920ed7b1565de35c0bed745c53794808d678e7f6ae0966a42f513d28024dcc95",
+   "sha256_raw": "920ed7b1565de35c0bed745c53794808d678e7f6ae0966a42f513d28024dcc95",
+   "size": 8035
+  },
+  "Metadata/pick_3.png": {
+   "sha256_normalized": "df7e3a69f5c7311aa7302acf7ff7d7407a6e6f31713c4806e4016c76b809e434",
+   "sha256_raw": "df7e3a69f5c7311aa7302acf7ff7d7407a6e6f31713c4806e4016c76b809e434",
+   "size": 7497
+  },
+  "Metadata/pick_4.png": {
+   "sha256_normalized": "1b6e0131c61b6e0ed00b853e1689a06cc16b4637dc51942e2820644d6c21a194",
+   "sha256_raw": "1b6e0131c61b6e0ed00b853e1689a06cc16b4637dc51942e2820644d6c21a194",
+   "size": 7838
+  },
+  "Metadata/pick_5.png": {
+   "sha256_normalized": "85598b0a8c5b203b516813549ade30c32ea0975c1cdfecf401b910caa2c3033b",
+   "sha256_raw": "85598b0a8c5b203b516813549ade30c32ea0975c1cdfecf401b910caa2c3033b",
+   "size": 7415
+  },
+  "Metadata/pick_6.png": {
+   "sha256_normalized": "a4cb70163c7dda048f034ea6165e0dec4680f8fdaef5586add07333f6e432c73",
+   "sha256_raw": "a4cb70163c7dda048f034ea6165e0dec4680f8fdaef5586add07333f6e432c73",
+   "size": 8002
+  },
+  "Metadata/pick_7.png": {
+   "sha256_normalized": "bb439087c7d89f98ce0b1073693145b94f7af1d4cf692234444a48b043e29637",
+   "sha256_raw": "bb439087c7d89f98ce0b1073693145b94f7af1d4cf692234444a48b043e29637",
+   "size": 7503
+  },
+  "Metadata/pick_8.png": {
+   "sha256_normalized": "dbbe506092af849815449cd5044b053b25fcecdd6396bbaa24a45c0c1421d002",
+   "sha256_raw": "dbbe506092af849815449cd5044b053b25fcecdd6396bbaa24a45c0c1421d002",
+   "size": 7831
+  },
+  "Metadata/pick_9.png": {
+   "sha256_normalized": "3346d1021c39cad1878ebd1f829ea39146f0440f64cd451efb856dae56c6b21c",
+   "sha256_raw": "3346d1021c39cad1878ebd1f829ea39146f0440f64cd451efb856dae56c6b21c",
+   "size": 7556
+  },
+  "Metadata/plate_1.json": {
+   "sha256_normalized": "8131ff12300adba7695ba1b39498377d78e05fa8c48e23bb0fa0a1daefd846a8",
+   "sha256_raw": "8131ff12300adba7695ba1b39498377d78e05fa8c48e23bb0fa0a1daefd846a8",
+   "size": 2262
+  },
+  "Metadata/plate_1.png": {
+   "sha256_normalized": "378b29a8b34df392b26844e53ffc545ae92dd8898229e1eaf19da7fa546a37c3",
+   "sha256_raw": "378b29a8b34df392b26844e53ffc545ae92dd8898229e1eaf19da7fa546a37c3",
+   "size": 15871
+  },
+  "Metadata/plate_10.json": {
+   "sha256_normalized": "d776a6f8ca8ac26d6cb48ae07147e9026f03f8433670585d5c8b18f0cab66632",
+   "sha256_raw": "d776a6f8ca8ac26d6cb48ae07147e9026f03f8433670585d5c8b18f0cab66632",
+   "size": 2267
+  },
+  "Metadata/plate_10.png": {
+   "sha256_normalized": "4711e2b05f69f156af3d10bbf9247415a87c62f80a00e7b3d6bde21a1902610c",
+   "sha256_raw": "4711e2b05f69f156af3d10bbf9247415a87c62f80a00e7b3d6bde21a1902610c",
+   "size": 15621
+  },
+  "Metadata/plate_10_small.png": {
+   "sha256_normalized": "e94f316158790f93f75586cd413ace706a161d55447fff2a9fa8e61119f07a4d",
+   "sha256_raw": "e94f316158790f93f75586cd413ace706a161d55447fff2a9fa8e61119f07a4d",
+   "size": 6035
+  },
+  "Metadata/plate_11.json": {
+   "sha256_normalized": "da164c853df0721cc0ee64cce48fe2324749f52c8c538fd4134ec5c016489859",
+   "sha256_raw": "da164c853df0721cc0ee64cce48fe2324749f52c8c538fd4134ec5c016489859",
+   "size": 2273
+  },
+  "Metadata/plate_11.png": {
+   "sha256_normalized": "4ff6c0a0e52a7c7df935421fdaa36a099797cc341fe2911407735679330e86f0",
+   "sha256_raw": "4ff6c0a0e52a7c7df935421fdaa36a099797cc341fe2911407735679330e86f0",
+   "size": 15969
+  },
+  "Metadata/plate_11_small.png": {
+   "sha256_normalized": "60cd7b0defcdc1fd0db80a83425d4bc978e41801553cddc7f64f7c653448cea5",
+   "sha256_raw": "60cd7b0defcdc1fd0db80a83425d4bc978e41801553cddc7f64f7c653448cea5",
+   "size": 6131
+  },
+  "Metadata/plate_12.json": {
+   "sha256_normalized": "0b698317696a33937628af08c58e20f3bad668f04c92ece642322d8a4863911a",
+   "sha256_raw": "0b698317696a33937628af08c58e20f3bad668f04c92ece642322d8a4863911a",
+   "size": 2263
+  },
+  "Metadata/plate_12.png": {
+   "sha256_normalized": "d669d46c082005991afb2a47ad5f3578abaec16ca43265bfcb8e79f22faa8069",
+   "sha256_raw": "d669d46c082005991afb2a47ad5f3578abaec16ca43265bfcb8e79f22faa8069",
+   "size": 16834
+  },
+  "Metadata/plate_12_small.png": {
+   "sha256_normalized": "c0ba8acb224695b6bf07fac21f5aaea10fab11dfc3e6381356cec88cf3f890c6",
+   "sha256_raw": "c0ba8acb224695b6bf07fac21f5aaea10fab11dfc3e6381356cec88cf3f890c6",
+   "size": 6498
+  },
+  "Metadata/plate_13.json": {
+   "sha256_normalized": "b27a66745b0932a6bd2663f93bc79fff4017b0c7c44baf045ff4fe5b47c76fbb",
+   "sha256_raw": "b27a66745b0932a6bd2663f93bc79fff4017b0c7c44baf045ff4fe5b47c76fbb",
+   "size": 2094
+  },
+  "Metadata/plate_13.png": {
+   "sha256_normalized": "ea2811e2d6303342d7f2cf83076d30915056c7e972ec6a66609cb6357355d48f",
+   "sha256_raw": "ea2811e2d6303342d7f2cf83076d30915056c7e972ec6a66609cb6357355d48f",
+   "size": 15537
+  },
+  "Metadata/plate_13_small.png": {
+   "sha256_normalized": "294107ca86e0c15b574b55806edae363e65b83c96c1cba3e8ff28c85c24f9620",
+   "sha256_raw": "294107ca86e0c15b574b55806edae363e65b83c96c1cba3e8ff28c85c24f9620",
+   "size": 6004
+  },
+  "Metadata/plate_14.json": {
+   "sha256_normalized": "237c8282bc64a65645cd3e1b87fdbcef1ef170a0c9a7d9ce8defbb0b4892138c",
+   "sha256_raw": "237c8282bc64a65645cd3e1b87fdbcef1ef170a0c9a7d9ce8defbb0b4892138c",
+   "size": 2125
+  },
+  "Metadata/plate_14.png": {
+   "sha256_normalized": "598a486df9b7d4989739946750a9a9916d82b988cb70a17f02baf032fbf9d864",
+   "sha256_raw": "598a486df9b7d4989739946750a9a9916d82b988cb70a17f02baf032fbf9d864",
+   "size": 15337
+  },
+  "Metadata/plate_14_small.png": {
+   "sha256_normalized": "30be141cb778a86fe378519ac87e140e9bedcee0cfd2f838c8095544f5d5b50a",
+   "sha256_raw": "30be141cb778a86fe378519ac87e140e9bedcee0cfd2f838c8095544f5d5b50a",
+   "size": 5876
+  },
+  "Metadata/plate_15.json": {
+   "sha256_normalized": "cbf8a729ddff8893a12bc0c379cd681c882db8cf521879d686c160f24085d1f6",
+   "sha256_raw": "cbf8a729ddff8893a12bc0c379cd681c882db8cf521879d686c160f24085d1f6",
+   "size": 2254
+  },
+  "Metadata/plate_15.png": {
+   "sha256_normalized": "cb4dd4876c30ded90647b57f455e48d680f620589d10e7561dfd4f5dca544900",
+   "sha256_raw": "cb4dd4876c30ded90647b57f455e48d680f620589d10e7561dfd4f5dca544900",
+   "size": 15735
+  },
+  "Metadata/plate_15_small.png": {
+   "sha256_normalized": "16b71a40ad8f6d1adb547a62bfab90c90a5d506a9ccc42d42de43c3123fb5669",
+   "sha256_raw": "16b71a40ad8f6d1adb547a62bfab90c90a5d506a9ccc42d42de43c3123fb5669",
+   "size": 5681
+  },
+  "Metadata/plate_16.json": {
+   "sha256_normalized": "97e50f970f6b36cd21584aba1f54eada9a5ec189f1ad314d99203863b44c8efd",
+   "sha256_raw": "97e50f970f6b36cd21584aba1f54eada9a5ec189f1ad314d99203863b44c8efd",
+   "size": 2075
+  },
+  "Metadata/plate_16.png": {
+   "sha256_normalized": "7a1f420ce64af75f4a22699db165409ef7699c5852e2fbdf94d0258f961163db",
+   "sha256_raw": "7a1f420ce64af75f4a22699db165409ef7699c5852e2fbdf94d0258f961163db",
+   "size": 15502
+  },
+  "Metadata/plate_16_small.png": {
+   "sha256_normalized": "ae86543de9c92366938920c0682760300808582061ff8ea522428e1baba6ae9e",
+   "sha256_raw": "ae86543de9c92366938920c0682760300808582061ff8ea522428e1baba6ae9e",
+   "size": 6016
+  },
+  "Metadata/plate_17.json": {
+   "sha256_normalized": "d0a50b8d5bf4f53f4192e775d6e1fce479d83db408880d3f5edfcc740b840500",
+   "sha256_raw": "d0a50b8d5bf4f53f4192e775d6e1fce479d83db408880d3f5edfcc740b840500",
+   "size": 2223
+  },
+  "Metadata/plate_17.png": {
+   "sha256_normalized": "fa78bd619ba93750503de101b846ff66bb315c6f848b4fb6d27e96dcc2f2e30e",
+   "sha256_raw": "fa78bd619ba93750503de101b846ff66bb315c6f848b4fb6d27e96dcc2f2e30e",
+   "size": 15507
+  },
+  "Metadata/plate_17_small.png": {
+   "sha256_normalized": "d87953d6c097ef846e83fee7d6086136f6ea2ebe4bdf670060299f440ebaa221",
+   "sha256_raw": "d87953d6c097ef846e83fee7d6086136f6ea2ebe4bdf670060299f440ebaa221",
+   "size": 5932
+  },
+  "Metadata/plate_18.json": {
+   "sha256_normalized": "5136cae958af3585ac571dbc3412aed3aaf900d51e6f949493529ef6c3a4f8c8",
+   "sha256_raw": "5136cae958af3585ac571dbc3412aed3aaf900d51e6f949493529ef6c3a4f8c8",
+   "size": 1469
+  },
+  "Metadata/plate_18.png": {
+   "sha256_normalized": "9fe9877dd367c7a476fd1910aea2e67567bec9480f8be7e9973c7d9d80bde2ce",
+   "sha256_raw": "9fe9877dd367c7a476fd1910aea2e67567bec9480f8be7e9973c7d9d80bde2ce",
+   "size": 11067
+  },
+  "Metadata/plate_18_small.png": {
+   "sha256_normalized": "62c2a238daddf558f468f6b6c31dab83b04739001f9b0c024dbe1e8b4e7e8690",
+   "sha256_raw": "62c2a238daddf558f468f6b6c31dab83b04739001f9b0c024dbe1e8b4e7e8690",
+   "size": 4305
+  },
+  "Metadata/plate_1_small.png": {
+   "sha256_normalized": "cf71c1ec9f8edb5a2f33837e84f4471a1c707d39794aceb0b943675845b2aa58",
+   "sha256_raw": "cf71c1ec9f8edb5a2f33837e84f4471a1c707d39794aceb0b943675845b2aa58",
+   "size": 6245
+  },
+  "Metadata/plate_2.json": {
+   "sha256_normalized": "8d130320b74c31473113272d0026b13a89eecf9de1fc58af3ce560ec119946e1",
+   "sha256_raw": "8d130320b74c31473113272d0026b13a89eecf9de1fc58af3ce560ec119946e1",
+   "size": 1620
+  },
+  "Metadata/plate_2.png": {
+   "sha256_normalized": "5753b2f1b429788ea84b0251add18bfcd454c4fd0da3392270901c502e66fe98",
+   "sha256_raw": "5753b2f1b429788ea84b0251add18bfcd454c4fd0da3392270901c502e66fe98",
+   "size": 16418
+  },
+  "Metadata/plate_2_small.png": {
+   "sha256_normalized": "ff3f4209d3d0c098f2d624f85c2c6d23e328e3a6aaf07821b0befa476d09c48d",
+   "sha256_raw": "ff3f4209d3d0c098f2d624f85c2c6d23e328e3a6aaf07821b0befa476d09c48d",
+   "size": 6620
+  },
+  "Metadata/plate_3.json": {
+   "sha256_normalized": "f39c1fb1ff008b059d3e9bcb1c6294fa2646d3f14c5d688523b2e9dd6a0da34a",
+   "sha256_raw": "f39c1fb1ff008b059d3e9bcb1c6294fa2646d3f14c5d688523b2e9dd6a0da34a",
+   "size": 1518
+  },
+  "Metadata/plate_3.png": {
+   "sha256_normalized": "099ee78e2a7715deafad529e042aaaf489096d319eb6f71c2022d2d4d876f708",
+   "sha256_raw": "099ee78e2a7715deafad529e042aaaf489096d319eb6f71c2022d2d4d876f708",
+   "size": 17918
+  },
+  "Metadata/plate_3_small.png": {
+   "sha256_normalized": "727451bf6e88775adaf54fee543acbdeed06980a8f3428809f6be4888c6400a6",
+   "sha256_raw": "727451bf6e88775adaf54fee543acbdeed06980a8f3428809f6be4888c6400a6",
+   "size": 6921
+  },
+  "Metadata/plate_4.json": {
+   "sha256_normalized": "39907664d364fb4fb6ab098d8890958a3c0fb2b6d3e7736b5f31f37082001c38",
+   "sha256_raw": "39907664d364fb4fb6ab098d8890958a3c0fb2b6d3e7736b5f31f37082001c38",
+   "size": 2298
+  },
+  "Metadata/plate_4.png": {
+   "sha256_normalized": "b4e7aeb4c919b0669f62bef097b446cdcdb3962ff89b7f6bddbbb5e4fc81ede9",
+   "sha256_raw": "b4e7aeb4c919b0669f62bef097b446cdcdb3962ff89b7f6bddbbb5e4fc81ede9",
+   "size": 16270
+  },
+  "Metadata/plate_4_small.png": {
+   "sha256_normalized": "cb71a6217c73f3892ebcf6b6c5e540ad68da35856e7be07202713c0ebb066f1f",
+   "sha256_raw": "cb71a6217c73f3892ebcf6b6c5e540ad68da35856e7be07202713c0ebb066f1f",
+   "size": 6331
+  },
+  "Metadata/plate_5.json": {
+   "sha256_normalized": "3cefb62a54c0b19baa2c1a7a6430ff4f36e563cb78ae0a9264c5b7f0397ec12e",
+   "sha256_raw": "3cefb62a54c0b19baa2c1a7a6430ff4f36e563cb78ae0a9264c5b7f0397ec12e",
+   "size": 2256
+  },
+  "Metadata/plate_5.png": {
+   "sha256_normalized": "32dbffbd70b830154a137acd89df5c634a47db45d4bad3c9b41e5ef5adee6250",
+   "sha256_raw": "32dbffbd70b830154a137acd89df5c634a47db45d4bad3c9b41e5ef5adee6250",
+   "size": 15362
+  },
+  "Metadata/plate_5_small.png": {
+   "sha256_normalized": "0c50f0a6e923bfa5d5f478472e8195b0bd4afdf98170fc9fa730d98e0732e3fb",
+   "sha256_raw": "0c50f0a6e923bfa5d5f478472e8195b0bd4afdf98170fc9fa730d98e0732e3fb",
+   "size": 5810
+  },
+  "Metadata/plate_6.json": {
+   "sha256_normalized": "1aa112493207dc9685a379882b2748ab65a5b4163cd1516948c8cd4201032562",
+   "sha256_raw": "1aa112493207dc9685a379882b2748ab65a5b4163cd1516948c8cd4201032562",
+   "size": 2179
+  },
+  "Metadata/plate_6.png": {
+   "sha256_normalized": "1e78cfecf89d1e437705de54b23e57eb697cb65ac4e0d21a4de425090f71affb",
+   "sha256_raw": "1e78cfecf89d1e437705de54b23e57eb697cb65ac4e0d21a4de425090f71affb",
+   "size": 16176
+  },
+  "Metadata/plate_6_small.png": {
+   "sha256_normalized": "0db26c543e22a591222e3f9ad551a446ceaa0a06a312f1090fd168edefe22f7d",
+   "sha256_raw": "0db26c543e22a591222e3f9ad551a446ceaa0a06a312f1090fd168edefe22f7d",
+   "size": 6410
+  },
+  "Metadata/plate_7.json": {
+   "sha256_normalized": "01f596f3ccf47c077a50e11c695e31868abc837991b47818cecdd534fa90234d",
+   "sha256_raw": "01f596f3ccf47c077a50e11c695e31868abc837991b47818cecdd534fa90234d",
+   "size": 2227
+  },
+  "Metadata/plate_7.png": {
+   "sha256_normalized": "29689786d690192899bf1306364dec93f8e6657eac66ca895e2ad9a4d7491630",
+   "sha256_raw": "29689786d690192899bf1306364dec93f8e6657eac66ca895e2ad9a4d7491630",
+   "size": 16102
+  },
+  "Metadata/plate_7_small.png": {
+   "sha256_normalized": "53e2a2841bd14d63469ffc5df42e63532dcdc36770729b7e53e6aab3e495a2b3",
+   "sha256_raw": "53e2a2841bd14d63469ffc5df42e63532dcdc36770729b7e53e6aab3e495a2b3",
+   "size": 6226
+  },
+  "Metadata/plate_8.json": {
+   "sha256_normalized": "613667b6a51a79aaef5734f375688a58920ef87c8509064cbbddd819f5567c33",
+   "sha256_raw": "613667b6a51a79aaef5734f375688a58920ef87c8509064cbbddd819f5567c33",
+   "size": 2447
+  },
+  "Metadata/plate_8.png": {
+   "sha256_normalized": "459252c36b93a51fa9258552594fe2b018a9f77b38d8eaf901342e5a181a8f99",
+   "sha256_raw": "459252c36b93a51fa9258552594fe2b018a9f77b38d8eaf901342e5a181a8f99",
+   "size": 16999
+  },
+  "Metadata/plate_8_small.png": {
+   "sha256_normalized": "0e54d3ff42a72759b854dae49cdda577af991f2c8313467c1ec479bf292c57a5",
+   "sha256_raw": "0e54d3ff42a72759b854dae49cdda577af991f2c8313467c1ec479bf292c57a5",
+   "size": 6447
+  },
+  "Metadata/plate_9.json": {
+   "sha256_normalized": "5e8027f691060b6b69f31c5e498a689f62327fa4803762b632461aacb219ec94",
+   "sha256_raw": "5e8027f691060b6b69f31c5e498a689f62327fa4803762b632461aacb219ec94",
+   "size": 2259
+  },
+  "Metadata/plate_9.png": {
+   "sha256_normalized": "a51d618ef07c1d093575ceff1123d98637044f25383b5d55fc072ac7e5c5c174",
+   "sha256_raw": "a51d618ef07c1d093575ceff1123d98637044f25383b5d55fc072ac7e5c5c174",
+   "size": 15464
+  },
+  "Metadata/plate_9_small.png": {
+   "sha256_normalized": "f2ce5427a5048bad1e295fb3fd5106523127080ea9b283d59ef181d25b5f1e81",
+   "sha256_raw": "f2ce5427a5048bad1e295fb3fd5106523127080ea9b283d59ef181d25b5f1e81",
+   "size": 5987
+  },
+  "Metadata/plate_no_light_1.png": {
+   "sha256_normalized": "8aba4506c56fb0932e2f4cbb9eeb846951eb727b2b182d0d22c721c14ac986ca",
+   "sha256_raw": "8aba4506c56fb0932e2f4cbb9eeb846951eb727b2b182d0d22c721c14ac986ca",
+   "size": 5216
+  },
+  "Metadata/plate_no_light_10.png": {
+   "sha256_normalized": "0a99b44598c7425e6fa2cbe58cb4941494424108f4bdfe57284aa90cfd1670c4",
+   "sha256_raw": "0a99b44598c7425e6fa2cbe58cb4941494424108f4bdfe57284aa90cfd1670c4",
+   "size": 5460
+  },
+  "Metadata/plate_no_light_11.png": {
+   "sha256_normalized": "ee1f37391fdef80fa1b1710dd2e1899242a80a32d7272ff447b502bcd98b93c2",
+   "sha256_raw": "ee1f37391fdef80fa1b1710dd2e1899242a80a32d7272ff447b502bcd98b93c2",
+   "size": 5194
+  },
+  "Metadata/plate_no_light_12.png": {
+   "sha256_normalized": "a3b034255a508e254a9e0ae84dbbff50e899a639470d81fa7c7c7e036e160324",
+   "sha256_raw": "a3b034255a508e254a9e0ae84dbbff50e899a639470d81fa7c7c7e036e160324",
+   "size": 5329
+  },
+  "Metadata/plate_no_light_13.png": {
+   "sha256_normalized": "4b1d01b54f7fca7008acde076932289054eca300e379078e8fe222b3fc5320e3",
+   "sha256_raw": "4b1d01b54f7fca7008acde076932289054eca300e379078e8fe222b3fc5320e3",
+   "size": 5614
+  },
+  "Metadata/plate_no_light_14.png": {
+   "sha256_normalized": "81680ba4e0d937ba38d367bbb86d4d4ecf6ec7172c468e48d633e481472ef74a",
+   "sha256_raw": "81680ba4e0d937ba38d367bbb86d4d4ecf6ec7172c468e48d633e481472ef74a",
+   "size": 5401
+  },
+  "Metadata/plate_no_light_15.png": {
+   "sha256_normalized": "85a0b7151dbf3f178de86c09ec5944852c947b4a155d37a8458ab2a78412b881",
+   "sha256_raw": "85a0b7151dbf3f178de86c09ec5944852c947b4a155d37a8458ab2a78412b881",
+   "size": 4875
+  },
+  "Metadata/plate_no_light_16.png": {
+   "sha256_normalized": "74e6345bc75c706a3f99a478ef0b8eed7cdd37014312fcde6e0bed57417520ad",
+   "sha256_raw": "74e6345bc75c706a3f99a478ef0b8eed7cdd37014312fcde6e0bed57417520ad",
+   "size": 5003
+  },
+  "Metadata/plate_no_light_17.png": {
+   "sha256_normalized": "9d86896e128edb070f012dd72bf7082807962c677d27177264995a38f63f97b8",
+   "sha256_raw": "9d86896e128edb070f012dd72bf7082807962c677d27177264995a38f63f97b8",
+   "size": 5234
+  },
+  "Metadata/plate_no_light_18.png": {
+   "sha256_normalized": "f1d01e31e68dd3bb084b5d4425c7da8cb85bc4e1f5077b2489bcdf5741824596",
+   "sha256_raw": "f1d01e31e68dd3bb084b5d4425c7da8cb85bc4e1f5077b2489bcdf5741824596",
+   "size": 4410
+  },
+  "Metadata/plate_no_light_2.png": {
+   "sha256_normalized": "cb44e298d00fadb1e2f1e52141fcc0922879b0ac6058be3e2bf3ac7991902be2",
+   "sha256_raw": "cb44e298d00fadb1e2f1e52141fcc0922879b0ac6058be3e2bf3ac7991902be2",
+   "size": 5884
+  },
+  "Metadata/plate_no_light_3.png": {
+   "sha256_normalized": "717de7cbe6950af59f79fae01d441a3d9735db5674897dd135d3bb748781d751",
+   "sha256_raw": "717de7cbe6950af59f79fae01d441a3d9735db5674897dd135d3bb748781d751",
+   "size": 5707
+  },
+  "Metadata/plate_no_light_4.png": {
+   "sha256_normalized": "2401a5940eea9913c771506d772e41fbd2f438ffd5fc05052291b35ee323b7a8",
+   "sha256_raw": "2401a5940eea9913c771506d772e41fbd2f438ffd5fc05052291b35ee323b7a8",
+   "size": 5480
+  },
+  "Metadata/plate_no_light_5.png": {
+   "sha256_normalized": "40d39fd27b6a9669147cbe1cf13c12d678694a5487777661bb5172578c74fefa",
+   "sha256_raw": "40d39fd27b6a9669147cbe1cf13c12d678694a5487777661bb5172578c74fefa",
+   "size": 5021
+  },
+  "Metadata/plate_no_light_6.png": {
+   "sha256_normalized": "fe5af90bd2ec75bb5bfe6cda1d1c730b71400c586d22a6c92d29b39f03898cff",
+   "sha256_raw": "fe5af90bd2ec75bb5bfe6cda1d1c730b71400c586d22a6c92d29b39f03898cff",
+   "size": 5612
+  },
+  "Metadata/plate_no_light_7.png": {
+   "sha256_normalized": "14070fd3abdcac4d61776db09e8919ca413a181256528bb4a032138aa75dd57d",
+   "sha256_raw": "14070fd3abdcac4d61776db09e8919ca413a181256528bb4a032138aa75dd57d",
+   "size": 5227
+  },
+  "Metadata/plate_no_light_8.png": {
+   "sha256_normalized": "a1577fba8bf71f01229127f8f584642fb8b912dd012a55b7a4f1d68a7eb43637",
+   "sha256_raw": "a1577fba8bf71f01229127f8f584642fb8b912dd012a55b7a4f1d68a7eb43637",
+   "size": 5497
+  },
+  "Metadata/plate_no_light_9.png": {
+   "sha256_normalized": "f42e49e0805d0a91ff9a376611c483965c9297885d1ed550b2f889b1d35ebaa7",
+   "sha256_raw": "f42e49e0805d0a91ff9a376611c483965c9297885d1ed550b2f889b1d35ebaa7",
+   "size": 5762
+  },
+  "Metadata/project_settings.config": {
+   "sha256_normalized": "8d4d319957a7726eafc78f23af6ab8aaed3ac70c520129fd8207e87c6991a377",
+   "sha256_raw": "8d4d319957a7726eafc78f23af6ab8aaed3ac70c520129fd8207e87c6991a377",
+   "size": 67539
+  },
+  "Metadata/slice_info.config": {
+   "sha256_normalized": "ba9637c53b7798967768dfd09b0535e04e454a6cffba64e34a103f96dec64250",
+   "sha256_raw": "ba9637c53b7798967768dfd09b0535e04e454a6cffba64e34a103f96dec64250",
+   "size": 205
+  },
+  "Metadata/top_1.png": {
+   "sha256_normalized": "52d408c30cc2c21c12f80324a5bdcef487e789a801fc5acbac759d6bb8e92a6c",
+   "sha256_raw": "52d408c30cc2c21c12f80324a5bdcef487e789a801fc5acbac759d6bb8e92a6c",
+   "size": 25122
+  },
+  "Metadata/top_10.png": {
+   "sha256_normalized": "97e7d119f2e9d12227685a56ee2385eee96b8258c6cfa916c34df563a88f1589",
+   "sha256_raw": "97e7d119f2e9d12227685a56ee2385eee96b8258c6cfa916c34df563a88f1589",
+   "size": 23411
+  },
+  "Metadata/top_11.png": {
+   "sha256_normalized": "12da67efe0cf8e3e09798912567e539305bf8f7691467c97c6a6fc9e1aa81cc4",
+   "sha256_raw": "12da67efe0cf8e3e09798912567e539305bf8f7691467c97c6a6fc9e1aa81cc4",
+   "size": 24404
+  },
+  "Metadata/top_12.png": {
+   "sha256_normalized": "d022996f49e2ca4bdebfbcdd8a1a2fe050a61216925100d5cac527ede22f02ce",
+   "sha256_raw": "d022996f49e2ca4bdebfbcdd8a1a2fe050a61216925100d5cac527ede22f02ce",
+   "size": 25047
+  },
+  "Metadata/top_13.png": {
+   "sha256_normalized": "8be9a7fbedefc3d1d2faaf9799fd125b3650148f3ffa9501f23943b124b5b2e4",
+   "sha256_raw": "8be9a7fbedefc3d1d2faaf9799fd125b3650148f3ffa9501f23943b124b5b2e4",
+   "size": 23396
+  },
+  "Metadata/top_14.png": {
+   "sha256_normalized": "1397b732928ca6caf12262a27d71afdd54c49d11bbfe8d16347609152ca6f9d8",
+   "sha256_raw": "1397b732928ca6caf12262a27d71afdd54c49d11bbfe8d16347609152ca6f9d8",
+   "size": 22877
+  },
+  "Metadata/top_15.png": {
+   "sha256_normalized": "5fd830ac1b2cc34dc1e0f42db5f457a17228e72517802a3d35536935d1b800a2",
+   "sha256_raw": "5fd830ac1b2cc34dc1e0f42db5f457a17228e72517802a3d35536935d1b800a2",
+   "size": 24192
+  },
+  "Metadata/top_16.png": {
+   "sha256_normalized": "a49efab85306fd3a6eb54b7159d6cb93ac20a03fb613f8734d5e28f6860f222d",
+   "sha256_raw": "a49efab85306fd3a6eb54b7159d6cb93ac20a03fb613f8734d5e28f6860f222d",
+   "size": 21344
+  },
+  "Metadata/top_17.png": {
+   "sha256_normalized": "19ae966501ecf4a9a6f53145d84fc77292dd29b0c7ba5ecc3031e7220fd2a43a",
+   "sha256_raw": "19ae966501ecf4a9a6f53145d84fc77292dd29b0c7ba5ecc3031e7220fd2a43a",
+   "size": 23805
+  },
+  "Metadata/top_18.png": {
+   "sha256_normalized": "219560bd4d052b350eaab0d1b9b38b41ba893bc2041bc9bc9101490f9beb4e64",
+   "sha256_raw": "219560bd4d052b350eaab0d1b9b38b41ba893bc2041bc9bc9101490f9beb4e64",
+   "size": 13139
+  },
+  "Metadata/top_2.png": {
+   "sha256_normalized": "0cce947b715a5d06302d441baee88b4450b02e8f368d60610de602ccfad8e899",
+   "sha256_raw": "0cce947b715a5d06302d441baee88b4450b02e8f368d60610de602ccfad8e899",
+   "size": 25574
+  },
+  "Metadata/top_3.png": {
+   "sha256_normalized": "64963df9b554fb81481fe30b8a29522d482e8a2260506e0f12b23d57d49b2552",
+   "sha256_raw": "64963df9b554fb81481fe30b8a29522d482e8a2260506e0f12b23d57d49b2552",
+   "size": 25095
+  },
+  "Metadata/top_4.png": {
+   "sha256_normalized": "6184643fd3f52dc34912c8325b45a1199043c97d1a9cd2384c22c1e88d1eb9fc",
+   "sha256_raw": "6184643fd3f52dc34912c8325b45a1199043c97d1a9cd2384c22c1e88d1eb9fc",
+   "size": 25434
+  },
+  "Metadata/top_5.png": {
+   "sha256_normalized": "eaa812af9915fa6f0ad41da0df19dd2c49983224e8a5b7a572b44dc21b0d4b66",
+   "sha256_raw": "eaa812af9915fa6f0ad41da0df19dd2c49983224e8a5b7a572b44dc21b0d4b66",
+   "size": 25397
+  },
+  "Metadata/top_6.png": {
+   "sha256_normalized": "f7dfd96b66db8596578a0409964f3f0d2775bf519d6004589b84f49e867011fa",
+   "sha256_raw": "f7dfd96b66db8596578a0409964f3f0d2775bf519d6004589b84f49e867011fa",
+   "size": 25620
+  },
+  "Metadata/top_7.png": {
+   "sha256_normalized": "72a42240c0ba7760f6913b49541ba3353cd7f113b6d485dac28c21002e8469b6",
+   "sha256_raw": "72a42240c0ba7760f6913b49541ba3353cd7f113b6d485dac28c21002e8469b6",
+   "size": 25564
+  },
+  "Metadata/top_8.png": {
+   "sha256_normalized": "2454b2ce93365a6222be0e091342fee440b3740f54bc55e9e6119c61a5c0639e",
+   "sha256_raw": "2454b2ce93365a6222be0e091342fee440b3740f54bc55e9e6119c61a5c0639e",
+   "size": 26050
+  },
+  "Metadata/top_9.png": {
+   "sha256_normalized": "db17c809867226fc9b108a4b9b69252b83eed82819c3f5b2c853ded126c59e89",
+   "sha256_raw": "db17c809867226fc9b108a4b9b69252b83eed82819c3f5b2c853ded126c59e89",
+   "size": 23730
+  },
+  "[Content_Types].xml": {
+   "sha256_normalized": "4acce1f577c7f0af6d9d5923faac96a76aeb1c06f0eef1762b2c8905cc0c846b",
+   "sha256_raw": "4acce1f577c7f0af6d9d5923faac96a76aeb1c06f0eef1762b2c8905cc0c846b",
+   "size": 432
+  },
+  "_rels/.rels": {
+   "sha256_normalized": "eba9728f3f5482ecaee5c07f78ab85ac1b537747f60035da471f79678f858aa9",
+   "sha256_raw": "eba9728f3f5482ecaee5c07f78ab85ac1b537747f60035da471f79678f858aa9",
+   "size": 673
+  }
+ }
+}

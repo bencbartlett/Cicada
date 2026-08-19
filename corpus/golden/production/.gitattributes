@@ -1,0 +1,2 @@
+# Production references are byte-exact copies of the shipped fabrication files (CRLF as written by the wall scripts); never normalized.
+* -text

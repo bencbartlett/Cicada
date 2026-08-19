@@ -1,17 +1,101 @@
-# Corpus
+# Corpus — the wall pipeline, end to end
 
-The wall-pipeline end-to-end test corpus (DECISIONS.md: "Test corpus = the
-wall-piece pipeline"): field solver, colorizer, labels, pins, carve, packer,
-and exporters from the 1,500-part production wall piece, plus golden output
-hashes.
+The wall-piece pipeline as Cicada's test corpus (DECISIONS.md: "Test corpus
+= the wall-piece pipeline"; docs/15 stage 6): the production
+magnetic-field pyramid wall — 1,200 Voronoi frusta with debossed IDs and
+two crush-rib pin bores each, packed onto 79 Bambu plates, plus the CNC
+board DXF — rebuilt on the engine from a frozen layout and compared
+against the files that were actually fabricated from.
 
-Populated in spike stage 6 (docs/15). The source material lives in the wall
-project repo, which is not part of this repository — ask Ben for its location
-when porting begins. Bulky inputs move to git LFS if they exceed tens of MB
-(doc 14 §CI).
+## What is here
 
-Layout (once populated):
+| Path | Contents |
+|---|---|
+| `wall.cic` | The pipeline. `--node carved` is the carve-speed criterion; `--node bambu --node dxf` writes the fabrication files (explicit runs only) |
+| `scripts/` | The Python script nodes: the production GhPython cores ported verbatim (`scripts/README.md` lists every node, port, source line, and declared deviation) |
+| `inputs/layout.json` | The frozen production layout, extracted from the shipped artifacts: recovered Voronoi seeds, per-cell shrink, heights, lean lengths, bins, export flags — plus the production cells/centroids/leans/IDs as checks |
+| `inputs/bambu/` | The two Bambu reference projects the packer/writer harvest (process overlay, keep-outs, embedded profiles) — copied from the wall repo |
+| `tools/extract_layout.py`, `tools/recover_seeds.py` | Dev tools (not pipeline nodes) that produce `inputs/layout.json` from the wall repo's exports; `recover_seeds.py` needs numpy |
+| `tools/normalize.py` | The output normalizer + comparer (3MF / DXF / manifest; markdown report; exit code = verdict) |
+| `tools/test_*.py` | Offline unit tests for the scripts and the normalizer (`python -m unittest discover -s corpus/tools -p "test_*.py"`; the production cross-checks skip without the wall repo) |
+| `measure/` | The docs/15 measurement harness: `carve.sh`/`carve.ps1` (cold/warm carve), `slider_loop.mjs` (preview latency), `esc.mjs` (cancel time-to-idle); Node ≥ 20, no deps |
+| `golden/production/` | The production references: `board_postprocessed.dxf` and `manifest.csv` (copies of the shop files), `coil_manifest.csv`, per-file `plates_*.summary.json` (canonical summaries of the five 50–116 MB production 3MFs, which stay outside the repo), the extraction and seed-recovery reports |
+| `golden/cicada/` | Our own golden hashes of the normalized outputs (the nightly determinism check) |
+| `out/` | Where the exporters write (gitignored) |
 
-- `wall.cic` — the ported pipeline slice
-- `inputs/` — source data the pipeline consumes
-- `golden/` — expected output hashes for the nightly comparison
+## Running it
+
+```
+# cold carve (the criterion): a fresh cache dir, release build
+cargo run --release -p cicada-cli -- run corpus/wall.cic --node carved --time --cache-dir <fresh-dir>
+# the fabrication files
+cargo run --release -p cicada-cli -- run corpus/wall.cic --node bambu --node dxf --cache-dir <dir>
+# compare against production (report + verdict)
+python corpus/tools/normalize.py all --ours corpus/out --ref corpus/golden/production --report corpus/out/report.md
+# in the app (serve a scratch copy for experiments — the canvas writes the served files)
+cargo run --release -p cicada-cli -- serve corpus/wall.cic
+```
+
+Python 3 on PATH is all the scripts need (pure stdlib: the wall's
+scripts never used numpy). The measurement protocol, the recorded numbers,
+and their machine spec live in
+[docs/15-spike-plan.md](../docs/15-spike-plan.md) §Stage-6 results.
+
+## What the pipeline does, honestly
+
+`layout.json` is the frozen production layout. The pipeline consumes from
+it exactly what production consumed from its own upstream: the Voronoi
+SEEDS (recovered from the shipped cells by bisector least squares — every
+production cell vertex is reproduced within 1.1 µm), the per-cell shrink
+factors (the wall's density modulation: cells shrink with field strength),
+the vertical heights and apex lean lengths (the Grasshopper graph-mapper
+chain that produced them from the field is not ported; the field law is
+recorded in the extraction report), the colour bins, and the export flags.
+Everything else is computed: Voronoi → area centroids → shrink → the 2D
+Biot–Savart field at the seeds (soft core 243.84 mm = 0.1 × 96 in, as
+production) → lean directions → tip caps (the base cell scaled by 0.07 about
+the apex — the printed 1.4.1 caps) → `loft` → IDs + deboss placement →
+`text_solids` glyph cutters → pin cutters (bore + chamfer + 60° cone
+ceiling; slot with vanes on the lean pin) → one Manifold difference per part
+→ terrain packing → `orient` → the Bambu multi-plate 3MF writer and the R12
+board DXF writer, both ported verbatim.
+
+The production cells, centroids, lean directions, and IDs ride along in
+`layout.json` as CHECKS: `wall_labels(ids_expected=…)` refuses if the
+recomputed IDs differ; the normalizer compares the DXF pins and outlines
+against the shop file.
+
+## What was found in production while porting (recorded, not hidden)
+
+- The packer ran with `PackStep = 2` and an H2 bed width of 320 mm; its
+  apexes were computed at the Voronoi seeds (where the field was solved),
+  so the shipped parts sit a median 0.57° off lean-to-+Y — `wall.cic`
+  passes `apex_origins=layout.seeds` to reproduce the shipped yaw.
+- The shipped X1C plates were packed WITHOUT the X1-series front-left
+  bed-exclude block: the production packer searched only the export
+  directory and its parent for `example_settings_x1c.3mf`, which lived in
+  the repo root — `bed_exclude=False` reproduces that; `True` is right for
+  a new layout.
+- The 1.4.1 tip caps are the cell scaled by 0.07 about the apex, not the
+  `tip_caps.py` triangles (export 1.4 used triangles).
+- `board_postprocessed.dxf` declares four layers in its LAYER table but
+  also carries 3,828 TEXT entities (the regen path's quirk) — reproduced
+  as shipped; the 3MF zip entries are stamped with the wall clock
+  (reproduced with a fixed 1980-01-01 — the one declared writer deviation);
+  `I59` is listed in `coil_manifest.csv` but missing from every
+  `coil_2.3mf` after export 1.4.
+- 58 coil-captured parts and 5 parts dropped in 1.4.1 are `exported=false`
+  (they are built and carved, never exported — like production).
+
+## Regenerating the inputs
+
+```
+python corpus/tools/extract_layout.py          # production artifacts → inputs/layout.json + golden/production/*
+python corpus/tools/recover_seeds.py           # bisector least squares; writes seeds/keep/cell_scales only if every cell vertex reproduces within 2e-3 mm
+python corpus/tools/extract_layout.py          # second pass: re-derives the field-based fallbacks at the seeds
+python corpus/tools/normalize.py summarize <prod>.3mf -o corpus/golden/production/plates_f<bin>_<color>_<printer>.summary.json   # per production plate file
+```
+
+The wall repo is read-only for these tools (path baked in; `--wall-repo`
+overrides). Nothing here is hand-edited: the tools are deterministic and
+idempotent.

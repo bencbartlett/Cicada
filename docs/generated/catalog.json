@@ -1434,6 +1434,45 @@
       ]
     },
     {
+      "name": "area",
+      "title": "Area",
+      "description": "the enclosed area and the area centroid of a closed planar curve (the spike form of docs/08 §7 Area: closed curves only; surfaces arrive with v0.1). Polylines by the shoelace formula in their own plane (Newell normal) — the centroid is the AREA centroid, not the vertex mean (the wall scales its Voronoi cells about it); circles and rectangles analytically. The area is orientation-independent (always positive). Self-intersecting polylines are not detected: the shoelace result is what it is (lobes of opposite winding cancel).",
+      "category": "Surface & solid",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": true,
+      "panics": "the curve is degenerate at tolerance (fewer than 3 distinct vertices, a zero radius or empty extent, or an enclosed area within tolerance² of zero — collinear vertices), non-planar within tolerance, or its frame is degenerate.",
+      "inputs": [
+        {
+          "name": "curve",
+          "type": "Closed<Curve>",
+          "base": "Closed<Curve>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The closed planar curve bounding the region."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "area",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The enclosed area — always positive, whichever way the curve winds."
+        },
+        {
+          "name": "centroid",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The area centroid (first moment over area), in the curve's plane."
+        }
+      ]
+    },
+    {
       "name": "extrude",
       "title": "Extrude",
       "description": "extrude a closed planar profile into a watertight prism (mesh-backed under its v0.1 name, doc 15).",
