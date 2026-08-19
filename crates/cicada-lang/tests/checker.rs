@@ -10,6 +10,7 @@
 #![allow(clippy::expect_used)]
 
 use cicada_core::spec::{NodeSpec, PortSpec, PortType, Tier};
+use cicada_lang::check::BindingType;
 use cicada_lang::{Catalog, Document};
 
 const fn port(name: &'static str, base: &'static str, depth: u8) -> PortSpec {
@@ -59,6 +60,7 @@ const fn node(
         version: 1,
         pure: true,
         uses_tolerance: false,
+        panics: None,
         inputs,
         outputs,
         module: "fake",
@@ -127,11 +129,31 @@ static AS_CLOSED: NodeSpec = node(
 );
 static SUM: NodeSpec = node("sum_list", &[port("values", "Number", 1)], OUT_NUMBER);
 static NESTED: NodeSpec = node("nested", &[], &[port("out", "Number", 2)]);
+// Stage-4 shapes: kind-preserving type variables (`T` over transformable
+// kinds, `E` over any kind), the `Any` display-sink catch-all, and the
+// `Geometry` widening target — all through FAKE specs, never the stdlib.
+static TRANSLATE: NodeSpec = node(
+    "translate",
+    &[port("geometry", "T", 0), port("motion", "Vector", 0)],
+    &[port("out", "T", 0)],
+);
+static ARRAY: NodeSpec = node(
+    "array",
+    &[port("geometry", "T", 0), port("count", "Integer", 0)],
+    &[port("out", "T", 1)],
+);
+static ITEM: NodeSpec = node(
+    "item",
+    &[port("list", "E", 1), port("index", "Integer", 0)],
+    &[port("out", "E", 0)],
+);
+static PANEL: NodeSpec = node("panel", &[port("data", "Any", 0)], &[]);
+static PREVIEW: NodeSpec = node("preview", &[port("geometry", "Geometry", 0)], &[]);
 
 fn catalog_specs() -> Vec<&'static NodeSpec> {
     vec![
         &SLIDER, &CIRCLE, &SCATTER, &MOVE, &EXTRUDE, &DIVIDE, &ADD, &LOOP_A, &LOOP_B, &AS_CLOSED,
-        &SUM, &NESTED,
+        &SUM, &NESTED, &TRANSLATE, &ARRAY, &ITEM, &PANEL, &PREVIEW,
     ]
 }
 
@@ -195,6 +217,57 @@ fn unknown_names_nodes_kwargs_with_did_you_mean() {
          c = circel(radius=amps)\n\
          m = move(geometry=ptz, motion=amps)\n\
          pts = scatter(count=100, seed=7)\n"
+    ));
+}
+
+// Stage 4: kind-preserving type variables. `T` binds per call and carries
+// the ACTUAL kind through variable-typed outputs — a translated Curve is
+// still a Curve (feedable to as_closed), an arrayed one is [Curve].
+#[test]
+fn type_variables_preserve_kinds_end_to_end() {
+    let source = "# cicada 1\n\
+         c = circle(radius=1.0)\n\
+         points, tangents, t = divide_curve(curve=c)\n\
+         v = item(list=tangents, index=0)\n\
+         moved = translate(geometry=c, motion=v)\n\
+         closed = as_closed(curve=moved)\n\
+         row = array(geometry=moved, count=5)\n\
+         pts = scatter(count=10, seed=1)\n\
+         first = item(list=pts, index=0)\n\
+         shown = panel(data=pts)\n\
+         also = panel(data=first)\n\
+         seen = preview(geometry=moved)\n\
+         bad = move(geometry=first, motion=first)\n";
+    let specs = catalog_specs();
+    let catalog = Catalog::new(&specs);
+    let document = Document::parse(source);
+    let resolution = cicada_lang::resolve(&document, &catalog);
+    // The only red: `move`'s fake spec wants a Vector motion; `first` is a
+    // Point — proving `first` really resolved to Point through `E`.
+    assert_eq!(
+        resolution.diagnostics.len(),
+        1,
+        "{:#?}",
+        resolution.diagnostics
+    );
+    let ty = |name: &str| match resolution.bindings.get(name) {
+        Some(BindingType::Value { ty, .. }) => ty.render(),
+        other => panic!("`{name}` resolved to {other:?}"),
+    };
+    assert_eq!(ty("moved"), "Curve", "T bound to Curve and carried out");
+    assert_eq!(ty("closed"), "Closed<Curve>");
+    assert_eq!(ty("row"), "[Curve]", "variable under a list output");
+    assert_eq!(ty("first"), "Point", "E bound to the element kind");
+    assert_eq!(ty("v"), "Vector", "E binds independently per call");
+}
+
+#[test]
+fn type_variable_constraint_and_geometry_widening_refuse() {
+    insta::assert_json_snapshot!(check(
+        "# cicada 1\n\
+         amps = slider(value=2.0)\n\
+         bad = translate(geometry=amps, motion=amps)\n\
+         worse = preview(geometry=amps)\n"
     ));
 }
 

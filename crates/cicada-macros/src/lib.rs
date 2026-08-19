@@ -163,7 +163,9 @@ fn marshal_field_tokens(
     let from_field = quote! {
         #ident: match &values[#index] {
             Some(value) => {
-                <#ty as cicada_core::marshal::FromValue>::from_value(value).map_err(
+                // from_arc, not from_value: pass-through port types (Any,
+                // E) clone the Arc instead of re-hashing the payload.
+                <#ty as cicada_core::marshal::FromValue>::from_arc(value).map_err(
                     |source| cicada_core::marshal::InvokeError::Input { port: #name, source },
                 )?
             }
@@ -218,73 +220,104 @@ fn marshal_impls(
 
 struct PortAttrs {
     /// The default, both as the original typed expression (marshalling
-    /// inlines it) and its rendered catalog literal.
+    /// inlines it) and its rendered catalog text.
     default: Option<(Expr, String)>,
     dimension: Option<String>,
 }
 
 fn parse_port_attrs(attrs: &[Attribute]) -> syn::Result<PortAttrs> {
-    let mut out = PortAttrs {
-        default: None,
-        dimension: None,
-    };
+    let mut default_expr: Option<Expr> = None;
+    let mut default_doc: Option<LitStr> = None;
+    let mut dimension: Option<String> = None;
     for attr in attrs {
         if !attr.path().is_ident("port") {
             continue;
         }
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("default") {
-                if out.default.is_some() {
+                if default_expr.is_some() {
                     return Err(meta.error("duplicate `default` — the second would silently win"));
                 }
-                let expr: Expr = meta.value()?.parse()?;
-                let rendered = render_default(&expr)?;
-                out.default = Some((expr, rendered));
+                default_expr = Some(meta.value()?.parse()?);
+                Ok(())
+            } else if meta.path.is_ident("default_doc") {
+                if default_doc.is_some() {
+                    return Err(
+                        meta.error("duplicate `default_doc` — the second would silently win")
+                    );
+                }
+                default_doc = Some(meta.value()?.parse()?);
                 Ok(())
             } else if meta.path.is_ident("dimension") {
-                if out.dimension.is_some() {
+                if dimension.is_some() {
                     return Err(meta.error("duplicate `dimension` — the second would silently win"));
                 }
                 let ident: syn::Ident = meta.value()?.parse()?;
-                out.dimension = Some(ident.to_string());
+                dimension = Some(ident.to_string());
                 Ok(())
             } else {
-                Err(meta.error("unknown #[port(...)] key — expected `default` or `dimension`"))
+                Err(meta.error(
+                    "unknown #[port(...)] key — expected `default`, `default_doc`, \
+                     or `dimension`",
+                ))
             }
         })?;
     }
-    Ok(out)
+    // A literal default renders itself; a non-literal default (docs/08's
+    // `origin: Point = origin`) must carry its catalog rendering in
+    // `default_doc` — one honest source, never a guessed pretty-print.
+    let default = match (default_expr, default_doc) {
+        (None, None) => None,
+        (None, Some(doc)) => {
+            return Err(syn::Error::new(
+                doc.span(),
+                "`default_doc` without `default` — it names a default's catalog \
+                 rendering; there is no default here",
+            ));
+        }
+        (Some(expr), doc) => {
+            let rendered = match (render_literal(&expr), doc) {
+                (Some(_), Some(doc)) => {
+                    return Err(syn::Error::new(
+                        doc.span(),
+                        "`default_doc` on a LITERAL default — the literal renders \
+                         itself; two sources would drift",
+                    ));
+                }
+                (Some(text), None) => text,
+                (None, Some(doc)) => doc.value(),
+                (None, None) => {
+                    return Err(syn::Error::new(
+                        expr.span(),
+                        "non-literal default needs #[port(default_doc = \"…\")] — its \
+                         catalog rendering (e.g. default_doc = \"origin\")",
+                    ));
+                }
+            };
+            Some((expr, rendered))
+        }
+    };
+    Ok(PortAttrs { default, dimension })
 }
 
-/// Render a default expression as the catalog literal. Plain and negated
-/// literals only — non-literal defaults (`Point::new(…)`, docs/08's
-/// `origin: Point = origin`) are refused until their catalog rendering is
-/// designed with the stage-4 nodes that need them.
-fn render_default(expr: &Expr) -> syn::Result<String> {
+/// The catalog rendering of a plain or negated literal, or `None` for
+/// non-literal expressions (which must carry `default_doc`).
+fn render_literal(expr: &Expr) -> Option<String> {
     match expr {
-        Expr::Lit(ExprLit { lit, .. }) => Ok(lit_text(lit)),
+        Expr::Lit(ExprLit { lit, .. }) => Some(lit_text(lit)),
         Expr::Unary(ExprUnary {
             op: UnOp::Neg(_),
             expr: inner,
             ..
         }) => {
             if let Expr::Lit(ExprLit { lit, .. }) = inner.as_ref() {
-                Ok(format!("-{}", lit_text(lit)))
+                Some(format!("-{}", lit_text(lit)))
             } else {
-                Err(non_literal_default(expr))
+                None
             }
         }
-        other => Err(non_literal_default(other)),
+        _ => None,
     }
-}
-
-fn non_literal_default(expr: &Expr) -> syn::Error {
-    syn::Error::new(
-        expr.span(),
-        "#[port(default = …)] takes a literal (or negated literal) for now — \
-         non-literal defaults arrive with the stage-4 nodes that need them \
-         (their catalog rendering is undesigned)",
-    )
 }
 
 fn lit_text(lit: &Lit) -> String {
@@ -302,6 +335,28 @@ fn doc_first_line(attrs: &[Attribute]) -> String {
         .unwrap_or_default()
 }
 
+/// The body of a `# <name>` rustdoc section, joined to one line ("" if the
+/// section is absent or empty). This is how a node's `# Panics` contract
+/// travels into the catalog (doc 14: doc comments are the single source).
+fn doc_section(attrs: &[Attribute], name: &str) -> String {
+    let heading = format!("# {name}");
+    let mut collected: Vec<String> = Vec::new();
+    let mut inside = false;
+    for line in doc_lines(attrs) {
+        if inside {
+            if line.starts_with("# ") {
+                break; // next section
+            }
+            if !line.is_empty() {
+                collected.push(line);
+            }
+        } else if line == heading {
+            inside = true;
+        }
+    }
+    collected.join(" ")
+}
+
 fn doc_lines(attrs: &[Attribute]) -> Vec<String> {
     let mut lines = Vec::new();
     for attr in attrs {
@@ -314,8 +369,18 @@ fn doc_lines(attrs: &[Attribute]) -> Vec<String> {
                 ..
             }) = &nv.value
         {
-            for line in text.value().lines() {
+            let value = text.value();
+            // An empty `///` line is a PARAGRAPH BREAK and must survive:
+            // `"".lines()` yields nothing, which silently glued adjacent
+            // paragraphs together (regression: adversarial review, stage
+            // 4 — `# Panics` sections leaked into catalog descriptions).
+            let mut any = false;
+            for line in value.lines() {
                 lines.push(line.trim().to_owned());
+                any = true;
+            }
+            if !any {
+                lines.push(String::new());
             }
         }
     }
@@ -383,12 +448,23 @@ fn parse_node_args(args: &TokenStream2) -> syn::Result<NodeArgs> {
     Ok(parsed)
 }
 
-/// Title/description from the doc comment's first line: `Title — description.`
+/// Title/description from the doc comment's FIRST PARAGRAPH:
+/// `Title — description…` — the paragraph may wrap across source lines
+/// (rustdoc's 80-column discipline), and every line of it belongs to the
+/// description; truncating at the first physical line garbled half the
+/// catalog (regression: adversarial review, stage 4).
 fn parse_title_line(function: &ItemFn) -> syn::Result<(String, String)> {
     let span = function.sig.span();
-    // Loudly refuse anything else — this line IS the catalog (docs/08:
-    // "docstring first line = node title").
-    let first_line = doc_first_line(&function.attrs);
+    // Loudly refuse anything else — this paragraph IS the catalog
+    // (docs/08: "docstring first line = node title").
+    let lines = doc_lines(&function.attrs);
+    let first_line = lines
+        .iter()
+        .skip_while(|line| line.is_empty())
+        .take_while(|line| !line.is_empty())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ");
     let Some((title, description)) = first_line.split_once(" — ") else {
         return Err(syn::Error::new(
             span,
@@ -404,6 +480,46 @@ fn parse_title_line(function: &ItemFn) -> syn::Result<(String, String)> {
         ));
     }
     Ok((title.to_owned(), description.to_owned()))
+}
+
+/// The `panics: …` spec-field tokens from the fn's `# Panics` doc section
+/// (the runtime contract carried into the catalog — doc 14's "catalog
+/// carries contracts from stage 4"). The conventional "Panics when/if "
+/// opener is stripped: the catalog renders `Red when: <condition>`, and
+/// a stuttered "Red when: Panics when …" would read like a bug.
+fn panics_tokens(function: &ItemFn) -> TokenStream2 {
+    let text = doc_section(&function.attrs, "Panics");
+    let text = text
+        .strip_prefix("Panics when ")
+        .or_else(|| text.strip_prefix("Panics if "))
+        .unwrap_or(&text);
+    if text.is_empty() {
+        quote!(None)
+    } else {
+        quote!(Some(#text))
+    }
+}
+
+/// The input-struct type of a node fn (struct-in ABI): exactly one typed
+/// argument, with `uses_tolerance` nodes taking the project config as an
+/// explicit FIRST argument (tolerance is explicit state, never ambient).
+fn input_struct_type(function: &ItemFn, uses_tolerance: bool) -> syn::Result<&Type> {
+    let span = function.sig.span();
+    let inputs: Vec<&FnArg> = function.sig.inputs.iter().collect();
+    match (uses_tolerance, inputs.as_slice()) {
+        (false, [FnArg::Typed(pat)]) => Ok(&pat.ty),
+        (true, [FnArg::Typed(_config), FnArg::Typed(pat)]) => Ok(&pat.ty),
+        (false, _) => Err(syn::Error::new(
+            span,
+            "a node takes exactly one argument: its input struct \
+             (struct-in/struct-out ABI, DECISIONS.md) — e.g. `fn add(input: AddIn) -> f64`",
+        )),
+        (true, _) => Err(syn::Error::new(
+            span,
+            "a uses_tolerance node takes the config then its input struct — \
+             e.g. `fn as_closed(config: &ProjectConfig, input: AsClosedIn) -> …`",
+        )),
+    }
 }
 
 fn expand_node(args: &TokenStream2, function: &ItemFn) -> syn::Result<TokenStream2> {
@@ -448,19 +564,9 @@ fn expand_node(args: &TokenStream2, function: &ItemFn) -> syn::Result<TokenStrea
     };
 
     let (title, description) = parse_title_line(function)?;
+    let panics_tokens = panics_tokens(function);
 
-    // Exactly one typed argument: the input struct (struct-in ABI).
-    let inputs: Vec<&FnArg> = function.sig.inputs.iter().collect();
-    let input_ty: &Type = match inputs.as_slice() {
-        [FnArg::Typed(pat)] => &pat.ty,
-        _ => {
-            return Err(syn::Error::new(
-                span,
-                "a node takes exactly one argument: its input struct \
-                 (struct-in/struct-out ABI, DECISIONS.md) — e.g. `fn add(input: AddIn) -> f64`",
-            ));
-        }
-    };
+    let input_ty = input_struct_type(function, parsed.uses_tolerance)?;
     let output_ty: TokenStream2 = match &function.sig.output {
         ReturnType::Default => quote!(()),
         ReturnType::Type(_, ty) => quote!(#ty),
@@ -485,9 +591,13 @@ fn expand_node(args: &TokenStream2, function: &ItemFn) -> syn::Result<TokenStrea
         fn_ident.unraw().to_string().to_uppercase()
     );
     let invoke_ident = format_ident!("__cicada_invoke_{}", fn_ident.unraw());
-    let invoke_shim = invoke_shim(&invoke_ident, fn_ident, input_ty);
+    let invoke_shim = invoke_shim(&invoke_ident, fn_ident, input_ty, uses_tolerance);
 
     Ok(quote! {
+        // The struct-in ABI is by-value by design (DECISIONS.md): a node
+        // that only borrows its input must not be pushed to change its
+        // signature — the shim owns the calling convention.
+        #[allow(clippy::needless_pass_by_value)]
         #function
 
         #[doc(hidden)]
@@ -501,6 +611,7 @@ fn expand_node(args: &TokenStream2, function: &ItemFn) -> syn::Result<TokenStrea
             version: #version,
             pure: #pure,
             uses_tolerance: #uses_tolerance,
+            panics: #panics_tokens,
             inputs: <#input_ty as cicada_core::spec::Ports>::PORTS,
             outputs: <#output_ty as cicada_core::spec::AsOutputs>::OUTPUTS,
             module: module_path!(),
@@ -521,22 +632,35 @@ fn expand_node(args: &TokenStream2, function: &ItemFn) -> syn::Result<TokenStrea
 /// The type-erased invocation shim (stage 3): marshal in, call the real fn,
 /// marshal out. Panics are NOT caught here — the scheduler `catch_unwind`s
 /// and turns them into red nodes (docs/12).
+///
+/// `uses_tolerance` nodes take the project config as an explicit first
+/// argument (`fn f(config: &ProjectConfig, input: FIn)`) — tolerance is
+/// explicit state, never ambient; other nodes never see it, keeping the
+/// declaration and the capability in lockstep with the `NodeKey` folding.
 fn invoke_shim(
     invoke_ident: &proc_macro2::Ident,
     fn_ident: &proc_macro2::Ident,
     input_ty: &Type,
+    uses_tolerance: bool,
 ) -> TokenStream2 {
+    let call = if uses_tolerance {
+        quote!(#fn_ident(config, input))
+    } else {
+        quote!(#fn_ident(input))
+    };
     quote! {
         #[doc(hidden)]
         #[allow(missing_docs)]
         fn #invoke_ident(
+            config: &cicada_core::config::ProjectConfig,
             inputs: &[Option<::std::sync::Arc<cicada_core::value::HashedValue>>],
         ) -> Result<
             Vec<::std::sync::Arc<cicada_core::value::HashedValue>>,
             cicada_core::marshal::InvokeError,
         > {
+            let _ = config; // tolerance-free nodes ignore it by design
             let input = <#input_ty as cicada_core::marshal::FromValues>::from_values(inputs)?;
-            cicada_core::marshal::IntoValues::into_values(#fn_ident(input))
+            cicada_core::marshal::IntoValues::into_values(#call)
         }
     }
 }

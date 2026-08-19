@@ -1,6 +1,113 @@
 {
-  "format": 1,
+  "format": 2,
   "nodes": [
+    {
+      "name": "slider",
+      "title": "Number Slider",
+      "description": "a bounded numeric parameter.",
+      "category": "Params & input",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "`value` lies outside `min..=max` or the bounds are inverted — a drifted literal is a loud red, never a silent clamp.",
+      "inputs": [
+        {
+          "name": "value",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Current value."
+        },
+        {
+          "name": "min",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "0.0",
+          "doc": "Lower bound."
+        },
+        {
+          "name": "max",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "10.0",
+          "doc": "Upper bound."
+        },
+        {
+          "name": "step",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "0.0",
+          "doc": "Snap increment for the canvas widget and scrub caching (doc 12);"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "toggle",
+      "title": "Boolean Toggle",
+      "description": "an on/off parameter.",
+      "category": "Params & input",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "value",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Current state."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "panel",
+      "title": "Panel",
+      "description": "display sink; shows counts and samples on the canvas.",
+      "category": "Params & input",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "data",
+          "type": "Any",
+          "base": "Any",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Anything — the panel shows whatever arrives."
+        }
+      ],
+      "outputs": []
+    },
     {
       "name": "series",
       "title": "Series",
@@ -10,6 +117,7 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
+      "panics": "`count` is negative — loud refusal, never a silent empty list (the scheduler turns node panics into red nodes, stage 3).",
       "inputs": [
         {
           "name": "start",
@@ -36,6 +144,52 @@
           "list_depth": 0,
           "optional": false,
           "doc": "Number of values."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[Number]",
+          "base": "Number",
+          "list_depth": 1,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "random",
+      "title": "Random",
+      "description": "seeded uniform random numbers in a domain.",
+      "category": "Sequences & random",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "`count` is negative.",
+      "inputs": [
+        {
+          "name": "domain",
+          "type": "Domain",
+          "base": "Domain",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The interval values are drawn from (uniform)."
+        },
+        {
+          "name": "count",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Number of values."
+        },
+        {
+          "name": "seed",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "PRNG seed — explicit, always (docs/08 rule 2)."
         }
       ],
       "outputs": [
@@ -159,6 +313,1544 @@
           "doc": "Interval end."
         }
       ]
+    },
+    {
+      "name": "subtract",
+      "title": "Subtract",
+      "description": "difference of two numbers.",
+      "category": "Maths & logic",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Left operand."
+        },
+        {
+          "name": "b",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Right operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "multiply",
+      "title": "Multiply",
+      "description": "product of two numbers.",
+      "category": "Maths & logic",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Left operand."
+        },
+        {
+          "name": "b",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Right operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "divide",
+      "title": "Divide",
+      "description": "quotient of two numbers (IEEE: dividing by zero yields ±∞).",
+      "category": "Maths & logic",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Left operand."
+        },
+        {
+          "name": "b",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Right operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "modulo",
+      "title": "Modulo",
+      "description": "IEEE remainder of `a / b` (sign follows `a`).",
+      "category": "Maths & logic",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "`a % 0` is NaN, which value construction refuses — the node goes red.",
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Left operand."
+        },
+        {
+          "name": "b",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Right operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "power",
+      "title": "Power",
+      "description": "`a` raised to `b` (`^` in expressions).",
+      "category": "Maths & logic",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Left operand."
+        },
+        {
+          "name": "b",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Right operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "remap",
+      "title": "Remap",
+      "description": "map a value linearly from a source domain to a target domain. Values outside the source domain extrapolate linearly (no clamping).",
+      "category": "Maths & logic",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "the source domain is empty (`start == end`) — the map is undefined there.",
+      "inputs": [
+        {
+          "name": "value",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The value to remap."
+        },
+        {
+          "name": "source",
+          "type": "Domain",
+          "base": "Domain",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The domain the value lives in."
+        },
+        {
+          "name": "target",
+          "type": "Domain",
+          "base": "Domain",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The domain to map it into."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "item",
+      "title": "List Item",
+      "description": "one element of a list by index.",
+      "category": "List & axis",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "the list is empty, or when `index` is out of range and `wrap` is off. Lists with absent (`Optional`) slots refuse at marshalling — hole-aware selection arrives with the Optional-flow nodes (v0.1).",
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The list."
+        },
+        {
+          "name": "index",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Zero-based index."
+        },
+        {
+          "name": "wrap",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "default": "false",
+          "doc": "Wrap out-of-range indices around the list (modular)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "E",
+          "base": "E",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "length",
+      "title": "List Length",
+      "description": "the number of slots in a list (absent slots included — slot-preserving nulls keep their places, docs/08 rule 6).",
+      "category": "List & axis",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[E?]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": true,
+          "doc": "The list — absent (`Optional`) slots count too."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "construct_point",
+      "title": "Construct Point",
+      "description": "a point from x/y/z coordinates.",
+      "category": "Point · Vector · Plane",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "0.0",
+          "doc": "X coordinate.",
+          "dimension": "length"
+        },
+        {
+          "name": "y",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "0.0",
+          "doc": "Y coordinate.",
+          "dimension": "length"
+        },
+        {
+          "name": "z",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "0.0",
+          "doc": "Z coordinate.",
+          "dimension": "length"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "deconstruct_point",
+      "title": "Deconstruct Point",
+      "description": "the x/y/z coordinates of a point.",
+      "category": "Point · Vector · Plane",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "point",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The point."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "X coordinate."
+        },
+        {
+          "name": "y",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Y coordinate."
+        },
+        {
+          "name": "z",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Z coordinate."
+        }
+      ]
+    },
+    {
+      "name": "unit_x",
+      "title": "Unit X",
+      "description": "the world x direction, scaled.",
+      "category": "Point · Vector · Plane",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "factor",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "1.0",
+          "doc": "Length of the produced vector."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "unit_y",
+      "title": "Unit Y",
+      "description": "the world y direction, scaled.",
+      "category": "Point · Vector · Plane",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "factor",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "1.0",
+          "doc": "Length of the produced vector."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "unit_z",
+      "title": "Unit Z",
+      "description": "the world z direction, scaled.",
+      "category": "Point · Vector · Plane",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "factor",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "1.0",
+          "doc": "Length of the produced vector."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "vector_2pt",
+      "title": "Vector 2Pt",
+      "description": "the vector from `a` to `b`, optionally unitized.",
+      "category": "Point · Vector · Plane",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": true,
+      "panics": "`unitize` is on and the points coincide within tolerance — a zero vector has no direction.",
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Tail point."
+        },
+        {
+          "name": "b",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Head point."
+        },
+        {
+          "name": "unitize",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "default": "false",
+          "doc": "Normalize the result to unit length."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "xy_plane",
+      "title": "XY Plane",
+      "description": "the world XY frame at an origin.",
+      "category": "Point · Vector · Plane",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "origin",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false,
+          "default": "origin",
+          "doc": "Plane origin."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "xz_plane",
+      "title": "XZ Plane",
+      "description": "the world XZ frame at an origin.",
+      "category": "Point · Vector · Plane",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "origin",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false,
+          "default": "origin",
+          "doc": "Plane origin."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "yz_plane",
+      "title": "YZ Plane",
+      "description": "the world YZ frame at an origin.",
+      "category": "Point · Vector · Plane",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "origin",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false,
+          "default": "origin",
+          "doc": "Plane origin."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "line",
+      "title": "Line",
+      "description": "a straight segment between two points.",
+      "category": "Curve",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Start point."
+        },
+        {
+          "name": "b",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "End point."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Curve",
+          "base": "Curve",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "polyline",
+      "title": "Polyline",
+      "description": "a vertex chain, open or closed.",
+      "category": "Curve",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "vertices",
+          "type": "[Point]",
+          "base": "Point",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The vertices, in order."
+        },
+        {
+          "name": "closed",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "default": "false",
+          "doc": "Close the chain (implicit edge from the last vertex to the first)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Curve",
+          "base": "Curve",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "circle",
+      "title": "Circle",
+      "description": "an analytic circle in a plane. The stored frame is orthonormalized at construction, so downstream evaluation is exact.",
+      "category": "Curve",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": true,
+      "panics": "the radius is not above tolerance or the plane's axes are degenerate (zero-length or parallel).",
+      "inputs": [
+        {
+          "name": "plane",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "default": "xy_plane",
+          "doc": "The circle's frame; origin = center."
+        },
+        {
+          "name": "radius",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The radius.",
+          "dimension": "length"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Closed<Curve>",
+          "base": "Closed<Curve>",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "rectangle",
+      "title": "Rectangle",
+      "description": "an analytic rectangle in a plane, always closed. The frame is orthonormalized at construction. (The rounded-`corner` parameter arrives with compound curves, v0.1.)",
+      "category": "Curve",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": true,
+      "panics": "either extent is empty at tolerance or the plane is degenerate.",
+      "inputs": [
+        {
+          "name": "plane",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "default": "xy_plane",
+          "doc": "The rectangle's frame."
+        },
+        {
+          "name": "x",
+          "type": "Domain",
+          "base": "Domain",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Extent along the plane's x axis."
+        },
+        {
+          "name": "y",
+          "type": "Domain",
+          "base": "Domain",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Extent along the plane's y axis."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Closed<Curve>",
+          "base": "Closed<Curve>",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "divide_curve",
+      "title": "Divide Curve",
+      "description": "points, tangents, and parameters at equal arc-length steps. An open curve yields `count + 1` samples (both ends included); a closed curve yields `count` (the seam appears once).",
+      "category": "Curve",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": true,
+      "panics": "`count < 1` or the curve is degenerate at tolerance (no usable length, zero radius, collapsed frame).",
+      "inputs": [
+        {
+          "name": "curve",
+          "type": "Curve",
+          "base": "Curve",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The curve to divide."
+        },
+        {
+          "name": "count",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "default": "10",
+          "doc": "Number of equal arc-length segments."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "points",
+          "type": "[Point]",
+          "base": "Point",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "Sample points."
+        },
+        {
+          "name": "tangents",
+          "type": "[Vector]",
+          "base": "Vector",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "Unit tangents at the samples."
+        },
+        {
+          "name": "parameters",
+          "type": "[Number]",
+          "base": "Number",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "Normalized arc-length parameters in `0..=1`."
+        }
+      ]
+    },
+    {
+      "name": "as_closed",
+      "title": "As Closed",
+      "description": "the checked closed-curve refinement (docs/08 rule 5). Already-closed curves pass through unchanged; an open polyline whose endpoints coincide within tolerance closes (duplicate end vertex dropped).",
+      "category": "Curve",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": true,
+      "panics": "the curve cannot close: a line, endpoints apart beyond tolerance, or fewer than 3 distinct vertices after closing — red with the distance that failed, never a silent pass (wall lesson 13).",
+      "inputs": [
+        {
+          "name": "curve",
+          "type": "Curve",
+          "base": "Curve",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The curve to refine."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Closed<Curve>",
+          "base": "Closed<Curve>",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "extrude",
+      "title": "Extrude",
+      "description": "extrude a closed planar profile into a watertight prism (mesh-backed under its v0.1 name, doc 15).",
+      "category": "Surface & solid",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": true,
+      "panics": "the profile is degenerate or non-planar at tolerance, the direction lies in the profile plane, `segments < 3`, or the profile polygon is self-intersecting.",
+      "inputs": [
+        {
+          "name": "profile",
+          "type": "Closed<Curve>",
+          "base": "Closed<Curve>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The closed, planar profile to extrude."
+        },
+        {
+          "name": "direction",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Extrusion direction and length (need not be normal to the profile —"
+        },
+        {
+          "name": "segments",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "default": "64",
+          "doc": "Tessellation density for curved profiles (circles)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Watertight<Mesh>",
+          "base": "Watertight<Mesh>",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "box",
+      "title": "Box",
+      "description": "an axis-aligned box in a plane's frame (mesh-backed under its v0.1 name, doc 15). Decreasing domains are normalized.",
+      "category": "Surface & solid",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": true,
+      "panics": "any extent is empty at tolerance or the plane is degenerate.",
+      "inputs": [
+        {
+          "name": "plane",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "default": "xy_plane",
+          "doc": "The box's frame."
+        },
+        {
+          "name": "x",
+          "type": "Domain",
+          "base": "Domain",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Extent along the frame's x axis."
+        },
+        {
+          "name": "y",
+          "type": "Domain",
+          "base": "Domain",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Extent along the frame's y axis."
+        },
+        {
+          "name": "z",
+          "type": "Domain",
+          "base": "Domain",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Extent along the frame's z axis."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Watertight<Mesh>",
+          "base": "Watertight<Mesh>",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "sphere",
+      "title": "Sphere",
+      "description": "a UV sphere at a plane's origin (mesh-backed under its v0.1 name, doc 15).",
+      "category": "Surface & solid",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": true,
+      "panics": "the radius is not above tolerance, `segments < 3`, or the plane is degenerate.",
+      "inputs": [
+        {
+          "name": "plane",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "default": "xy_plane",
+          "doc": "Center frame; the plane's z is the polar axis."
+        },
+        {
+          "name": "radius",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The radius.",
+          "dimension": "length"
+        },
+        {
+          "name": "segments",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "default": "32",
+          "doc": "Longitudinal segment count (latitude bands follow as half)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Watertight<Mesh>",
+          "base": "Watertight<Mesh>",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "mesh_union",
+      "title": "Mesh Union",
+      "description": "the union of watertight meshes via Manifold (docs/08: watertight, parallel, seconds).",
+      "category": "Mesh & field",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "Manifold refuses an operand (named by index) — its ε-validity is stricter than structural watertightness in corner cases.",
+      "inputs": [
+        {
+          "name": "meshes",
+          "type": "[Watertight<Mesh>]",
+          "base": "Watertight<Mesh>",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The solids to union (empty list → the empty solid)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Watertight<Mesh>",
+          "base": "Watertight<Mesh>",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "mesh_difference",
+      "title": "Mesh Difference",
+      "description": "subtract every cutter from a mesh via Manifold; the result may be the empty solid. Lift with `each()` to carve per part (`mesh_difference(mesh=each(frusta), cutters=each(cutter_groups))`).",
+      "category": "Mesh & field",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "Manifold refuses the mesh or a cutter (named by index).",
+      "inputs": [
+        {
+          "name": "mesh",
+          "type": "Watertight<Mesh>",
+          "base": "Watertight<Mesh>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The solid to carve."
+        },
+        {
+          "name": "cutters",
+          "type": "[Watertight<Mesh>]",
+          "base": "Watertight<Mesh>",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The solids to subtract (the wall's carve: one part, its cutters)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Watertight<Mesh>",
+          "base": "Watertight<Mesh>",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "mesh_intersection",
+      "title": "Mesh Intersection",
+      "description": "the intersection of two watertight meshes via Manifold; the result may be the empty solid.",
+      "category": "Mesh & field",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "Manifold refuses an operand.",
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Watertight<Mesh>",
+          "base": "Watertight<Mesh>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "First solid."
+        },
+        {
+          "name": "b",
+          "type": "Watertight<Mesh>",
+          "base": "Watertight<Mesh>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Second solid."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Watertight<Mesh>",
+          "base": "Watertight<Mesh>",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "as_watertight",
+      "title": "As Watertight",
+      "description": "the checked watertight refinement (docs/08: the mesh-tier solid): every edge shared by exactly two consistently oriented triangles.",
+      "category": "Mesh & field",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "the mesh has open or inconsistently oriented edges — red with the count, never a silent pass (wall lesson 13).",
+      "inputs": [
+        {
+          "name": "mesh",
+          "type": "Mesh",
+          "base": "Mesh",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The mesh to refine."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Watertight<Mesh>",
+          "base": "Watertight<Mesh>",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "voronoi",
+      "title": "Voronoi",
+      "description": "planar Voronoi cells of seed points, clipped to a convex boundary. Cells are index-aligned with the seeds (provenance never shifts). Spike scope: the boundary must be convex and everything must lie on its plane.",
+      "category": "Intersect & regions",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": true,
+      "panics": "the boundary is open, non-convex, or degenerate; when a seed is off the boundary plane, coincides with another seed within tolerance, or owns no area inside the boundary; or when `seeds` is empty.",
+      "inputs": [
+        {
+          "name": "seeds",
+          "type": "[Point]",
+          "base": "Point",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "Seed points — one cell per seed, index-aligned."
+        },
+        {
+          "name": "boundary",
+          "type": "Closed<Curve>",
+          "base": "Closed<Curve>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Convex closed boundary the cells are clipped to."
+        },
+        {
+          "name": "segments",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "default": "64",
+          "doc": "Tessellation density for curved boundaries (circles)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "cells",
+          "type": "[Closed<Curve>]",
+          "base": "Closed<Curve>",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "One closed cell per seed, index-aligned with `seeds`."
+        }
+      ]
+    },
+    {
+      "name": "move",
+      "title": "Move",
+      "description": "translate geometry along a vector.",
+      "category": "Transform",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "geometry",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The geometry to move."
+        },
+        {
+          "name": "motion",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The translation."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "rotate",
+      "title": "Rotate",
+      "description": "rotate geometry about a plane's normal through its origin.",
+      "category": "Transform",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": true,
+      "panics": "the plane is degenerate (zero-length or parallel axes).",
+      "inputs": [
+        {
+          "name": "geometry",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The geometry to rotate."
+        },
+        {
+          "name": "angle",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Rotation angle in radians (right-handed about the plane's normal).",
+          "dimension": "angle"
+        },
+        {
+          "name": "plane",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "default": "xy_plane",
+          "doc": "Rotation frame: about its z axis, through its origin."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "scale",
+      "title": "Scale",
+      "description": "uniform scale about a center. Negative factors point-reflect (mesh orientation is preserved by winding correction).",
+      "category": "Transform",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": true,
+      "panics": "`|factor|` is within tolerance of zero — geometry would collapse to a point.",
+      "inputs": [
+        {
+          "name": "geometry",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The geometry to scale."
+        },
+        {
+          "name": "center",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false,
+          "default": "origin",
+          "doc": "Center of scaling."
+        },
+        {
+          "name": "factor",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Uniform scale factor (negative = point reflection)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "orient",
+      "title": "Orient",
+      "description": "the rigid motion carrying the source plane onto the target plane (the wall's part-to-plate workhorse).",
+      "category": "Transform",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": true,
+      "panics": "either plane is degenerate.",
+      "inputs": [
+        {
+          "name": "geometry",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The geometry to orient."
+        },
+        {
+          "name": "source",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The frame the geometry currently sits in."
+        },
+        {
+          "name": "target",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The frame to carry it onto."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "linear_array",
+      "title": "Linear Array",
+      "description": "`count` copies stepped along a direction, the first at the original position.",
+      "category": "Transform",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "`count < 1`.",
+      "inputs": [
+        {
+          "name": "geometry",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The geometry to repeat."
+        },
+        {
+          "name": "direction",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Step between consecutive copies."
+        },
+        {
+          "name": "count",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Number of copies (the first sits at the original position)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[T]",
+          "base": "T",
+          "list_depth": 1,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "custom_preview",
+      "title": "Custom Preview",
+      "description": "display a geometry with a color; the display cost shows in the profiler next to compute cost.",
+      "category": "Output, display & export",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "geometry",
+          "type": "Geometry",
+          "base": "Geometry",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The geometry to draw (lift with `each()` for lists)."
+        },
+        {
+          "name": "color",
+          "type": "Color",
+          "base": "Color",
+          "list_depth": 0,
+          "optional": false,
+          "default": "white",
+          "doc": "Display color (linear RGBA)."
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "name": "text_tag",
+      "title": "Text Tag",
+      "description": "a display-only text label at a plane.",
+      "category": "Output, display & export",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "location",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Where the tag sits (the plane orients it)."
+        },
+        {
+          "name": "text",
+          "type": "Text",
+          "base": "Text",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The text to show."
+        },
+        {
+          "name": "size",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "1.0",
+          "doc": "Text height in document units.",
+          "dimension": "length"
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "name": "export_obj",
+      "title": "Export OBJ",
+      "description": "write meshes to a Wavefront OBJ file for external viewers (the stage-4 debug window into headless geometry; the real exporters — 3MF, DXF — arrive with the wall corpus).",
+      "category": "Output, display & export",
+      "tier": "S",
+      "version": 1,
+      "pure": false,
+      "uses_tolerance": false,
+      "panics": "the file cannot be written (missing directory, permissions) — an export that silently wrote nothing is the worst outcome (wall lesson 7).",
+      "inputs": [
+        {
+          "name": "meshes",
+          "type": "[Mesh]",
+          "base": "Mesh",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The meshes to write — ANY meshes (this is the debug viewer's door;"
+        },
+        {
+          "name": "path",
+          "type": "Text",
+          "base": "Text",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Output path (`.obj`); relative paths resolve against the working"
+        }
+      ],
+      "outputs": []
     }
   ]
 }

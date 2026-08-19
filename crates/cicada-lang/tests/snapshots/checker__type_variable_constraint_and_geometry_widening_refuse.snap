@@ -1,0 +1,42 @@
+---
+source: crates/cicada-lang/tests/checker.rs
+expression: "check(\"# cicada 1\\n\\\n         amps = slider(value=2.0)\\n\\\n         bad = translate(geometry=amps, motion=amps)\\n\\\n         worse = preview(geometry=amps)\\n\")"
+---
+[
+  {
+    "actual": "Number",
+    "expected": "T",
+    "kind": "type_mismatch",
+    "message": "`geometry` is kind-preserving over transformable kinds (Point, Vector, Plane, Curve, Closed<Curve>, Mesh, Watertight<Mesh>); `amps` is not one",
+    "node": "bad",
+    "span": {
+      "col_end": 29,
+      "col_start": 25,
+      "line": 3
+    }
+  },
+  {
+    "actual": "Number",
+    "expected": "Vector",
+    "kind": "type_mismatch",
+    "message": "Number into a Vector port",
+    "node": "bad",
+    "span": {
+      "col_end": 42,
+      "col_start": 38,
+      "line": 3
+    }
+  },
+  {
+    "actual": "Number",
+    "expected": "Geometry",
+    "kind": "type_mismatch",
+    "message": "Number into a Geometry port",
+    "node": "worse",
+    "span": {
+      "col_end": 29,
+      "col_start": 25,
+      "line": 4
+    }
+  }
+]

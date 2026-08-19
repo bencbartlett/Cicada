@@ -1,0 +1,21 @@
+# cicada 1
+# Curves 101: params drive analytic curves; divide_curve samples them.
+# Run:  cargo run -p cicada-cli -- run examples/01-curves.cic
+# (add --time for per-node timings, --hashes for stable output hashes)
+
+# A slider is an ordinary node; dragging it on the canvas (stage 5)
+# rewrites the one `value` literal below.
+radius = slider(value=3.0, min=0.5, max=10.0, step=0.5)
+
+# Circles are closed by construction (Closed<Curve>).
+ring = circle(radius=radius)
+
+# Divide into 12 equal arcs: closed curve -> 12 points (seam once).
+points, tangents, params = divide_curve(curve=ring, count=12)
+
+# Rectangles want two extents (domains).
+extent = construct_domain(start=0.0, end=4.0)
+frame_rect = rectangle(x=extent, y=extent)
+
+# An expression node: free variables become input ports.
+circumference = 2 * 3.14159265358979 * radius

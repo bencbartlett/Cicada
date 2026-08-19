@@ -70,6 +70,10 @@ fn catalog_json(specs: &[&NodeSpec]) -> anyhow::Result<String> {
         version: u32,
         pure: bool,
         uses_tolerance: bool,
+        /// The runtime contract (rustdoc `# Panics`, one line): when the
+        /// node goes red. Format 2.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        panics: Option<&'a str>,
         inputs: Vec<Port<'a>>,
         outputs: Vec<Port<'a>>,
     }
@@ -109,7 +113,8 @@ fn catalog_json(specs: &[&NodeSpec]) -> anyhow::Result<String> {
     }
 
     let catalog = Catalog {
-        format: 1,
+        // Format 2: adds per-node `panics` (the runtime contract).
+        format: 2,
         nodes: specs
             .iter()
             .map(|spec| Node {
@@ -125,6 +130,7 @@ fn catalog_json(specs: &[&NodeSpec]) -> anyhow::Result<String> {
                 version: spec.version,
                 pure: spec.pure,
                 uses_tolerance: spec.uses_tolerance,
+                panics: spec.panics,
                 inputs: spec.inputs.iter().map(port).collect(),
                 outputs: spec.outputs.iter().map(port).collect(),
             })

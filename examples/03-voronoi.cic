@@ -1,0 +1,36 @@
+# cicada 1
+# A miniature of the wall pipeline: seeded random points -> Voronoi
+# partition -> extruded cells -> a carve -> OBJ.
+# Solve:         cargo run -p cicada-cli -- run examples/03-voronoi.cic --time
+# Write OBJ:     cargo run -p cicada-cli -- run examples/03-voronoi.cic --node dump
+
+# The board (the Voronoi boundary — convex, in the world XY plane).
+bx = construct_domain(start=0.0, end=40.0)
+by = construct_domain(start=0.0, end=24.0)
+board = rectangle(x=bx, y=by)
+
+# Seeded random seed points, strictly inside the board. Same seed, same
+# wall — determinism is the whole point.
+dx = construct_domain(start=1.0, end=39.0)
+dy = construct_domain(start=1.0, end=23.0)
+xs = random(domain=dx, count=18, seed=7)
+ys = random(domain=dy, count=18, seed=11)
+seeds = construct_point(x=each(xs), y=each(ys))
+
+# One closed cell per seed, index-aligned.
+cells = voronoi(seeds=seeds, boundary=board)
+
+# Extrude every cell into a prism (each() = the lift chip in text form).
+up = unit_z(factor=3.0)
+prisms = extrude(profile=each(cells), direction=up)
+
+# Carve a shared pin through every prism (the wall carves per-part pin
+# holes; one shared cutter keeps the demo small).
+pin_at = construct_point(x=20.0, y=12.0, z=3.0)
+pin_frame = xy_plane(origin=pin_at)
+pin = sphere(plane=pin_frame, radius=2.5, segments=24)
+still = unit_x(factor=0.0)
+pins = linear_array(geometry=pin, direction=still, count=1)
+carved = mesh_difference(mesh=each(prisms), cutters=pins)
+
+dump = export_obj(meshes=carved, path="examples/03-voronoi.obj")

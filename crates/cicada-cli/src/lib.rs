@@ -9,3 +9,4 @@
 pub mod catalog;
 pub mod lower;
 pub mod run;
+pub mod scripts;

@@ -49,6 +49,14 @@ pub enum KindTag {
     /// Normalized expression-node IR (docs/12: expression `node_version` =
     /// "hash of the normalized expression IR").
     ExprIr = 16,
+    /// `Curve` (analytic sum type, stage 4)
+    Curve = 17,
+    /// `Mesh` (`SoA` triangle mesh, stage 4)
+    Mesh = 18,
+    /// Script-node source bytes (docs/12 cache keys: script
+    /// `node_version` = hash of the source file) — not a value; tagged
+    /// here so every hash shares one versioned format.
+    ScriptSource = 19,
 }
 
 /// A 32-byte blake3 content hash.
@@ -155,6 +163,44 @@ impl ValueHasher {
         self
     }
 
+    /// Hash a whole f64 buffer with a u64 length prefix — the mesh-scale
+    /// bulk path (per-call [`Self::f64`] on a million-vertex buffer would
+    /// pay one hasher update per component). Chunked little-endian
+    /// encoding; the same canonical form as [`Self::f64`] (`-0.0`
+    /// collapses, NaN is a debug panic), so bulk and per-component hashing
+    /// of equal data agree.
+    #[must_use]
+    pub fn f64s(mut self, values: &[f64]) -> Self {
+        self.0.update(&(values.len() as u64).to_le_bytes());
+        let mut buffer = [0_u8; 8 * 512];
+        for chunk in values.chunks(512) {
+            for (index, &x) in chunk.iter().enumerate() {
+                debug_assert!(
+                    !x.is_nan(),
+                    "NaN reached a hash site — refuse it at construction"
+                );
+                let canonical = if x == 0.0 { 0.0 } else { x };
+                buffer[index * 8..index * 8 + 8].copy_from_slice(&canonical.to_le_bytes());
+            }
+            self.0.update(&buffer[..chunk.len() * 8]);
+        }
+        self
+    }
+
+    /// Hash a whole u32 buffer with a u64 length prefix (mesh indices).
+    #[must_use]
+    pub fn u32s(mut self, values: &[u32]) -> Self {
+        self.0.update(&(values.len() as u64).to_le_bytes());
+        let mut buffer = [0_u8; 4 * 512];
+        for chunk in values.chunks(512) {
+            for (index, &x) in chunk.iter().enumerate() {
+                buffer[index * 4..index * 4 + 4].copy_from_slice(&x.to_le_bytes());
+            }
+            self.0.update(&buffer[..chunk.len() * 4]);
+        }
+        self
+    }
+
     /// Hash a child value's hash (Merkle edge).
     #[must_use]
     pub fn child(mut self, hash: &ValueHash) -> Self {
@@ -207,5 +253,39 @@ mod tests {
         let neg = ValueHasher::new(KindTag::Number).f64(-0.0).finish();
         let pos = ValueHasher::new(KindTag::Number).f64(0.0).finish();
         assert_eq!(neg, pos);
+    }
+
+    #[test]
+    fn bulk_f64s_matches_length_prefix_plus_components() {
+        // The bulk path must be byte-equivalent to a u64 length prefix
+        // followed by per-component f64 hashing — including across the
+        // 512-element chunk boundary and for -0.0 canonicalization.
+        let values: Vec<f64> = (0..1300)
+            .map(|i| if i % 7 == 0 { -0.0 } else { f64::from(i) * 0.5 })
+            .collect();
+        let bulk = ValueHasher::new(KindTag::Mesh).f64s(&values).finish();
+        let mut per = ValueHasher::new(KindTag::Mesh).u64(values.len() as u64);
+        for &x in &values {
+            per = per.f64(x);
+        }
+        assert_eq!(bulk, per.finish());
+    }
+
+    #[test]
+    fn bulk_u32s_is_length_prefixed_and_chunk_stable() {
+        let values: Vec<u32> = (0..1300).collect();
+        let a = ValueHasher::new(KindTag::Mesh).u32s(&values).finish();
+        let b = ValueHasher::new(KindTag::Mesh).u32s(&values).finish();
+        assert_eq!(a, b);
+        // Length prefix prevents concat ambiguity between adjacent buffers.
+        let ab = ValueHasher::new(KindTag::Mesh)
+            .u32s(&[1, 2])
+            .u32s(&[3])
+            .finish();
+        let ba = ValueHasher::new(KindTag::Mesh)
+            .u32s(&[1])
+            .u32s(&[2, 3])
+            .finish();
+        assert_ne!(ab, ba);
     }
 }

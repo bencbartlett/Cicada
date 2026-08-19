@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
+use cicada_core::geometry::{Circle, Curve, Line, Mesh, Polyline, Rectangle};
 use cicada_core::hash::ValueHash;
 use cicada_core::scalar::{Color, Domain, IndexMap};
 use cicada_core::spatial::{Plane, Point, Vector, Xform};
@@ -205,6 +206,8 @@ fn without_verbatim(path: &Path) -> PathBuf {
 
 /// The on-disk value encoding: leaves inline, lists by child hash (Merkle
 /// on disk). Serde-derived here so `cicada-core` stays serde-free.
+/// Append-only enum (postcard encodes variant indices): never reorder or
+/// renumber — old blobs must decode under new binaries.
 #[derive(Serialize, Deserialize)]
 enum StoredValue {
     Number(f64),
@@ -223,6 +226,34 @@ enum StoredValue {
         slots: Vec<Option<[u8; 32]>>,
     },
     Nothing,
+    Curve(StoredCurve),
+    Mesh {
+        positions: Vec<f64>,
+        indices: Vec<u32>,
+    },
+}
+
+/// On-disk curve encoding, one variant per analytic curve kind. Same
+/// append-only contract as [`StoredValue`].
+#[derive(Serialize, Deserialize)]
+enum StoredCurve {
+    Line {
+        a: [f64; 3],
+        b: [f64; 3],
+    },
+    Polyline {
+        vertices: Vec<[f64; 3]>,
+        closed: bool,
+    },
+    Circle {
+        plane: [[f64; 3]; 3],
+        radius: f64,
+    },
+    Rectangle {
+        plane: [[f64; 3]; 3],
+        x: [f64; 2],
+        y: [f64; 2],
+    },
 }
 
 fn to_stored(data: &ValueData) -> StoredValue {
@@ -242,6 +273,33 @@ fn to_stored(data: &ValueData) -> StoredValue {
             [p.y.0.x, p.y.0.y, p.y.0.z],
         ]),
         ValueData::Xform(x) => StoredValue::Xform(x.coefficients()),
+        ValueData::Curve(curve) => StoredValue::Curve(match curve {
+            Curve::Line(line) => StoredCurve::Line {
+                a: point_triplet(line.a),
+                b: point_triplet(line.b),
+            },
+            Curve::Polyline(polyline) => StoredCurve::Polyline {
+                vertices: polyline
+                    .vertices
+                    .iter()
+                    .map(|&v| point_triplet(v))
+                    .collect(),
+                closed: polyline.closed,
+            },
+            Curve::Circle(circle) => StoredCurve::Circle {
+                plane: plane_triplets(&circle.plane),
+                radius: circle.radius,
+            },
+            Curve::Rectangle(rectangle) => StoredCurve::Rectangle {
+                plane: plane_triplets(&rectangle.plane),
+                x: [rectangle.x.start, rectangle.x.end],
+                y: [rectangle.y.start, rectangle.y.end],
+            },
+        }),
+        ValueData::Mesh(mesh) => StoredValue::Mesh {
+            positions: mesh.positions().to_vec(),
+            indices: mesh.indices().to_vec(),
+        },
         ValueData::List(list) => StoredValue::List {
             axis: list.axis.as_ref().map(|axis| axis.as_ref().to_owned()),
             slots: list
@@ -251,6 +309,30 @@ fn to_stored(data: &ValueData) -> StoredValue {
                 .collect(),
         },
         ValueData::Nothing => StoredValue::Nothing,
+    }
+}
+
+fn point_triplet(point: Point) -> [f64; 3] {
+    [point.0.x, point.0.y, point.0.z]
+}
+
+fn plane_triplets(plane: &Plane) -> [[f64; 3]; 3] {
+    [
+        point_triplet(plane.origin),
+        [plane.x.0.x, plane.x.0.y, plane.x.0.z],
+        [plane.y.0.x, plane.y.0.y, plane.y.0.z],
+    ]
+}
+
+fn triplet_point(t: [f64; 3]) -> Point {
+    Point::new(t[0], t[1], t[2])
+}
+
+fn triplets_plane(t: [[f64; 3]; 3]) -> Plane {
+    Plane {
+        origin: triplet_point(t[0]),
+        x: Vector::new(t[1][0], t[1][1], t[1][2]),
+        y: Vector::new(t[2][0], t[2][1], t[2][2]),
     }
 }
 
@@ -751,7 +833,18 @@ impl DiskStore {
                 });
             }
         };
-        let data = self.hydrate_stored(stored, visiting)?;
+        let data = match self.hydrate_stored(stored, visiting) {
+            Ok(data) => data,
+            // A structurally invalid payload (bad mesh buffers) is THIS
+            // blob's corruption — quarantine it like undecodable bytes.
+            // Child-load errors pass through untouched (the child is the
+            // problem, and it quarantined itself if corrupt).
+            Err(error @ StoreError::ValueRejected { .. }) => {
+                quarantine(&path);
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
         let value = match HashedValue::new(data) {
             Ok(value) => value,
             Err(error) => {
@@ -798,6 +891,36 @@ impl DiskStore {
                 y: Vector::new(y[0], y[1], y[2]),
             }),
             StoredValue::Xform(c) => ValueData::Xform(Xform::from_coefficients(c)),
+            StoredValue::Curve(stored) => ValueData::Curve(match stored {
+                StoredCurve::Line { a, b } => Curve::Line(Line {
+                    a: triplet_point(a),
+                    b: triplet_point(b),
+                }),
+                StoredCurve::Polyline { vertices, closed } => Curve::Polyline(Polyline {
+                    vertices: vertices.into_iter().map(triplet_point).collect(),
+                    closed,
+                }),
+                StoredCurve::Circle { plane, radius } => Curve::Circle(Circle {
+                    plane: triplets_plane(plane),
+                    radius,
+                }),
+                StoredCurve::Rectangle { plane, x, y } => Curve::Rectangle(Rectangle {
+                    plane: triplets_plane(plane),
+                    x: Domain::new(x[0], x[1]),
+                    y: Domain::new(y[0], y[1]),
+                }),
+            }),
+            StoredValue::Mesh { positions, indices } => {
+                // Structural validation on load: a blob failing Mesh::new is
+                // corruption (nothing invalid passes construction on the
+                // way in) — surfaced as ValueRejected, quarantined by the
+                // caller like every bad blob.
+                ValueData::Mesh(Mesh::new(positions, indices).map_err(|error| {
+                    StoreError::ValueRejected {
+                        message: error.to_string(),
+                    }
+                })?)
+            }
             StoredValue::List { axis, slots } => {
                 let mut loaded = Vec::with_capacity(slots.len());
                 for slot in slots {

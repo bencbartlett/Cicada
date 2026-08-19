@@ -32,3 +32,6 @@ Thumbs.db
 
 # Claude Code local settings (skills and shared settings ARE committed)
 .claude/settings.local.json
+
+# Debug exporter output (examples are re-runnable; artifacts stay local)
+examples/*.obj

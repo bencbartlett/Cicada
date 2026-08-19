@@ -12,6 +12,7 @@
 
 use std::sync::Arc;
 
+use crate::geometry::{Curve, Mesh};
 use crate::hash::{KindTag, ValueHash, ValueHasher};
 use crate::scalar::{Color, Domain, IndexMap};
 use crate::spatial::{Plane, Point, Vector, Xform};
@@ -42,6 +43,11 @@ pub enum ValueData {
     Plane(Plane),
     /// Affine transform.
     Xform(Xform),
+    /// Analytic curve (stage 4). Refinements (`Closed<Curve>`) are
+    /// port-type-level; the wire value is the plain curve.
+    Curve(Curve),
+    /// Triangle mesh (stage 4). Same refinement rule (`Watertight<Mesh>`).
+    Mesh(Mesh),
     /// A list of already-hashed elements (Merkle node), possibly with a
     /// named axis and absent (`Optional`) slots.
     List(List),
@@ -67,6 +73,8 @@ impl ValueData {
             Self::Vector(_) => "Vector",
             Self::Plane(_) => "Plane",
             Self::Xform(_) => "Xform",
+            Self::Curve(_) => "Curve",
+            Self::Mesh(_) => "Mesh",
             Self::List(_) => "List",
             Self::Nothing => "Nothing",
         }
@@ -198,7 +206,69 @@ fn canonicalize(data: &mut ValueData) -> Result<(), ValueError> {
             canon_vec3(&mut m.z_axis, "Xform")?;
             canon_vec3(&mut x.0.translation, "Xform")
         }
+        ValueData::Curve(curve) => canon_curve(curve),
+        ValueData::Mesh(mesh) => canon_mesh(mesh),
     }
+}
+
+fn canon_curve(curve: &mut Curve) -> Result<(), ValueError> {
+    use crate::geometry as g;
+    match curve {
+        Curve::Line(g::Line { a, b }) => {
+            canon_vec3(&mut a.0, "Curve")?;
+            canon_vec3(&mut b.0, "Curve")
+        }
+        Curve::Polyline(polyline) => {
+            for vertex in &mut polyline.vertices {
+                canon_vec3(&mut vertex.0, "Curve")?;
+            }
+            Ok(())
+        }
+        Curve::Circle(circle) => {
+            canon_plane(&mut circle.plane)?;
+            canon_f64(&mut circle.radius, "Curve", "radius")
+        }
+        Curve::Rectangle(rectangle) => {
+            canon_plane(&mut rectangle.plane)?;
+            canon_f64(&mut rectangle.x.start, "Curve", "x.start")?;
+            canon_f64(&mut rectangle.x.end, "Curve", "x.end")?;
+            canon_f64(&mut rectangle.y.start, "Curve", "y.start")?;
+            canon_f64(&mut rectangle.y.end, "Curve", "y.end")
+        }
+    }
+}
+
+fn canon_plane(plane: &mut Plane) -> Result<(), ValueError> {
+    canon_vec3(&mut plane.origin.0, "Plane")?;
+    canon_vec3(&mut plane.x.0, "Plane")?;
+    canon_vec3(&mut plane.y.0, "Plane")
+}
+
+/// Mesh canonicalization: NaN refusal always; the `-0.0` rewrite copies the
+/// position buffer ONLY when a `-0.0` is actually present (the common clean
+/// buffer is a pure scan, no allocation).
+fn canon_mesh(mesh: &mut Mesh) -> Result<(), ValueError> {
+    let mut needs_rewrite = false;
+    for &x in mesh.positions() {
+        if x.is_nan() {
+            return Err(ValueError::NanRefused(NanLocation {
+                kind: "Mesh",
+                component: "positions",
+            }));
+        }
+        if x == 0.0 && x.is_sign_negative() {
+            needs_rewrite = true;
+        }
+    }
+    if needs_rewrite {
+        let positions: Vec<f64> = mesh
+            .positions()
+            .iter()
+            .map(|&x| if x == 0.0 { 0.0 } else { x })
+            .collect();
+        *mesh = mesh.with_positions_canonicalized(positions);
+    }
+    Ok(())
 }
 
 fn canon_f64(x: &mut f64, kind: &'static str, component: &'static str) -> Result<(), ValueError> {
@@ -215,6 +285,55 @@ fn canon_vec3(v: &mut glam::DVec3, kind: &'static str) -> Result<(), ValueError>
     canon_f64(&mut v.x, kind, "x")?;
     canon_f64(&mut v.y, kind, "y")?;
     canon_f64(&mut v.z, kind, "z")
+}
+
+/// Hash a plane's nine coefficients (origin, x, y) into an open hasher —
+/// shared by the `Plane` kind and the curve variants that embed frames.
+fn hash_plane(mut hasher: ValueHasher, plane: &Plane) -> ValueHasher {
+    for v in [&plane.origin.0, &plane.x.0, &plane.y.0] {
+        hasher = hasher.f64(v.x).f64(v.y).f64(v.z);
+    }
+    hasher
+}
+
+/// Hash one curve. Variant discriminant byte first (append-only: Line=1,
+/// Polyline=2, Circle=3, Rectangle=4 — never renumber).
+fn hash_curve(curve: &Curve) -> ValueHash {
+    use crate::geometry as g;
+    match curve {
+        Curve::Line(g::Line { a, b }) => ValueHasher::new(KindTag::Curve)
+            .byte(1)
+            .f64(a.0.x)
+            .f64(a.0.y)
+            .f64(a.0.z)
+            .f64(b.0.x)
+            .f64(b.0.y)
+            .f64(b.0.z)
+            .finish(),
+        Curve::Polyline(polyline) => {
+            let mut hasher = ValueHasher::new(KindTag::Curve)
+                .byte(2)
+                .byte(u8::from(polyline.closed))
+                .u64(polyline.vertices.len() as u64);
+            for vertex in &polyline.vertices {
+                hasher = hasher.f64(vertex.0.x).f64(vertex.0.y).f64(vertex.0.z);
+            }
+            hasher.finish()
+        }
+        Curve::Circle(circle) => {
+            hash_plane(ValueHasher::new(KindTag::Curve).byte(3), &circle.plane)
+                .f64(circle.radius)
+                .finish()
+        }
+        Curve::Rectangle(rectangle) => {
+            hash_plane(ValueHasher::new(KindTag::Curve).byte(4), &rectangle.plane)
+                .f64(rectangle.x.start)
+                .f64(rectangle.x.end)
+                .f64(rectangle.y.start)
+                .f64(rectangle.y.end)
+                .finish()
+        }
+    }
 }
 
 /// Hash canonicalized data. Private: reachable only via [`HashedValue::new`].
@@ -267,6 +386,11 @@ fn hash_data(data: &ValueData) -> ValueHash {
             }
             hasher.finish()
         }
+        ValueData::Curve(curve) => hash_curve(curve),
+        ValueData::Mesh(mesh) => ValueHasher::new(KindTag::Mesh)
+            .f64s(mesh.positions())
+            .u32s(mesh.indices())
+            .finish(),
         ValueData::List(list) => {
             // Merkle: axis name, then per slot presence + child hash
             // (docs/12: "a list's hash is the hash of its element hashes
@@ -385,6 +509,133 @@ mod tests {
             list.hash().to_hex(),
             "3d0dae4fb7e6669af34884e4f2e14a63e6541d69d22bc565c0c6cf892c0078b7"
         );
+    }
+
+    // Stage-4 geometry kinds: one golden per curve variant + one mesh,
+    // locking the variant discriminants and the bulk-buffer encoding.
+    // Blessed via run-once, same contract as golden_hashes above.
+    #[test]
+    fn golden_geometry_hashes() {
+        use crate::geometry::{Circle, Curve, Line, Mesh, Polyline, Rectangle};
+        let plane = Plane {
+            origin: Point::new(1.0, 2.0, 3.0),
+            x: Vector::new(1.0, 0.0, 0.0),
+            y: Vector::new(0.0, 1.0, 0.0),
+        };
+        let cases: &[(ValueData, &str)] = &[
+            (
+                ValueData::Curve(Curve::Line(Line {
+                    a: Point::new(0.0, 0.0, 0.0),
+                    b: Point::new(1.0, 0.0, 0.0),
+                })),
+                "1a7cce717025fc0379b31802ffa7f1bdf7d69b005e6ca5a54e8bb35ce147ce00",
+            ),
+            (
+                ValueData::Curve(Curve::Polyline(Polyline {
+                    vertices: vec![
+                        Point::new(0.0, 0.0, 0.0),
+                        Point::new(1.0, 0.0, 0.0),
+                        Point::new(0.0, 1.0, 0.0),
+                    ],
+                    closed: true,
+                })),
+                "7a66f6b2b8e8d30bae4ade7344c6cac9f8c83c9372478b34e42061227652d4ac",
+            ),
+            (
+                ValueData::Curve(Curve::Circle(Circle { plane, radius: 2.5 })),
+                "84fe60ee77d6f05ff5ece9d26584295b0498fd7a1bb35c654f5f5991fe24c3ae",
+            ),
+            (
+                ValueData::Curve(Curve::Rectangle(Rectangle {
+                    plane,
+                    x: Domain::new(-1.0, 1.0),
+                    y: Domain::new(0.0, 2.0),
+                })),
+                "28a36eeae05c1d7f1230e704eecf233b7b6c82b0d49208d6b4eb0ac71f1fc9ad",
+            ),
+            (
+                ValueData::Mesh(
+                    Mesh::new(
+                        vec![
+                            0.0, 0.0, 0.0, //
+                            1.0, 0.0, 0.0, //
+                            0.0, 1.0, 0.0, //
+                            0.0, 0.0, 1.0,
+                        ],
+                        vec![0, 2, 1, 0, 1, 3, 1, 2, 3, 0, 3, 2],
+                    )
+                    .expect("tetrahedron is valid"),
+                ),
+                "24e158394935257ec9efe9f0f7f98a3634774aa79eb78f595beb0179c95c7055",
+            ),
+        ];
+        let drifted: Vec<String> = cases
+            .iter()
+            .filter_map(|(data, want)| {
+                let got = value(data.clone()).hash().to_hex();
+                (&got != want).then(|| format!("{}: got {got}", data.kind_name()))
+            })
+            .collect();
+        assert!(
+            drifted.is_empty(),
+            "geometry hash format drifted:\n{}",
+            drifted.join("\n")
+        );
+    }
+
+    #[test]
+    fn open_and_closed_polyline_hash_differently() {
+        use crate::geometry::{Curve, Polyline};
+        let make = |closed: bool| {
+            value(ValueData::Curve(Curve::Polyline(Polyline {
+                vertices: vec![Point::new(0.0, 0.0, 0.0), Point::new(1.0, 0.0, 0.0)],
+                closed,
+            })))
+        };
+        assert_ne!(make(false).hash(), make(true).hash());
+    }
+
+    #[test]
+    fn mesh_negative_zero_canonicalizes_and_nan_is_refused() {
+        use crate::geometry::Mesh;
+        let tri = |x0: f64| {
+            Mesh::new(
+                vec![x0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                vec![0, 1, 2],
+            )
+            .expect("valid triangle")
+        };
+        let neg = value(ValueData::Mesh(tri(-0.0)));
+        let pos = value(ValueData::Mesh(tri(0.0)));
+        assert_eq!(neg.hash(), pos.hash());
+        let ValueData::Mesh(canonical) = neg.data() else {
+            panic!("wrong variant")
+        };
+        assert!(
+            canonical.positions()[0].is_sign_positive(),
+            "payload canonicalized, not just hash"
+        );
+        assert!(matches!(
+            HashedValue::new(ValueData::Mesh(tri(f64::NAN))),
+            Err(ValueError::NanRefused(_))
+        ));
+    }
+
+    #[test]
+    fn curve_nan_is_refused() {
+        use crate::geometry::{Circle, Curve};
+        let bad = Curve::Circle(Circle {
+            plane: Plane {
+                origin: Point::new(0.0, 0.0, 0.0),
+                x: Vector::new(1.0, 0.0, 0.0),
+                y: Vector::new(0.0, 1.0, 0.0),
+            },
+            radius: f64::NAN,
+        });
+        assert!(matches!(
+            HashedValue::new(ValueData::Curve(bad)),
+            Err(ValueError::NanRefused(_))
+        ));
     }
 
     #[test]

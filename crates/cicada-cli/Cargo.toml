@@ -17,6 +17,7 @@ anyhow.workspace = true
 cicada-core.workspace = true
 cicada-lang.workspace = true
 cicada-sched.workspace = true
+cicada-script.workspace = true
 cicada-stdlib.workspace = true
 clap.workspace = true
 serde.workspace = true

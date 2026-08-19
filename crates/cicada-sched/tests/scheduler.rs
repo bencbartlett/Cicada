@@ -161,6 +161,7 @@ fn decl(name: &str, op: &str, inputs: Vec<Input>, fan: Vec<u8>, run: NodeFn) -> 
         inputs,
         fan,
         output_count: 1,
+        effectful: false,
         run,
     }
 }
@@ -1333,6 +1334,58 @@ fn cost_samples_exclude_element_cache_hits() {
         stats.per_element_nanos(),
         Some(1_000_000),
         "estimate stays the TRUE per-element cost under warm overlap: {stats:?}"
+    );
+}
+
+// Effectful nodes bypass the memo at EVERY granularity (stage 4): an
+// each()-lifted exporter served per-element from cache would silently
+// skip side effects for the warm elements. Regression: the element-cache
+// gate ignored decl.effectful (adversarial review, stage 4).
+#[test]
+fn effectful_fanned_node_never_element_caches() {
+    let rig = rig(1, |config| {
+        config.element_cache_min_nanos = 1;
+    });
+    let executions = Arc::new(AtomicUsize::new(0));
+    let run: NodeFn = {
+        let clock = Arc::clone(&rig.clock);
+        let executions = Arc::clone(&executions);
+        Arc::new(move |_inputs| {
+            executions.fetch_add(1, Ordering::SeqCst);
+            clock.advance(1_000_000);
+            Ok(vec![])
+        })
+    };
+    let graph = || {
+        let mut node = decl(
+            "export",
+            "fake.effectful_fan",
+            vec![Input::Value(number_list(&[1.0, 2.0, 3.0], None))],
+            vec![1],
+            Arc::clone(&run),
+        );
+        node.output_count = 0;
+        node.effectful = true;
+        SolveGraph::new(vec![node]).unwrap()
+    };
+    // First run calibrates cost stats far above element_cache_min_nanos.
+    solve(&rig.scheduler, &graph(), &[NodeId(0)], &Recorder::default());
+    assert_eq!(executions.load(Ordering::SeqCst), 3);
+    // Identical second run: every element must EXECUTE again — the side
+    // effect IS the work; no element (or node) cache hit is legal.
+    let recorder = Recorder::default();
+    solve(&rig.scheduler, &graph(), &[NodeId(0)], &recorder);
+    assert_eq!(
+        executions.load(Ordering::SeqCst),
+        6,
+        "warm rerun of an effectful fan re-executes every element"
+    );
+    let events = recorder.events.lock().unwrap();
+    assert!(
+        !events
+            .iter()
+            .any(|seen| matches!(seen, Seen::CacheHit(_) | Seen::ElementCacheHit(..))),
+        "no cache hit of any granularity: {events:?}"
     );
 }
 

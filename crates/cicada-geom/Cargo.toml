@@ -8,6 +8,14 @@ publish.workspace = true
 
 [dependencies]
 cicada-core.workspace = true
+glam.workspace = true
+manifold-csg.workspace = true
+spade.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+rayon.workspace = true
 
 [lints]
 workspace = true

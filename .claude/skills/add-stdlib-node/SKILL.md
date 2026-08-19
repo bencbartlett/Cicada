@@ -90,7 +90,7 @@ have no representation yet). Compile-fail messages are snapshot-tested in
 re-bless (PowerShell):
 
 ```powershell
-$env:TRYBUILD = "overwrite"; cargo test -p cicada-stdlib --test macro_ui; Remove-Item Env:\TRYBUILD
+$env:TRYBUILD = "overwrite"; cargo test -p cicada-core --test macro_ui; Remove-Item Env:\TRYBUILD
 ```
 
 and commit the .stderr diff with the reason. trybuild resolves deps

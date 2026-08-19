@@ -1,0 +1,5 @@
+error: non-literal default needs #[port(default_doc = "…")] — its catalog rendering (e.g. default_doc = "origin")
+ --> tests/ui/nonliteral_default.rs:7:22
+  |
+7 |     #[port(default = f64::consts_something())]
+  |                      ^^^

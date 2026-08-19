@@ -7,10 +7,13 @@
 //!
 //! Stage 1 (doc 15): value model + `#[node]`/`#[derive(Ports)]` reflection
 //! (the macros live in `cicada-macros`; the traits and registration
-//! machinery live here). Geometry kinds join from `cicada-geom` in stage 4.
+//! machinery live here). Stage 4 adds the geometry VALUE kinds
+//! ([`geometry`]) — value types are core's by the dependency law;
+//! constructive geometry lives in `cicada-geom`.
 
 pub mod catalog;
 pub mod config;
+pub mod geometry;
 pub mod hash;
 pub mod intern;
 pub mod marshal;

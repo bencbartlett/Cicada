@@ -35,6 +35,13 @@ impl Point {
     pub const fn new(x: f64, y: f64, z: f64) -> Self {
         Self(DVec3::new(x, y, z))
     }
+
+    /// The world origin — the conventional default for plane-constructor
+    /// ports (docs/08 `origin: Point = origin`).
+    #[must_use]
+    pub const fn origin() -> Self {
+        Self::new(0.0, 0.0, 0.0)
+    }
 }
 
 impl Vector {
@@ -42,6 +49,39 @@ impl Vector {
     #[must_use]
     pub const fn new(x: f64, y: f64, z: f64) -> Self {
         Self(DVec3::new(x, y, z))
+    }
+}
+
+impl Plane {
+    /// The world XY plane at the origin — the conventional default frame
+    /// for constructor nodes (docs/08).
+    #[must_use]
+    pub const fn world_xy() -> Self {
+        Self {
+            origin: Point::origin(),
+            x: Vector::new(1.0, 0.0, 0.0),
+            y: Vector::new(0.0, 1.0, 0.0),
+        }
+    }
+
+    /// The world XZ plane at the origin.
+    #[must_use]
+    pub const fn world_xz() -> Self {
+        Self {
+            origin: Point::origin(),
+            x: Vector::new(1.0, 0.0, 0.0),
+            y: Vector::new(0.0, 0.0, 1.0),
+        }
+    }
+
+    /// The world YZ plane at the origin.
+    #[must_use]
+    pub const fn world_yz() -> Self {
+        Self {
+            origin: Point::origin(),
+            x: Vector::new(0.0, 1.0, 0.0),
+            y: Vector::new(0.0, 0.0, 1.0),
+        }
     }
 }
 

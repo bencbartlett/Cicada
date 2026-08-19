@@ -62,8 +62,10 @@ pub struct Lowered {
 /// each is loud rather than silently mis-lowered.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum LowerError {
-    /// Nested `each()` — executable at stage 4, refused today.
-    #[error("`{node}`: nested each() (depth {depth}) arrives with stage 4")]
+    /// Nested `each()` — refused until a node set needs it (v0.1).
+    #[error(
+        "`{node}`: nested each() (depth {depth}) is not yet executable — the S-tier set needs depth 1 only (nested lifts: v0.1)"
+    )]
     EachDepth {
         /// The binding.
         node: String,
@@ -158,12 +160,14 @@ pub fn reachable_bindings(document: &Document, targets: &[String]) -> HashSet<St
 /// # Errors
 ///
 /// [`LowerError`] — see the variants; all loud.
+#[allow(clippy::implicit_hasher)] // one internal call site; genericity buys nothing
 pub fn lower(
     document: &Document,
     resolution: &Resolution,
     specs: &[&'static NodeSpec],
     config: &ProjectConfig,
     targets: &[String],
+    scripts: &HashMap<String, crate::scripts::ScriptNode>,
 ) -> Result<Lowered, LowerError> {
     for target in targets {
         if document.find_binding(target).is_none() {
@@ -180,6 +184,7 @@ pub fn lower(
         resolution,
         spec_by_name,
         config,
+        scripts,
         nodes: Vec::new(),
         output_names: Vec::new(),
         bindings: HashMap::new(),
@@ -270,6 +275,7 @@ struct Lowering<'a> {
     resolution: &'a Resolution,
     spec_by_name: HashMap<&'static str, &'static NodeSpec>,
     config: &'a ProjectConfig,
+    scripts: &'a HashMap<String, crate::scripts::ScriptNode>,
     nodes: Vec<NodeDecl>,
     output_names: Vec<Vec<String>>,
     bindings: HashMap<String, LoweredBinding>,
@@ -331,6 +337,7 @@ impl Lowering<'_> {
                 inputs,
                 fan,
                 output_count: 1,
+                effectful: false,
                 run,
             },
             vec!["out".to_owned()],
@@ -356,11 +363,28 @@ impl Lowering<'_> {
         let Some(spec) = self.spec_by_name.get(call.func.name.as_str()).copied() else {
             return Err(LowerError::Unresolved { name });
         };
-        let Some(invoke) = cicada_core::spec::invoker(spec.name) else {
-            return Err(LowerError::NoInvoker {
-                name: spec.name.to_owned(),
-            });
-        };
+        // Script nodes carry their own run fn + source hash (docs/12:
+        // script node_version = source hash, in the body_hash slot);
+        // stdlib nodes dispatch through the registry's erased invoker.
+        let (run, body_hash): (NodeFn, Option<ValueHash>) =
+            if let Some(script) = self.scripts.get(spec.name) {
+                (Arc::clone(&script.run), Some(script.body_hash))
+            } else {
+                let Some(invoke) = cicada_core::spec::invoker(spec.name) else {
+                    return Err(LowerError::NoInvoker {
+                        name: spec.name.to_owned(),
+                    });
+                };
+                // The closure captures a config COPY: the invoke ABI takes
+                // it explicitly (tolerance is explicit state), and the
+                // NodeKey already folds the tolerance hash for
+                // uses_tolerance nodes.
+                let config = *self.config;
+                let run: NodeFn = Arc::new(move |values| {
+                    invoke(&config, values).map_err(|error| NodeError::new(error.to_string()))
+                });
+                (run, None)
+            };
 
         let mut inputs = Vec::with_capacity(spec.inputs.len());
         let mut fan = Vec::with_capacity(spec.inputs.len());
@@ -385,9 +409,6 @@ impl Lowering<'_> {
             }
         }
 
-        let run: NodeFn = Arc::new(move |values| {
-            invoke(values).map_err(|error| NodeError::new(error.to_string()))
-        });
         let outputs: Vec<String> = spec
             .outputs
             .iter()
@@ -398,11 +419,12 @@ impl Lowering<'_> {
                 name: name.clone(),
                 op: spec.name.to_owned(),
                 version: spec.version,
-                body_hash: None,
+                body_hash,
                 tolerance: spec.uses_tolerance.then(|| self.config.tolerance_hash()),
                 inputs,
                 fan,
                 output_count: spec.outputs.len(),
+                effectful: !spec.pure,
                 run,
             },
             outputs,

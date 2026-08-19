@@ -50,15 +50,23 @@ pub fn run(args: &RunArgs) -> anyhow::Result<()> {
     let source = fs::read_to_string(&args.pipeline)
         .with_context(|| format!("reading {}", args.pipeline.display()))?;
     let document = Document::parse(&source);
-    let specs = cicada_stdlib::registry();
-    let catalog = Catalog::new(specs);
+    let stdlib = cicada_stdlib::registry();
+    // Project script nodes (doc 10 §5): scripts/*.py next to the pipeline
+    // join the catalog; no scripts, no Python requirement.
+    let scripts = crate::scripts::discover(&args.pipeline, stdlib)?;
+    let mut specs: Vec<&'static cicada_core::spec::NodeSpec> = stdlib.to_vec();
+    let mut script_specs: Vec<&'static cicada_core::spec::NodeSpec> =
+        scripts.values().map(|node| node.spec).collect();
+    script_specs.sort_by_key(|spec| spec.name);
+    specs.extend(script_specs);
+    let catalog = Catalog::new(&specs);
     let resolution = resolve(&document, &catalog);
 
-    let targets = resolve_targets(&document, &args.nodes)?;
+    let targets = resolve_targets(&document, &specs, &args.nodes)?;
     gate_diagnostics(&document, &resolution.diagnostics, &targets)?;
 
     let config = ProjectConfig::default();
-    let lowered = lower(&document, &resolution, specs, &config, &targets)?;
+    let lowered = lower(&document, &resolution, &specs, &config, &targets, &scripts)?;
 
     let store_dir = match &args.cache_dir {
         Some(dir) => dir.clone(),
@@ -108,8 +116,13 @@ pub fn run(args: &RunArgs) -> anyhow::Result<()> {
 }
 
 /// The requested target names, or every leaf binding (nothing references
-/// it) in definition order.
-fn resolve_targets(document: &Document, nodes: &[String]) -> anyhow::Result<Vec<String>> {
+/// it) in definition order — MINUS effectful leaves (doc 10 §7: exporters
+/// never auto-run; naming one with `--node` IS the explicit action).
+fn resolve_targets(
+    document: &Document,
+    specs: &[&'static cicada_core::spec::NodeSpec],
+    nodes: &[String],
+) -> anyhow::Result<Vec<String>> {
     if !nodes.is_empty() {
         for name in nodes {
             if document.find_binding(name).is_none() {
@@ -118,20 +131,51 @@ fn resolve_targets(document: &Document, nodes: &[String]) -> anyhow::Result<Vec<
         }
         return Ok(nodes.to_vec());
     }
+    let effectful: std::collections::HashSet<&str> = specs
+        .iter()
+        .filter(|spec| !spec.pure)
+        .map(|spec| spec.name)
+        .collect();
     let mut referenced: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (_, statement, _) in document.statements() {
         for reference in statement.references() {
             referenced.insert(reference.name.clone());
         }
     }
-    let leaves: Vec<String> = document
-        .statements()
-        .flat_map(|(_, statement, _)| statement.targets.iter())
-        .filter(|target| !referenced.contains(&target.name))
-        .map(|target| target.name.clone())
-        .collect();
+    let mut leaves: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (_, statement, _) in document.statements() {
+        let is_effectful = matches!(
+            &statement.rhs,
+            cicada_lang::ast::Rhs::Call(call) if effectful.contains(call.func.name.as_str())
+        );
+        for target in &statement.targets {
+            if referenced.contains(&target.name) {
+                continue;
+            }
+            if is_effectful {
+                // Solve up to the exporter's INPUTS (doc 10 §7), just not
+                // the export itself.
+                eprintln!(
+                    "note: `{}` is effectful — skipped (its inputs still solve); run it \
+                     explicitly with `--node {}`",
+                    target.name, target.name
+                );
+                for reference in statement.references() {
+                    if seen.insert(reference.name.clone()) {
+                        leaves.push(reference.name.clone());
+                    }
+                }
+            } else if seen.insert(target.name.clone()) {
+                leaves.push(target.name.clone());
+            }
+        }
+    }
     if leaves.is_empty() {
-        bail!("the pipeline binds nothing to compute");
+        bail!(
+            "the pipeline binds nothing to compute (effectful bindings run only \
+             via --node)"
+        );
     }
     Ok(leaves)
 }
@@ -302,6 +346,33 @@ fn render_value(value: &HashedValue) -> String {
         ValueData::Vector(v) => format!("({}, {}, {})", v.0.x, v.0.y, v.0.z),
         ValueData::Plane(_) => "Plane".to_owned(),
         ValueData::Xform(_) => "Xform".to_owned(),
+        ValueData::Curve(curve) => {
+            use cicada_core::geometry::Curve;
+            match curve {
+                Curve::Line(line) => format!(
+                    "Line(({}, {}, {}) → ({}, {}, {}))",
+                    line.a.0.x, line.a.0.y, line.a.0.z, line.b.0.x, line.b.0.y, line.b.0.z
+                ),
+                Curve::Polyline(p) => format!(
+                    "Polyline(×{}{})",
+                    p.vertices.len(),
+                    if p.closed { ", closed" } else { "" }
+                ),
+                Curve::Circle(c) => format!(
+                    "Circle(center ({}, {}, {}), r {})",
+                    c.plane.origin.0.x, c.plane.origin.0.y, c.plane.origin.0.z, c.radius
+                ),
+                Curve::Rectangle(r) => format!(
+                    "Rectangle({}..{} × {}..{})",
+                    r.x.start, r.x.end, r.y.start, r.y.end
+                ),
+            }
+        }
+        ValueData::Mesh(mesh) => format!(
+            "Mesh({} vertices, {} triangles)",
+            mesh.vertex_count(),
+            mesh.triangle_count()
+        ),
         ValueData::List(list) => {
             let shown: Vec<String> = list
                 .slots

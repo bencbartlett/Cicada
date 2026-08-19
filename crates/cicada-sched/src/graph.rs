@@ -89,6 +89,10 @@ pub struct NodeDecl {
     pub fan: Vec<u8>,
     /// Output port count.
     pub output_count: usize,
+    /// Effectful (exporters, doc 10 §7): NEVER served from or recorded to
+    /// the memo table — a "cache hit" that skipped writing the file would
+    /// be a silent lie. Effectful nodes run every time they are targeted.
+    pub effectful: bool,
     /// The run function.
     pub run: NodeFn,
 }
@@ -134,9 +138,10 @@ pub enum GraphError {
         /// Fan count.
         fan: usize,
     },
-    /// A fan depth above 1 — nested `each()` execution arrives with
-    /// stage 4's node set; refusing beats a wrong fan-out.
-    #[error("node `{node}` input {input} has each() depth {depth}; the spike executes depth 1")]
+    /// A fan depth above 1 — no S-tier node needed nested lifts, so
+    /// nested execution waits for a node set that does (v0.1); refusing
+    /// beats a wrong fan-out.
+    #[error("node `{node}` input {input} has each() depth {depth}; only depth 1 executes today")]
     FanDepthUnsupported {
         /// The node.
         node: String,
@@ -393,6 +398,7 @@ mod tests {
             inputs,
             fan,
             output_count: 1,
+            effectful: false,
             run: noop_fn(),
         }
     }

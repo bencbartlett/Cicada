@@ -16,6 +16,7 @@
 
 use std::sync::Arc;
 
+use crate::geometry::{Closed, Curve, GeometryValue, Mesh, Transformable, Watertight};
 use crate::scalar::{Color, Domain, IndexMap};
 use crate::spatial::{Plane, Point, Vector, Xform};
 use crate::value::{HashedValue, List, ValueData, ValueError};
@@ -54,6 +55,17 @@ pub enum FromValueError {
         /// The unconvertible value.
         value: i64,
     },
+    /// The value's kind fits but its data fails the port's refinement
+    /// predicate (an open curve into `Closed<Curve>`, a leaky mesh into
+    /// `Watertight<Mesh>`). The checker prevents this wiring statically;
+    /// hitting it means a producer broke its contract — refused loudly.
+    #[error("value does not satisfy {refinement}: {reason}")]
+    Unrefined {
+        /// The refinement's catalog name.
+        refinement: &'static str,
+        /// Why the predicate failed.
+        reason: String,
+    },
 }
 
 /// Converts a wire value into a Rust port type. Implemented for the core
@@ -70,6 +82,18 @@ pub trait FromValue: Sized {
     /// [`FromValueError`] when the value's kind, shape, or precision does
     /// not fit.
     fn from_value(value: &HashedValue) -> Result<Self, FromValueError>;
+
+    /// Convert from the sealed `Arc` — the calling convention of generated
+    /// marshalling code. Defaults to [`Self::from_value`]; pass-through
+    /// types ([`AnyValue`], [`ElemValue`]) override it to clone the `Arc`,
+    /// so an `Any`/`E` port never re-hashes a mesh-sized payload.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::from_value`].
+    fn from_arc(value: &Arc<HashedValue>) -> Result<Self, FromValueError> {
+        Self::from_value(value)
+    }
 
     /// What an absent list slot converts to, when this type accepts
     /// absence. `None` for every type except `Option<T>` — a hole feeding
@@ -154,11 +178,19 @@ pub trait IntoValues {
     fn into_values(self) -> Result<Vec<Arc<HashedValue>>, InvokeError>;
 }
 
-/// A type-erased node invocation: per-port inputs in, per-port outputs out.
-/// Registered by `#[node]` alongside the spec; the scheduler's dispatch
-/// currency.
-pub type ErasedInvoke =
-    fn(&[Option<Arc<HashedValue>>]) -> Result<Vec<Arc<HashedValue>>, InvokeError>;
+/// A type-erased node invocation: project config + per-port inputs in,
+/// per-port outputs out. Registered by `#[node]` alongside the spec; the
+/// scheduler's dispatch currency.
+///
+/// The config parameter is how `uses_tolerance` nodes read tolerance —
+/// explicit state passed explicitly, never ambient (DECISIONS.md tolerance
+/// row). Nodes not declaring `uses_tolerance` never see it (their shim
+/// ignores it), so a node cannot consult tolerance without also folding
+/// the tolerance hash into its `NodeKey`.
+pub type ErasedInvoke = fn(
+    &crate::config::ProjectConfig,
+    &[Option<Arc<HashedValue>>],
+) -> Result<Vec<Arc<HashedValue>>, InvokeError>;
 
 // ---------------------------------------------------------------- leaves --
 
@@ -212,6 +244,217 @@ impl_marshal_leaf!(Point, Point, "Point");
 impl_marshal_leaf!(Vector, Vector, "Vector");
 impl_marshal_leaf!(Plane, Plane, "Plane");
 impl_marshal_leaf!(Xform, Xform, "Xform");
+impl_marshal_leaf!(Curve, Curve, "Curve");
+impl_marshal_leaf!(Mesh, Mesh, "Mesh");
+
+// ------------------------------------------------- refinement wrappers --
+//
+// On the wire a refined value is the PLAIN base kind (a circle and a
+// `Closed<Curve>` circle are one value, one hash — interning and early
+// cutoff depend on that). The wrapper exists at the port-type level; the
+// predicate is re-verified on the way IN (the wire boundary takes no one's
+// word) and debug-asserted on the way OUT (our own constructors are the
+// tested parties). `is_closed` is O(1); `is_watertight` is O(edges) —
+// measured negligible next to any node that consumes a mesh; revisit only
+// on profiling evidence.
+
+impl FromValue for Closed<Curve> {
+    fn expected() -> String {
+        "Closed<Curve>".to_owned()
+    }
+
+    fn from_value(value: &HashedValue) -> Result<Self, FromValueError> {
+        let curve = Curve::from_value(value).map_err(|_| FromValueError::Kind {
+            expected: "Closed<Curve>".to_owned(),
+            got: value.data().kind_name(),
+        })?;
+        if curve.is_closed() {
+            Ok(Self(curve))
+        } else {
+            Err(FromValueError::Unrefined {
+                refinement: "Closed<Curve>",
+                reason: format!("{} is open", curve.variant_name()),
+            })
+        }
+    }
+}
+
+impl IntoValue for Closed<Curve> {
+    fn into_value(self) -> Result<Arc<HashedValue>, ValueError> {
+        debug_assert!(
+            self.0.is_closed(),
+            "a node produced Closed<Curve> around an open {}",
+            self.0.variant_name()
+        );
+        HashedValue::new(ValueData::Curve(self.0))
+    }
+}
+
+impl FromValue for Watertight<Mesh> {
+    fn expected() -> String {
+        "Watertight<Mesh>".to_owned()
+    }
+
+    fn from_value(value: &HashedValue) -> Result<Self, FromValueError> {
+        let mesh = Mesh::from_value(value).map_err(|_| FromValueError::Kind {
+            expected: "Watertight<Mesh>".to_owned(),
+            got: value.data().kind_name(),
+        })?;
+        if mesh.is_watertight() {
+            Ok(Self(mesh))
+        } else {
+            Err(FromValueError::Unrefined {
+                refinement: "Watertight<Mesh>",
+                reason: format!(
+                    "mesh ({} triangles) has open or inconsistently oriented edges",
+                    mesh.triangle_count()
+                ),
+            })
+        }
+    }
+}
+
+impl IntoValue for Watertight<Mesh> {
+    fn into_value(self) -> Result<Arc<HashedValue>, ValueError> {
+        debug_assert!(
+            self.0.is_watertight(),
+            "a node produced Watertight<Mesh> around a leaky mesh"
+        );
+        HashedValue::new(ValueData::Mesh(self.0))
+    }
+}
+
+impl IntoValues for Closed<Curve> {
+    fn into_values(self) -> Result<Vec<Arc<HashedValue>>, InvokeError> {
+        Ok(vec![self.into_value().map_err(|source| {
+            InvokeError::Output {
+                port: "out",
+                source,
+            }
+        })?])
+    }
+}
+
+impl IntoValues for Watertight<Mesh> {
+    fn into_values(self) -> Result<Vec<Arc<HashedValue>>, InvokeError> {
+        Ok(vec![self.into_value().map_err(|source| {
+            InvokeError::Output {
+                port: "out",
+                source,
+            }
+        })?])
+    }
+}
+
+// ------------------------------------------- runtime-polymorphic ports --
+
+/// A pass-through wire value for `Any` ports (docs/08 Panel): accepts
+/// every kind, converts nothing. Distinct from [`ElemValue`]: `Any` never
+/// binds a type variable.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnyValue(pub Arc<HashedValue>);
+
+/// A pass-through wire value for `E`-variable ports (list nodes:
+/// `item(list: [E]) → E`): accepts every kind; the CHECKER binds `E` per
+/// call so the element kind survives statically.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ElemValue(pub Arc<HashedValue>);
+
+macro_rules! impl_marshal_passthrough {
+    ($ty:ident, $name:literal) => {
+        impl FromValue for $ty {
+            fn expected() -> String {
+                $name.to_owned()
+            }
+
+            fn from_value(value: &HashedValue) -> Result<Self, FromValueError> {
+                // Direct-call fallback only: generated marshalling goes
+                // through `from_arc` below, which just clones the Arc.
+                // Re-sealing already-canonical data cannot fail.
+                HashedValue::new(value.data().clone()).map_or_else(
+                    |_| unreachable!("re-sealing an already-sealed value cannot fail"),
+                    |arc| Ok(Self(arc)),
+                )
+            }
+
+            fn from_arc(value: &Arc<HashedValue>) -> Result<Self, FromValueError> {
+                Ok(Self(Arc::clone(value)))
+            }
+        }
+
+        impl IntoValue for $ty {
+            fn into_value(self) -> Result<Arc<HashedValue>, ValueError> {
+                Ok(self.0)
+            }
+        }
+
+        impl IntoValues for $ty {
+            fn into_values(self) -> Result<Vec<Arc<HashedValue>>, InvokeError> {
+                Ok(vec![self.0])
+            }
+        }
+    };
+}
+
+impl_marshal_passthrough!(AnyValue, "Any");
+impl_marshal_passthrough!(ElemValue, "E");
+
+/// One marshalling table for the two runtime-dispatched geometry enums.
+macro_rules! impl_marshal_geometry_enum {
+    ($ty:ident, $name:literal, [$(($variant:ident, $data:ident)),+ $(,)?]) => {
+        impl FromValue for $ty {
+            fn expected() -> String {
+                $name.to_owned()
+            }
+
+            fn from_value(value: &HashedValue) -> Result<Self, FromValueError> {
+                match value.data() {
+                    $(ValueData::$data(x) => Ok(Self::$variant(x.clone())),)+
+                    other => Err(FromValueError::Kind {
+                        expected: $name.to_owned(),
+                        got: other.kind_name(),
+                    }),
+                }
+            }
+        }
+
+        impl IntoValue for $ty {
+            fn into_value(self) -> Result<Arc<HashedValue>, ValueError> {
+                match self {
+                    $(Self::$variant(x) => HashedValue::new(ValueData::$data(x)),)+
+                }
+            }
+        }
+
+        impl IntoValues for $ty {
+            fn into_values(self) -> Result<Vec<Arc<HashedValue>>, InvokeError> {
+                Ok(vec![self.into_value().map_err(|source| {
+                    InvokeError::Output {
+                        port: "out",
+                        source,
+                    }
+                })?])
+            }
+        }
+    };
+}
+
+impl_marshal_geometry_enum!(
+    Transformable,
+    "T",
+    [
+        (Point, Point),
+        (Vector, Vector),
+        (Plane, Plane),
+        (Curve, Curve),
+        (Mesh, Mesh),
+    ]
+);
+impl_marshal_geometry_enum!(
+    GeometryValue,
+    "Geometry",
+    [(Point, Point), (Curve, Curve), (Mesh, Mesh)]
+);
 
 /// Exact Integer → Number widening, or `None` when the conversion would
 /// shift the value. The naive roundtrip test `(i as f64) as i64 == i` is
@@ -324,7 +567,7 @@ impl<T: FromValue> FromValue for Vec<T> {
             .enumerate()
             .map(|(index, slot)| match slot {
                 None => T::from_absent().ok_or(FromValueError::Hole { index }),
-                Some(element) => T::from_value(element).map_err(|source| FromValueError::Element {
+                Some(element) => T::from_arc(element).map_err(|source| FromValueError::Element {
                     index,
                     source: Box::new(source),
                 }),
@@ -363,6 +606,13 @@ impl<T: FromValue> FromValue for Option<T> {
         match value.data() {
             ValueData::Nothing => Ok(None),
             _ => T::from_value(value).map(Some),
+        }
+    }
+
+    fn from_arc(value: &Arc<HashedValue>) -> Result<Self, FromValueError> {
+        match value.data() {
+            ValueData::Nothing => Ok(None),
+            _ => T::from_arc(value).map(Some),
         }
     }
 

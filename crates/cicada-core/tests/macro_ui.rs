@@ -7,7 +7,7 @@
 //! (PowerShell form; bash: `TRYBUILD=overwrite cargo test …`):
 //!
 //! ```powershell
-//! $env:TRYBUILD = "overwrite"; cargo test -p cicada-stdlib --test macro_ui; Remove-Item Env:\TRYBUILD
+//! $env:TRYBUILD = "overwrite"; cargo test -p cicada-core --test macro_ui; Remove-Item Env:\TRYBUILD
 //! ```
 //!
 //! Review the diff, commit it with the reason. Note: trybuild builds its

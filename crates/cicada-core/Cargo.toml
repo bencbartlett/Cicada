@@ -12,5 +12,13 @@ glam.workspace = true
 inventory.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+# Dev-only: the macros' compile-fail UX lives here (tests/macro_ui.rs) —
+# core + macros is the SMALLEST closure that exercises them; hosting it in
+# cicada-stdlib made every trybuild scratch build compile the geometry
+# kernels. No cycle: cicada-macros has zero workspace deps by law.
+cicada-macros.workspace = true
+trybuild.workspace = true
+
 [lints]
 workspace = true

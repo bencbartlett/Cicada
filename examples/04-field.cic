@@ -1,0 +1,31 @@
+# cicada 1
+# The Python script host: scripts/solve_field.py drives per-cell prism
+# heights — the wall's field-solver stage in miniature.
+# Solve:       cargo run -p cicada-cli -- run examples/04-field.cic --time
+# Write OBJ:   cargo run -p cicada-cli -- run examples/04-field.cic --node dump
+
+# Board + seeds, as in 03-voronoi.
+bx = construct_domain(start=0.0, end=40.0)
+by = construct_domain(start=0.0, end=24.0)
+board = rectangle(x=bx, y=by)
+dx = construct_domain(start=1.0, end=39.0)
+dy = construct_domain(start=1.0, end=23.0)
+xs = random(domain=dx, count=18, seed=7)
+ys = random(domain=dy, count=18, seed=11)
+seeds = construct_point(x=each(xs), y=each(ys))
+cells = voronoi(seeds=seeds, boundary=board)
+
+# The script node: cells near the emitter feel a stronger field. Editing
+# the .py recomputes exactly this cone (source-hash cache keys).
+amps = slider(value=400.0, min=0.0, max=1000.0)
+field = solve_field(points=seeds, amps=amps)
+
+# Field intensity -> prism height, then a strict zip of cells × heights:
+# two each() lifts on one call pair index-to-index.
+field_span = construct_domain(start=0.0, end=400.0)
+height_span = construct_domain(start=0.5, end=6.0)
+heights = remap(value=each(field), source=field_span, target=height_span)
+ups = unit_z(factor=each(heights))
+prisms = extrude(profile=each(cells), direction=each(ups))
+
+dump = export_obj(meshes=prisms, path="examples/04-field.obj")

@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use cicada_core::geometry::{Circle, Curve, Line, Mesh, Polyline, Rectangle};
 use cicada_core::scalar::{Color, Domain, IndexMap};
 use cicada_core::spatial::{Plane, Point, Vector, Xform};
 use cicada_core::value::{HashedValue, List, ValueData};
@@ -49,6 +50,71 @@ fn leaf_value() -> impl Strategy<Value = Arc<HashedValue>> {
         }))),
         Just(value(ValueData::Xform(Xform::identity()))),
         Just(value(ValueData::Nothing)),
+        curve_value(),
+        mesh_value(),
+    ]
+}
+
+fn finite_point() -> impl Strategy<Value = Point> {
+    (finite_f64(), finite_f64(), finite_f64()).prop_map(|(x, y, z)| Point::new(x, y, z))
+}
+
+/// Arbitrary curves across all four analytic variants (stage 4).
+fn curve_value() -> impl Strategy<Value = Arc<HashedValue>> {
+    let plane = || {
+        finite_point().prop_map(|origin| Plane {
+            origin,
+            x: Vector::new(1.0, 0.0, 0.0),
+            y: Vector::new(0.0, 1.0, 0.0),
+        })
+    };
+    prop_oneof![
+        (finite_point(), finite_point())
+            .prop_map(|(a, b)| value(ValueData::Curve(Curve::Line(Line { a, b })))),
+        (
+            proptest::collection::vec(finite_point(), 0..8),
+            any::<bool>()
+        )
+            .prop_map(|(vertices, closed)| value(ValueData::Curve(Curve::Polyline(
+                Polyline { vertices, closed }
+            )))),
+        (plane(), finite_f64()).prop_map(|(plane, radius)| value(ValueData::Curve(Curve::Circle(
+            Circle { plane, radius }
+        )))),
+        (
+            plane(),
+            finite_f64(),
+            finite_f64(),
+            finite_f64(),
+            finite_f64()
+        )
+            .prop_map(
+                |(plane, x0, x1, y0, y1)| value(ValueData::Curve(Curve::Rectangle(Rectangle {
+                    plane,
+                    x: Domain::new(x0, x1),
+                    y: Domain::new(y0, y1),
+                })))
+            ),
+    ]
+}
+
+/// Arbitrary valid meshes: a fan of triangles over up to 9 vertices, plus
+/// the empty mesh (booleans produce it — it must roundtrip).
+fn mesh_value() -> impl Strategy<Value = Arc<HashedValue>> {
+    prop_oneof![
+        Just(value(ValueData::Mesh(
+            Mesh::new(vec![], vec![]).expect("empty mesh is valid")
+        ))),
+        (3usize..9).prop_flat_map(|vertices| {
+            let positions = proptest::collection::vec(finite_f64(), vertices * 3);
+            positions.prop_map(move |positions| {
+                let count = u32::try_from(vertices).unwrap();
+                let indices: Vec<u32> = (1..count - 1).flat_map(|i| [0, i, i + 1]).collect();
+                value(ValueData::Mesh(
+                    Mesh::new(positions, indices).expect("fan indices are valid"),
+                ))
+            })
+        }),
     ]
 }
 

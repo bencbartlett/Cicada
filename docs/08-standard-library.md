@@ -141,11 +141,23 @@ struct DivideOut {
 `#[derive(Ports)]` reflects fields into typed ports — a field with a
 default is an optional port; `#[node]` assembles the `NodeSpec`: name,
 title (doc comment first line), category, ports, generic bounds,
-purity, tier — registered at compile time. Single-output nodes may
-return a bare value (port named `out`). The registry serializes to a
-**JSON catalog** consumed by three clients: the palette
-(search-to-place), the checker (wire compatibility), and the AI (the
-machine-readable surface it composes nodes from).
+purity, tier, and the runtime contract (the rustdoc `# Panics` section,
+rendered in the catalog as "Red when: …") — registered at compile time.
+Single-output nodes may return a bare value (port named `out`). The
+registry serializes to a **JSON catalog** consumed by three clients: the
+palette (search-to-place), the checker (wire compatibility), and the AI
+(the machine-readable surface it composes nodes from).
+
+**Kind-preserving generics, as implemented (stage 4)**: generic ports use
+per-call type VARIABLES at the spec level — `T` (any transformable kind:
+Point, Vector, Plane, Curve, `Closed<Curve>`, Mesh, `Watertight<Mesh>`)
+and `E` (any kind; list nodes) — which the checker binds once per call
+and substitutes into variable-typed outputs, so `move` of a
+`Closed<Curve>` is statically a `Closed<Curve>`. At runtime one concrete
+function dispatches over an erased enum; no Rust generics in node fns.
+`Any` is the display-sink catch-all (absorbs any wire at any depth,
+binds nothing). `Geometry` is a widening target (display sinks); nothing
+narrows back out of it.
 
 Wire-time behavior, from the same specs (doc 02): implicit widening
 upcasts; offered one-click **map-lifts** (recorded in the text);
@@ -162,12 +174,13 @@ variants ("/") compress sibling nodes.
 
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
-| Number Slider | `() → Number` | S | min/max/step/precision on node; the GH workhorse |
-| Literals: Number, Integer, Boolean, Text, Color, Point, Vector, Plane | `() → T` | S | typed constant params |
+| Number Slider | `slider(value: Number, min = 0, max = 10, step = 0) → Number` | S | the GH workhorse; out-of-range value = red, never a silent clamp |
+| Boolean Toggle | `toggle(value: Boolean) → Boolean` | S | |
+| Literals: Number, Integer, Boolean, Text, Color, Point, Vector, Plane | `() → T` | S | bare literal bindings in the dialect ARE the constant params (doc 10 §3); no zero-input literal nodes exist |
 | Value List | `() → T` | 1 | dropdown enum param |
 | Cycle | `(period: Number = 4, frames: Integer = 120) → Number` | 1 | looping time 0→1, transport-driven (play/pause/speed); frame-quantized so one full loop warms the cache — subsequent loops are pure playback (docs 12, 13) |
 | Clock | `(speed: Number = 1) → Number` | 1 | unbounded time 0→∞, transport-driven (play/pause/reset); deterministic per value, uncached by design |
-| Panel | `(data: [Any]) → ()` | S | display sink; shows counts + samples |
+| Panel | `(data: Any) → ()` | S | display sink; `Any` absorbs any wire at any depth (scalar or list), so one panel shows anything |
 
 ### 2 · Sequences & random
 
@@ -198,8 +211,8 @@ variants ("/") compress sibling nodes.
 
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
-| List Item | `(list: [T], index: Integer, wrap: Boolean = false) → T` | S | |
-| List Length | `(list: [T]) → Integer` | S | |
+| List Item | `(list: [E], index: Integer, wrap: Boolean = false) → E` | S | `E` binds per call: item of a `[Point]` is a Point; holes refuse loudly (hole-aware selection: v0.1) |
+| List Length | `(list: [E?]) → Integer` | S | counts slots, absent included (slot-preserving) |
 | Reverse | `(list: [T]) → [T]` | 1 | |
 | Shift List | `(list: [T], offset: Integer, wrap: Boolean = true) → [T]` | 1 | |
 | Sort | `(keys: [Number], values: [T]) → (sorted: [T], map: IndexMap)` | 1 | stable; map preserves identity |
@@ -237,10 +250,10 @@ it (doc 09).
 | Line | `(a: Point, b: Point) → Line` | S | |
 | Line SDL | `(start: Point, direction: Vector, length: Number) → Line` | 1 | |
 | Polyline | `(vertices: [Point], closed: Boolean = false) → Polyline` | S | |
-| Circle | `(plane: Plane, radius: Number) → Circle` | S | variants: CNR, 3Pt (tier 1) |
+| Circle | `(plane: Plane = xy_plane, radius: Number) → Closed<Curve>` | S | variants: CNR, 3Pt (tier 1); the stored frame orthonormalizes at construction |
 | Arc | `(plane: Plane, radius: Number, angle: Domain) → Arc` | 1 | variants: 3Pt, SED |
 | Ellipse | `(plane: Plane, r1: Number, r2: Number) → Ellipse` | 1 | |
-| Rectangle | `(plane: Plane, x: Domain, y: Domain, corner: Number = 0) → Rectangle` | S | always closed |
+| Rectangle | `(plane: Plane = xy_plane, x: Domain, y: Domain) → Closed<Curve>` | S | always closed; the rounded-`corner` param arrives with compound curves (v0.1); spike curve outputs type as `Curve`/`Closed<Curve>` (per-variant wire kinds like `Circle <: Curve` arrive with the full lattice) |
 | Polygon | `(plane: Plane, radius: Number, sides: Integer, corner: Number = 0) → Polygon` | 1 | |
 | Interpolate | `(points: [Point], degree: Integer = 3, periodic: Boolean = false) → Nurbs` | 1 | curvo-backed |
 | Nurbs Curve | `(points: [Point], degree: Integer, periodic: Boolean) → Nurbs` | 1 | control points |
@@ -256,13 +269,14 @@ it (doc 09).
 | Offset Curve | `(curve: Planar<Curve>, distance: Number, corners: Corner = sharp) → Curve` | 1 | cavalier_contours |
 | Fillet Corners | `(curve: Polyline, radius: Number) → Curve` | 1 | 2D corner fillets |
 | Shatter | `(curve: Curve, parameters: [Number]) → [Curve]` | 1 | |
-| As Closed / As Planar | `(curve: Curve) → Closed<Curve> / Planar<Curve>` | S | checked refinements; red with IDs on failure |
+| As Closed | `(curve: Curve) → Closed<Curve>` | S | checked refinement; red with the failing distance; closes an open polyline whose endpoints coincide within tolerance |
+| As Planar | `(curve: Curve) → Planar<Curve>` | 1 | the `Planar` refinement is v0.1 (doc 15 scopes the spike to As Closed/As Watertight); spike Extrude checks planarity at runtime instead |
 
 ### 7 · Surface & solid
 
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
-| Extrude | `(profile: Closed<Planar<Curve>>, direction: Vector) → Solid` | S | |
+| Extrude | `(profile: Closed<Curve>, direction: Vector, segments: Integer = 64) → Watertight<Mesh>` | S | spike form: mesh-backed (doc 15's honest shim), planarity checked at runtime within tolerance (the `Planar` refinement is v0.1); `segments` tessellates curved profiles; v0.1 restores `→ Solid` |
 | Extrude Open | `(curve: Curve, direction: Vector) → Surface` | 1 | |
 | Extrude to Point | `(profile: Closed<Planar<Curve>>, apex: Point) → Solid` | 1 | the wall's frusta |
 | Loft | `(profiles: [Closed<Curve>]) → Solid` | 1 | `Loft Open` for surfaces; explicit `zip over parts` idiom for base/cap pairing |
@@ -270,8 +284,8 @@ it (doc 09).
 | Revolve | `(profile: Curve, axis: Line, angle: Domain = full) → Solid` | 1 | |
 | Pipe | `(rail: Curve, radius: Number) → Solid` | 1 | |
 | Boundary Surface | `(boundary: Closed<Planar<Curve>>, holes: [Closed<Planar<Curve>>]?) → Surface` | 1 | |
-| Box / Center Box | `(plane: Plane, x, y, z: Domain) → Solid` | S | |
-| Sphere | `(plane: Plane, radius: Number) → Solid` | S | |
+| Box / Center Box | `(plane: Plane = xy_plane, x, y, z: Domain) → Watertight<Mesh>` | S | spike form: mesh-backed under the v0.1 name (doc 15's honest shim); decreasing domains normalize; v0.1 restores `→ Solid` |
+| Sphere | `(plane: Plane = xy_plane, radius: Number, segments: Integer = 32) → Watertight<Mesh>` | S | spike form: mesh-backed UV sphere (`segments` = longitudes); v0.1 restores `→ Solid` |
 | Cylinder / Cone | `(plane: Plane, radius: Number, height: Number) → Solid` | 1 | |
 | Solid Union / Difference / Intersection | `(a: [Solid], b: [Solid]) → [Solid]` | 1 | OCCT B-rep booleans; known ceilings + Rhino.Compute rescue (doc 03) |
 | Offset Solid | `(solid: Solid, distance: Number) → Solid` | 1 | shell/inflate, Manifold |
@@ -291,7 +305,9 @@ it (doc 09).
 | Deconstruct Mesh | `(mesh: Mesh) → (vertices: [Point], faces: [Face], normals: [Vector])` | 1 | |
 | Tessellate | `(solid: Solid, density…) → Watertight<Mesh>` | 1 | the explicit analytic/B-rep → mesh bridge |
 | As Watertight | `(mesh: Mesh) → Watertight<Mesh>` | S | Manifold check; the mesh-tier solid |
-| Mesh Boolean (union / difference / intersection) | `(a: [Watertight<Mesh>], b: [Watertight<Mesh>]) → [Watertight<Mesh>]` | S | Manifold — watertight, parallel, seconds; the wall's carve |
+| Mesh Union | `(meshes: [Watertight<Mesh>]) → Watertight<Mesh>` | S | Manifold; n-ary — empty list = the empty solid |
+| Mesh Difference | `(mesh: Watertight<Mesh>, cutters: [Watertight<Mesh>]) → Watertight<Mesh>` | S | Manifold; the wall's carve is `mesh_difference(mesh=each(frusta), cutters=each(cutter_groups))` — explicit `each()` zip replaced the original list×list signature (typed combinators over implicit matching, doc 09) |
+| Mesh Intersection | `(a: Watertight<Mesh>, b: Watertight<Mesh>) → Watertight<Mesh>` | S | Manifold; may be the empty solid |
 | Weld / Smooth / Reduce | `(mesh: Mesh, …) → Mesh` | 1 | |
 | Field primitives | `(…) → Field` | 2 | sphere/box/gyroid/from-mesh SDF; fidget |
 | Field ops | `(a: Field, b: Field, k: Number) → Field` | 2 | union/smooth-union/offset/shell |
@@ -301,7 +317,7 @@ it (doc 09).
 
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
-| Voronoi | `(seeds: [Point], boundary: Closed<Planar<Curve>>) → cells: [Closed<Polyline>]` | S | spade; the wall's partition |
+| Voronoi | `(seeds: [Point], boundary: Closed<Curve>, segments: Integer = 64) → cells: [Closed<Curve>]` | S | spade; the wall's partition; cells index-aligned with seeds; spike scope: convex planar boundary (concave arrives with `i_overlay`, v0.1); `segments` tessellates curved boundaries |
 | Delaunay | `(points: [Point]) → Mesh` | 1 | |
 | Curve \| Curve | `(a: Curve, b: Curve) → (points: [Point], tA: [Number], tB: [Number])` | 1 | |
 | Curve \| Plane | `(curve: Curve, plane: Plane) → (points: [Point], t: [Number])` | 1 | |
@@ -330,11 +346,12 @@ All kind-preserving over `T: Transformable`.
 
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
-| Custom Preview | `(geometry: [Geometry], material: Material) → ()` | S | display edge; cost visible in profiler |
+| Custom Preview | `(geometry: Geometry, color: Color = white) → ()` | S | display edge; cost visible in profiler; scalar port — lift with `each()` per element (per-element display cost falls out); the `Material` port returns with the real display pipeline (v0.1, with the Material node) |
 | Material | `(color: Color, roughness: Number = 0.5, metallic: Number = 0) → Material` | 1 | names map to Blender shaders (doc 04) |
 | Gradient | `(t: Number, stops: [(Number, Color)]) → Color` | 1 | |
 | Text Tag | `(location: Plane, text: Text, size: Number) → ()` | S | display-only |
 | Text Outlines | `(text: Text, font: Text, size: Number, plane: Plane) → [Closed<Curve>]` | 1 | real geometry; ttf-parser; the wall's labels |
+| Export OBJ (debug) | `(meshes: [Mesh], path: Text) → ()` | S | the stage-4 window into headless geometry (any viewer opens it); effectful — explicit-run only, never memoized; takes ANY meshes (a debug viewer must not demand watertightness) |
 | Export STL / 3MF (plain) | `(solids: [Solid], path: Text) → ()` | 1 | explicit-run |
 | Export 3MF (Bambu project) | `(plates: [Plate], path: Text) → ()` | 1 | ported wall writer; brings `Plate` types |
 | Export DXF | `(layers…, path: Text) → ()` | 1 | ported wall writer; datum discipline |

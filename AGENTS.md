@@ -14,26 +14,37 @@ system; the current work order is the vertical-slice spike
    never silently.
 2. **`docs/generated/CATALOG.md` for node signatures** instead of grepping
    crates — context is expensive; the catalog is a few KB and CI-checked
-   fresh. (Known gap: runtime contracts — e.g. a node's `# Panics` rules —
-   still live only in the node's rustdoc; the catalog carries them from
-   stage 4.)
+   fresh. It also carries each node's runtime contract ("Red when: …",
+   from its rustdoc `# Panics` section) and the type-variable legend
+   (`T` = kind-preserving transformable, `E` = any element kind, `Any` =
+   display-sink catch-all).
 3. The stage you are working in, from
    [docs/15-spike-plan.md](docs/15-spike-plan.md), and the docs it lists for
    that stage.
 
-**Current status: stage 3 complete — scheduler-lite and the first
-end-to-end surface.** Live: the value model + `#[node]` registry (stage 1,
-now also registering type-erased invokers + `FromValues`/`IntoValues`
-marshalling), the `.cic` toolchain (stage 2: lossless parser, minimal-edit
-writer, checker-lite with doc-11 JSON diagnostics), and the scheduler
-(stage 3: content-addressed `NodeKey`s, two-level disk store in the USER
-cache dir, rayon wavefront with chunked `each()` fan-out, cancellation
-tokens, latest-wins preview sessions, cost sampling — all tested on
-virtual-time fake nodes). Geometry, the server, and the web app do not
-exist yet. Live subcommands: `cicada catalog` and `cicada run` (headless
-solve of the spike dialect subset; always pass `--cache-dir` in tests so
-the user cache stays clean). Commands below marked *(stage N)* arrive with
-that stage; do not reference them in code or docs as if they work today.
+**Current status: stage 4 complete — geometry, the S-tier stdlib, and the
+Python script host.** Live: the value model + `#[node]` registry (stage 1;
+type-erased invokers + marshalling since stage 3), the `.cic` toolchain
+(stage 2: lossless parser, minimal-edit writer, checker-lite — now with
+kind-preserving type variables `T`/`E`, `Geometry` widenings, and `Any`
+absorption), the scheduler (stage 3: content-addressed `NodeKey`s,
+two-level disk store in the USER cache dir, rayon wavefront with chunked
+`each()` fan-out, cancellation, latest-wins previews; effectful nodes now
+bypass the memo entirely), and stage 4: geometry value kinds in core
+(analytic `Curve`, `SoA` `Mesh`, `Closed`/`Watertight` refinements),
+`cicada-geom` (tolerance ops, frames, ear-clip triangulation,
+extrude/box/sphere builders, Manifold boolean seam via `manifold-csg`
+f64-native, spade Voronoi), ~40 registered S-tier nodes (every one with
+table + property + golden-hash tests), the `# Panics`→catalog contract
+pipeline, the debug OBJ exporter (`#[node(effectful)]` — explicit-run
+only), and `cicada-script`'s Python worker pool (length-framed MessagePack,
+`@cicada.node` decorator, source-hash cache keys, kill-the-worker
+cancellation; `scripts/*.py` next to a pipeline self-register). The server
+and the web app do not exist yet. Live subcommands: `cicada catalog` and
+`cicada run` (always pass `--cache-dir` in tests so the user cache stays
+clean; effectful bindings run only via `--node`). `examples/` is the
+runnable playground. Commands below marked *(stage N)* arrive with that
+stage; do not reference them in code or docs as if they work today.
 
 ## Project map
 
@@ -54,7 +65,9 @@ that stage; do not reference them in code or docs as if they work today.
 
 **Dependency direction is law**: `core ← {geom, lang, stdlib, sched, script}
 ← server ← cli`; only `cli` may depend on `server`; `stdlib` never depends on
-`sched`. Enforced by `crates/cicada-cli/tests/dependency_dag.rs`.
+`sched`. Within the mid layer, `stdlib → geom` is a sanctioned edge (nodes
+ARE the geometry users, docs/03); no other intra-mid-layer edges exist.
+Enforced by `crates/cicada-cli/tests/dependency_dag.rs`.
 
 ## Command palette
 
@@ -67,13 +80,17 @@ that stage; do not reference them in code or docs as if they work today.
 | Format | `cargo fmt --all` (check: `--check`) |
 | Regenerate catalog (CATALOG.md + catalog.json) | `cargo run -p cicada-cli -- catalog` |
 | Catalog freshness (CI mode) | `cargo run -p cicada-cli -- catalog --check` |
-| Bless macro compile-fail snapshots (PowerShell) | `$env:TRYBUILD = "overwrite"; cargo test -p cicada-stdlib --test macro_ui; Remove-Item Env:\TRYBUILD` |
+| Bless macro compile-fail snapshots (PowerShell) | `$env:TRYBUILD = "overwrite"; cargo test -p cicada-core --test macro_ui; Remove-Item Env:\TRYBUILD` |
 | Web checks (bash; PS 5.1 has no `&&` — use `;`) | `cd web && npm run check && npm run lint && npm test` |
 | Serve *(stage 5)* | `cicada serve` |
 | Headless run | `cargo run -p cicada-cli -- run <pipeline.cic> [--node <name>]… [--time] [--hashes] [--cache-dir <dir>] [--threads N]` — no `--node` = every leaf; `--hashes` prints stable hash lines INSTEAD of values; dialect syntax: [docs/10](docs/10-dialect-and-file-format.md); tests/CI always pass `--cache-dir` |
 | Bless insta snapshots (checker diagnostics) | `cargo insta review` (cargo-insta installed 2026-08-12) — or `$env:INSTA_UPDATE = "always"; cargo test -p cicada-lang; Remove-Item Env:\INSTA_UPDATE` |
+| Carve benchmark (kernel seam, release only) | `cargo run --release -p cicada-geom --example carve_bench [parts]` — see skill `perf-check` |
+| Run the examples playground | `cargo run -p cicada-cli -- run examples/<file>.cic [--node dump] [--time]` |
 
-Web work needs Node ≥ 20 (CI uses 22).
+Web work needs Node ≥ 20 (CI uses 22). The Python script host needs
+Python 3 on PATH (or `CICADA_PYTHON`); worker protocol is dependency-free
+— numpy etc. are only needed by scripts that import them.
 
 ### Dev machine notes (Windows)
 
@@ -104,6 +121,17 @@ Web work needs Node ≥ 20 (CI uses 22).
   `$env:CARGO_TARGET_DIR = "$env:LOCALAPPDATA\cargo-target-wt\<worktree-name>"`.
 - The engine cache itself never has this problem — it lives in the user
   cache directory, never the project folder (DECISIONS.md).
+- **cmake for the Manifold kernel build**: `manifold-csg-sys` compiles
+  upstream Manifold via cmake on first build (per profile). cmake is not
+  on this machine's PATH; prepend the VS Build Tools copy per shell:
+
+  ```powershell
+  $env:Path = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;$env:Path"
+  ```
+
+  First builds clone Manifold v3.5.2 + oneTBB (network needed once per
+  target dir) and have a KNOWN transient FetchContent failure — retry
+  once before diagnosing. CI runners have cmake preinstalled.
 
 ## Working rules
 
@@ -165,6 +193,6 @@ for anything user-visible.
 | `.claude/skills/verify-change` | The evidence loop before declaring any change done |
 | `.claude/skills/add-stdlib-node` | Adding or modifying a node in `cicada-stdlib`, end to end |
 | `.claude/skills/dialect-change` | Any change to `cicada-lang` — grammar, writer, checker, diagnostics |
+| `.claude/skills/perf-check` | Benchmarks against the doc-15 targets, and how to record numbers |
 
-More arrive with their workflows (doc 14): `protocol-change` (stage 5),
-`perf-check` (first benchmarks).
+More arrive with their workflows (doc 14): `protocol-change` (stage 5).

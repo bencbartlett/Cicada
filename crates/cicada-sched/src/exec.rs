@@ -539,7 +539,11 @@ impl Ctx<'_> {
             fan: &decl.fan,
         });
         let _ = self.keys[id.0].set(key);
-        if let Some(entry) = self.scheduler.store.memo(&key) {
+        // Effectful nodes (exporters) never consult the memo: their WORK is
+        // the side effect, and a hit would silently skip it (doc 10 §7).
+        if !decl.effectful
+            && let Some(entry) = self.scheduler.store.memo(&key)
+        {
             if entry.outputs.len() == decl.output_count {
                 self.observer
                     .on_event(&Event::NodeCacheHit { node: &decl.name });
@@ -592,7 +596,12 @@ impl Ctx<'_> {
         computed: u64,
         nanos: u64,
     ) -> NodeOutcome {
-        if let Err(error) = self.scheduler.store.record_memo(key, &outputs) {
+        // Effectful nodes are never memoized (see the memo-read gate); the
+        // cost sample below still records — the estimator can know an
+        // export's cost without the cache ever lying about having run it.
+        if !decl.effectful
+            && let Err(error) = self.scheduler.store.record_memo(key, &outputs)
+        {
             self.set_fatal(error);
             return NodeOutcome::Cancelled;
         }
@@ -776,8 +785,13 @@ impl Ctx<'_> {
             n,
             self.scheduler.threads,
         );
-        let element_cache =
-            per_element.is_some_and(|nanos| nanos >= self.scheduler.config.element_cache_min_nanos);
+        // Effectful nodes never memoize at ANY granularity: an each()-
+        // lifted exporter served per-element from cache would silently
+        // skip side effects for the warm elements (same rule as the
+        // node-level gate — the cache must never lie about work done).
+        let element_cache = !decl.effectful
+            && per_element
+                .is_some_and(|nanos| nanos >= self.scheduler.config.element_cache_min_nanos);
 
         let (results, nanos, computed) =
             self.run_chunks(decl, inputs, &fanned, n, chunk, element_cache);

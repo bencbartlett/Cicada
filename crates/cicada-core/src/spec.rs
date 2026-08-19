@@ -119,6 +119,11 @@ pub struct NodeSpec {
     /// True when the node consults `ProjectConfig` tolerances — the
     /// tolerance hash joins the `NodeKey` (DECISIONS.md tolerance row).
     pub uses_tolerance: bool,
+    /// The node's runtime contract from its rustdoc `# Panics` section
+    /// (joined to one line): the conditions under which it goes red.
+    /// Carried into both catalog renderings so agents read contracts from
+    /// the catalog, never by grepping crates (doc 14).
+    pub panics: Option<&'static str>,
     /// Input ports in declaration order. A port with a default is optional.
     pub inputs: &'static [PortSpec],
     /// Output ports in declaration order. Single-output nodes use one port
@@ -275,6 +280,26 @@ impl_port_leaf!(crate::spatial::Point, "Point");
 impl_port_leaf!(crate::spatial::Vector, "Vector");
 impl_port_leaf!(crate::spatial::Plane, "Plane");
 impl_port_leaf!(crate::spatial::Xform, "Xform");
+impl_port_leaf!(crate::geometry::Curve, "Curve");
+impl_port_leaf!(crate::geometry::Mesh, "Mesh");
+// Refinement wrappers render as their refined base names — the checker's
+// two spike refinements (doc 15). The wire value is the plain base kind;
+// marshalling re-verifies the predicate (crate::marshal).
+impl_port_leaf!(
+    crate::geometry::Closed<crate::geometry::Curve>,
+    "Closed<Curve>"
+);
+impl_port_leaf!(
+    crate::geometry::Watertight<crate::geometry::Mesh>,
+    "Watertight<Mesh>"
+);
+// Type variables (crate::geometry::VAR_TRANSFORMABLE / VAR_ELEMENT) and the
+// display-sink kinds: the checker binds `T`/`E` per call; `Geometry` and
+// `Any` are terminal sinks that never narrow back.
+impl_port_leaf!(crate::geometry::Transformable, "T");
+impl_port_leaf!(crate::geometry::GeometryValue, "Geometry");
+impl_port_leaf!(crate::marshal::AnyValue, "Any");
+impl_port_leaf!(crate::marshal::ElemValue, "E");
 
 /// One compile-time node registration. `#[node]` submits these; never
 /// construct by hand.
@@ -447,6 +472,7 @@ mod tests {
             version: 1,
             pure: true,
             uses_tolerance: false,
+            panics: None,
             inputs: DIVIDE_IN,
             outputs: DIVIDE_OUT,
             module: "test",

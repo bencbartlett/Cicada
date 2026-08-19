@@ -1,13 +1,19 @@
 [package]
 name = "cicada-script"
-description = "Cicada script hosts: wasmtime guest runtime and the Python worker pool"
+description = "Cicada script hosts: Python worker pool (stage 4); WASM host (v0.1)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+blake3.workspace = true
 cicada-core.workspace = true
+rmpv.workspace = true
+# Runtime dep (not dev): the embedded worker program materializes to a
+# temp file the interpreter can read.
+tempfile.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true
