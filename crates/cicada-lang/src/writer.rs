@@ -2,7 +2,8 @@
 //! gesture is a specified text edit that touches only what the gesture
 //! implies — never reformatting, reordering, or realigning existing lines.
 //! Stage-2 gestures (doc 15): place, wire, lift, set-param, delete, rename,
-//! plus `apply_fix` for machine-applicable diagnostic fixes (docs/11).
+//! plus `apply_fix` for machine-applicable diagnostic fixes (docs/11);
+//! stage 5 added `remove_kwarg` (deleting a wire on the canvas).
 //!
 //! Gestures fail loudly and leave the document UNTOUCHED on failure: an
 //! edit that would turn a parsed statement into a broken one is reverted
@@ -149,6 +150,47 @@ pub fn set_kwarg(
     };
     let span = LineSpan { start: at, end: at };
     checked_splice(document, line, span, &insertion)
+}
+
+/// Remove a wire / clear a kwarg (stage 5: deleting an edge on the canvas
+/// — the inverse of [`set_kwarg`]). Removes `port=value` together with ONE
+/// adjacent separator, touching nothing else: `f(a=x, b=y)` → `f(b=y)` /
+/// `f(a=x)`; `f(a=x)` → `f()`. A required port left unwired reds the node
+/// (missing-kwarg), never a silent default — the honest state of "this
+/// wire is gone".
+///
+/// # Errors
+///
+/// [`WriterError::UnknownBinding`] / [`WriterError::NotACall`] /
+/// [`WriterError::UnknownKwarg`] / [`WriterError::FutureVersion`].
+pub fn remove_kwarg(document: &mut Document, binding: &str, port: &str) -> Result<(), WriterError> {
+    guard_version(document)?;
+    let (line, statement) = call_statement(document, binding)?;
+    let Rhs::Call(call) = &statement.rhs else {
+        unreachable!("call_statement checked")
+    };
+    let position = call
+        .kwargs
+        .iter()
+        .position(|k| k.name.name == port)
+        .ok_or_else(|| WriterError::UnknownKwarg {
+            binding: binding.to_owned(),
+            kwarg: port.to_owned(),
+        })?;
+    let kwarg = &call.kwargs[position];
+    let raw = document.lines()[line].raw();
+    // Span to cut: the kwarg plus the separator that joins it to a
+    // neighbour — the FOLLOWING `, ` when one exists (so the first kwarg's
+    // removal leaves the second flush against `(`), else the PRECEDING one.
+    let (start, end) = if let Some(next) = call.kwargs.get(position + 1) {
+        (kwarg.span.start, next.span.start)
+    } else if position > 0 {
+        (call.kwargs[position - 1].span.end, kwarg.span.end)
+    } else {
+        (kwarg.span.start, kwarg.span.end)
+    };
+    debug_assert!(start <= end && end <= raw.len());
+    checked_splice(document, line, LineSpan { start, end }, "")
 }
 
 /// Accept a lift chip (docs/10: wrap that kwarg's value in `each(…)`).

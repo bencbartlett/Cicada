@@ -1148,8 +1148,11 @@ fn fanned_shape<'v>(
     Ok((fanned, n))
 }
 
-/// Best-effort text of a caught panic payload.
-pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+/// Best-effort text of a caught panic payload. Public since stage 5: the
+/// server's generation loop wraps `solve` in the same `catch_unwind`
+/// discipline as [`crate::preview::PreviewSession`].
+#[must_use]
+pub fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(text) = payload.downcast_ref::<&str>() {
         (*text).to_owned()
     } else if let Some(text) = payload.downcast_ref::<String>() {

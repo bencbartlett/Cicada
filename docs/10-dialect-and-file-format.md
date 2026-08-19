@@ -204,7 +204,9 @@ axis names (Voronoi's `cells`).
 Exporters bind like anything else but **never auto-run** (wall lesson
 7): solving computes up to their inputs; executing the export is an
 explicit action (button on the node / `cicada run wall.cic --node dxf`).
-Run state lives in the lock file, never in the text.
+Run state lives in the lock file, never in the text. Relative paths in
+their literals resolve against the pipeline's directory (both `cicada
+run` and `cicada serve` work from it), never against the shell's cwd.
 
 ## Round-trip contract (canvas ⇄ text)
 
@@ -214,6 +216,7 @@ Every canvas gesture is specified as a text edit:
 |---|---|
 | Place node | Append `name = fn(…)` after last dependency (or EOF); auto-name `fn_1`/`fn_2`-style — a binding never takes the bare callable name, which would shadow it for later calls (§5 resolution order); renameable |
 | Draw wire | Rewrite one kwarg in the target binding |
+| Delete wire | Remove that kwarg (with one adjacent separator); a required port left unwired reds the node — the honest state of "this wire is gone" |
 | Accept lift chip | Wrap that kwarg's value in `each(…)` |
 | Accept adapter chip | Insert adapter binding (`outline_c = as_closed(curve=outline)`) + rewire |
 | Drag slider | Rewrite one numeric literal |

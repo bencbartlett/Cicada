@@ -20,7 +20,10 @@ instanced viewport with picking; the wall slice end-to-end.
 **Out, explicitly** (all v0.1+): OCCT/B-rep backing, WASM script host,
 undo/redo, git panel, scrub caching, time transport, AI layer,
 refinement conversions beyond `As Closed`/`As Watertight`, sidecar
-beyond positions, auto-layout beyond grid-append.
+beyond positions (+ the preview toggle, added in stage 5), auto-layout
+beyond grid-append (stage 5 ships "layer by dependency depth, stack in
+definition order" — deterministic and a few lines; anything smarter
+stays out).
 
 **One honest shim**: spike `Extrude`/`Box`/`Sphere` are mesh-backed
 under their v0.1 names (Solid is B-rep-backed from v0.1; the spike's

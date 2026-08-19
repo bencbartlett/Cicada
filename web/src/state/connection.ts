@@ -1,0 +1,158 @@
+/**
+ * Wires the socket to the store and the frame bus, fetches the catalog,
+ * answers screenshot requests via the viewport, and exposes the debug
+ * handle Playwright reads (`window.__cicada`). Called once from `main.tsx`.
+ */
+import { CicadaClient, wsUrl } from "../protocol/client";
+import type { Catalog, ClientMessage, ServerEnvelope } from "../protocol/messages";
+import { frameBus } from "./frameBus";
+import { useCicada } from "./store";
+
+export interface StartOptions {
+  token: string;
+  pipeline: string;
+}
+
+/** Read `?token=…&pipeline=…` from the page URL (Jupyter-style). */
+export function readUrlOptions(search: string = window.location.search): Partial<StartOptions> {
+  const params = new URLSearchParams(search);
+  const token = params.get("token") ?? undefined;
+  const pipeline = params.get("pipeline") ?? undefined;
+  return { token, pipeline };
+}
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  const buffer = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+let client: CicadaClient | null = null;
+
+/** Reconnect backoff: 0.5 s doubling to a cap of 8 s (`attempt` is 1-based). */
+export const RECONNECT_BASE_MS = 500;
+export const RECONNECT_CAP_MS = 8000;
+export function reconnectDelayMs(attempt: number): number {
+  return Math.min(RECONNECT_CAP_MS, RECONNECT_BASE_MS * 2 ** Math.max(0, attempt - 1));
+}
+
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectAttempt = 0;
+
+/** Try again now (banner button); a no-op unless a retry is pending. */
+export function retryConnectionNow(): void {
+  if (client === null || reconnectTimer === null) return;
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  useCicada.getState().setReconnect({ attempt: reconnectAttempt, nextAt: null });
+  client.connect();
+}
+
+/**
+ * The socket dropped without us closing it: clear the session identity
+ * (nothing may write against a dead socket), then reconnect with capped
+ * exponential backoff. The server re-hydrates on join (hello + snapshot +
+ * display_reset + frames), which the store and the scene already handle.
+ */
+function scheduleReconnect(reason: string): void {
+  if (client === null || reconnectTimer !== null) return;
+  reconnectAttempt += 1;
+  const delay = reconnectDelayMs(reconnectAttempt);
+  const attempt = reconnectAttempt;
+  useCicada.getState().markDisconnected(reason, { attempt, nextAt: Date.now() + delay });
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    useCicada.getState().setReconnect({ attempt, nextAt: null });
+    client?.connect();
+  }, delay);
+}
+
+export function startConnection(options: StartOptions): CicadaClient {
+  const store = useCicada.getState();
+  store.setIdentity(options.token, options.pipeline);
+  store.setConnection("connecting");
+
+  const url = wsUrl(options.token, options.pipeline);
+  client = new CicadaClient(url, {
+    onMessage: (envelope: ServerEnvelope) => {
+      useCicada.getState().applyServerMessage(envelope);
+      if (envelope.type === "screenshot_request") {
+        const { id, target } = envelope.payload;
+        frameBus
+          .screenshot(target)
+          .then(blobToBase64)
+          .then((png_base64) => {
+            client?.send({ type: "screenshot", payload: { id, png_base64 } });
+          })
+          .catch((error: unknown) => {
+            client?.send({ type: "screenshot", payload: { id, error: String(error) } });
+          });
+      }
+    },
+    onFrame: (frame, byteLength) => frameBus.publish(frame, byteLength),
+    onOpen: () => {
+      reconnectAttempt = 0;
+      useCicada.getState().setConnection("open");
+    },
+    onClose: (reason, closedByUs) => {
+      if (closedByUs) {
+        useCicada.getState().setConnection("closed", reason);
+        return;
+      }
+      scheduleReconnect(reason);
+    },
+    onError: (message) => {
+      const state = useCicada.getState();
+      if (state.connection === "reconnecting") {
+        // A failed retry is expected while reconnecting — the banner says
+        // so; no notice per attempt (`onclose` follows and reschedules).
+        // Anything else (a dropped intent, a bad frame) stays loud.
+        if (message !== "socket error") state.addNotice("error", message);
+        return;
+      }
+      state.setConnection("error", message);
+      state.addNotice("error", message);
+    },
+  });
+  store.installSender((message: ClientMessage) => client?.send(message) ?? "");
+  client.connect();
+
+  void fetch(`/api/catalog?pipeline=${encodeURIComponent(options.pipeline)}`, {
+    headers: { "X-Cicada-Token": options.token },
+  })
+    .then(async (response) => {
+      if (!response.ok) throw new Error(`catalog: HTTP ${response.status}`);
+      return (await response.json()) as Catalog;
+    })
+    .then((catalog) => useCicada.getState().setCatalog(catalog))
+    .catch((error: unknown) => useCicada.getState().addNotice("error", String(error)));
+
+  installDebugHandle();
+  return client;
+}
+
+/** `window.__cicada`: the agent verification hooks (doc 14). */
+function installDebugHandle(): void {
+  const handle = {
+    /** A snapshot of the store (authoritative mirror + ui). */
+    state: () => useCicada.getState(),
+    /** Frames received so far. */
+    frames: () => ({ received: frameBus.received, bytes: frameBus.bytes }),
+    /** Send an intent (tests drive gestures through the same op pipeline). */
+    send: (message: ClientMessage) => useCicada.getState().send(message),
+    /** Viewport render → PNG blob (same path as /debug/screenshot). */
+    screenshot: (target = "viewport") => frameBus.screenshot(target),
+    /** Filled in by the viewport: scene statistics for assertions. */
+    scene: null as null | (() => unknown),
+  };
+  (window as unknown as { __cicada: typeof handle }).__cicada = handle;
+}
+
+export function getClient(): CicadaClient | null {
+  return client;
+}

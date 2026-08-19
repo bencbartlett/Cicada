@@ -12,17 +12,22 @@ path = "src/main.rs"
 
 [dependencies]
 # anyhow is allowed ONLY in this crate (doc 14 §Toolchain).
-# cicada-server joins in stage 5 with `cicada serve` — no dead edges before.
 anyhow.workspace = true
 cicada-core.workspace = true
 cicada-lang.workspace = true
 cicada-sched.workspace = true
-cicada-script.workspace = true
+# The server owns the hydration path (compile/lower/scripts) and `serve`;
+# only this crate may depend on it (dependency law).
+cicada-server.workspace = true
 cicada-stdlib.workspace = true
 clap.workspace = true
-serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
+tokio.workspace = true
+
+[features]
+# Forwarded to the server: embed the built SPA (`web/dist`) into the
+# binary — the release / Playwright-CI shape of `cicada serve`.
+embed = ["cicada-server/embed"]
 
 [dev-dependencies]
 cargo_metadata.workspace = true

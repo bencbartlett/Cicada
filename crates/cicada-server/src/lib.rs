@@ -1,13 +1,35 @@
-//! The engine server: axum app serving the protocol — JSON control plane,
-//! generation-tagged binary geometry frames, sessions with a single-writer
-//! lease, the op log, transport, and git integration (docs/13).
+//! The engine server (docs/13): the axum app serving the protocol — JSON
+//! control plane, generation-tagged binary geometry frames, sessions with a
+//! single-writer lease, and the debug endpoints agents verify UI changes
+//! with (doc 14). It owns ALL authoritative state; the browser sends
+//! gesture-level intents and receives authoritative deltas.
 //!
-//! Owns all authoritative state; the browser sends gesture-level intents and
-//! receives authoritative deltas. axum/tokio are quarantined here (doc 14).
-//! Nothing depends on this crate except `cicada-cli` (enforced by the
-//! dependency-DAG check).
+//! The pipeline hydration path lives here too (moved from `cicada-cli` at
+//! stage 5): [`compile`] (parse → scripts → check → targets → gate),
+//! [`lower`] (checked document → `SolveGraph`), [`scripts`] (Python script
+//! nodes + the cancel bridge). `cicada run` drives them headlessly; the
+//! [`session`] drives them live. axum/tokio are quarantined in this crate
+//! (doc 14); nothing depends on it except `cicada-cli` (dependency-DAG
+//! test).
 //!
-//! Stage 0 (doc 15): empty. `cicada serve`, the protocol, and the debug
-//! endpoints land in stage 5.
+//! Stage-5 slice, stated honestly (doc 15): one project directory, one
+//! session per pipeline, single writer + read-only observers, no undo/redo
+//! (op log is ephemeral and forward-only), no transport, no git panel; the
+//! byte-exact frame format is documented in [`frames`] and docs/13.
+
+pub mod catalog;
+pub mod compile;
+pub mod display;
+pub mod frames;
+pub mod http;
+pub mod layout;
+pub mod lower;
+pub mod protocol;
+pub mod scripts;
+pub mod session;
+pub mod sidecar;
+pub mod solve;
+pub mod viewmodel;
 
 pub use cicada_core as core;
+pub use http::{DEFAULT_PORT, ServeConfig, ServeError, ServerHandle, serve};

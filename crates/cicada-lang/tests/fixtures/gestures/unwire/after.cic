@@ -1,0 +1,5 @@
+# cicada 1
+pts = scatter(count=100)
+m = move(motion=vec)
+solo = collect()
+late = orient(geometry=pts, plane=p)  # keep me

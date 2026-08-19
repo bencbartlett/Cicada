@@ -51,10 +51,26 @@ Run everything headless first; touch the browser only for UI-facing changes.
    The wall corpus slice (`corpus/wall.cic`) arrives in stage 6; until
    then use whatever fixture pipeline the stage under test provides.
 
-6. **UI-facing changes** *(stage 5+, once serve + debug endpoints exist)*:
-   drive the running app yourself — Playwright smoke, `/debug/state`,
-   `/debug/screenshot` — and capture the screenshot/state diff as evidence.
-   Never hand the human a "please click around and check" step.
+6. **UI-facing changes**: drive the running app yourself — never hand the
+   human a "please click around and check" step. The recipe:
+
+   ```bash
+   # serve a SCRATCH copy (the app writes the served files) with a fixed token
+   cp -r examples "$TMP/cicada-probe/"; cd "$TMP/cicada-probe"
+   "$CARGO_TARGET_DIR/debug/cicada" serve examples/02-solids.cic --port 8450 --token t \
+       --cache-dir "$TMP/cicada-probe/cache" --web-dir <repo>/web/dist &   # after `npm run build`
+   curl "http://127.0.0.1:8450/debug/state?token=t&wait=true"              # the authoritative oracle
+   curl -o shot.png "http://127.0.0.1:8450/debug/screenshot?token=t"       # needs a connected page
+   ```
+
+   Open `http://127.0.0.1:8450/?token=t&pipeline=02-solids.cic` with
+   Playwright (`import { chromium } from "@playwright/test"` in a .mjs under
+   `web/`), drive gestures through the DOM, read `window.__cicada.state()`
+   / `.scene()` / `.frames()`, compare `/debug/state` before and after, and
+   LOOK at the screenshots. The durable form is `web/e2e/smoke.spec.ts`
+   (`cd web && npm run build && npm run e2e`); extend it when a contract
+   changes. Dev alternative: `npm run dev` (Vite proxy) instead of
+   `--web-dir`.
 
 7. **Attach evidence** to the report/commit: the failing-then-passing test
    for bug fixes, hash diffs with an explanation for determinism changes,

@@ -33,4 +33,4 @@ still = unit_x(factor=0.0)
 pins = linear_array(geometry=pin, direction=still, count=1)
 carved = mesh_difference(mesh=each(prisms), cutters=pins)
 
-dump = export_obj(meshes=carved, path="examples/03-voronoi.obj")
+dump = export_obj(meshes=carved, path="03-voronoi.obj")

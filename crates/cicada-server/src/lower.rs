@@ -1,13 +1,21 @@
 //! Lowering: a checked `.cic` document → an executable
-//! [`SolveGraph`](cicada_sched::SolveGraph) (stage 3). Lives here — not in
-//! `cicada-sched`, which stays language-agnostic behind fake-node tests —
-//! and moves into the server's hydration path at stage 5.
+//! [`SolveGraph`](cicada_sched::SolveGraph). Lives in the server (its
+//! hydration path, doc 15 stage 5 — moved here from `cicada-cli`, which
+//! still drives it for `cicada run`), not in `cicada-sched`, which stays
+//! language-agnostic behind fake-node tests.
 //!
-//! Only the statements REACHABLE from the requested targets are lowered
-//! (docs/12: red cones are excluded from scheduling, everything else
-//! proceeds — so an unrelated broken statement never blocks a run).
-//! Callers gate on checker diagnostics for the same reachable set first;
-//! anything unresolved that survives to lowering is refused loudly.
+//! Two entry points, one algorithm:
+//!
+//! - [`lower`] — the strict, target-scoped form `cicada run` uses: only the
+//!   statements REACHABLE from the requested targets are lowered (docs/12:
+//!   red cones are excluded from scheduling, everything else proceeds — so
+//!   an unrelated broken statement never blocks a run). Callers gate on
+//!   checker diagnostics for the same reachable set first; anything
+//!   unresolved that survives to lowering is refused loudly.
+//! - [`lower_partial`] — the live-session form: lowers every statement that
+//!   CAN lower and reports the rest as excluded with the honest reason (its
+//!   own diagnostic, a lowering refusal, or "fed by" an excluded upstream),
+//!   so the canvas shows red + blocked cones while everything else solves.
 //!
 //! Cache-key material produced here (docs/12 §Cache keys): stdlib calls
 //! key on the spec's dialect name + explicit semantic version; expression
@@ -15,7 +23,7 @@
 //! ordinal of first appearance, so renaming a binding never recomputes
 //! (docs/10 round-trip discipline).
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use cicada_core::config::ProjectConfig;
@@ -24,8 +32,11 @@ use cicada_core::spec::NodeSpec;
 use cicada_core::value::{HashedValue, List, ValueData, ValueError};
 use cicada_lang::ast::{BinOp, Expr, Lit, LitWithSpan, Rhs, Statement, ValueExpr};
 use cicada_lang::check::{BindingType, Resolution};
+use cicada_lang::diag::Diagnostic;
 use cicada_lang::document::{Document, Line};
 use cicada_sched::{Input, NodeDecl, NodeError, NodeFn, NodeId, SolveGraph};
+
+use crate::scripts::ScriptNode;
 
 /// Where a binding's value lives after lowering.
 #[derive(Debug, Clone)]
@@ -48,7 +59,8 @@ pub enum LoweredBinding {
 }
 
 /// A lowered pipeline: the graph plus name → binding and per-node output
-/// port names (for display).
+/// port names (for display), and — for [`lower_partial`] — the bindings
+/// that did NOT lower, each with its reason.
 pub struct Lowered {
     /// The executable graph.
     pub graph: SolveGraph,
@@ -56,6 +68,35 @@ pub struct Lowered {
     pub bindings: HashMap<String, LoweredBinding>,
     /// Output port names per node, parallel to the graph's nodes.
     pub output_names: Vec<Vec<String>>,
+    /// Bindings excluded from the graph, with why (ordered by name for
+    /// deterministic reporting). Always empty from [`lower`].
+    pub excluded: BTreeMap<String, Exclusion>,
+}
+
+/// Why a binding is not in the solve graph (docs/12: red cones are
+/// excluded from scheduling; the reason is always spelled out).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Exclusion {
+    /// The binding's own statement has checker/parse diagnostics.
+    Diagnostics,
+    /// The statement is `#off`-disabled (DECISIONS.md node-disable row).
+    Disabled,
+    /// Lowering itself refused (message from [`LowerError`]).
+    Lowering(String),
+    /// An upstream binding is excluded (or unknown); this one is blocked
+    /// by it — the name is the culprit.
+    FedBy(String),
+}
+
+impl Exclusion {
+    /// The status-vocabulary word (docs/16): `red` or `blocked`.
+    #[must_use]
+    pub fn status(&self) -> &'static str {
+        match self {
+            Self::FedBy(_) => "blocked",
+            Self::Diagnostics | Self::Disabled | Self::Lowering(_) => "red",
+        }
+    }
 }
 
 /// Why lowering refused. Most cases are pre-empted by the checker gate;
@@ -167,7 +208,7 @@ pub fn lower(
     specs: &[&'static NodeSpec],
     config: &ProjectConfig,
     targets: &[String],
-    scripts: &HashMap<String, crate::scripts::ScriptNode>,
+    scripts: &HashMap<String, ScriptNode>,
 ) -> Result<Lowered, LowerError> {
     for target in targets {
         if document.find_binding(target).is_none() {
@@ -268,6 +309,174 @@ pub fn lower(
         graph: SolveGraph::new(lowering.nodes)?,
         bindings: lowering.bindings,
         output_names: lowering.output_names,
+        excluded: BTreeMap::new(),
+    })
+}
+
+/// Lower everything that can lower (the live-session form). Statements
+/// with diagnostics, disabled statements, and statements whose lowering
+/// refuses are excluded with their reason; everything downstream of an
+/// exclusion (or of an unknown name) is excluded as `FedBy`. Kahn order,
+/// iterative — forward references of any length, never a stack overflow.
+///
+/// # Errors
+///
+/// Only [`LowerError::Graph`] — graph assembly over the lowered subset
+/// failing is a bug, never a user problem.
+#[allow(clippy::implicit_hasher, clippy::too_many_lines)] // one Kahn pass; genericity buys nothing
+pub fn lower_partial(
+    document: &Document,
+    resolution: &Resolution,
+    specs: &[&'static NodeSpec],
+    config: &ProjectConfig,
+    scripts: &HashMap<String, ScriptNode>,
+) -> Result<Lowered, LowerError> {
+    let spec_by_name: HashMap<&str, &'static NodeSpec> =
+        specs.iter().map(|spec| (spec.name, *spec)).collect();
+    let mut lowering = Lowering {
+        resolution,
+        spec_by_name,
+        config,
+        scripts,
+        nodes: Vec::new(),
+        output_names: Vec::new(),
+        bindings: HashMap::new(),
+    };
+    let mut excluded: BTreeMap<String, Exclusion> = BTreeMap::new();
+
+    // Bindings with their own diagnostics (parse or semantic) are red.
+    let mut red: HashSet<&str> = HashSet::new();
+    for diagnostic in &resolution.diagnostics {
+        if let Some(node) = &diagnostic.node {
+            red.insert(node.as_str());
+        }
+    }
+    let statements: Vec<(usize, &Statement)> = document
+        .lines()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| match line {
+            Line::Statement { statement, .. } => Some((index, statement)),
+            _ => None,
+        })
+        .collect();
+    for line in document.lines() {
+        if let Line::Disabled {
+            name: Some(name), ..
+        } = line
+        {
+            excluded.insert(name.clone(), Exclusion::Disabled);
+        }
+    }
+    let line_of: HashMap<&str, usize> = statements
+        .iter()
+        .flat_map(|&(line, statement)| {
+            statement
+                .targets
+                .iter()
+                .map(move |target| (target.name.as_str(), line))
+        })
+        .collect();
+    let mut pending: HashMap<usize, usize> = HashMap::new();
+    let mut dependents: HashMap<usize, Vec<usize>> = HashMap::new();
+    for &(line, statement) in &statements {
+        let mut upstream: HashSet<usize> = HashSet::new();
+        for reference in statement.references() {
+            if let Some(&definition) = line_of.get(reference.name.as_str()) {
+                upstream.insert(definition);
+            }
+        }
+        pending.insert(line, upstream.len());
+        for definition in upstream {
+            dependents.entry(definition).or_default().push(line);
+        }
+    }
+    let statement_at: HashMap<usize, &Statement> = statements.iter().copied().collect();
+    let mut ready: VecDeque<usize> = {
+        let mut roots: Vec<usize> = pending
+            .iter()
+            .filter(|&(_, &count)| count == 0)
+            .map(|(&line, _)| line)
+            .collect();
+        roots.sort_unstable();
+        roots.into_iter().collect()
+    };
+    let mut visited = 0_usize;
+    while let Some(line) = ready.pop_front() {
+        let statement = statement_at[&line];
+        visited += 1;
+        // This statement's fate: red by its own diagnostics; blocked by an
+        // excluded (or unknown) upstream — the first such reference names
+        // the culprit; else lowered, where a refusal is a red of its own.
+        let own_red = statement
+            .targets
+            .iter()
+            .any(|target| red.contains(target.name.as_str()));
+        let fed_by = statement.references().into_iter().find_map(|reference| {
+            let name = reference.name.as_str();
+            let missing = !line_of.contains_key(name) && !lowering.bindings.contains_key(name);
+            (excluded.contains_key(name) || missing).then(|| reference.name.clone())
+        });
+        let outcome: Option<Exclusion> = if own_red {
+            Some(Exclusion::Diagnostics)
+        } else if let Some(upstream) = fed_by {
+            Some(Exclusion::FedBy(upstream))
+        } else {
+            match lowering.lower_statement(statement) {
+                Ok(()) => None,
+                Err(error) => Some(Exclusion::Lowering(error.to_string())),
+            }
+        };
+        if let Some(reason) = outcome {
+            for target in &statement.targets {
+                excluded.insert(target.name.clone(), reason.clone());
+            }
+        }
+        for &dependent in dependents.get(&line).into_iter().flatten() {
+            if let Some(count) = pending.get_mut(&dependent) {
+                *count -= 1;
+                if *count == 0 {
+                    ready.push_back(dependent);
+                }
+            }
+        }
+    }
+    if visited != statements.len() {
+        // Kahn leftovers = a cycle. The checker already red-flagged its
+        // members; name them explicitly rather than losing them.
+        for &(line, statement) in &statements {
+            if pending.get(&line).is_some_and(|&count| count > 0) {
+                for target in &statement.targets {
+                    excluded
+                        .entry(target.name.clone())
+                        .or_insert_with(|| Exclusion::Lowering("part of a cycle".to_owned()));
+                }
+            }
+        }
+    }
+    Ok(Lowered {
+        graph: SolveGraph::new(lowering.nodes)?,
+        bindings: lowering.bindings,
+        output_names: lowering.output_names,
+        excluded,
+    })
+}
+
+/// The diagnostics that name bindings inside `cone` (or name no binding at
+/// all — file-level problems block everything), split from those outside
+/// it: `(blocking, outside)`. The `cicada run` gate and the session share
+/// this one rule.
+#[must_use]
+#[allow(clippy::implicit_hasher)] // one internal call site
+pub fn split_diagnostics<'d>(
+    diagnostics: &'d [Diagnostic],
+    cone: &HashSet<String>,
+) -> (Vec<&'d Diagnostic>, Vec<&'d Diagnostic>) {
+    diagnostics.iter().partition(|diagnostic| {
+        diagnostic
+            .node
+            .as_ref()
+            .is_none_or(|node| cone.contains(node))
     })
 }
 
@@ -275,7 +484,7 @@ struct Lowering<'a> {
     resolution: &'a Resolution,
     spec_by_name: HashMap<&'static str, &'static NodeSpec>,
     config: &'a ProjectConfig,
-    scripts: &'a HashMap<String, crate::scripts::ScriptNode>,
+    scripts: &'a HashMap<String, ScriptNode>,
     nodes: Vec<NodeDecl>,
     output_names: Vec<Vec<String>>,
     bindings: HashMap<String, LoweredBinding>,

@@ -26,10 +26,17 @@ cicada-server = { path = "crates/cicada-server" }
 
 # External. thiserror in libraries; anyhow only in cicada-cli (doc 14).
 anyhow = "1"
+# Server stack (doc 13): axum + tokio quarantined in cicada-server; the WS
+# feature carries the binary geometry frames.
+axum = { version = "0.8", features = ["ws", "http1", "json", "query", "tokio", "macros"], default-features = false }
+base64 = "0.22"
 blake3 = "1"
+bytes = "1"
 cargo_metadata = "0.19"
 clap = { version = "4", features = ["derive"] }
 directories = "6"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+getrandom = "0.3"
 glam = "0.30"
 insta = { version = "1", features = ["json"] }
 inventory = "0.3"
@@ -40,18 +47,31 @@ inventory = "0.3"
 # at first build (git clone + FetchContent — needs cmake + network once;
 # MANIFOLD_CSG_LIB_DIR is the hermetic escape hatch).
 manifold-csg = "0.4"
-postcard = { version = "1", features = ["alloc", "use-std"] }
+mime_guess = "2"
+# Project-directory watching (doc 13 §External changes): debounced reload
+# barrier + snapshot broadcast.
+notify = "8"
+# default-features = false drops `heapless-cas` (heapless 0.7 → the
+# unmaintained atomic-polyfill, RUSTSEC-2023-0089 — nightly cargo-deny went
+# red on it 2026-08-14); the std store never touched those code paths.
+postcard = { version = "1", default-features = false, features = ["alloc", "use-std"] }
 proc-macro2 = "1"
 proptest = "1"
 quote = "1"
 rayon = "1"
 rmpv = "1"
+# The embedded SPA (doc 13: `cicada serve` is the whole app) — behind the
+# server's `embed` feature so debug/test builds need no `web/dist`.
+rust-embed = { version = "8", features = ["interpolate-folder-path", "debug-embed"] }
 serde = { version = "1", features = ["derive"] }
 spade = "2"
 serde_json = "1"
 syn = { version = "2", features = ["full"] }
 tempfile = "3"
 thiserror = "2"
+tokio-tungstenite = "0.29"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "fs", "io-util", "signal"] }
+tower-http = { version = "0.6", features = ["fs"] }
 trybuild = "1"
 zstd = "0.13"
 

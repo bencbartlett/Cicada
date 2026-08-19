@@ -34,7 +34,7 @@ pub use cicada_core as core;
 pub use clock::{Clock, MonotonicClock, VirtualClock};
 pub use exec::{
     CancelToken, Event, NodeFailure, NodeOutcome, NoopObserver, Observer, Scheduler,
-    SchedulerConfig, SolveError, SolveReport,
+    SchedulerConfig, SolveError, SolveReport, panic_message,
 };
 pub use graph::{GraphError, Input, NodeDecl, NodeError, NodeFn, NodeId, SolveGraph};
 pub use key::{CACHE_EPOCH, KeyInputs, NodeKey, node_key};

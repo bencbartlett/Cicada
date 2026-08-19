@@ -5,7 +5,9 @@
 //! Diagnostics gate **scoped to the target cone** (docs/12: red cones are
 //! excluded, everything else proceeds): a problem in the cone refuses the
 //! run with doc-11 JSON on stderr; problems elsewhere are printed as
-//! warnings and the run continues.
+//! warnings and the run continues. The semantics live in
+//! `cicada_server::compile` (shared with the live session since stage 5);
+//! this file prints.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,13 +16,13 @@ use std::sync::Arc;
 use anyhow::{Context as _, bail};
 use cicada_core::config::ProjectConfig;
 use cicada_core::value::{HashedValue, ValueData};
-use cicada_lang::{Catalog, Document, diag::Diagnostic, resolve};
 use cicada_sched::{
     CancelToken, DiskStore, MonotonicClock, NodeId, NodeOutcome, NoopObserver, Scheduler,
     SchedulerConfig, SolveReport, project_cache_dir,
 };
-
-use crate::lower::{Lowered, LoweredBinding, lower, reachable_bindings};
+use cicada_server::compile::{self, Loaded};
+use cicada_server::lower::{Lowered, LoweredBinding, lower};
+use cicada_server::scripts::ScriptCancel;
 
 /// Arguments of `cicada run`.
 pub struct RunArgs {
@@ -47,22 +49,49 @@ pub struct RunArgs {
 /// Anything loud: unreadable file, diagnostics in the target cone, store
 /// failures, red nodes.
 pub fn run(args: &RunArgs) -> anyhow::Result<()> {
+    // Absolute paths first, then work FROM the pipeline's directory:
+    // relative paths inside the pipeline (exporter `path=` literals)
+    // resolve against it — the same rule as `cicada serve` — not against
+    // the shell's working directory (stage-5 review: exports were landing
+    // wherever the process was launched).
+    let pipeline = fs::canonicalize(&args.pipeline)
+        .with_context(|| format!("resolving {}", args.pipeline.display()))?;
+    let cache_dir = args
+        .cache_dir
+        .as_ref()
+        .map(|dir| std::path::absolute(dir).with_context(|| format!("resolving {}", dir.display())))
+        .transpose()?;
+    if let Some(dir) = pipeline.parent() {
+        std::env::set_current_dir(dir).with_context(|| format!("entering {}", dir.display()))?;
+    }
+    let args = &RunArgs {
+        pipeline,
+        nodes: args.nodes.clone(),
+        time: args.time,
+        hashes: args.hashes,
+        cache_dir,
+        threads: args.threads,
+    };
     let source = fs::read_to_string(&args.pipeline)
         .with_context(|| format!("reading {}", args.pipeline.display()))?;
-    let document = Document::parse(&source);
-    let stdlib = cicada_stdlib::registry();
     // Project script nodes (doc 10 §5): scripts/*.py next to the pipeline
-    // join the catalog; no scripts, no Python requirement.
-    let scripts = crate::scripts::discover(&args.pipeline, stdlib)?;
-    let mut specs: Vec<&'static cicada_core::spec::NodeSpec> = stdlib.to_vec();
-    let mut script_specs: Vec<&'static cicada_core::spec::NodeSpec> =
-        scripts.values().map(|node| node.spec).collect();
-    script_specs.sort_by_key(|spec| spec.name);
-    specs.extend(script_specs);
-    let catalog = Catalog::new(&specs);
-    let resolution = resolve(&document, &catalog);
+    // join the catalog; no scripts, no Python requirement. The headless
+    // run never cancels, so the cancel bridge's switch stays unkilled.
+    let Loaded {
+        document,
+        specs,
+        scripts,
+        resolution,
+    } = compile::load(&args.pipeline, &source, &ScriptCancel::new())?;
 
-    let targets = resolve_targets(&document, &specs, &args.nodes)?;
+    let targets = compile::resolve_targets(&document, &specs, &args.nodes)?;
+    for name in &targets.skipped_effectful {
+        eprintln!(
+            "note: `{name}` is effectful — skipped (its inputs still solve); run it \
+             explicitly with `--node {name}`"
+        );
+    }
+    let targets = targets.names;
     gate_diagnostics(&document, &resolution.diagnostics, &targets)?;
 
     let config = ProjectConfig::default();
@@ -115,89 +144,17 @@ pub fn run(args: &RunArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The requested target names, or every leaf binding (nothing references
-/// it) in definition order — MINUS effectful leaves (doc 10 §7: exporters
-/// never auto-run; naming one with `--node` IS the explicit action).
-fn resolve_targets(
-    document: &Document,
-    specs: &[&'static cicada_core::spec::NodeSpec],
-    nodes: &[String],
-) -> anyhow::Result<Vec<String>> {
-    if !nodes.is_empty() {
-        for name in nodes {
-            if document.find_binding(name).is_none() {
-                bail!("no binding named `{name}` in the pipeline");
-            }
-        }
-        return Ok(nodes.to_vec());
-    }
-    let effectful: std::collections::HashSet<&str> = specs
-        .iter()
-        .filter(|spec| !spec.pure)
-        .map(|spec| spec.name)
-        .collect();
-    let mut referenced: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for (_, statement, _) in document.statements() {
-        for reference in statement.references() {
-            referenced.insert(reference.name.clone());
-        }
-    }
-    let mut leaves: Vec<String> = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for (_, statement, _) in document.statements() {
-        let is_effectful = matches!(
-            &statement.rhs,
-            cicada_lang::ast::Rhs::Call(call) if effectful.contains(call.func.name.as_str())
-        );
-        for target in &statement.targets {
-            if referenced.contains(&target.name) {
-                continue;
-            }
-            if is_effectful {
-                // Solve up to the exporter's INPUTS (doc 10 §7), just not
-                // the export itself.
-                eprintln!(
-                    "note: `{}` is effectful — skipped (its inputs still solve); run it \
-                     explicitly with `--node {}`",
-                    target.name, target.name
-                );
-                for reference in statement.references() {
-                    if seen.insert(reference.name.clone()) {
-                        leaves.push(reference.name.clone());
-                    }
-                }
-            } else if seen.insert(target.name.clone()) {
-                leaves.push(target.name.clone());
-            }
-        }
-    }
-    if leaves.is_empty() {
-        bail!(
-            "the pipeline binds nothing to compute (effectful bindings run only \
-             via --node)"
-        );
-    }
-    Ok(leaves)
-}
-
 /// Refuse when any diagnostic touches the target cone (or names no node);
 /// print the rest as warnings.
 fn gate_diagnostics(
-    document: &Document,
-    diagnostics: &[Diagnostic],
+    document: &cicada_lang::Document,
+    diagnostics: &[cicada_lang::diag::Diagnostic],
     targets: &[String],
 ) -> anyhow::Result<()> {
     if diagnostics.is_empty() {
         return Ok(());
     }
-    let cone = reachable_bindings(document, targets);
-    let (blocking, outside): (Vec<&Diagnostic>, Vec<&Diagnostic>) =
-        diagnostics.iter().partition(|diagnostic| {
-            diagnostic
-                .node
-                .as_ref()
-                .is_none_or(|node| cone.contains(node))
-        });
+    let compile::Gate { blocking, outside } = compile::gate(document, diagnostics, targets);
     if !outside.is_empty() {
         eprintln!(
             "warning: {} diagnostic(s) outside the requested cone (run continues):",

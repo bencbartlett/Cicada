@@ -26,4 +26,4 @@ carved = mesh_difference(mesh=block, cutters=cutter_list)
 
 # The debug window into headless geometry: any OBJ viewer opens this.
 dump_list = linear_array(geometry=carved, direction=still, count=1)
-dump = export_obj(meshes=dump_list, path="examples/02-solids.obj")
+dump = export_obj(meshes=dump_list, path="02-solids.obj")

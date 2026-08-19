@@ -48,9 +48,9 @@ pub fn export_obj(input: ExportObjIn) {
         panic!("export_obj: writing `{}` failed: {error}", input.path);
     }
     // Say WHERE it landed, absolutely — an export whose destination the
-    // user has to hunt for is halfway to wall lesson 7 (probe friction:
-    // relative paths resolve against the invocation's working directory,
-    // and nothing said so).
+    // user has to hunt for is halfway to wall lesson 7. Relative paths
+    // resolve against the pipeline's directory: `cicada run` and `cicada
+    // serve` both enter it before solving (stage 5).
     let resolved = fs::canonicalize(&input.path)
         .map_or_else(|_| input.path.clone(), |p| p.display().to_string());
     eprintln!(

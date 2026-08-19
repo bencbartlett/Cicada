@@ -1,0 +1,3102 @@
+//! One pipeline = one session (docs/13 §Projects, pipelines, sessions):
+//! the authoritative owner of the `.cic` text, its sidecar, the checked
+//! and lowered graph, the solve loop, per-node statuses, the display set,
+//! and the connected clients with their single-writer lease.
+//!
+//! Every canvas gesture arrives as an intent, becomes a minimal text edit
+//! through `cicada_lang::writer` (docs/10 round-trip table), is persisted
+//! immediately (no save button, docs/16), broadcast as an authoritative
+//! delta, and solved after a ~30 ms structural debounce; `param_preview`
+//! streams edit a scratch copy and go straight to the latest-wins loop.
+//! Frames go out only for outputs whose value hash changed since the last
+//! broadcast; a joining client gets the whole display set re-streamed.
+//!
+//! Locking discipline: `inner` (document/graph/clients) and `status` (the
+//! per-node board, written from rayon worker threads) are separate mutexes;
+//! neither is held while calling into the solve loop, and the solve loop
+//! holds none of its own while calling back in — so no lock order exists
+//! to violate.
+
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
+
+use bytes::Bytes;
+use cicada_core::config::ProjectConfig;
+use cicada_core::hash::ValueHash;
+use cicada_core::spec::NodeSpec;
+use cicada_lang::ast::Rhs;
+use cicada_lang::check::BindingType;
+use cicada_lang::diag::DiagnosticKind;
+use cicada_lang::{Catalog, Document, resolve, writer};
+use cicada_sched::{
+    CancelToken, DiskStore, Event, LogRecovery, MonotonicClock, NodeId, NodeOutcome, Observer,
+    Scheduler, SchedulerConfig, SolveError, SolveReport, project_cache_dir,
+};
+use tokio::sync::mpsc::UnboundedSender;
+
+use crate::compile::{self, Loaded};
+use crate::display::{self, DisplayStats, PickTable};
+use crate::lower::{Lowered, LoweredBinding, lower, lower_partial};
+use crate::protocol::{
+    ClientMessage, DeltaSource, LeaseView, NodeState, NodeStatus, ProbeCatalogEntry, ProbeVerdict,
+    Role, ServerMessage, SolveSummary, ValueSummary, encode, is_write,
+};
+use crate::scripts::ScriptCancel;
+use crate::sidecar::Sidecar;
+use crate::solve::{Job, JobKind, SolveLoop, SolveSink};
+use crate::viewmodel::{self, GraphView, NodeRefs, WireEnd};
+
+/// A path for humans: Windows' `\\?\` verbatim prefix stripped, forward
+/// slashes.
+#[must_use]
+pub fn display_path(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    let text = text.strip_prefix(r"\\?\").unwrap_or(&text);
+    text.replace('\\', "/")
+}
+
+/// Structural-edit debounce (docs/12 §Solve generations: ~30 ms).
+pub const STRUCTURAL_DEBOUNCE: Duration = Duration::from_millis(30);
+/// Status coalescing period (docs/13: ≤ 10 Hz).
+pub const STATUS_PERIOD: Duration = Duration::from_millis(100);
+/// Grid unit hint sent to clients (px per unit).
+pub const UNIT_PX: u32 = 24;
+
+/// Session construction options.
+#[derive(Debug, Clone)]
+pub struct SessionConfig {
+    /// The project directory (display + relative paths).
+    pub project_dir: PathBuf,
+    /// The pipeline file (absolute).
+    pub pipeline: PathBuf,
+    /// Store override; default = the per-project user cache dir.
+    pub cache_dir: Option<PathBuf>,
+    /// Worker threads (0 = cores − 2).
+    pub threads: usize,
+    /// Project configuration (units, tolerance).
+    pub project: ProjectConfig,
+}
+
+/// Session failures.
+#[derive(Debug, thiserror::Error)]
+pub enum SessionError {
+    /// Reading the pipeline failed.
+    #[error("reading {path}: {source}")]
+    Read {
+        /// The file.
+        path: PathBuf,
+        /// The OS error.
+        #[source]
+        source: std::io::Error,
+    },
+    /// Writing the pipeline failed.
+    #[error("writing {path}: {source}")]
+    Write {
+        /// The file.
+        path: PathBuf,
+        /// The OS error.
+        #[source]
+        source: std::io::Error,
+    },
+    /// Script discovery failed.
+    #[error(transparent)]
+    Scripts(#[from] crate::scripts::ScriptsError),
+    /// The sidecar is unreadable/invalid.
+    #[error(transparent)]
+    Sidecar(#[from] crate::sidecar::SidecarError),
+    /// The store refused to open.
+    #[error(transparent)]
+    Store(#[from] cicada_sched::StoreError),
+    /// The scheduler could not start.
+    #[error(transparent)]
+    Solve(#[from] SolveError),
+    /// Graph assembly failed (a lowering bug).
+    #[error(transparent)]
+    Lower(#[from] crate::lower::LowerError),
+    /// The pipeline is not inside the project directory — refused, never
+    /// silently served from wherever it is.
+    #[error("{pipeline} is not inside the project {project}")]
+    OutsideProject {
+        /// The pipeline.
+        pipeline: PathBuf,
+        /// The project directory.
+        project: PathBuf,
+    },
+}
+
+/// Why an intent was refused (sent back as an `error` message).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum IntentError {
+    /// Read-only observer sent a write.
+    #[error("read-only observer — take the lease to edit")]
+    Lease,
+    /// A writer gesture refused.
+    #[error("{0}")]
+    Writer(#[from] writer::WriterError),
+    /// Unknown node/function/port.
+    #[error("{0}")]
+    Unknown(String),
+    /// Malformed intent.
+    #[error("{0}")]
+    Protocol(String),
+    /// Persisting failed.
+    #[error("{0}")]
+    Persist(String),
+    /// The gesture is refused by the checker (blocked wire, cycle, missing
+    /// port) — the text is never edited.
+    #[error("{0}")]
+    Refused(String),
+}
+
+impl IntentError {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Lease => "lease",
+            Self::Writer(_) => "writer",
+            Self::Unknown(_) => "unknown",
+            Self::Protocol(_) => "protocol",
+            Self::Persist(_) => "persist",
+            Self::Refused(_) => "refused",
+        }
+    }
+}
+
+/// A message to one client's socket.
+#[derive(Debug, Clone)]
+pub enum Outgoing {
+    /// JSON control-plane text.
+    Text(String),
+    /// A binary frame.
+    Binary(Bytes),
+}
+
+struct Client {
+    tx: UnboundedSender<Outgoing>,
+    role: Role,
+    joined: u64,
+}
+
+/// One displayed output's last broadcast state.
+#[derive(Debug, Clone)]
+struct Displayed {
+    hash: ValueHash,
+    generation: u64,
+    stats: DisplayStats,
+}
+
+/// A generation's report kept for the inspector.
+struct Kept {
+    generation: u64,
+    lowered: Arc<Lowered>,
+    report: Arc<SolveReport>,
+}
+
+struct Inner {
+    loaded: Loaded,
+    sidecar: Sidecar,
+    lowered: Arc<Lowered>,
+    graph: GraphView,
+    seq: u64,
+    refs: NodeRefs,
+    picks: PickTable,
+    clients: BTreeMap<u32, Client>,
+    next_client: u32,
+    join_counter: u64,
+    writer: Option<u32>,
+    /// blake3 of the text we last wrote — the watcher ignores our own
+    /// writes by comparing.
+    last_written: Option<[u8; 32]>,
+    display: HashMap<(u32, u32), Displayed>,
+    last_complete: Option<Kept>,
+    /// Pending screenshot requests: id → reply slot.
+    screenshots: HashMap<u64, tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>>,
+    next_screenshot: u64,
+    text_hash: [u8; 32],
+}
+
+/// The per-node status board — written by observer events on worker
+/// threads, flushed to clients at ≤ 10 Hz and on generation boundaries.
+struct StatusBoard {
+    nodes: BTreeMap<String, NodeStatus>,
+    changed: BTreeMap<String, NodeStatus>,
+    summary: SolveSummary,
+    started: Option<Instant>,
+    /// Predicted nanos per pending node (cost-weighted ETA).
+    predicted: HashMap<String, Option<u64>>,
+    dirty: bool,
+}
+
+struct Core {
+    config: SessionConfig,
+    relative: String,
+    inner: Mutex<Inner>,
+    status: Mutex<StatusBoard>,
+    scheduler: Arc<Scheduler>,
+    scripts: Arc<ScriptCancel>,
+    /// The debounce thread's shared state.
+    debounce: Mutex<Option<Instant>>,
+    debounce_wake: Condvar,
+    shutdown: AtomicBool,
+    /// Set once the loop exists (Core is built first). Weak: the loop's
+    /// sink holds the Core, so a strong reference here would be a cycle
+    /// that never drops the worker thread, scheduler, or store.
+    solve: Mutex<Option<std::sync::Weak<SolveLoop>>>,
+    threads: usize,
+    notices: Mutex<Vec<String>>,
+    /// Session start (timings are relative to it).
+    epoch: Instant,
+    /// The last generations' timings (docs/15 measurement protocol: the
+    /// preview-latency currency, read from `/debug/state`).
+    timings: Mutex<std::collections::VecDeque<GenerationTiming>>,
+}
+
+/// One generation's timing record.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GenerationTiming {
+    /// The generation.
+    pub generation: u64,
+    /// `structural` / `preview` / `explicit`.
+    pub kind: &'static str,
+    /// Milliseconds since the session opened when it started.
+    pub started_ms: f64,
+    /// Wall milliseconds from start to completion (frames included).
+    pub elapsed_ms: Option<f64>,
+    /// Ended cancelled.
+    pub cancelled: bool,
+    /// Nodes computed / cached.
+    pub computed: usize,
+    /// Cache hits.
+    pub cached: usize,
+    /// Frame bytes broadcast for it.
+    pub frame_bytes: usize,
+}
+
+/// How many timing records to keep.
+pub const TIMINGS_KEPT: usize = 256;
+
+/// A live pipeline session.
+pub struct Session {
+    core: Arc<Core>,
+    solve: Arc<SolveLoop>,
+    debouncer: Option<std::thread::JoinHandle<()>>,
+    ticker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Session {
+    /// Open a session: read + check + lower the pipeline, open the store,
+    /// start the scheduler and the solve loop, run the first generation.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError`].
+    #[allow(clippy::too_many_lines)] // construction wires every part exactly once
+    pub fn open(config: SessionConfig) -> Result<Arc<Self>, SessionError> {
+        let text =
+            std::fs::read_to_string(&config.pipeline).map_err(|source| SessionError::Read {
+                path: config.pipeline.clone(),
+                source,
+            })?;
+        let scripts_cancel = ScriptCancel::new();
+        let loaded = compile::load(&config.pipeline, &text, &scripts_cancel)?;
+        let sidecar = Sidecar::load(&Sidecar::path_for(&config.pipeline))?;
+        let lowered = Arc::new(lower_partial(
+            &loaded.document,
+            &loaded.resolution,
+            &loaded.specs,
+            &config.project,
+            &loaded.scripts,
+        )?);
+        let mut refs = NodeRefs::default();
+        let graph = viewmodel::build(
+            &loaded.document,
+            &loaded.resolution,
+            &loaded.specs,
+            &lowered,
+            &sidecar,
+            &mut refs,
+        );
+
+        let store_dir = match &config.cache_dir {
+            Some(dir) => dir.clone(),
+            None => project_cache_dir(&config.pipeline)?,
+        };
+        let (store, open_report) = DiskStore::open(&store_dir)?;
+        let mut notices = Vec::new();
+        match open_report.recovery {
+            None => {}
+            Some(LogRecovery::TornTail) => notices.push(
+                "memo log ended in a torn record (crash mid-write?); truncated there — completed \
+                 work before it was kept"
+                    .to_owned(),
+            ),
+            Some(LogRecovery::CorruptRecord {
+                offset,
+                bytes_dropped,
+            }) => notices.push(format!(
+                "memo log had an undecodable record at byte {offset}; {bytes_dropped} bytes of \
+                 later cached work were dropped and will recompute"
+            )),
+        }
+        let scheduler = Arc::new(Scheduler::new(
+            Arc::new(store),
+            Arc::new(MonotonicClock::new()),
+            SchedulerConfig {
+                threads: config.threads,
+                ..SchedulerConfig::default()
+            },
+        )?);
+        let threads = scheduler.threads();
+        let relative = config
+            .pipeline
+            .strip_prefix(&config.project_dir)
+            .map_err(|_| SessionError::OutsideProject {
+                pipeline: config.pipeline.clone(),
+                project: config.project_dir.clone(),
+            })?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let text_hash = *blake3::hash(text.as_bytes()).as_bytes();
+        let core = Arc::new(Core {
+            relative,
+            inner: Mutex::new(Inner {
+                loaded,
+                sidecar,
+                lowered,
+                graph,
+                seq: 0,
+                refs,
+                picks: PickTable::default(),
+                clients: BTreeMap::new(),
+                next_client: 0,
+                join_counter: 0,
+                writer: None,
+                last_written: None,
+                display: HashMap::new(),
+                last_complete: None,
+                screenshots: HashMap::new(),
+                next_screenshot: 0,
+                text_hash,
+            }),
+            status: Mutex::new(StatusBoard {
+                nodes: BTreeMap::new(),
+                changed: BTreeMap::new(),
+                summary: SolveSummary::default(),
+                started: None,
+                predicted: HashMap::new(),
+                dirty: false,
+            }),
+            scheduler: Arc::clone(&scheduler),
+            scripts: Arc::clone(&scripts_cancel),
+            debounce: Mutex::new(None),
+            debounce_wake: Condvar::new(),
+            shutdown: AtomicBool::new(false),
+            solve: Mutex::new(None),
+            threads,
+            notices: Mutex::new(notices),
+            epoch: Instant::now(),
+            timings: Mutex::new(std::collections::VecDeque::with_capacity(TIMINGS_KEPT)),
+            config,
+        });
+        let sink: Arc<dyn SolveSink> = core.clone();
+        let solve = Arc::new(SolveLoop::new(scheduler, scripts_cancel, sink));
+        *core
+            .solve
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::downgrade(&solve));
+        core.seed_statuses();
+
+        // The debounce thread: sleeps until the deadline, then submits.
+        let debounce_core = Arc::clone(&core);
+        let debouncer = std::thread::Builder::new()
+            .name("cicada-debounce".to_owned())
+            .spawn(move || debounce_loop(&debounce_core))
+            .ok();
+        // The status ticker: flushes coalesced statuses at ≤ 10 Hz.
+        let ticker_core = Arc::clone(&core);
+        let ticker = std::thread::Builder::new()
+            .name("cicada-status".to_owned())
+            .spawn(move || {
+                while !ticker_core.shutdown.load(Ordering::SeqCst) {
+                    std::thread::sleep(STATUS_PERIOD);
+                    ticker_core.flush_status(false);
+                }
+            })
+            .ok();
+        let session = Arc::new(Self {
+            core,
+            solve,
+            debouncer,
+            ticker,
+        });
+        session.submit_structural_now();
+        Ok(session)
+    }
+
+    /// The pipeline path relative to the project.
+    #[must_use]
+    pub fn relative(&self) -> &str {
+        &self.core.relative
+    }
+
+    /// The pipeline's absolute path.
+    #[must_use]
+    pub fn pipeline(&self) -> &Path {
+        &self.core.config.pipeline
+    }
+
+    /// The store directory.
+    #[must_use]
+    pub fn cache_dir(&self) -> PathBuf {
+        self.core.scheduler.store().root().to_owned()
+    }
+
+    // --------------------------------------------------------- clients --
+
+    /// Register a client socket. The first client takes the write lease;
+    /// later ones observe. Returns `(client id, role)`. The caller then
+    /// sends [`Self::hello`], [`Self::snapshot`], and
+    /// [`Self::restream_display`].
+    #[must_use]
+    pub fn connect(&self, tx: UnboundedSender<Outgoing>) -> (u32, Role) {
+        let mut inner = self.core.lock_inner();
+        inner.next_client += 1;
+        inner.join_counter += 1;
+        let id = inner.next_client;
+        let role = if inner.writer.is_none() {
+            inner.writer = Some(id);
+            Role::Writer
+        } else {
+            Role::Observer
+        };
+        let joined = inner.join_counter;
+        inner.clients.insert(id, Client { tx, role, joined });
+        let lease = lease_view(&inner);
+        // Everyone learns the new roster.
+        for (&other, client) in &inner.clients {
+            if other != id {
+                let _ = client.tx.send(Outgoing::Text(encode(
+                    inner.seq,
+                    &ServerMessage::Lease {
+                        lease: lease.clone(),
+                        role: client.role,
+                    },
+                )));
+            }
+        }
+        (id, role)
+    }
+
+    /// A client left. A departing writer hands the lease to the oldest
+    /// observer after the caller's grace period (`transfer_lease_if_free`).
+    pub fn disconnect(&self, id: u32) {
+        let mut inner = self.core.lock_inner();
+        inner.clients.remove(&id);
+        if inner.writer == Some(id) {
+            inner.writer = None;
+        }
+        let lease = lease_view(&inner);
+        for client in inner.clients.values() {
+            let _ = client.tx.send(Outgoing::Text(encode(
+                inner.seq,
+                &ServerMessage::Lease {
+                    lease: lease.clone(),
+                    role: client.role,
+                },
+            )));
+        }
+    }
+
+    /// After the writer's grace period: if no writer, promote the oldest
+    /// observer (docs/13: automatic transfer, 5 s grace).
+    pub fn transfer_lease_if_free(&self) {
+        let mut inner = self.core.lock_inner();
+        if inner.writer.is_some() {
+            return;
+        }
+        let Some((&oldest, _)) = inner.clients.iter().min_by_key(|(_, c)| c.joined) else {
+            return;
+        };
+        inner.writer = Some(oldest);
+        if let Some(client) = inner.clients.get_mut(&oldest) {
+            client.role = Role::Writer;
+        }
+        broadcast_lease(&inner);
+    }
+
+    /// Does `id` hold the write lease?
+    #[must_use]
+    pub fn is_writer(&self, id: u32) -> bool {
+        self.core.lock_inner().writer == Some(id)
+    }
+
+    /// Is any client connected?
+    #[must_use]
+    pub fn has_clients(&self) -> bool {
+        !self.core.lock_inner().clients.is_empty()
+    }
+
+    /// The `hello` message for a client.
+    #[must_use]
+    pub fn hello(&self, id: u32, role: Role) -> String {
+        let inner = self.core.lock_inner();
+        encode(
+            inner.seq,
+            &ServerMessage::Hello {
+                client_id: id,
+                role,
+                protocol: crate::protocol::PROTOCOL_VERSION,
+                engine: format!("cicada {}", env!("CARGO_PKG_VERSION")),
+                project: display_path(&self.core.config.project_dir),
+                pipeline: self.core.relative.clone(),
+                unit_px: UNIT_PX,
+            },
+        )
+    }
+
+    /// The full snapshot (initial load / resync / reload barrier).
+    #[must_use]
+    pub fn snapshot(&self, barrier: bool, reason: &str) -> String {
+        let inner = self.core.lock_inner();
+        let status = self.core.lock_status();
+        encode(
+            inner.seq,
+            &ServerMessage::Snapshot {
+                graph: inner.graph.clone(),
+                text: inner.loaded.document.emit(),
+                statuses: status.nodes.clone(),
+                summary: status.summary.clone(),
+                lease: lease_view(&inner),
+                barrier,
+                reason: reason.to_owned(),
+            },
+        )
+    }
+
+    /// Re-stream every displayed output's frames to ONE client (join /
+    /// `resync_display`).
+    pub fn restream_display(&self, id: u32) {
+        let mut inner = self.core.lock_inner();
+        let Some(client) = inner.clients.get(&id) else {
+            return;
+        };
+        let tx = client.tx.clone();
+        let generation = inner
+            .display
+            .values()
+            .map(|d| d.generation)
+            .max()
+            .unwrap_or(0);
+        let _ = tx.send(Outgoing::Text(encode(
+            inner.seq,
+            &ServerMessage::DisplayReset { generation },
+        )));
+        let store = Arc::clone(self.core.scheduler.store());
+        let tolerance = self.core.config.project.tol();
+        let keys: Vec<((u32, u32), Displayed)> =
+            inner.display.iter().map(|(k, v)| (*k, v.clone())).collect();
+        for ((node, output), displayed) in keys {
+            match store.load_value(&displayed.hash) {
+                Ok(value) => {
+                    let frames = display::frames_for_value(
+                        &value,
+                        displayed.generation,
+                        node,
+                        output,
+                        &mut inner.picks,
+                        tolerance,
+                    );
+                    for frame in frames.frames {
+                        let _ = tx.send(Outgoing::Binary(Bytes::from(frame)));
+                    }
+                }
+                Err(error) => {
+                    let _ = tx.send(Outgoing::Text(encode(
+                        inner.seq,
+                        &ServerMessage::Notice {
+                            level: "warning".to_owned(),
+                            message: format!(
+                                "display value {} could not be reloaded from the store: {error}",
+                                displayed.hash
+                            ),
+                        },
+                    )));
+                }
+            }
+        }
+        for notice in self.core.take_notices() {
+            let _ = tx.send(Outgoing::Text(encode(
+                inner.seq,
+                &ServerMessage::Notice {
+                    level: "warning".to_owned(),
+                    message: notice,
+                },
+            )));
+        }
+    }
+
+    // --------------------------------------------------------- intents --
+
+    /// Handle one intent from `client`. Errors are sent back to that
+    /// client as `error` messages; nothing here panics on bad input.
+    pub fn handle(&self, client: u32, intent_id: Option<String>, message: ClientMessage) {
+        // Write gestures mutate the document/sidecar in place before the
+        // persist; if anything fails on the way, the in-memory state must
+        // roll back to what is on disk — a refused edit that lingered would
+        // be broadcast and written by the next unrelated op.
+        let snapshot = if is_write(&message) {
+            let inner = self.core.lock_inner();
+            Some((
+                inner.seq,
+                inner.loaded.document.clone(),
+                inner.sidecar.clone(),
+                inner.refs.clone(),
+            ))
+        } else {
+            None
+        };
+        let result = self.dispatch(client, intent_id.clone(), message);
+        if result.is_err()
+            && let Some((seq, document, sidecar, refs)) = snapshot
+        {
+            let mut inner = self.core.lock_inner();
+            if inner.seq == seq {
+                inner.loaded.document = document;
+                inner.sidecar = sidecar;
+                inner.refs = refs;
+                inner.loaded.recheck();
+            }
+        }
+        if let Err(error) = result {
+            let inner = self.core.lock_inner();
+            if let Some(c) = inner.clients.get(&client) {
+                let _ = c.tx.send(Outgoing::Text(encode(
+                    inner.seq,
+                    &ServerMessage::Error {
+                        intent_id,
+                        kind: error.kind().to_owned(),
+                        message: error.to_string(),
+                    },
+                )));
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_lines)] // the intent table, one arm per gesture
+    fn dispatch(
+        &self,
+        client: u32,
+        intent_id: Option<String>,
+        message: ClientMessage,
+    ) -> Result<(), IntentError> {
+        {
+            let inner = self.core.lock_inner();
+            if is_write(&message) && inner.writer != Some(client) {
+                return Err(IntentError::Lease);
+            }
+        }
+        let source = |label: String| DeltaSource {
+            client: Some(client),
+            intent_id: intent_id.clone(),
+            label,
+        };
+        match message {
+            ClientMessage::Hello { .. } => Ok(()),
+            ClientMessage::PlaceNode {
+                func,
+                cell,
+                connect,
+            } => {
+                let mut inner = self.core.lock_inner();
+                if !inner.loaded.specs.iter().any(|spec| spec.name == func) {
+                    return Err(IntentError::Unknown(format!(
+                        "no node named `{func}` in the catalog"
+                    )));
+                }
+                let deps: Vec<&str> = connect
+                    .as_ref()
+                    .map(|c| vec![c.from.node.as_str()])
+                    .unwrap_or_default();
+                let name = writer::place(&mut inner.loaded.document, &func, &deps)?;
+                if let Some(cell) = cell {
+                    inner.sidecar.set_cell(&name, Some(cell));
+                }
+                if let Some(spec) = connect {
+                    connect_checked(&mut inner, &spec.from, &name, &spec.to_port, spec.lift)?;
+                }
+                self.commit(&mut inner, source(format!("place {func}")), vec![name])?;
+                Ok(())
+            }
+            ClientMessage::Connect { from, to, lift } => {
+                let mut inner = self.core.lock_inner();
+                connect_checked(&mut inner, &from, &to.node, &to.port, lift)?;
+                let label = format!("wire {}.{} → {}.{}", from.node, from.port, to.node, to.port);
+                self.commit(&mut inner, source(label), vec![to.node])?;
+                Ok(())
+            }
+            ClientMessage::Disconnect { to } => {
+                let mut inner = self.core.lock_inner();
+                writer::remove_kwarg(&mut inner.loaded.document, &to.node, &to.port)?;
+                let label = format!("unwire {}.{}", to.node, to.port);
+                self.commit(&mut inner, source(label), vec![to.node])?;
+                Ok(())
+            }
+            ClientMessage::AcceptLift { node, port } => {
+                let mut inner = self.core.lock_inner();
+                writer::wrap_each(&mut inner.loaded.document, &node, &port)?;
+                self.commit(
+                    &mut inner,
+                    source(format!("lift {node}.{port}")),
+                    vec![node],
+                )?;
+                Ok(())
+            }
+            ClientMessage::SetParam { node, port, value } => {
+                let mut inner = self.core.lock_inner();
+                apply_param(&mut inner.loaded.document, &node, port.as_deref(), &value)?;
+                let label = match &port {
+                    Some(port) => format!("set {node}.{port} = {value}"),
+                    None => format!("set {node} = {value}"),
+                };
+                self.commit(&mut inner, source(label), vec![node])?;
+                Ok(())
+            }
+            ClientMessage::ParamPreview { node, port, value } => {
+                let job = {
+                    let inner = self.core.lock_inner();
+                    let mut scratch = inner.loaded.document.clone();
+                    apply_param(&mut scratch, &node, port.as_deref(), &value)?;
+                    let resolution = resolve(&scratch, &Catalog::new(&inner.loaded.specs));
+                    let lowered = lower_partial(
+                        &scratch,
+                        &resolution,
+                        &inner.loaded.specs,
+                        &self.core.config.project,
+                        &inner.loaded.scripts,
+                    )
+                    .map_err(|e| IntentError::Protocol(e.to_string()))?;
+                    let targets = all_targets(&lowered);
+                    Job {
+                        lowered: Arc::new(lowered),
+                        targets,
+                        kind: JobKind::Preview,
+                    }
+                };
+                self.solve.submit(job);
+                Ok(())
+            }
+            ClientMessage::Rename { node, new } => {
+                let mut inner = self.core.lock_inner();
+                if inner.loaded.specs.iter().any(|spec| spec.name == new) {
+                    // docs/10 §5: a binding named like a callable would
+                    // shadow the node for later calls.
+                    return Err(IntentError::Refused(format!(
+                        "`{new}` is a node name in the catalog — a binding cannot take it"
+                    )));
+                }
+                writer::rename(&mut inner.loaded.document, &node, &new)?;
+                inner.sidecar.rename(&node, &new);
+                inner.refs.rename(&node, &new);
+                self.commit(
+                    &mut inner,
+                    source(format!("rename {node} → {new}")),
+                    vec![new],
+                )?;
+                Ok(())
+            }
+            ClientMessage::DeleteNode { node } => {
+                let mut inner = self.core.lock_inner();
+                // Downstream references become red — the dirty set names
+                // them so the client can flash the reds.
+                let dependents: Vec<String> = inner
+                    .loaded
+                    .document
+                    .statements()
+                    .filter(|(_, statement, _)| {
+                        statement.references().iter().any(|r| r.name == node)
+                    })
+                    .map(|(_, statement, _)| statement.name().to_owned())
+                    .collect();
+                writer::delete(&mut inner.loaded.document, &node)?;
+                inner.sidecar.remove(&node);
+                inner.sidecar.remove_from_groups(&node);
+                self.commit(&mut inner, source(format!("delete {node}")), dependents)?;
+                Ok(())
+            }
+            ClientMessage::MoveNode { node, cell } => {
+                let mut inner = self.core.lock_inner();
+                if inner.graph.node(&node).is_none() {
+                    return Err(IntentError::Unknown(format!("no node named `{node}`")));
+                }
+                inner.sidecar.set_cell(&node, cell);
+                self.commit_sidecar_only(&mut inner, source(format!("move {node}")))?;
+                Ok(())
+            }
+            ClientMessage::SetPreview { node, on } => {
+                let mut inner = self.core.lock_inner();
+                if inner.graph.node(&node).is_none() {
+                    return Err(IntentError::Unknown(format!("no node named `{node}`")));
+                }
+                // An override equal to the default is no override (the
+                // sidecar stays near-empty by construction).
+                let default_on = inner
+                    .graph
+                    .node(&node)
+                    .is_some_and(|n| n.outputs.iter().any(|o| o.displayable));
+                let on = on.filter(|&flag| flag != default_on);
+                inner.sidecar.set_preview(&node, on);
+                self.commit_sidecar_only(&mut inner, source(format!("preview {node}")))?;
+                // The display set changed: send frames (from the last
+                // complete generation) or clears for this node.
+                self.core.refresh_display(&mut inner, None);
+                Ok(())
+            }
+            ClientMessage::Cancel {} => {
+                self.solve.cancel();
+                Ok(())
+            }
+            ClientMessage::Inspect { node } => {
+                let inner = self.core.lock_inner();
+                let (generation, outputs) = self.core.node_values(&inner, &node);
+                send_to(
+                    &inner,
+                    client,
+                    &ServerMessage::NodeValues {
+                        node,
+                        outputs,
+                        generation,
+                    },
+                );
+                Ok(())
+            }
+            ClientMessage::InspectWire { to } => {
+                let inner = self.core.lock_inner();
+                let Some(wire) = inner.graph.wires.iter().find(|w| w.to == to).cloned() else {
+                    return Err(IntentError::Unknown(format!(
+                        "no wire into {}.{}",
+                        to.node, to.port
+                    )));
+                };
+                let (_, outputs) = self.core.node_values(&inner, &wire.from.node);
+                let summary = outputs
+                    .into_iter()
+                    .find(|(port, _)| *port == wire.from.port)
+                    .and_then(|(_, summary)| summary);
+                let pairing = match (wire.lift, summary.as_ref().and_then(|s| s.count)) {
+                    (0, _) => "direct (no iteration)".to_owned(),
+                    (depth, Some(count)) => format!("map ×{depth} over {count} elements"),
+                    (depth, None) => format!("map ×{depth}"),
+                };
+                send_to(
+                    &inner,
+                    client,
+                    &ServerMessage::WireValues {
+                        to,
+                        from: wire.from,
+                        summary,
+                        pairing,
+                    },
+                );
+                Ok(())
+            }
+            ClientMessage::ProbeWire { from } => {
+                let inner = self.core.lock_inner();
+                let (targets, catalog) = probe_wire(&inner, &from)?;
+                send_to(
+                    &inner,
+                    client,
+                    &ServerMessage::WireProbe {
+                        intent_id,
+                        from,
+                        targets,
+                        catalog,
+                    },
+                );
+                Ok(())
+            }
+            ClientMessage::ResyncDisplay {} => {
+                self.restream_display(client);
+                Ok(())
+            }
+            ClientMessage::TakeLease {} => {
+                let mut inner = self.core.lock_inner();
+                let previous = inner.writer;
+                inner.writer = Some(client);
+                if let Some(prev) = previous
+                    && let Some(c) = inner.clients.get_mut(&prev)
+                {
+                    c.role = Role::Observer;
+                }
+                if let Some(c) = inner.clients.get_mut(&client) {
+                    c.role = Role::Writer;
+                }
+                broadcast_lease(&inner);
+                Ok(())
+            }
+            ClientMessage::Screenshot {
+                id,
+                png_base64,
+                error,
+            } => {
+                let mut inner = self.core.lock_inner();
+                if let Some(slot) = inner.screenshots.remove(&id) {
+                    let result = match (png_base64, error) {
+                        (Some(b64), _) => {
+                            use base64::Engine as _;
+                            base64::engine::general_purpose::STANDARD
+                                .decode(b64.as_bytes())
+                                .map_err(|e| format!("bad base64: {e}"))
+                        }
+                        (None, Some(error)) => Err(error),
+                        (None, None) => Err("client sent no image".to_owned()),
+                    };
+                    let _ = slot.send(result);
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Persist text + sidecar after writer gestures, recheck, relower,
+    /// rebuild the view, bump `seq`, broadcast the delta, and schedule the
+    /// structural solve.
+    fn commit(
+        &self,
+        inner: &mut Inner,
+        source: DeltaSource,
+        dirty: Vec<String>,
+    ) -> Result<(), IntentError> {
+        let text = inner.loaded.document.emit();
+        // Atomic: temp file in the same directory, then rename over the
+        // live file — a crash or a concurrent reader (git, the watcher, an
+        // editor) never sees a truncated source of truth.
+        write_atomic(&self.core.config.pipeline, text.as_bytes()).map_err(|e| {
+            IntentError::Persist(format!(
+                "writing {}: {e}",
+                self.core.config.pipeline.display()
+            ))
+        })?;
+        let hash = *blake3::hash(text.as_bytes()).as_bytes();
+        inner.last_written = Some(hash);
+        inner.text_hash = hash;
+        inner
+            .sidecar
+            .save(&Sidecar::path_for(&self.core.config.pipeline))
+            .map_err(|e| IntentError::Persist(e.to_string()))?;
+        inner.loaded.recheck();
+        self.core.rebuild(inner);
+        inner.seq += 1;
+        let message = ServerMessage::Delta {
+            source,
+            graph: inner.graph.clone(),
+            text,
+            dirty,
+        };
+        broadcast(inner, &message);
+        self.core.seed_statuses_locked(inner);
+        self.schedule_structural();
+        Ok(())
+    }
+
+    /// Sidecar-only ops (move / preview): persist, rebuild layout, delta;
+    /// no solve.
+    fn commit_sidecar_only(
+        &self,
+        inner: &mut Inner,
+        source: DeltaSource,
+    ) -> Result<(), IntentError> {
+        inner
+            .sidecar
+            .save(&Sidecar::path_for(&self.core.config.pipeline))
+            .map_err(|e| IntentError::Persist(e.to_string()))?;
+        self.core.rebuild(inner);
+        inner.seq += 1;
+        let message = ServerMessage::Delta {
+            source,
+            graph: inner.graph.clone(),
+            text: inner.loaded.document.emit(),
+            dirty: Vec::new(),
+        };
+        broadcast(inner, &message);
+        Ok(())
+    }
+
+    /// Reload from disk after an external change (git checkout, editor):
+    /// re-read text (+ scripts when `rescan_scripts`), sidecar, relower,
+    /// broadcast a barrier snapshot, resolve.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError`] on unreadable files / script failures — the
+    /// previous state stays live and the error is reported.
+    pub fn reload_from_disk(
+        &self,
+        reason: &str,
+        rescan_scripts: bool,
+    ) -> Result<bool, SessionError> {
+        let text = std::fs::read_to_string(&self.core.config.pipeline).map_err(|source| {
+            SessionError::Read {
+                path: self.core.config.pipeline.clone(),
+                source,
+            }
+        })?;
+        let hash = *blake3::hash(text.as_bytes()).as_bytes();
+        let sidecar = Sidecar::load(&Sidecar::path_for(&self.core.config.pipeline))?;
+        {
+            let mut inner = self.core.lock_inner();
+            let text_same = inner.text_hash == hash;
+            let sidecar_same = inner.sidecar == sidecar;
+            if text_same && sidecar_same && !rescan_scripts {
+                return Ok(false);
+            }
+            if inner.last_written == Some(hash) && sidecar_same && !rescan_scripts {
+                // Our own write echoing back through the watcher.
+                return Ok(false);
+            }
+            if rescan_scripts {
+                let loaded = compile::load(&self.core.config.pipeline, &text, &self.core.scripts)?;
+                inner.loaded = loaded;
+            } else if !text_same {
+                inner.loaded.reload_text(&text);
+            }
+            inner.text_hash = hash;
+            inner.sidecar = sidecar;
+            self.core.rebuild(&mut inner);
+            inner.seq += 1;
+        }
+        // Barrier snapshot to everyone.
+        let snapshot = self.snapshot(true, reason);
+        {
+            let inner = self.core.lock_inner();
+            for client in inner.clients.values() {
+                let _ = client.tx.send(Outgoing::Text(snapshot.clone()));
+            }
+            self.core.seed_statuses_locked(&inner);
+        }
+        self.schedule_structural();
+        Ok(true)
+    }
+
+    fn schedule_structural(&self) {
+        let mut deadline = self
+            .core
+            .debounce
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *deadline = Some(Instant::now() + STRUCTURAL_DEBOUNCE);
+        drop(deadline);
+        self.core.debounce_wake.notify_all();
+    }
+
+    /// Submit the current document's solve immediately (initial load).
+    pub fn submit_structural_now(&self) {
+        self.core.submit_structural();
+    }
+
+    /// Block until the solve loop is idle (tests, `/debug/state?wait=1`).
+    pub fn wait_idle(&self) {
+        // Let a pending debounce fire first.
+        loop {
+            let pending = self
+                .core
+                .debounce
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some();
+            if !pending {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        self.solve.wait_idle();
+        self.core.flush_status(true);
+    }
+
+    /// Cancel the running generation.
+    pub fn cancel(&self) {
+        self.solve.cancel();
+    }
+
+    // -------------------------------------------------- effectful runs --
+
+    /// Run an effectful node explicitly (`POST /api/run/{node}`, doc 10
+    /// §7). Solves its cone on the shared scheduler with its own token
+    /// (a slider drag never cancels an export). Blocking.
+    ///
+    /// # Errors
+    ///
+    /// The refusal text: unknown node, not effectful, diagnostics in the
+    /// cone (JSON), red nodes.
+    #[allow(clippy::too_many_lines)] // gate → lower → solve → statuses → timing → report, in order
+    pub fn run_effectful(&self, node: &str) -> Result<serde_json::Value, String> {
+        let (lowered, generation) = {
+            let inner = self.core.lock_inner();
+            let effectful =
+                compile::effectful_bindings(&inner.loaded.document, &inner.loaded.specs);
+            if inner.loaded.document.find_binding(node).is_none() {
+                return Err(format!("no binding named `{node}`"));
+            }
+            if !effectful.contains(node) {
+                return Err(format!(
+                    "`{node}` is not effectful — it solves live; explicit runs are for exporters"
+                ));
+            }
+            let targets = vec![node.to_owned()];
+            let gate = compile::gate(
+                &inner.loaded.document,
+                &inner.loaded.resolution.diagnostics,
+                &targets,
+            );
+            if !gate.blocking.is_empty() {
+                return Err(format!(
+                    "{} diagnostic(s) in `{node}`'s cone: {}",
+                    gate.blocking.len(),
+                    serde_json::to_string(&gate.blocking).unwrap_or_default()
+                ));
+            }
+            let lowered = lower(
+                &inner.loaded.document,
+                &inner.loaded.resolution,
+                &inner.loaded.specs,
+                &self.core.config.project,
+                &targets,
+                &inner.loaded.scripts,
+            )
+            .map_err(|e| e.to_string())?;
+            (Arc::new(lowered), self.solve.next_generation())
+        };
+        let Some(id) = lowered.graph.find(node) else {
+            return Err(format!("`{node}` lowered to no node — bug"));
+        };
+        // Explicit runs never touch the live solve bar (summary/ETA belong
+        // to the loop's generation, which may be in flight): only per-node
+        // statuses move.
+        let observer = ForwardObserver {
+            core: Arc::clone(&self.core),
+            generation,
+        };
+        {
+            let mut status = self.core.lock_status();
+            set_status(
+                &mut status,
+                node,
+                NodeStatus::new(NodeState::Queued, generation),
+            );
+        }
+        let started = Instant::now();
+        let report = self
+            .core
+            .scheduler
+            .solve(
+                &lowered.graph,
+                &[id],
+                generation,
+                &CancelToken::new(),
+                &observer,
+            )
+            .map_err(|e| e.to_string())?;
+        self.core
+            .finish_statuses(generation, &lowered, &report, false);
+        self.core.record_timing(GenerationTiming {
+            generation,
+            kind: "explicit",
+            started_ms: (started - self.core.epoch).as_secs_f64() * 1000.0,
+            elapsed_ms: Some(started.elapsed().as_secs_f64() * 1000.0),
+            cancelled: report.cancelled,
+            computed: report
+                .outcomes
+                .iter()
+                .filter(|o| matches!(o, NodeOutcome::Computed { .. }))
+                .count(),
+            cached: report
+                .outcomes
+                .iter()
+                .filter(|o| matches!(o, NodeOutcome::CacheHit { .. }))
+                .count(),
+            frame_bytes: 0,
+        });
+        self.core.flush_status(true);
+        let failures = report.failures();
+        let ok = failures.is_empty() && !report.cancelled;
+        let message = if ok {
+            format!("`{node}` ran")
+        } else {
+            failures
+                .iter()
+                .map(|f| format!("red: `{}` — {}", f.node, f.message))
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        {
+            let inner = self.core.lock_inner();
+            broadcast(
+                &inner,
+                &ServerMessage::RunFinished {
+                    node: node.to_owned(),
+                    ok,
+                    message: message.clone(),
+                },
+            );
+        }
+        if ok {
+            Ok(
+                serde_json::json!({ "ok": true, "node": node, "generation": generation, "message": message }),
+            )
+        } else {
+            Err(message)
+        }
+    }
+
+    // ------------------------------------------------------ screenshots --
+
+    /// Ask a connected client (the writer, else any) to render the
+    /// viewport; resolves with PNG bytes. Returns `None` when no client is
+    /// connected (the caller reports 503, loudly).
+    #[must_use]
+    pub fn request_screenshot(
+        &self,
+        target: &str,
+    ) -> Option<tokio::sync::oneshot::Receiver<Result<Vec<u8>, String>>> {
+        let mut inner = self.core.lock_inner();
+        let chosen = inner
+            .writer
+            .filter(|w| inner.clients.contains_key(w))
+            .or_else(|| inner.clients.keys().next().copied())?;
+        inner.next_screenshot += 1;
+        let id = inner.next_screenshot;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        inner.screenshots.insert(id, tx);
+        let message = ServerMessage::ScreenshotRequest {
+            id,
+            target: target.to_owned(),
+        };
+        send_to(&inner, chosen, &message);
+        Some(rx)
+    }
+
+    // -------------------------------------------------------------- api --
+
+    /// The project-aware catalog (stdlib + this pipeline's script nodes).
+    #[must_use]
+    pub fn catalog_value(&self) -> serde_json::Value {
+        let inner = self.core.lock_inner();
+        crate::catalog::catalog_value(&inner.loaded.specs)
+    }
+
+    /// `GET /api/blob/{hash}`: the summary of a stored value.
+    ///
+    /// # Errors
+    ///
+    /// A message when the hash is malformed or not in the store.
+    pub fn blob_summary(&self, hash_hex: &str) -> Result<serde_json::Value, String> {
+        let bytes = (0..32)
+            .map(|i| {
+                hash_hex
+                    .get(2 * i..2 * i + 2)
+                    .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+            })
+            .collect::<Option<Vec<u8>>>()
+            .filter(|_| hash_hex.len() == 64)
+            .ok_or_else(|| format!("`{hash_hex}` is not a 64-hex-char blake3 hash"))?;
+        let mut raw = [0u8; 32];
+        raw.copy_from_slice(&bytes);
+        let value = self
+            .core
+            .scheduler
+            .store()
+            .load_value(&ValueHash::from_bytes(raw))
+            .map_err(|e| e.to_string())?;
+        serde_json::to_value(display::summarize(&value)).map_err(|e| e.to_string())
+    }
+
+    // ------------------------------------------------------------ debug --
+
+    /// The `/debug/state` document. `with_values` adds per-node output
+    /// summaries (loads values — opt in).
+    #[must_use]
+    pub fn debug_state(&self, with_values: bool) -> serde_json::Value {
+        let inner = self.core.lock_inner();
+        let status = self.core.lock_status();
+        let display: BTreeMap<String, serde_json::Value> = inner
+            .display
+            .iter()
+            .filter_map(|(&(node_ref, output), displayed)| {
+                let name = inner.refs.name_of(node_ref)?;
+                let port = inner
+                    .graph
+                    .node(name)
+                    .and_then(|n| n.outputs.get(output as usize))
+                    .map_or_else(|| output.to_string(), |o| o.name.clone());
+                Some((
+                    format!("{name}.{port}"),
+                    serde_json::json!({
+                        "hash": displayed.hash.to_hex(),
+                        "generation": displayed.generation,
+                        "stats": displayed.stats,
+                    }),
+                ))
+            })
+            .collect();
+        let values: Option<BTreeMap<String, serde_json::Value>> = with_values.then(|| {
+            inner
+                .graph
+                .nodes
+                .iter()
+                .map(|node| {
+                    let (generation, outputs) = self.core.node_values(&inner, &node.name);
+                    (
+                        node.name.clone(),
+                        serde_json::json!({ "generation": generation, "outputs": outputs }),
+                    )
+                })
+                .collect()
+        });
+        serde_json::json!({
+            "protocol": crate::protocol::PROTOCOL_VERSION,
+            "engine": format!("cicada {}", env!("CARGO_PKG_VERSION")),
+            "project": display_path(&self.core.config.project_dir),
+            "pipeline": self.core.relative,
+            "cache_dir": self.core.scheduler.store().root().to_string_lossy(),
+            "threads": self.core.threads,
+            "seq": inner.seq,
+            "text": inner.loaded.document.emit(),
+            "text_hash": blake3::Hash::from_bytes(inner.text_hash).to_hex().to_string(),
+            "graph": inner.graph,
+            "statuses": status.nodes,
+            "summary": status.summary,
+            "solve": {
+                "busy": self.solve.is_busy(),
+                "last_complete_generation": inner.last_complete.as_ref().map(|k| k.generation),
+            },
+            "display": display,
+            "lease": lease_view(&inner),
+            "values": values,
+            "timings": *self.core.timings.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+        })
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.core.shutdown.store(true, Ordering::SeqCst);
+        self.core.debounce_wake.notify_all();
+        if let Some(handle) = self.debouncer.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.ticker.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+// ------------------------------------------------------------- helpers --
+
+/// Forwards an explicit run's events into the shared status board.
+struct ForwardObserver {
+    core: Arc<Core>,
+    generation: u64,
+}
+
+impl Observer for ForwardObserver {
+    fn on_event(&self, event: &Event<'_>) {
+        self.core.on_event_impl(self.generation, event, false);
+    }
+}
+
+fn broadcast(inner: &Inner, message: &ServerMessage) {
+    let text = encode(inner.seq, message);
+    for client in inner.clients.values() {
+        let _ = client.tx.send(Outgoing::Text(text.clone()));
+    }
+}
+
+fn broadcast_binary(inner: &Inner, bytes: &Bytes) {
+    for client in inner.clients.values() {
+        let _ = client.tx.send(Outgoing::Binary(bytes.clone()));
+    }
+}
+
+fn send_to(inner: &Inner, client: u32, message: &ServerMessage) {
+    if let Some(c) = inner.clients.get(&client) {
+        let _ = c.tx.send(Outgoing::Text(encode(inner.seq, message)));
+    }
+}
+
+fn lease_view(inner: &Inner) -> LeaseView {
+    LeaseView {
+        writer: inner.writer,
+        clients: inner.clients.iter().map(|(&id, c)| (id, c.role)).collect(),
+    }
+}
+
+fn broadcast_lease(inner: &Inner) {
+    let lease = lease_view(inner);
+    for client in inner.clients.values() {
+        let _ = client.tx.send(Outgoing::Text(encode(
+            inner.seq,
+            &ServerMessage::Lease {
+                lease: lease.clone(),
+                role: client.role,
+            },
+        )));
+    }
+}
+
+/// The reference text for a wire source: a bare name for value bindings
+/// (single-output calls, literals, expressions), `name.port` for a port
+/// of a multi-output node.
+fn reference_text(inner: &Inner, from: &WireEnd) -> Result<String, IntentError> {
+    if inner.loaded.document.find_binding(&from.node).is_none() {
+        return Err(IntentError::Unknown(format!(
+            "no node named `{}`",
+            from.node
+        )));
+    }
+    match inner.loaded.resolution.bindings.get(&from.node) {
+        Some(BindingType::Node { .. }) => Ok(format!("{}.{}", from.node, from.port)),
+        // Value / poisoned / unknown: bare reference; the checker decides
+        // what it means after the edit.
+        _ => Ok(from.node.clone()),
+    }
+}
+
+/// The target call's port names in spec order (for kwarg insertion).
+fn spec_order(inner: &Inner, node: &str) -> Option<Vec<&'static str>> {
+    let line = inner.loaded.document.find_binding(node)?;
+    let cicada_lang::Line::Statement { statement, .. } = &inner.loaded.document.lines()[line]
+    else {
+        return None;
+    };
+    let Rhs::Call(call) = &statement.rhs else {
+        return None;
+    };
+    let spec = inner
+        .loaded
+        .specs
+        .iter()
+        .find(|spec| spec.name == call.func.name)?;
+    Some(spec.inputs.iter().map(|port| port.name).collect())
+}
+
+fn apply_param(
+    document: &mut Document,
+    node: &str,
+    port: Option<&str>,
+    value: &str,
+) -> Result<(), IntentError> {
+    // A param edit writes ONE literal (docs/10: slider drag = one numeric
+    // token). Anything else — a reference, an `each()`, a stray
+    // expression — is refused before it touches the text.
+    let trial = Document::parse(&format!("# cicada 1\n_probe = f(x={value})\n"));
+    let is_literal = trial.statements().next().is_some_and(|(_, statement, _)| {
+        matches!(&statement.rhs, Rhs::Call(call) if call
+            .kwargs
+            .first()
+            .is_some_and(|k| matches!(k.value, cicada_lang::ast::ValueExpr::Literal(_))))
+    });
+    if !is_literal {
+        return Err(IntentError::Refused(format!(
+            "`{value}` is not a literal — param edits write one literal token (numbers, True/False, \"text\")"
+        )));
+    }
+    match port {
+        Some(port) => writer::set_param(document, node, port, value)?,
+        None => writer::set_literal(document, node, value)?,
+    }
+    Ok(())
+}
+
+/// Write `bytes` to `path` atomically: a sibling temp file, `sync_all`,
+/// then rename over the target (a replace on every platform std supports).
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let dir = path.parent().unwrap_or(Path::new("."));
+    let name = path
+        .file_name()
+        .map_or_else(|| "file".to_owned(), |n| n.to_string_lossy().into_owned());
+    let tmp = dir.join(format!(".{name}.cicada-tmp"));
+    {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+    }
+    if let Err(error) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// The checker's verdict on wiring `text` into `node.port` of `document`
+/// (evaluated on a scratch copy): `(verdict, reason)` with verdict one of
+/// `ok` / `lift` / `blocked`. The single source of wire truth for both the
+/// drag-time probe and the connect gesture itself.
+fn wire_verdict(
+    document: &Document,
+    specs: &[&'static NodeSpec],
+    catalog: &Catalog<'_>,
+    base_cycles: usize,
+    node: &str,
+    port: &str,
+    text: &str,
+) -> (String, Option<String>) {
+    let mut scratch = document.clone();
+    let order = spec_order_doc(&scratch, specs, node);
+    if let Err(error) = writer::set_kwarg(&mut scratch, node, port, text, order.as_deref()) {
+        return ("blocked".to_owned(), Some(error.to_string()));
+    }
+    let resolution = resolve(&scratch, catalog);
+    let line = scratch.find_binding(node);
+    let span = line.and_then(|line| match &scratch.lines()[line] {
+        cicada_lang::Line::Statement { statement, .. } => match &statement.rhs {
+            Rhs::Call(call) => call
+                .kwargs
+                .iter()
+                .find(|k| k.name.name == port)
+                .map(|k| (line, k.value.span())),
+            _ => None,
+        },
+        _ => None,
+    });
+    let cycles = resolution
+        .diagnostics
+        .iter()
+        .filter(|d| d.kind == DiagnosticKind::Cycle)
+        .count();
+    if cycles > base_cycles {
+        return (
+            "blocked".to_owned(),
+            Some("would create a cycle".to_owned()),
+        );
+    }
+    let Some((line, span)) = span else {
+        return (
+            "blocked".to_owned(),
+            Some("kwarg vanished after the edit — bug".to_owned()),
+        );
+    };
+    let hit = resolution.diagnostics.iter().find(|d| {
+        d.span.line == line + 1 && d.span.col_start < span.end && d.span.col_end > span.start
+    });
+    match hit {
+        None => ("ok".to_owned(), None),
+        Some(d) if d.kind == DiagnosticKind::NeedsLift => {
+            let levels = d
+                .fix
+                .as_ref()
+                .map_or(1, |fix| if fix.label.contains('×') { 2 } else { 1 });
+            if levels == 1 {
+                ("lift".to_owned(), Some(d.message.clone()))
+            } else {
+                (
+                    "blocked".to_owned(),
+                    Some(format!(
+                        "{} — nested each() (depth > 1) is not executable in the spike (v0.1)",
+                        d.message
+                    )),
+                )
+            }
+        }
+        Some(d) if d.kind == DiagnosticKind::NeedsAdapter => (
+            "blocked".to_owned(),
+            Some(format!(
+                "{} (adapter chips arrive with `insert_between`, v0.1 — place the adapter node)",
+                d.message
+            )),
+        ),
+        Some(d) => ("blocked".to_owned(), Some(d.message.clone())),
+    }
+}
+
+/// The connect gesture, gated by the checker: the port must exist and the
+/// wire must be `ok` (or `lift` with the chip accepted) — the text is edited
+/// only when the checker agrees (docs/09: the wrong wire never exists).
+fn connect_checked(
+    inner: &mut Inner,
+    from: &WireEnd,
+    node: &str,
+    port: &str,
+    lift: bool,
+) -> Result<(), IntentError> {
+    let text = reference_text(inner, from)?;
+    let spec_ports = spec_order(inner, node);
+    if let Some(ports) = &spec_ports
+        && !ports.contains(&port)
+    {
+        return Err(IntentError::Refused(format!(
+            "`{node}` has no port `{port}` (ports: {})",
+            ports.join(", ")
+        )));
+    }
+    let catalog = Catalog::new(&inner.loaded.specs);
+    let base_cycles = inner
+        .loaded
+        .resolution
+        .diagnostics
+        .iter()
+        .filter(|d| d.kind == DiagnosticKind::Cycle)
+        .count();
+    let (verdict, reason) = wire_verdict(
+        &inner.loaded.document,
+        &inner.loaded.specs,
+        &catalog,
+        base_cycles,
+        node,
+        port,
+        &text,
+    );
+    match verdict.as_str() {
+        "ok" => {}
+        "lift" if lift => {}
+        "lift" => {
+            return Err(IntentError::Refused(format!(
+                "{} — accept the lift chip (each()) to connect",
+                reason.unwrap_or_default()
+            )));
+        }
+        _ => {
+            return Err(IntentError::Refused(format!(
+                "wire {}.{} → {node}.{port} is blocked: {}",
+                from.node,
+                from.port,
+                reason.unwrap_or_else(|| "incompatible".to_owned())
+            )));
+        }
+    }
+    let order = spec_ports;
+    writer::set_kwarg(
+        &mut inner.loaded.document,
+        node,
+        port,
+        &text,
+        order.as_deref(),
+    )?;
+    if lift {
+        writer::wrap_each(&mut inner.loaded.document, node, port)?;
+    }
+    Ok(())
+}
+
+/// Every non-effectful node — the live solve pulls everything solvable
+/// (exporters never auto-run, doc 10 §7).
+fn all_targets(lowered: &Lowered) -> Vec<NodeId> {
+    lowered
+        .graph
+        .nodes()
+        .iter()
+        .enumerate()
+        .filter(|(_, node)| !node.effectful)
+        .map(|(index, _)| NodeId(index))
+        .collect()
+}
+
+/// Wire-drag verdicts, computed by asking the checker: for every input
+/// port on the canvas (and every catalog node's ports), apply the wire to
+/// a scratch copy and read the diagnostic on that kwarg — no second copy
+/// of the type lattice anywhere.
+#[allow(clippy::too_many_lines)] // the verdict closure + two sweeps (canvas ports, catalog)
+fn probe_wire(
+    inner: &Inner,
+    from: &WireEnd,
+) -> Result<(Vec<ProbeVerdict>, Vec<ProbeCatalogEntry>), IntentError> {
+    let text = reference_text(inner, from)?;
+    let catalog = Catalog::new(&inner.loaded.specs);
+    let base_cycles = inner
+        .loaded
+        .resolution
+        .diagnostics
+        .iter()
+        .filter(|d| d.kind == DiagnosticKind::Cycle)
+        .count();
+    let verdict_for = |document: &Document, node: &str, port: &str| -> (String, Option<String>) {
+        wire_verdict(
+            document,
+            &inner.loaded.specs,
+            &catalog,
+            base_cycles,
+            node,
+            port,
+            &text,
+        )
+    };
+
+    let mut targets = Vec::new();
+    for node in &inner.graph.nodes {
+        if node.name == from.node {
+            continue;
+        }
+        if node.kind == viewmodel::NodeKind::Expression {
+            // Expression inputs are the expression's free variables — a
+            // wire there would mean rewriting the formula, which is not a
+            // wire gesture. Say so instead of staying silent.
+            for input in &node.inputs {
+                targets.push(ProbeVerdict {
+                    node: node.name.clone(),
+                    port: input.name.clone(),
+                    verdict: "blocked".to_owned(),
+                    reason: Some(format!(
+                        "`{}` is a free variable of the expression — edit the formula text \
+                         (or rename the source binding) rather than wiring",
+                        input.name
+                    )),
+                });
+            }
+            continue;
+        }
+        if node.func.is_none() || node.kind != viewmodel::NodeKind::Call {
+            continue;
+        }
+        for input in &node.inputs {
+            if input.unknown {
+                continue;
+            }
+            let (verdict, reason) = verdict_for(&inner.loaded.document, &node.name, &input.name);
+            targets.push(ProbeVerdict {
+                node: node.name.clone(),
+                port: input.name.clone(),
+                verdict,
+                reason,
+            });
+        }
+    }
+    let mut catalog_entries = Vec::new();
+    for spec in &inner.loaded.specs {
+        let mut scratch = inner.loaded.document.clone();
+        let Ok(name) = writer::place(&mut scratch, spec.name, &[]) else {
+            continue;
+        };
+        let mut ports = Vec::new();
+        for port in spec.inputs {
+            let (verdict, _) = verdict_for(&scratch, &name, port.name);
+            if verdict != "blocked" {
+                ports.push((port.name.to_owned(), verdict));
+            }
+        }
+        if !ports.is_empty() {
+            catalog_entries.push(ProbeCatalogEntry {
+                func: spec.name.to_owned(),
+                ports,
+            });
+        }
+    }
+    Ok((targets, catalog_entries))
+}
+
+fn spec_order_doc(
+    document: &Document,
+    specs: &[&'static NodeSpec],
+    node: &str,
+) -> Option<Vec<&'static str>> {
+    let line = document.find_binding(node)?;
+    let cicada_lang::Line::Statement { statement, .. } = &document.lines()[line] else {
+        return None;
+    };
+    let Rhs::Call(call) = &statement.rhs else {
+        return None;
+    };
+    let spec = specs.iter().find(|spec| spec.name == call.func.name)?;
+    Some(spec.inputs.iter().map(|port| port.name).collect())
+}
+
+fn debounce_loop(core: &Core) {
+    loop {
+        let deadline = {
+            let guard = core
+                .debounce
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let guard = core
+                .debounce_wake
+                .wait_while(guard, |deadline| {
+                    deadline.is_none() && !core.shutdown.load(Ordering::SeqCst)
+                })
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if core.shutdown.load(Ordering::SeqCst) {
+                return;
+            }
+            let Some(deadline) = *guard else { continue };
+            deadline
+        };
+        let now = Instant::now();
+        if deadline > now {
+            std::thread::sleep(deadline - now);
+            // A newer edit may have pushed the deadline; loop re-checks.
+            let current = *core
+                .debounce
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if current != Some(deadline) {
+                continue;
+            }
+        }
+        *core
+            .debounce
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        core.submit_structural();
+    }
+}
+
+impl Core {
+    fn lock_inner(&self) -> std::sync::MutexGuard<'_, Inner> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn lock_status(&self) -> std::sync::MutexGuard<'_, StatusBoard> {
+        self.status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn take_notices(&self) -> Vec<String> {
+        std::mem::take(
+            &mut *self
+                .notices
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
+    /// Relower + rebuild the view-model from the current document,
+    /// resolution, and sidecar; clear frames of nodes that vanished.
+    fn rebuild(&self, inner: &mut Inner) {
+        let lowered = lower_partial(
+            &inner.loaded.document,
+            &inner.loaded.resolution,
+            &inner.loaded.specs,
+            &self.config.project,
+            &inner.loaded.scripts,
+        );
+        match lowered {
+            Ok(lowered) => inner.lowered = Arc::new(lowered),
+            Err(error) => {
+                // Graph assembly failing is a bug; keep the previous graph
+                // live and shout.
+                self.notices
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(format!("lowering failed: {error}"));
+            }
+        }
+        let Inner {
+            loaded,
+            sidecar,
+            lowered,
+            graph,
+            refs,
+            ..
+        } = inner;
+        *graph = viewmodel::build(
+            &loaded.document,
+            &loaded.resolution,
+            &loaded.specs,
+            lowered,
+            sidecar,
+            refs,
+        );
+        // Frames for nodes no longer on the canvas: clear.
+        let live: HashSet<u32> = inner.graph.nodes.iter().map(|n| n.node_ref).collect();
+        let gone: Vec<(u32, u32)> = inner
+            .display
+            .keys()
+            .filter(|(node, _)| !live.contains(node))
+            .copied()
+            .collect();
+        for key in gone {
+            let displayed = inner.display.remove(&key);
+            let generation = displayed.map_or(0, |d| d.generation);
+            broadcast_binary(
+                inner,
+                &Bytes::from(display::clear_frame(generation, key.0, key.1)),
+            );
+        }
+    }
+
+    /// Submit a structural generation over the current lowered graph.
+    fn submit_structural(&self) {
+        let job = {
+            let inner = self.lock_inner();
+            Job {
+                lowered: Arc::clone(&inner.lowered),
+                targets: all_targets(&inner.lowered),
+                kind: JobKind::Structural,
+            }
+        };
+        let solve = self
+            .solve
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade);
+        if let Some(solve) = solve {
+            solve.submit(job);
+        }
+    }
+
+    /// Statuses for excluded nodes (red/blocked from the checker) —
+    /// visible immediately, before any generation runs.
+    fn seed_statuses(&self) {
+        let inner = self.lock_inner();
+        self.seed_statuses_locked(&inner);
+    }
+
+    fn seed_statuses_locked(&self, inner: &Inner) {
+        let mut status = self.lock_status();
+        let live: HashSet<&str> = inner.graph.nodes.iter().map(|n| n.name.as_str()).collect();
+        let vanished: Vec<String> = status
+            .nodes
+            .keys()
+            .filter(|name| !live.contains(name.as_str()))
+            .cloned()
+            .collect();
+        for name in vanished {
+            status.nodes.remove(&name);
+        }
+        for node in &inner.graph.nodes {
+            if let Some(excluded) = &node.excluded {
+                let state = if excluded.status == "blocked" {
+                    NodeState::Blocked
+                } else {
+                    NodeState::Red
+                };
+                let mut entry = NodeStatus::new(state, status.summary.generation);
+                entry.message = Some(excluded.reason.clone());
+                set_status(&mut status, &node.name, entry);
+            } else if node.kind == viewmodel::NodeKind::Literal
+                && !status.nodes.contains_key(&node.name)
+            {
+                // Literals never enter the graph — they are always "done".
+                set_status(&mut status, &node.name, NodeStatus::new(NodeState::Done, 0));
+            } else if node.effectful
+                && status.nodes.get(&node.name).is_none_or(|existing| {
+                    // Keep a real run's verdict (done/red from an explicit
+                    // run); anything else — idle, or a stale blocked/red
+                    // left by an old generation the exporter never joins —
+                    // resets to the honest idle line.
+                    !matches!(existing.state, NodeState::Done | NodeState::Running)
+                        || existing.generation == 0
+                })
+            {
+                // Exporters never auto-run (doc 10 §7): idle, and say why —
+                // an honest status beats a node that never changes.
+                let mut entry = NodeStatus::new(NodeState::Idle, 0);
+                entry.message = Some(
+                    "effectful — runs only on explicit action (Run in the inspector / POST /api/run)"
+                        .to_owned(),
+                );
+                set_status(&mut status, &node.name, entry);
+            } else if let Some(existing) = status.nodes.get(&node.name).cloned()
+                && matches!(existing.state, NodeState::Red | NodeState::Blocked)
+            {
+                // Was red/blocked (excluded by the checker, or by an older
+                // generation), no longer excluded — reset to idle until the
+                // next generation speaks (it runs within the debounce).
+                set_status(&mut status, &node.name, NodeStatus::new(NodeState::Idle, 0));
+            }
+        }
+        status.dirty = true;
+    }
+
+    /// Frames for outputs whose hash changed since the last broadcast
+    /// (or every displayed output when `only` is `None` after a preview
+    /// toggle). Uses the last complete generation's report.
+    fn refresh_display(&self, inner: &mut Inner, _only: Option<&str>) {
+        let Some(kept) = inner.last_complete.as_ref() else {
+            return;
+        };
+        let generation = kept.generation;
+        let lowered = Arc::clone(&kept.lowered);
+        let report = Arc::clone(&kept.report);
+        self.emit_frames(inner, generation, &lowered, &report);
+    }
+
+    /// The core of display: for every previewed, displayable output in the
+    /// graph, compare the generation's output hash to the last broadcast
+    /// and send frames when it changed; send clears for outputs that
+    /// stopped drawing.
+    #[allow(clippy::too_many_lines)] // want-set, clears, sends: one pass in one place
+    fn emit_frames(
+        &self,
+        inner: &mut Inner,
+        generation: u64,
+        lowered: &Lowered,
+        report: &SolveReport,
+    ) -> usize {
+        let mut bytes_sent = 0_usize;
+        let store = Arc::clone(self.scheduler.store());
+        let tolerance = self.config.project.tol();
+        // Which (ref, output) should draw now?
+        let mut wanted: Vec<(u32, u32, ValueHash)> = Vec::new();
+        for node in &inner.graph.nodes {
+            if !node.preview {
+                continue;
+            }
+            for (output_index, output) in node.outputs.iter().enumerate() {
+                if !output.displayable {
+                    continue;
+                }
+                let hash = match lowered.bindings.get(&node.name) {
+                    Some(LoweredBinding::Value(value)) => value.hash(),
+                    Some(LoweredBinding::Port { node: id, output }) => {
+                        // Single-output binding: the port index is the
+                        // binding's own; unpack targets map by name below.
+                        let Some(hashes) = report.outcome(*id).output_hashes() else {
+                            continue;
+                        };
+                        let index = if node.targets.len() > 1 {
+                            // Multi-target unpack: this OUTPUT's own binding.
+                            match node
+                                .targets
+                                .get(output_index)
+                                .and_then(|t| lowered.bindings.get(t))
+                            {
+                                Some(LoweredBinding::Port { output, .. }) => *output,
+                                _ => *output,
+                            }
+                        } else {
+                            *output
+                        };
+                        let Some(hash) = hashes.get(index) else {
+                            continue;
+                        };
+                        *hash
+                    }
+                    Some(LoweredBinding::Node { node: id }) => {
+                        let Some(hashes) = report.outcome(*id).output_hashes() else {
+                            continue;
+                        };
+                        let Some(hash) = hashes.get(output_index) else {
+                            continue;
+                        };
+                        *hash
+                    }
+                    None => continue,
+                };
+                let output_u32 = u32::try_from(output_index).unwrap_or(u32::MAX);
+                wanted.push((node.node_ref, output_u32, hash));
+            }
+        }
+        // Clears: displayed before, not wanted now (preview off, red, gone).
+        let wanted_keys: HashSet<(u32, u32)> = wanted.iter().map(|(n, o, _)| (*n, *o)).collect();
+        let stale: Vec<(u32, u32)> = inner
+            .display
+            .keys()
+            .filter(|key| !wanted_keys.contains(key))
+            .copied()
+            .collect();
+        for key in stale {
+            // Red/blocked/cancelled outputs keep their last frame (docs/12:
+            // last coherent value) — only outputs whose node is still
+            // previewed but produced nothing are cleared here; nodes that
+            // stopped being displayable/previewed clear too.
+            let still_previewed_but_failed = inner.graph.nodes.iter().any(|n| {
+                n.node_ref == key.0
+                    && n.preview
+                    && n.outputs.get(key.1 as usize).is_some_and(|o| o.displayable)
+            });
+            if still_previewed_but_failed {
+                continue;
+            }
+            inner.display.remove(&key);
+            broadcast_binary(
+                inner,
+                &Bytes::from(display::clear_frame(generation, key.0, key.1)),
+            );
+        }
+        for (node_ref, output, hash) in wanted {
+            if inner
+                .display
+                .get(&(node_ref, output))
+                .is_some_and(|d| d.hash == hash)
+            {
+                continue;
+            }
+            match store.load_value(&hash) {
+                Ok(value) => {
+                    let frames = display::frames_for_value(
+                        &value,
+                        generation,
+                        node_ref,
+                        output,
+                        &mut inner.picks,
+                        tolerance,
+                    );
+                    for frame in frames.frames {
+                        bytes_sent += frame.len();
+                        broadcast_binary(inner, &Bytes::from(frame));
+                    }
+                    inner.display.insert(
+                        (node_ref, output),
+                        Displayed {
+                            hash,
+                            generation,
+                            stats: frames.stats,
+                        },
+                    );
+                }
+                Err(error) => {
+                    broadcast(
+                        inner,
+                        &ServerMessage::Notice {
+                            level: "warning".to_owned(),
+                            message: format!("value {hash} not loadable for display: {error}"),
+                        },
+                    );
+                }
+            }
+        }
+        bytes_sent
+    }
+
+    /// Per-output value summaries for a node from the last complete
+    /// generation.
+    fn node_values(&self, inner: &Inner, node: &str) -> (u64, Vec<(String, Option<ValueSummary>)>) {
+        let Some(view) = inner.graph.node(node) else {
+            return (0, Vec::new());
+        };
+        let Some(kept) = inner.last_complete.as_ref() else {
+            return (
+                0,
+                view.outputs
+                    .iter()
+                    .map(|o| (o.name.clone(), None))
+                    .collect(),
+            );
+        };
+        let store = self.scheduler.store();
+        let mut outputs = Vec::new();
+        for (index, output) in view.outputs.iter().enumerate() {
+            let hash = match kept.lowered.bindings.get(&view.name) {
+                Some(LoweredBinding::Value(value)) => Some(value.hash()),
+                Some(LoweredBinding::Port {
+                    node: id,
+                    output: port,
+                }) => {
+                    let port = if view.targets.len() > 1 {
+                        match view
+                            .targets
+                            .get(index)
+                            .and_then(|t| kept.lowered.bindings.get(t))
+                        {
+                            Some(LoweredBinding::Port { output, .. }) => *output,
+                            _ => *port,
+                        }
+                    } else {
+                        *port
+                    };
+                    kept.report
+                        .outcome(*id)
+                        .output_hashes()
+                        .and_then(|h| h.get(port).copied())
+                }
+                Some(LoweredBinding::Node { node: id }) => kept
+                    .report
+                    .outcome(*id)
+                    .output_hashes()
+                    .and_then(|h| h.get(index).copied()),
+                None => None,
+            };
+            let summary =
+                hash.and_then(|hash| store.load_value(&hash).ok().map(|v| display::summarize(&v)));
+            outputs.push((output.name.clone(), summary));
+        }
+        (kept.generation, outputs)
+    }
+
+    /// Fill statuses from a finished report.
+    fn finish_statuses(
+        &self,
+        generation: u64,
+        lowered: &Lowered,
+        report: &SolveReport,
+        with_summary: bool,
+    ) {
+        let mut status = self.lock_status();
+        let saved = (!with_summary).then(|| (status.summary.clone(), status.started));
+        for (index, outcome) in report.outcomes.iter().enumerate() {
+            let name = lowered.graph.node(NodeId(index)).name.clone();
+            let entry = match outcome {
+                NodeOutcome::Skipped => continue,
+                NodeOutcome::CacheHit { .. } => NodeStatus::new(NodeState::Cached, generation),
+                NodeOutcome::Computed {
+                    elements, nanos, ..
+                } => {
+                    let mut s = NodeStatus::new(NodeState::Done, generation);
+                    s.elements = Some(*elements);
+                    s.nanos = Some(*nanos);
+                    s
+                }
+                NodeOutcome::Failed(failure) => {
+                    let mut s = NodeStatus::new(NodeState::Red, generation);
+                    s.message = Some(failure.message.clone());
+                    s.element_ids.clone_from(&failure.element_ids);
+                    s
+                }
+                NodeOutcome::Blocked { upstream } => {
+                    let mut s = NodeStatus::new(NodeState::Blocked, generation);
+                    s.message = Some(format!("fed by red `{upstream}`"));
+                    s
+                }
+                NodeOutcome::Cancelled => NodeStatus::new(NodeState::Cancelled, generation),
+            };
+            set_status(&mut status, &name, entry);
+        }
+        let mut computed = 0;
+        let mut cached = 0;
+        for outcome in &report.outcomes {
+            match outcome {
+                NodeOutcome::Computed { .. } => computed += 1,
+                NodeOutcome::CacheHit { .. } => cached += 1,
+                _ => {}
+            }
+        }
+        // Red/blocked count EVERY node wearing the word — checker-excluded
+        // ones (which never enter the solve) included — so the solve bar
+        // and the canvas badges agree.
+        let red = status
+            .nodes
+            .values()
+            .filter(|s| s.state == NodeState::Red)
+            .count();
+        let blocked = status
+            .nodes
+            .values()
+            .filter(|s| s.state == NodeState::Blocked)
+            .count();
+        let elapsed = status
+            .started
+            .map_or(0.0, |s| s.elapsed().as_secs_f64() * 1000.0);
+        status.summary = SolveSummary {
+            generation,
+            running: false,
+            cancelled: report.cancelled,
+            computed,
+            cached,
+            pending: 0,
+            red,
+            blocked,
+            elapsed_ms: elapsed,
+            eta_ms: None,
+            eta_rough: false,
+        };
+        status.started = None;
+        if let Some((summary, started)) = saved {
+            status.summary = summary;
+            status.started = started;
+        }
+        status.dirty = true;
+    }
+
+    /// Record one generation's timing (bounded ring).
+    fn record_timing(&self, timing: GenerationTiming) {
+        let mut timings = self
+            .timings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if timings.len() >= TIMINGS_KEPT {
+            timings.pop_front();
+        }
+        timings.push_back(timing);
+    }
+
+    /// Flush changed statuses to every client (ticker: only when dirty;
+    /// `force` = generation boundaries).
+    fn flush_status(&self, force: bool) {
+        let payload = {
+            let mut status = self.lock_status();
+            if !status.dirty && !force {
+                return;
+            }
+            if status.summary.running
+                && let Some(started) = status.started
+            {
+                status.summary.elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+                let (eta, rough) = eta(&status, self.threads);
+                status.summary.eta_ms = eta;
+                status.summary.eta_rough = rough;
+            }
+            let changed = std::mem::take(&mut status.changed);
+            status.dirty = false;
+            if changed.is_empty() && !force && !status.summary.running {
+                return;
+            }
+            ServerMessage::Status {
+                generation: status.summary.generation,
+                nodes: changed,
+                summary: status.summary.clone(),
+            }
+        };
+        let inner = self.lock_inner();
+        broadcast(&inner, &payload);
+    }
+}
+
+fn set_status(status: &mut StatusBoard, name: &str, entry: NodeStatus) {
+    if status.nodes.get(name) == Some(&entry) {
+        return;
+    }
+    status.nodes.insert(name.to_owned(), entry.clone());
+    status.changed.insert(name.to_owned(), entry);
+    status.dirty = true;
+}
+
+/// Cost-weighted ETA from persisted samples: Σ predicted nanos of pending
+/// nodes ÷ threads. `rough` when any pending op has no samples yet.
+fn eta(status: &StatusBoard, threads: usize) -> (Option<f64>, bool) {
+    let mut total: u64 = 0;
+    let mut rough = false;
+    let mut any = false;
+    for (name, node) in &status.nodes {
+        if matches!(node.state, NodeState::Queued | NodeState::Running) {
+            any = true;
+            match status.predicted.get(name).copied().flatten() {
+                Some(nanos) => total = total.saturating_add(nanos),
+                None => rough = true,
+            }
+        }
+    }
+    if !any {
+        return (None, false);
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let ms = total as f64 / 1_000_000.0 / threads.max(1) as f64;
+    (Some(ms), rough)
+}
+
+impl SolveSink for Core {
+    fn on_start(&self, generation: u64, job: &Job) {
+        let mut status = self.lock_status();
+        status.summary = SolveSummary {
+            generation,
+            running: true,
+            ..SolveSummary::default()
+        };
+        status.started = Some(Instant::now());
+        status.predicted.clear();
+        let cone = job.lowered.graph.ancestors(&job.targets);
+        let store = self.scheduler.store();
+        let mut pending = 0;
+        for (index, in_cone) in cone.iter().enumerate() {
+            if !in_cone {
+                continue;
+            }
+            let decl = job.lowered.graph.node(NodeId(index));
+            pending += 1;
+            let predicted = store
+                .stats(&decl.op)
+                .and_then(|stats| stats.per_element_nanos());
+            status.predicted.insert(decl.name.clone(), predicted);
+            set_status(
+                &mut status,
+                &decl.name,
+                NodeStatus::new(NodeState::Queued, generation),
+            );
+        }
+        status.summary.pending = pending;
+        status.dirty = true;
+    }
+
+    fn on_event(&self, generation: u64, event: &Event<'_>) {
+        self.on_event_impl(generation, event, true);
+    }
+
+    fn on_complete(&self, generation: u64, job: &Job, report: Arc<SolveReport>) {
+        self.on_complete_impl(generation, job, &report);
+    }
+
+    fn on_error(&self, generation: u64, _job: &Job, error: &SolveError) {
+        self.on_error_impl(generation, error);
+    }
+}
+
+impl Core {
+    /// Apply one execution event to the status board. `touch_summary`
+    /// is false for explicit runs — their counters must not disturb the
+    /// live generation's solve bar.
+    fn on_event_impl(&self, generation: u64, event: &Event<'_>, touch_summary: bool) {
+        let mut status = self.lock_status();
+        let saved = (!touch_summary).then(|| status.summary.clone());
+        match event {
+            Event::NodeStarted { node } => {
+                set_status(
+                    &mut status,
+                    node,
+                    NodeStatus::new(NodeState::Running, generation),
+                );
+            }
+            Event::NodeCacheHit { node } => {
+                set_status(
+                    &mut status,
+                    node,
+                    NodeStatus::new(NodeState::Cached, generation),
+                );
+                status.summary.cached += 1;
+                status.summary.pending = status.summary.pending.saturating_sub(1);
+            }
+            Event::ElementCacheHit { node, .. } => {
+                let mut entry = status
+                    .nodes
+                    .get(*node)
+                    .cloned()
+                    .unwrap_or_else(|| NodeStatus::new(NodeState::Running, generation));
+                entry.state = NodeState::Running;
+                entry.elements_done = Some(entry.elements_done.unwrap_or(0) + 1);
+                set_status(&mut status, node, entry);
+            }
+            Event::ChunkExecuted { node, len, .. } => {
+                let mut entry = status
+                    .nodes
+                    .get(*node)
+                    .cloned()
+                    .unwrap_or_else(|| NodeStatus::new(NodeState::Running, generation));
+                entry.state = NodeState::Running;
+                entry.elements_done = Some(entry.elements_done.unwrap_or(0) + *len as u64);
+                set_status(&mut status, node, entry);
+            }
+            Event::NodeComputed {
+                node,
+                elements,
+                nanos,
+            } => {
+                let mut entry = NodeStatus::new(NodeState::Done, generation);
+                entry.elements = Some(*elements);
+                entry.nanos = Some(*nanos);
+                set_status(&mut status, node, entry);
+                status.summary.computed += 1;
+                status.summary.pending = status.summary.pending.saturating_sub(1);
+            }
+            Event::NodeFailed { node } => {
+                set_status(
+                    &mut status,
+                    node,
+                    NodeStatus::new(NodeState::Red, generation),
+                );
+                status.summary.red += 1;
+                status.summary.pending = status.summary.pending.saturating_sub(1);
+            }
+            Event::NodeBlocked { node, upstream } => {
+                let mut entry = NodeStatus::new(NodeState::Blocked, generation);
+                entry.message = Some(format!("fed by red `{upstream}`"));
+                set_status(&mut status, node, entry);
+                status.summary.blocked += 1;
+                status.summary.pending = status.summary.pending.saturating_sub(1);
+            }
+            Event::NodeCancelled { node } => {
+                set_status(
+                    &mut status,
+                    node,
+                    NodeStatus::new(NodeState::Cancelled, generation),
+                );
+                status.summary.pending = status.summary.pending.saturating_sub(1);
+            }
+        }
+        if let Some(summary) = saved {
+            status.summary = summary;
+        }
+    }
+
+    fn on_complete_impl(&self, generation: u64, job: &Job, report: &Arc<SolveReport>) {
+        self.finish_statuses(generation, &job.lowered, report, true);
+        let started_ms = self
+            .lock_status()
+            .started
+            .map_or(0.0, |s| (s - self.epoch).as_secs_f64() * 1000.0);
+        let began = Instant::now();
+        let mut frame_bytes = 0;
+        {
+            let mut inner = self.lock_inner();
+            let newer = inner
+                .last_complete
+                .as_ref()
+                .is_none_or(|kept| generation > kept.generation);
+            if newer && !report.cancelled {
+                inner.last_complete = Some(Kept {
+                    generation,
+                    lowered: Arc::clone(&job.lowered),
+                    report: Arc::clone(report),
+                });
+            }
+            if newer {
+                // Frames for what completed — cancelled generations still
+                // painted whatever finished (generation-tagged; the client
+                // keeps the newest per node).
+                frame_bytes = self.emit_frames(&mut inner, generation, &job.lowered, report);
+            }
+        }
+        let elapsed = {
+            let status = self.lock_status();
+            status.summary.elapsed_ms
+        } + began.elapsed().as_secs_f64() * 1000.0;
+        self.record_timing(GenerationTiming {
+            generation,
+            kind: match job.kind {
+                JobKind::Structural => "structural",
+                JobKind::Preview => "preview",
+            },
+            started_ms,
+            elapsed_ms: Some(elapsed),
+            cancelled: report.cancelled,
+            computed: report
+                .outcomes
+                .iter()
+                .filter(|o| matches!(o, NodeOutcome::Computed { .. }))
+                .count(),
+            cached: report
+                .outcomes
+                .iter()
+                .filter(|o| matches!(o, NodeOutcome::CacheHit { .. }))
+                .count(),
+            frame_bytes,
+        });
+        self.flush_status(true);
+    }
+
+    fn on_error_impl(&self, generation: u64, error: &SolveError) {
+        {
+            let mut status = self.lock_status();
+            status.summary.running = false;
+            status.summary.generation = generation;
+            status.started = None;
+            status.dirty = true;
+        }
+        let inner = self.lock_inner();
+        broadcast(
+            &inner,
+            &ServerMessage::Notice {
+                level: "error".to_owned(),
+                message: format!("generation {generation} failed: {error}"),
+            },
+        );
+        drop(inner);
+        self.flush_status(true);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frames::{Frame, FrameKind, decode};
+    use tokio::sync::mpsc::unbounded_channel;
+
+    fn project(source: &str) -> (tempfile::TempDir, SessionConfig) {
+        let dir = tempfile::tempdir().unwrap();
+        let pipeline = dir.path().join("p.cic");
+        std::fs::write(&pipeline, source).unwrap();
+        let config = SessionConfig {
+            project_dir: dir.path().to_owned(),
+            pipeline,
+            cache_dir: Some(dir.path().join("cache")),
+            threads: 2,
+            project: ProjectConfig::default(),
+        };
+        (dir, config)
+    }
+
+    fn drain(rx: &mut tokio::sync::mpsc::UnboundedReceiver<Outgoing>) -> Vec<Outgoing> {
+        let mut out = Vec::new();
+        while let Ok(message) = rx.try_recv() {
+            out.push(message);
+        }
+        out
+    }
+
+    fn texts(messages: &[Outgoing]) -> Vec<serde_json::Value> {
+        messages
+            .iter()
+            .filter_map(|m| match m {
+                Outgoing::Text(t) => serde_json::from_str(t).ok(),
+                Outgoing::Binary(_) => None,
+            })
+            .collect()
+    }
+
+    fn frames(messages: &[Outgoing]) -> Vec<Frame> {
+        messages
+            .iter()
+            .filter_map(|m| match m {
+                Outgoing::Binary(b) => decode(b).ok(),
+                Outgoing::Text(_) => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // one end-to-end story: open → frames → every gesture
+    fn open_solve_and_stream_frames_then_edit_via_intents() {
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, role) = session.connect(tx);
+        assert_eq!(role, Role::Writer);
+        session.restream_display(id);
+        let got = drain(&mut rx);
+        let all = frames(&got);
+        let mesh_frames: Vec<&Frame> = all
+            .iter()
+            .filter(|f| f.header().kind == FrameKind::Mesh)
+            .collect();
+        assert_eq!(mesh_frames.len(), 1, "one displayed mesh output: block");
+        let Frame::Batch { batch, header } = mesh_frames[0] else {
+            panic!()
+        };
+        assert_eq!(batch.elements.len(), 1);
+        assert_eq!(batch.indices.len(), 36, "a box: 12 triangles");
+        let block_ref = header.node;
+        let state = session.debug_state(false);
+        assert_eq!(state["display"]["block.out"]["stats"]["triangles"], 12);
+        let bounds_before = state["display"]["block.out"]["stats"]["bounds"].clone();
+        assert_eq!(bounds_before[1][0], 2.0);
+        assert_eq!(state["statuses"]["block"]["state"], "done");
+
+        // Slider drag: preview streams, then the real set_param on release.
+        session.handle(
+            id,
+            Some("p1".into()),
+            ClientMessage::ParamPreview {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "3.0".into(),
+            },
+        );
+        session.wait_idle();
+        let got = drain(&mut rx);
+        let preview_frames = frames(&got);
+        assert!(
+            preview_frames
+                .iter()
+                .any(|f| f.header().kind == FrameKind::Mesh && f.header().node == block_ref),
+            "the preview repaints the box"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&pipeline)
+                .unwrap()
+                .matches("value=2.0")
+                .count(),
+            1,
+            "previews never write the file"
+        );
+        session.handle(
+            id,
+            Some("s1".into()),
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "3.0".into(),
+            },
+        );
+        session.wait_idle();
+        let text = std::fs::read_to_string(&pipeline).unwrap();
+        assert!(
+            text.contains("size = slider(value=3.0, min=0.5, max=5.0)"),
+            "{text}"
+        );
+        let got = drain(&mut rx);
+        let msgs = texts(&got);
+        let delta = msgs.iter().find(|m| m["type"] == "delta").unwrap();
+        assert_eq!(delta["payload"]["source"]["intent_id"], "s1");
+        assert_eq!(delta["payload"]["dirty"][0], "size");
+        let state = session.debug_state(false);
+        assert_eq!(state["display"]["block.out"]["stats"]["bounds"][1][0], 3.0);
+        assert!(state["seq"].as_u64().unwrap() >= 1);
+
+        // Place + connect through the round-trip table.
+        session.handle(
+            id,
+            Some("pl".into()),
+            ClientMessage::PlaceNode {
+                func: "sphere".into(),
+                cell: Some([40, 2]),
+                connect: Some(crate::protocol::ConnectSpec {
+                    from: WireEnd {
+                        node: "size".into(),
+                        port: "out".into(),
+                    },
+                    to_port: "radius".into(),
+                    lift: false,
+                }),
+            },
+        );
+        session.wait_idle();
+        let text = std::fs::read_to_string(&pipeline).unwrap();
+        assert!(text.contains("sphere_1 = sphere(radius=size)"), "{text}");
+        let sidecar = std::fs::read_to_string(Sidecar::path_for(&pipeline)).unwrap();
+        assert!(sidecar.contains("\"sphere_1\""));
+        let state = session.debug_state(false);
+        assert!(
+            state["display"]["sphere_1.out"]["stats"]["triangles"]
+                .as_u64()
+                .unwrap()
+                > 0
+        );
+        assert_eq!(state["graph"]["nodes"].as_array().unwrap().len(), 4);
+
+        // Unwire, rename, delete: text and downstream reds.
+        session.handle(
+            id,
+            None,
+            ClientMessage::Disconnect {
+                to: WireEnd {
+                    node: "sphere_1".into(),
+                    port: "radius".into(),
+                },
+            },
+        );
+        session.wait_idle();
+        let text = std::fs::read_to_string(&pipeline).unwrap();
+        assert!(text.contains("sphere_1 = sphere()"), "{text}");
+        let state = session.debug_state(false);
+        assert_eq!(
+            state["statuses"]["sphere_1"]["state"], "red",
+            "required port unwired"
+        );
+        session.handle(
+            id,
+            None,
+            ClientMessage::Rename {
+                node: "span".into(),
+                new: "extent".into(),
+            },
+        );
+        session.wait_idle();
+        let text = std::fs::read_to_string(&pipeline).unwrap();
+        assert!(
+            text.contains("block = box(x=extent, y=extent, z=extent)"),
+            "{text}"
+        );
+        session.handle(
+            id,
+            None,
+            ClientMessage::DeleteNode {
+                node: "extent".into(),
+            },
+        );
+        session.wait_idle();
+        let state = session.debug_state(false);
+        assert_eq!(
+            state["statuses"]["block"]["state"], "red",
+            "downstream red, never cascade"
+        );
+        assert!(
+            state["text"]
+                .as_str()
+                .unwrap()
+                .contains("block = box(x=extent")
+        );
+        // The box's frame is kept (last coherent value) — display still lists it.
+        assert!(state["display"]["block.out"].is_object());
+    }
+
+    #[test]
+    fn observers_cannot_write_and_lease_transfers() {
+        let (_dir, config) = project("# cicada 1\na = 1.0\n");
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx1, mut rx1) = unbounded_channel();
+        let (tx2, mut rx2) = unbounded_channel();
+        let (w, role_w) = session.connect(tx1);
+        let (o, role_o) = session.connect(tx2);
+        assert_eq!((role_w, role_o), (Role::Writer, Role::Observer));
+        session.handle(
+            o,
+            Some("x".into()),
+            ClientMessage::SetParam {
+                node: "a".into(),
+                port: None,
+                value: "2.0".into(),
+            },
+        );
+        let msgs = texts(&drain(&mut rx2));
+        let error = msgs.iter().find(|m| m["type"] == "error").unwrap();
+        assert_eq!(error["payload"]["kind"], "lease");
+        assert_eq!(error["payload"]["intent_id"], "x");
+        session.disconnect(w);
+        drain(&mut rx1);
+        session.transfer_lease_if_free();
+        let msgs = texts(&drain(&mut rx2));
+        let lease = msgs.iter().rfind(|m| m["type"] == "lease").unwrap();
+        assert_eq!(lease["payload"]["role"], "writer");
+        session.handle(
+            o,
+            None,
+            ClientMessage::SetParam {
+                node: "a".into(),
+                port: None,
+                value: "2.0".into(),
+            },
+        );
+        session.wait_idle();
+        assert!(
+            session.debug_state(false)["text"]
+                .as_str()
+                .unwrap()
+                .contains("a = 2.0")
+        );
+    }
+
+    #[test]
+    fn probe_wire_reports_ok_lift_and_blocked_from_the_checker() {
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             c = circle(radius=2.0)\n\
+             d = divide_curve(curve=c, count=8)\n\
+             up = unit_z()\n\
+             m = move(geometry=c, motion=up)\n\
+             m2 = move(geometry=m, motion=up)\n\
+             n = 3.0\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        session.handle(
+            id,
+            Some("q".into()),
+            ClientMessage::ProbeWire {
+                from: WireEnd {
+                    node: "d".into(),
+                    port: "points".into(),
+                },
+            },
+        );
+        let msgs = texts(&drain(&mut rx));
+        let probe = msgs.iter().find(|m| m["type"] == "wire_probe").unwrap();
+        let targets = probe["payload"]["targets"].as_array().unwrap();
+        let find = |node: &str, port: &str| {
+            targets
+                .iter()
+                .find(|t| t["node"] == node && t["port"] == port)
+                .unwrap()["verdict"]
+                .clone()
+        };
+        assert_eq!(
+            find("m", "geometry"),
+            "lift",
+            "[Point] into a T port → each()"
+        );
+        assert_eq!(find("m", "motion"), "blocked", "[Point] into a Vector port");
+        assert_eq!(find("c", "radius"), "blocked");
+        let catalog = probe["payload"]["catalog"].as_array().unwrap();
+        let polyline = catalog.iter().find(|c| c["func"] == "polyline").unwrap();
+        assert!(
+            polyline["ports"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p[0] == "vertices" && p[1] == "ok")
+        );
+        assert!(
+            !catalog.iter().any(|c| c["func"] == "add"),
+            "add takes Numbers only"
+        );
+        // A cycle is blocked even though the types fit.
+        session.handle(
+            id,
+            None,
+            ClientMessage::ProbeWire {
+                from: WireEnd {
+                    node: "m2".into(),
+                    port: "out".into(),
+                },
+            },
+        );
+        let msgs = texts(&drain(&mut rx));
+        let probe = msgs.iter().find(|m| m["type"] == "wire_probe").unwrap();
+        // m2 depends on m; wiring m2 into m.geometry closes the loop.
+        let into_c = probe["payload"]["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["node"] == "m" && t["port"] == "geometry")
+            .unwrap();
+        assert_eq!(into_c["verdict"], "blocked");
+        assert!(
+            into_c["reason"].as_str().unwrap().contains("cycle"),
+            "{into_c}"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // one refusal story, every refused gesture in turn
+    fn blocked_wires_bad_params_and_shadowing_renames_are_refused_before_the_text_moves() {
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             dir = unit_x()\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             xs = series(count=3)\n\
+             sum = add(a=1.0, b=2.0)\n",
+        );
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let before = std::fs::read_to_string(&pipeline).unwrap();
+        let refuse =
+            |message: ClientMessage, rx: &mut tokio::sync::mpsc::UnboundedReceiver<Outgoing>| {
+                session.handle(id, Some("x".into()), message);
+                session.wait_idle();
+                let msgs = texts(&drain(rx));
+                let error = msgs
+                    .iter()
+                    .find(|m| m["type"] == "error")
+                    .expect("an error message");
+                assert_eq!(error["payload"]["intent_id"], "x");
+                error["payload"]["message"].as_str().unwrap().to_owned()
+            };
+        // Vector into a Number port: blocked by the checker.
+        let why = refuse(
+            ClientMessage::Connect {
+                from: WireEnd {
+                    node: "dir".into(),
+                    port: "out".into(),
+                },
+                to: WireEnd {
+                    node: "span".into(),
+                    port: "end".into(),
+                },
+                lift: false,
+            },
+            &mut rx,
+        );
+        assert!(why.contains("blocked"), "{why}");
+        // A port the node does not have.
+        let why = refuse(
+            ClientMessage::Connect {
+                from: WireEnd {
+                    node: "size".into(),
+                    port: "out".into(),
+                },
+                to: WireEnd {
+                    node: "span".into(),
+                    port: "radius".into(),
+                },
+                lift: false,
+            },
+            &mut rx,
+        );
+        assert!(why.contains("no port `radius`"), "{why}");
+        // [Number] into a Number port without accepting the lift chip.
+        let why = refuse(
+            ClientMessage::Connect {
+                from: WireEnd {
+                    node: "xs".into(),
+                    port: "out".into(),
+                },
+                to: WireEnd {
+                    node: "sum".into(),
+                    port: "a".into(),
+                },
+                lift: false,
+            },
+            &mut rx,
+        );
+        assert!(why.contains("lift"), "{why}");
+        // A param edit that is not a literal.
+        let why = refuse(
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "span".into(),
+            },
+            &mut rx,
+        );
+        assert!(why.contains("not a literal"), "{why}");
+        // A rename onto a catalog name.
+        let why = refuse(
+            ClientMessage::Rename {
+                node: "sum".into(),
+                new: "add".into(),
+            },
+            &mut rx,
+        );
+        assert!(why.contains("catalog"), "{why}");
+        assert_eq!(
+            std::fs::read_to_string(&pipeline).unwrap(),
+            before,
+            "nothing refused ever touched the text"
+        );
+        assert_eq!(
+            session.debug_state(false)["text"].as_str().unwrap(),
+            before,
+            "and nothing lingered in memory"
+        );
+        // The same [Number] wire WITH the lift accepted goes through as each().
+        session.handle(
+            id,
+            None,
+            ClientMessage::Connect {
+                from: WireEnd {
+                    node: "xs".into(),
+                    port: "out".into(),
+                },
+                to: WireEnd {
+                    node: "sum".into(),
+                    port: "a".into(),
+                },
+                lift: true,
+            },
+        );
+        session.wait_idle();
+        assert!(
+            std::fs::read_to_string(&pipeline)
+                .unwrap()
+                .contains("sum = add(a=each(xs), b=2.0)")
+        );
+        // Preview default: an override equal to the default is no override.
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetPreview {
+                node: "span".into(),
+                on: Some(false),
+            },
+        );
+        session.wait_idle();
+        assert!(
+            !Sidecar::path_for(&pipeline).exists()
+                || !std::fs::read_to_string(Sidecar::path_for(&pipeline))
+                    .unwrap()
+                    .contains("preview"),
+            "a Domain output is not displayable: preview=false IS the default, so no sidecar entry"
+        );
+    }
+
+    #[test]
+    fn external_edit_reloads_with_a_barrier_snapshot() {
+        let (_dir, config) = project("# cicada 1\na = 1.0\n");
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let _client = session.connect(tx);
+        std::fs::write(&pipeline, "# cicada 1\na = 1.0\nb = 5.0\n").unwrap();
+        assert!(session.reload_from_disk("test", false).unwrap());
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        let snapshot = msgs.iter().find(|m| m["type"] == "snapshot").unwrap();
+        assert_eq!(snapshot["payload"]["barrier"], true);
+        assert_eq!(
+            snapshot["payload"]["graph"]["nodes"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(
+            !session.reload_from_disk("again", false).unwrap(),
+            "unchanged → no-op"
+        );
+    }
+}

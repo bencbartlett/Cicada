@@ -28,4 +28,4 @@ heights = remap(value=each(field), source=field_span, target=height_span)
 ups = unit_z(factor=each(heights))
 prisms = extrude(profile=each(cells), direction=each(ups))
 
-dump = export_obj(meshes=prisms, path="examples/04-field.obj")
+dump = export_obj(meshes=prisms, path="04-field.obj")

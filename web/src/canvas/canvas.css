@@ -1,0 +1,900 @@
+/* Canvas theme (docs/16 §Theme): React Flow tokens mapped onto the app's
+   semantic tokens; node face, ports, wires, chips, search, menus. Density
+   "professional tool": 1 unit (24px) per row, 11–12px type. */
+
+.cicada-canvas {
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+  user-select: none;
+}
+
+/* React Flow defines its `--xy-*-default` tokens on `.react-flow` itself, so
+   the overrides must sit on that element (inheritance would lose). */
+.cicada-canvas .react-flow {
+  background: var(--bg);
+  --xy-background-color-default: var(--bg);
+  --xy-background-pattern-lines-color-default: var(--grid);
+  --xy-background-pattern-dots-color-default: var(--grid-strong);
+  --xy-edge-stroke-default: var(--kind-neutral);
+  --xy-edge-stroke-selected-default: var(--accent);
+  --xy-edge-stroke-width-default: 1.5;
+  --xy-connectionline-stroke-default: var(--accent);
+  --xy-connectionline-stroke-width-default: 2;
+  --xy-handle-background-color-default: var(--kind-neutral);
+  --xy-handle-border-color-default: var(--bg-node);
+  --xy-node-background-color-default: var(--bg-node);
+  --xy-node-border-default: 1px solid var(--border);
+  --xy-node-color-default: var(--fg);
+  --xy-node-boxshadow-selected-default: 0 0 0 1px var(--accent);
+  --xy-node-boxshadow-hover-default: none;
+  --xy-node-border-radius-default: var(--radius);
+  --xy-controls-button-background-color-default: var(--bg-elev);
+  --xy-controls-button-background-color-hover-default: var(--bg-node-header);
+  --xy-controls-button-color-default: var(--fg-dim);
+  --xy-controls-button-color-hover-default: var(--fg);
+  --xy-controls-button-border-color-default: var(--border);
+  --xy-controls-box-shadow-default: var(--shadow);
+  --xy-attribution-background-color-default: transparent;
+  --xy-edge-label-background-color-default: var(--bg-elev);
+  --xy-edge-label-color-default: var(--fg-dim);
+  --xy-minimap-background-color-default: var(--bg-elev);
+  --xy-minimap-mask-background-color-default: rgba(0, 0, 0, 0.35);
+  --xy-minimap-node-background-color-default: var(--border-strong);
+  --xy-resize-background-color-default: var(--accent);
+  --xy-selection-background-color-default: var(--accent-bg);
+  --xy-selection-border-default: 1px dashed var(--accent);
+}
+
+.cicada-canvas .react-flow__attribution {
+  color: var(--fg-faint);
+  font-size: 9px;
+  opacity: 0.6;
+}
+
+.cicada-canvas .react-flow__attribution a {
+  color: inherit;
+}
+
+.cicada-canvas .react-flow__controls {
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.cicada-canvas .react-flow__controls-button svg {
+  fill: currentColor;
+}
+
+.cicada-canvas .react-flow__pane {
+  cursor: default;
+}
+
+.cicada-canvas .react-flow__pane.dragging {
+  cursor: grabbing;
+}
+
+.cicada-canvas .react-flow__selection {
+  background: var(--accent-bg);
+  border: 1px dashed var(--accent);
+}
+
+.cicada-canvas .react-flow__nodesselection-rect {
+  background: transparent;
+  border: 1px dashed var(--accent);
+}
+
+/* ------------------------------------------------------------------ node */
+
+.cicada-canvas .react-flow__node-cicada {
+  font: 11px/1.2 var(--font);
+  color: var(--fg);
+  cursor: grab;
+}
+
+.cicada-canvas .react-flow__node-cicada.dragging {
+  cursor: grabbing;
+}
+
+.cicada-canvas .react-flow__node-cicada:focus,
+.cicada-canvas .react-flow__node-cicada:focus-visible {
+  outline: none;
+}
+
+.cn {
+  --unit: 24px;
+  position: relative;
+  box-sizing: border-box;
+  background: var(--bg-node);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  transition: box-shadow 120ms ease;
+}
+
+.cn.selected,
+.react-flow__node.selected > .cn {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--accent),
+    0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+.cn.picked {
+  box-shadow:
+    0 0 0 1px var(--accent),
+    0 0 0 4px var(--accent-bg),
+    0 2px 10px rgba(0, 0, 0, 0.4);
+}
+
+.cn.hover-pick {
+  border-color: var(--border-strong);
+}
+
+.cn.flash {
+  animation: cn-flash 600ms ease-out;
+}
+
+@keyframes cn-flash {
+  0% {
+    box-shadow:
+      0 0 0 3px var(--accent),
+      0 0 14px var(--accent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.cn.excluded-red {
+  border-color: var(--error);
+  box-shadow: 0 0 0 1px var(--error);
+}
+
+.cn.excluded-amber {
+  border-color: var(--warn);
+  box-shadow: 0 0 0 1px var(--warn);
+}
+
+.cn.state-red {
+  border-color: var(--error);
+}
+
+.cn.probe-source {
+  border-color: var(--accent);
+}
+
+.cn.effectful {
+  border-style: dashed;
+}
+
+/* header row */
+.cn-header {
+  height: var(--unit);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 6px 0 8px;
+  background: var(--bg-node-header);
+  border-bottom: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0 0;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.cn-name {
+  font-weight: 700;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+  min-width: 2em;
+}
+
+.cn-func {
+  color: var(--fg-dim);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.cn-badges {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.cn-state {
+  font-size: 9px;
+  line-height: 14px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--bg-elev);
+  color: var(--fg-faint);
+  font-family: var(--mono);
+  max-width: 6em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cn-state.state-done {
+  color: var(--ok);
+}
+.cn-state.state-cached {
+  color: var(--cached);
+}
+.cn-state.state-running,
+.cn-state.state-queued {
+  color: var(--running);
+  background: var(--accent-bg);
+}
+.cn-state.state-red {
+  color: var(--error);
+  background: var(--error-bg);
+}
+.cn-state.state-blocked {
+  color: var(--blocked);
+  background: var(--warn-bg);
+}
+.cn-state.state-cancelled {
+  color: var(--warn);
+}
+
+.cn-eye {
+  all: unset;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 14px;
+  width: 16px;
+  text-align: center;
+  color: var(--fg-faint);
+  border-radius: 3px;
+}
+.cn-eye:hover {
+  color: var(--fg);
+  background: var(--bg-elev);
+}
+.cn-eye.on {
+  color: var(--accent);
+}
+
+.cn-fx {
+  font-size: 9px;
+  line-height: 14px;
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px dashed var(--warn);
+  color: var(--warn);
+  font-family: var(--mono);
+}
+
+/* comment note (above the header, outside the box) */
+.cn-note {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  margin-bottom: 3px;
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--fg-dim);
+  background: var(--warn-bg);
+  border-left: 2px solid var(--warn);
+  border-radius: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+/* port rows */
+.cn-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.cn-row {
+  height: var(--unit);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: relative;
+}
+
+.cn-port {
+  position: relative;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+.cn-port.cn-in {
+  padding-left: 10px;
+  justify-content: flex-start;
+}
+
+.cn-port.cn-out {
+  padding-right: 10px;
+  justify-content: flex-end;
+  flex: 0 1 auto;
+}
+
+.cn-port.cn-empty {
+  flex: 0 0 0;
+}
+
+.cn-port-label {
+  font-size: 11px;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cn-port.unknown .cn-port-label {
+  color: var(--error);
+  opacity: 0.75;
+}
+
+.cn .cn-literal {
+  color: var(--fg-dim);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 7em;
+}
+
+/* inline literal kwarg editor (shared LiteralWidgets, compact variant) */
+.cn-literal-edit {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.lit-input.compact {
+  width: 4.6em;
+  max-width: 100%;
+  height: 16px;
+  padding: 0 3px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-elev);
+  color: var(--fg-dim);
+  font-size: 10px;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.lit-input.compact::-webkit-outer-spin-button,
+.lit-input.compact::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.lit-input.compact:focus {
+  color: var(--fg);
+  border-color: var(--accent);
+  outline: none;
+}
+
+.lit-input.invalid {
+  border-color: var(--error) !important;
+}
+
+.lit-check.compact {
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.cicada-canvas[data-lod="far"] .cn-literal-edit,
+.cicada-canvas[data-lod="mid"] .cn-literal-edit {
+  visibility: hidden;
+}
+
+.cn-lift {
+  font-size: 9px;
+  line-height: 13px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+
+.cn-lift-offer {
+  border: 1px dashed var(--accent);
+  animation: cn-pulse 900ms ease-in-out infinite alternate;
+}
+
+@keyframes cn-pulse {
+  from {
+    opacity: 0.55;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* handles: kind-colored; required filled, optional hollow, refinement double ring */
+.cicada-canvas .react-flow__handle.cn-handle {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--port-color, var(--kind-neutral));
+  background: var(--port-color, var(--kind-neutral));
+  min-width: 0;
+  min-height: 0;
+  transition:
+    box-shadow 120ms ease,
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.cicada-canvas .react-flow__handle.cn-handle.optional {
+  background: var(--bg-node);
+}
+
+.cicada-canvas .react-flow__handle.cn-handle.refined {
+  box-shadow:
+    0 0 0 1.5px var(--bg-node),
+    0 0 0 3px var(--port-color, var(--kind-neutral));
+}
+
+.cicada-canvas .react-flow__handle.cn-handle.unknown {
+  border-color: var(--error);
+  background: var(--error-bg);
+}
+
+.cicada-canvas .react-flow__handle-left.cn-handle:hover,
+.cicada-canvas .react-flow__handle-left.connectingto {
+  transform: translate(-50%, -50%) scale(1.3);
+}
+
+.cicada-canvas .react-flow__handle-right.cn-handle:hover {
+  transform: translate(50%, -50%) scale(1.3);
+}
+
+/* probe verdicts while a wire drags (docs/09 blocked-wires contract) */
+.cn-port.probe-ok .react-flow__handle.cn-handle {
+  box-shadow:
+    0 0 0 2px var(--bg-node),
+    0 0 0 4px var(--ok),
+    0 0 8px var(--ok);
+}
+
+.cn-port.probe-lift .react-flow__handle.cn-handle {
+  box-shadow:
+    0 0 0 2px var(--bg-node),
+    0 0 0 4px var(--accent),
+    0 0 8px var(--accent);
+}
+
+.cn-port.probe-blocked,
+.cn-port.probe-none {
+  opacity: 0.35;
+}
+
+.cn-port.probe-blocked .react-flow__handle.cn-handle {
+  cursor: not-allowed;
+}
+
+/* widget row */
+.cn-widget {
+  height: var(--unit);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+  cursor: default;
+}
+
+.cn-widget input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: ew-resize;
+}
+
+.cn .cn-widget-value {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--fg-dim);
+  min-width: 3em;
+  text-align: right;
+}
+
+.cn-widget input[type="number"],
+.cn-widget input[type="text"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 18px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-elev);
+  color: var(--fg);
+  font-size: 11px;
+}
+
+.cn-widget input.invalid {
+  border-color: var(--error);
+}
+
+.cn-widget-kind {
+  font-size: 9px;
+}
+
+.cn-toggle {
+  cursor: pointer;
+}
+
+.cn-toggle input {
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+/* progress bar (running nodes) */
+.cn-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -3px;
+  height: 3px;
+  background: var(--bg-elev);
+  border-radius: 0 0 3px 3px;
+  overflow: hidden;
+}
+
+.cn-progress-bar {
+  height: 100%;
+  background: var(--running);
+  transition: width 120ms linear;
+}
+
+/* closest-zoom value previews: a second line inside the output row */
+.cn-port.cn-out.with-value {
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 0;
+  max-width: 60%;
+}
+
+.cn-port.cn-out.with-value .cn-port-label {
+  font-size: 9px;
+  line-height: 10px;
+}
+
+.cn .cn-port-value {
+  font-size: 7.5px;
+  line-height: 9px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* ghost boxes: broken / disabled lines */
+.cn-ghost {
+  opacity: 0.6;
+  border-style: dashed;
+}
+
+.cn-ghost.cn-kind-broken {
+  border-color: var(--error);
+}
+
+.cn-raw {
+  padding: 2px 8px;
+  font-size: 10px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* -------------------------------------------------------------- zoom LOD */
+
+.cicada-canvas[data-lod="far"] .cn-func,
+.cicada-canvas[data-lod="far"] .cn-badges {
+  display: none;
+}
+
+.cicada-canvas[data-lod="far"] .cn-port-label,
+.cicada-canvas[data-lod="far"] .cn-literal,
+.cicada-canvas[data-lod="far"] .cn-lift,
+.cicada-canvas[data-lod="far"] .cn-widget,
+.cicada-canvas[data-lod="far"] .cn-note,
+.cicada-canvas[data-lod="far"] .cicada-edge-chip {
+  visibility: hidden;
+}
+
+.cicada-canvas[data-lod="far"] .cn-header {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  height: auto;
+  border-bottom: none;
+  background: transparent;
+  justify-content: center;
+  padding: 0 4px;
+  pointer-events: none;
+}
+
+.cicada-canvas[data-lod="far"] .cn-name {
+  font-size: 28px;
+  letter-spacing: -0.02em;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cicada-canvas[data-lod="far"] .cn-rows .cn-port {
+  pointer-events: none;
+}
+
+.cicada-canvas[data-lod="far"] .react-flow__handle {
+  opacity: 0.6;
+}
+
+.cicada-canvas[data-lod="mid"] .cn-port-label,
+.cicada-canvas[data-lod="mid"] .cn-literal,
+.cicada-canvas[data-lod="mid"] .cn-note,
+.cicada-canvas[data-lod="mid"] .cn-widget-value,
+.cicada-canvas[data-lod="mid"] .cn-widget-kind {
+  visibility: hidden;
+}
+
+.cicada-canvas[data-lod="mid"] .cn-name {
+  font-size: 15px;
+}
+
+/* ----------------------------------------------------------------- wires */
+
+.cicada-canvas .react-flow__edge-path {
+  fill: none;
+  stroke-linecap: round;
+}
+
+.cicada-edge-glow {
+  fill: none;
+  opacity: 0.28;
+  stroke-linecap: round;
+}
+
+.cicada-edge-hatch {
+  fill: none;
+  stroke: var(--bg);
+  pointer-events: none;
+}
+
+.cicada-edge-red-dash {
+  fill: none;
+  stroke: var(--bg);
+  stroke-dasharray: 3 5;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.cicada-edge:hover .react-flow__edge-path {
+  filter: brightness(1.25);
+}
+
+.cicada-edge-chip {
+  position: absolute;
+  font: 9px/13px var(--mono);
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  pointer-events: all;
+}
+
+.cicada-connection-path {
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+  fill: none;
+}
+
+.cicada-connection.valid .cicada-connection-path {
+  stroke-dasharray: none;
+}
+
+.cicada-connection.invalid .cicada-connection-path {
+  stroke: var(--error) !important;
+}
+
+.cicada-connection.invalid .cicada-connection-tip {
+  fill: var(--error) !important;
+}
+
+/* -------------------------------------------------------------- overlays */
+
+.cv-readonly {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 5;
+  background: var(--warn-bg);
+  color: var(--warn);
+  border: 1px solid var(--warn);
+  pointer-events: none;
+}
+
+.cicada-canvas.readonly .cn-widget {
+  opacity: 0.6;
+}
+
+.cv-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.cv-search {
+  position: absolute;
+  z-index: 20;
+  width: 320px;
+  max-height: 340px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.cv-search-input {
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  padding: 6px 10px;
+  outline: none;
+  font-size: 13px;
+}
+
+.cv-search-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  overflow: auto;
+  flex: 1 1 auto;
+}
+
+.cv-search-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.cv-search-item.active {
+  background: var(--accent-bg);
+}
+
+.cv-search-name {
+  font-family: var(--mono);
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+
+.cv-search-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+}
+
+.cv-search-cat {
+  font-size: 10px;
+  flex: 0 0 auto;
+}
+
+.cv-search-ports {
+  display: flex;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.cv-search-port {
+  font: 10px/14px var(--mono);
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px solid var(--ok);
+  color: var(--ok);
+  background: transparent;
+}
+
+.cv-search-port.lift {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.cv-search-empty {
+  padding: 6px 10px;
+  font-size: 11px;
+}
+
+.cv-menu {
+  position: absolute;
+  z-index: 30;
+  min-width: 180px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 4px 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.cv-menu-title {
+  padding: 2px 10px 4px;
+  font-size: 11px;
+  color: var(--fg-faint);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 2px;
+}
+
+.cv-menu-item {
+  all: unset;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.cv-menu-item:hover:not(:disabled) {
+  background: var(--accent-bg);
+}
+
+.cv-menu-item:disabled {
+  color: var(--fg-faint);
+  cursor: default;
+}
+
+.cv-menu-item.danger {
+  color: var(--error);
+}
+
+.cv-menu-item.sep {
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+  padding-top: 6px;
+}
+
+.cv-menu-hint {
+  font-size: 10px;
+}

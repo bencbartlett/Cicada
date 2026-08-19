@@ -1,0 +1,73 @@
+/* Viewport shell — fills its `.pane`; the canvas is sized by the scene. */
+
+.viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--bg);
+  user-select: none;
+}
+
+.viewport-canvas {
+  display: block;
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+  outline: none;
+}
+
+.viewport-overlay {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.viewport-toolbar {
+  display: flex;
+  gap: 4px;
+  pointer-events: auto;
+}
+
+.viewport-toolbar button {
+  font-size: 11px;
+  padding: 1px 7px;
+  opacity: 0.9;
+}
+
+.viewport-readout {
+  font-size: 11px;
+  color: var(--fg-dim);
+  background: color-mix(in srgb, var(--bg-elev) 75%, transparent);
+  border-radius: var(--radius);
+  padding: 1px 6px;
+  width: max-content;
+}
+
+.viewport-hover {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  font-size: 11px;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--bg-elev) 80%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1px 6px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.viewport-failure {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  color: var(--error);
+  z-index: 3;
+}

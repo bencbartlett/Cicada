@@ -35,3 +35,5 @@ Thumbs.db
 
 # Debug exporter output (examples are re-runnable; artifacts stay local)
 examples/*.obj
+web/test-results/
+web/playwright-report/

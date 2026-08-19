@@ -18,7 +18,11 @@ with a proxy for HMR.
 
 - A **project** is a directory (normally a git repo root): `*.cic`
   pipelines, `scripts/`, sidecars. `cicada serve [dir]` serves exactly
-  one project.
+  one project (`cicada serve file.cic` serves the file's directory and
+  opens that pipeline by default). Clients name pipelines by plain
+  project-relative paths only — absolute, rooted, or `..` forms are
+  refused, and a session can never open or write a file outside the
+  project.
 - Each browser tab opens one pipeline = one **session**.
 - **Single-writer lease** per pipeline: the first client takes the
   write lease; further clients are live read-only observers (which
@@ -71,26 +75,41 @@ smooth tier by warming their range during idle time.
 ## Binary frame format
 
 Frames are typed arrays ready for GPU upload — zero parsing on the
-client beyond the header. Field-level layout (byte-exact spec lands
-with the implementation):
+client beyond the header. **The byte-exact spec is the module doc of
+`crates/cicada-server/src/frames.rs`** (encoder + decoder + round-trip
+tests; mirrored by `web/src/protocol/frames.ts`). Shape (stage 5):
 
 | Frame kind | Contents |
 |---|---|
-| `mesh_batch` | node ref, generation, element range; positions `f32×3`, normals `f32×3`, indices `u32`, pick-ID base `u32` |
-| `instance_batch` | mesh content-hash ref, generation; transforms `f32 3×4` per instance, pick IDs `u32` per instance |
-| `curve_batch` / `point_batch` | node ref, generation; polyline vertex runs / positions, pick IDs |
+| `mesh` / `curve` / `point` (batch) | 32-byte header (magic, version, kind, generation, node ref, output, element range) + element table (element index, pick id, vertex/index ranges) + positions `f32×3` + indices `u32` (triangles / segment pairs / none) + per-vertex pick ids `u32` |
+| `mesh_blob` + `instances` | a content-addressed mesh (blake3 hash, positions, indices) sent once, then per-output instance lists (element index, pick id, `f32 3×4` transform) |
+| `clear` | header only — the output draws nothing this generation |
+
+Normals are not transmitted: the viewport shades flat via screen-space
+derivatives (CAD-correct hard edges, half the mesh bandwidth); smooth
+normals arrive with the display-cost work if a use case needs them
+(revised 2026-08-19 with the implementation).
 
 - **Generation-tagged**: the client drops any frame older than the
   newest applied generation for that node — cancelled solves can
   never paint stale geometry (doc 04's "last coherent frame").
 - **Instancing is hash-driven**: identical mesh hashes across elements
-  arrive once as a `mesh_batch` plus an `instance_batch` of
-  transforms (doc 12 interning → doc 04 instanced draws).
+  arrive once as a `mesh_blob` plus an `instances` frame (doc 12
+  interning → doc 04 instanced draws). Spike: transforms are the
+  identity — hashes decide, not rigid-copy detection (v0.1 interner
+  work); instancing is per node output (cross-node dedupe later).
 - Pick IDs map viewport clicks back to (node, element index, part ID)
-  — backward picking rides the same tables.
+  — backward picking rides the same tables. Ids are stable per
+  `(node, output, element)` for a session's life.
 - The client **subscribes** to a display set (preview-enabled nodes +
   the currently inspected wire); the engine streams buffers
-  progressively as elements complete.
+  progressively as elements complete. Spike: the display set is
+  server-derived (every previewed, displayable output; the sidecar
+  `preview` key toggles), frames go out per whole output only for
+  outputs whose value hash changed since the last broadcast, and a
+  joining client receives `display_reset` plus a full re-stream.
+  Element-range streaming waits on the executor's chunk-level
+  persistence (the frame header already carries the range).
 
 ## Solve streaming
 
@@ -125,7 +144,40 @@ with near-zero server traffic. `clock` is the unbounded escape hatch
 | `GET /api/blob/{hash}` | Large payloads on demand (full inspector data, export previews) |
 | `POST /api/run/{node}` | Effectful nodes — requires the explicit-run confirmation, streams progress over the session socket |
 | `GET /api/git/…` | Status, node-level diff, commit, per-node history (doc 10 git integration) |
-| `GET /debug/state`, `GET /debug/screenshot` | The agent/dev verification loop (doc 14) |
+| `GET /debug/state`, `GET /debug/screenshot` | The agent/dev verification loop (doc 14). `state` (`?pipeline=&values=&wait=`) is the authoritative JSON oracle — graph view-model, text, statuses, summary, per-output display stats with bounds/triangles, lease; `screenshot` (`?target=viewport`) asks a connected client to render the WebGL viewport to PNG (503 when no client is connected — loud, never blank; whole-page shots are Playwright's job) |
+| `GET /health` | Readiness (no token) — Playwright's `webServer` waits on it |
+
+## Stage-5 slice, stated honestly
+
+What the spike ships of this document (doc 15): one project directory,
+sessions per pipeline created on first open, the single-writer lease
+with observers and the 5 s automatic hand-off, intents → minimal text
+edits through the doc-10 writer (persisted immediately) → full
+view-model deltas (the "delta" carries the whole graph view — hundreds
+of KB worst case at wall scale; incremental node deltas wait for a
+profile that asks), the ~30 ms structural debounce and the no-debounce
+latest-wins preview loop, ≤10 Hz coalesced statuses with a
+cost-weighted ETA from persisted samples (rough while ops lack samples),
+frames as above, the project watcher (debounced; a `.cic`, sidecar, or
+`scripts/*.py` change → reload → barrier snapshot), explicit effectful
+runs on the shared scheduler with their own token (a slider drag never
+cancels an export), and the debug endpoints. Wire compatibility during a
+drag is answered by the SERVER (`probe_wire`: the checker evaluates the
+hypothetical wire on a scratch copy — no second copy of the type lattice
+in TypeScript; cost is one re-check per candidate port — fine at the
+wall's ~10-node scale, an incremental checker's job beyond). Persisted
+writes are atomic (temp file + rename) and a refused or failed gesture
+rolls the in-memory document back to what is on disk. Not in the spike:
+undo/redo (no op log yet — the ledger row stands, the log arrives with
+v0.1), transport, git routes, `/api/blob` beyond value summaries,
+reconnect replay (a reconnect is a fresh session join: one hydration
+path — the client retries with backoff and re-hydrates), the
+cost-model's compute-on-release degrade for expensive cones and scrub
+caching (every drag solves latest-wins; a slow cone simply shows
+progress), `#off` node disable and groups (their keyboard rows notice
+loudly), the sidecar's `port_order`/`color`/`collapsed` keys (carried,
+not rendered), per-element frame ranges, and an auto-layout beyond
+"layer by dependency depth, stack in definition order".
 
 ## Undo/redo (formalizing the ledger row)
 
@@ -166,13 +218,21 @@ initial load path; there is exactly one client-hydration code path.
 ## Security and serving
 
 - `cicada serve` binds **127.0.0.1** by default and prints a URL with
-  an embedded session token (Jupyter-style); the WebSocket requires
-  it, CORS is locked to the served origin.
+  an embedded session token (Jupyter-style); the WebSocket, `/api/*`,
+  and `/debug/*` require it (`?token=`, `Authorization: Bearer`, or
+  `X-Cicada-Token`); the SPA and its assets load without it (the page
+  reads the token from its URL). Same-origin only; no CORS headers are
+  emitted.
 - Remote deployment (the Onshape-style case) = the same binary behind
   a reverse proxy with real auth — explicitly out of scope for v0.1;
   nothing in the protocol assumes locality except the default bind.
-- The engine binary embeds the SPA (`rust-embed`), so distribution is
-  one file; the v0.2 desktop app wraps this same server + a webview.
+- The engine binary embeds the SPA (`rust-embed`) behind the server's
+  `embed` build feature — the release / CI-Playwright shape, so debug
+  and test builds need no `npm run build`; without it `cicada serve`
+  serves the API plus a built SPA from `--web-dir <dir>`, or says so
+  loudly at `/` and dev uses Vite's proxy (`cd web && npm run dev`).
+  Distribution is one file; the v0.2 desktop app wraps this same server
+  + a webview.
 
 ## Latency targets (measured, not vibed — spike criteria feed here)
 

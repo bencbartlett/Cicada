@@ -22,29 +22,39 @@ system; the current work order is the vertical-slice spike
    [docs/15-spike-plan.md](docs/15-spike-plan.md), and the docs it lists for
    that stage.
 
-**Current status: stage 4 complete — geometry, the S-tier stdlib, and the
-Python script host.** Live: the value model + `#[node]` registry (stage 1;
-type-erased invokers + marshalling since stage 3), the `.cic` toolchain
-(stage 2: lossless parser, minimal-edit writer, checker-lite — now with
-kind-preserving type variables `T`/`E`, `Geometry` widenings, and `Any`
-absorption), the scheduler (stage 3: content-addressed `NodeKey`s,
-two-level disk store in the USER cache dir, rayon wavefront with chunked
-`each()` fan-out, cancellation, latest-wins previews; effectful nodes now
-bypass the memo entirely), and stage 4: geometry value kinds in core
-(analytic `Curve`, `SoA` `Mesh`, `Closed`/`Watertight` refinements),
-`cicada-geom` (tolerance ops, frames, ear-clip triangulation,
-extrude/box/sphere builders, Manifold boolean seam via `manifold-csg`
-f64-native, spade Voronoi), ~40 registered S-tier nodes (every one with
-table + property + golden-hash tests), the `# Panics`→catalog contract
-pipeline, the debug OBJ exporter (`#[node(effectful)]` — explicit-run
-only), and `cicada-script`'s Python worker pool (length-framed MessagePack,
-`@cicada.node` decorator, source-hash cache keys, kill-the-worker
-cancellation; `scripts/*.py` next to a pipeline self-register). The server
-and the web app do not exist yet. Live subcommands: `cicada catalog` and
-`cicada run` (always pass `--cache-dir` in tests so the user cache stays
-clean; effectful bindings run only via `--node`). `examples/` is the
-runnable playground. Commands below marked *(stage N)* arrive with that
-stage; do not reference them in code or docs as if they work today.
+**Current status: stage 5 complete — the app: server, canvas, viewport.**
+Live: the value model + `#[node]` registry (stage 1), the `.cic` toolchain
+(stage 2: lossless parser, minimal-edit writer — place / wire / unwire /
+lift / set-param / delete / rename — checker-lite with type variables
+`T`/`E`), the scheduler (stage 3: content-addressed `NodeKey`s, two-level
+disk store in the USER cache dir, rayon wavefront with chunked `each()`
+fan-out, cancellation, latest-wins previews; effectful nodes bypass the
+memo), stage 4 (geometry value kinds, `cicada-geom` with the Manifold and
+spade seams, ~40 S-tier nodes with table + property + golden-hash tests,
+the `# Panics`→catalog contract, the debug OBJ exporter, the Python worker
+pool), and stage 5: `cicada-server` (axum: token-gated HTTP + one
+WebSocket per client, JSON control plane + generation-tagged binary
+frames with pick ids and hash-driven instancing, per-pipeline sessions
+with the single-writer lease, intents → doc-10 writer gestures persisted
+immediately → full view-model deltas, a 30 ms structural debounce and a
+no-debounce latest-wins preview loop, ≤10 Hz coalesced statuses + ETA,
+the project watcher with barrier snapshots, explicit effectful runs via
+`POST /api/run/{node}`, `/debug/state` + `/debug/screenshot`; the
+`.cic`→`SolveGraph` lowering and script discovery moved here from the
+CLI — `cicada run` is a printer over them) and `web/` (React Flow canvas
+with search-to-place, typed ports, server-probed live wire compatibility,
+lift chips, red wires, sliders on canvas; three.js viewport with merged
+draws + instancing, ID-buffer backward picking, Rhino-style navigation;
+ribbon, inspector, params + read-only text panels, keyboard map;
+Playwright smoke). Live subcommands: `cicada catalog`, `cicada run`
+(always pass `--cache-dir` in tests; effectful bindings run only via
+`--node`), `cicada serve`. `examples/` is the runnable playground — also
+for the app (`cicada serve examples/02-solids.cic` — the canvas WRITES
+the served files, so for throwaway experiments serve a scratch copy;
+serving the committed examples is fine when you mean to change them).
+Commands below marked
+*(stage N)* arrive with that stage; do not reference them in code or docs
+as if they work today.
 
 ## Project map
 
@@ -53,19 +63,20 @@ stage; do not reference them in code or docs as if they work today.
 | `crates/cicada-core` | Value model (blake3 hash-at-construction, interning, Merkle lists/axes/Optional, ProjectConfig) + node/port specs, registry (specs + erased invokers), marshalling traits, catalog renderer |
 | `crates/cicada-macros` | `#[node]`, `#[derive(Ports)]` proc macros — zero workspace deps by design; compile-fail tests live in cicada-core (tests/ui + macro_ui.rs) |
 | `crates/cicada-geom` | Geometry types, tolerance ops, rented-kernel FFI seams (stage 4) |
-| `crates/cicada-lang` | `.cic` dialect: lossless parser, minimal-edit writer (place/wire/lift/set-param/delete/rename), checker-lite, doc-11 diagnostics |
+| `crates/cicada-lang` | `.cic` dialect: lossless parser, minimal-edit writer (place/wire/unwire/lift/set-param/delete/rename), checker-lite, doc-11 diagnostics |
 | `crates/cicada-stdlib` | The node catalog — pure functions, never depends on sched |
 | `crates/cicada-sched` | Scheduler-lite: solve graph + `NodeKey`s, two-level disk store (memo log + zstd blobs), rayon wavefront executor with `each()` fan-out, cancellation, latest-wins previews, cost sampling |
 | `crates/cicada-script` | WASM host (v0.1) + Python worker pool (stage 4) |
-| `crates/cicada-server` | axum app: protocol, sessions, op log (stage 5) |
-| `crates/cicada-cli` | The `cicada` binary + the `.cic`→`SolveGraph` lowering (moves into the server at stage 5); also hosts the dependency-DAG test |
-| `web/` | SPA: React + TypeScript + Vite (canvas/viewport land in stage 5) |
+| `crates/cicada-server` | The engine server (docs/13): axum app + token auth (`http.rs`), per-pipeline `Session` (intents → writer gestures → deltas, statuses, display set, lease), the latest-wins generation loop (`solve.rs`), JSON protocol (`protocol.rs`), graph view-model (`viewmodel.rs`), byte-exact binary frames (`frames.rs` IS the spec) + value→frame/summary (`display.rs`), sidecar + auto-layout, AND the hydration path shared with `cicada run`: `compile.rs` (targets, cone gate), `lower.rs`, `scripts.rs` (Python nodes + the cancel bridge). `embed` feature bakes `web/dist` in |
+| `crates/cicada-cli` | The `cicada` binary: `catalog`, `run` (a printer over the server's compile/lower), `serve`; hosts the dependency-DAG test |
+| `web/` | SPA: React + TypeScript + Vite; `src/protocol` (message + frame mirrors, WS client), `src/state` (zustand store, connection, frame bus), `src/canvas` (React Flow), `src/viewport` (three.js), `src/panels`, `e2e/` (Playwright smoke) |
 | `corpus/` | Wall-pipeline corpus + golden hashes (stage 6) |
 | `docs/` | Design docs 01–16 + `docs/generated/` |
 
 **Dependency direction is law**: `core ← {geom, lang, stdlib, sched, script}
-← server ← cli`; only `cli` may depend on `server`; `stdlib` never depends on
-`sched`. Within the mid layer, `stdlib → geom` is a sanctioned edge (nodes
+← server ← cli`; only `cli` may depend on `server` (it does, since stage 5:
+`serve`, and `run` reuses the server's compile/lower); `stdlib` never
+depends on `sched`. Within the mid layer, `stdlib → geom` is a sanctioned edge (nodes
 ARE the geometry users, docs/03); no other intra-mid-layer edges exist.
 Enforced by `crates/cicada-cli/tests/dependency_dag.rs`.
 
@@ -82,7 +93,9 @@ Enforced by `crates/cicada-cli/tests/dependency_dag.rs`.
 | Catalog freshness (CI mode) | `cargo run -p cicada-cli -- catalog --check` |
 | Bless macro compile-fail snapshots (PowerShell) | `$env:TRYBUILD = "overwrite"; cargo test -p cicada-core --test macro_ui; Remove-Item Env:\TRYBUILD` |
 | Web checks (bash; PS 5.1 has no `&&` — use `;`) | `cd web && npm run check && npm run lint && npm test` |
-| Serve *(stage 5)* | `cicada serve` |
+| Serve the app | `cargo run -p cicada-cli -- serve <dir-or-pipeline.cic> [--port 8420] [--token …] [--cache-dir …] [--web-dir web/dist]` — prints the URL with the token; without a built SPA it is API-only and says so at `/`. Dev: `cd web && npm run dev` (Vite proxies `/api`, `/ws`, `/debug` to port 8420 — `CICADA_SERVER=` overrides) and open the Vite URL with the same `?token=…&pipeline=…`. Release shape: `cd web && npm run build` then `cargo build -p cicada-cli --features embed` |
+| Playwright smoke (doc 15 DoD) | `cd web && npm run build && npm run e2e` — starts `cicada serve` from `$CARGO_TARGET_DIR/debug/cicada` (or `CICADA_BIN`) over a scratch copy of `examples/`; first time: `npx playwright install chromium` |
+| Agent verification of the running app | `GET /debug/state?token=…&pipeline=…&wait=true` (authoritative JSON: graph, statuses, per-output display bounds/triangles), `GET /debug/screenshot?token=…` (viewport PNG rendered by a connected client), `window.__cicada.{state,frames,scene,send,screenshot}` in the page |
 | Headless run | `cargo run -p cicada-cli -- run <pipeline.cic> [--node <name>]… [--time] [--hashes] [--cache-dir <dir>] [--threads N]` — no `--node` = every leaf; `--hashes` prints stable hash lines INSTEAD of values; dialect syntax: [docs/10](docs/10-dialect-and-file-format.md); tests/CI always pass `--cache-dir` |
 | Bless insta snapshots (checker diagnostics) | `cargo insta review` (cargo-insta installed 2026-08-12) — or `$env:INSTA_UPDATE = "always"; cargo test -p cicada-lang; Remove-Item Env:\INSTA_UPDATE` |
 | Carve benchmark (kernel seam, release only) | `cargo run --release -p cicada-geom --example carve_bench [parts]` — see skill `perf-check` |
@@ -146,6 +159,12 @@ Python 3 on PATH (or `CICADA_PYTHON`); worker protocol is dependency-free
   CI runners have cmake preinstalled (and Windows images ship
   `core.longpaths` enabled); ci.yml still primes the kernel build with
   one retry as a belt.
+- **Playwright** (stage 5): browsers install per machine —
+  `cd web && npx playwright install chromium` (done here 2026-08-19).
+  The app WRITES the served project's files: never point `cicada serve`
+  or the smoke at the repo's `examples/` for experiments — copy them to a
+  scratch dir first (`playwright.config.ts` does this itself). Node 22
+  has a global `WebSocket`, handy for protocol probes from a script.
 
 ## Working rules
 
@@ -208,5 +227,4 @@ for anything user-visible.
 | `.claude/skills/add-stdlib-node` | Adding or modifying a node in `cicada-stdlib`, end to end |
 | `.claude/skills/dialect-change` | Any change to `cicada-lang` — grammar, writer, checker, diagnostics |
 | `.claude/skills/perf-check` | Benchmarks against the doc-15 targets, and how to record numbers |
-
-More arrive with their workflows (doc 14): `protocol-change` (stage 5).
+| `.claude/skills/protocol-change` | Any change to the server↔client protocol (messages, view-model, frames, routes) — server, client mirror, and tests together |

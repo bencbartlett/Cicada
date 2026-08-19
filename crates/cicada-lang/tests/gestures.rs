@@ -88,6 +88,53 @@ fn wire_rewrites_one_kwarg_and_inserts_in_spec_order() {
 }
 
 #[test]
+fn unwire_removes_one_kwarg_and_one_separator() {
+    let before = include_str!("fixtures/gestures/unwire/before.cic");
+    let after = include_str!("fixtures/gestures/unwire/after.cic");
+    let emitted = apply(before, |doc| {
+        // First kwarg: the FOLLOWING separator goes with it.
+        writer::remove_kwarg(doc, "m", "geometry").unwrap();
+        // Only kwarg: empty parens remain.
+        writer::remove_kwarg(doc, "solo", "items").unwrap();
+        // Middle kwarg: its following separator goes; the trailing comment
+        // and everything else stay byte-identical.
+        writer::remove_kwarg(doc, "late", "direction").unwrap();
+    });
+    assert_eq!(emitted, after);
+    // Last kwarg: the PRECEDING separator goes.
+    let mut document = Document::parse(
+        "# cicada 1
+x = f(a=1, b=2)
+",
+    );
+    writer::remove_kwarg(&mut document, "x", "b").unwrap();
+    assert_eq!(
+        document.emit(),
+        "# cicada 1
+x = f(a=1)
+"
+    );
+    // Unknown kwarg / non-call: loud, untouched.
+    let source = "# cicada 1
+x = f(a=1)
+y = 2
+";
+    let mut document = Document::parse(source);
+    assert_eq!(
+        writer::remove_kwarg(&mut document, "x", "zzz").unwrap_err(),
+        WriterError::UnknownKwarg {
+            binding: "x".to_owned(),
+            kwarg: "zzz".to_owned()
+        }
+    );
+    assert_eq!(
+        writer::remove_kwarg(&mut document, "y", "a").unwrap_err(),
+        WriterError::NotACall("y".to_owned())
+    );
+    assert_eq!(document.emit(), source);
+}
+
+#[test]
 fn lift_wraps_the_kwarg_value_in_each() {
     let before = include_str!("fixtures/gestures/lift/before.cic");
     let after = include_str!("fixtures/gestures/lift/after.cic");
