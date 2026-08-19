@@ -5,13 +5,14 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use cicada_core::geometry::{Circle, Curve, Line, Mesh, Polyline, Rectangle};
 use cicada_core::scalar::{Color, Domain, IndexMap};
 use cicada_core::spatial::{Plane, Point, Vector, Xform};
 use cicada_core::value::{HashedValue, List, ValueData};
-use cicada_sched::{DiskStore, StoreError, project_cache_dir};
+use cicada_sched::{BlobLocation, DiskStore, PACK_MAX_BYTES, StoreError, project_cache_dir};
 use proptest::prelude::*;
 
 fn value(data: ValueData) -> Arc<HashedValue> {
@@ -168,12 +169,96 @@ fn shared_elements_are_stored_once() {
     }));
     store.store_value(&a).unwrap();
     store.store_value(&b).unwrap();
-    // Blobs: shared element + two list spines = 3 files.
-    let mut blobs = 0;
-    for shard in std::fs::read_dir(dir.path().join("values")).unwrap() {
-        blobs += std::fs::read_dir(shard.unwrap().path()).unwrap().count();
+    // Blobs: shared element + two list spines = 3 entries (small values
+    // live in the pack; the sharded files are for big blobs only).
+    let mut files = 0;
+    for entry in std::fs::read_dir(dir.path().join("values")).unwrap() {
+        let shard_dir = entry.unwrap().path();
+        if shard_dir.is_dir() {
+            files += std::fs::read_dir(shard_dir).unwrap().count();
+        }
     }
-    assert_eq!(blobs, 3, "content addressing dedupes shared children");
+    assert_eq!(
+        store.packed_values() + files,
+        3,
+        "content addressing dedupes shared children"
+    );
+}
+
+#[test]
+fn big_blobs_get_their_own_file_and_small_ones_pack() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = DiskStore::open(dir.path()).unwrap();
+    let small = value(ValueData::Number(1.5));
+    // Incompressible bytes past the pack threshold: a random-looking text.
+    let mut big_text = String::new();
+    let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+    while big_text.len() < PACK_MAX_BYTES * 2 {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        write!(big_text, "{x:016x}").unwrap();
+    }
+    let big = value(ValueData::Text(Arc::from(big_text.as_str())));
+    store.store_value(&small).unwrap();
+    store.store_value(&big).unwrap();
+    assert!(matches!(
+        store.locate_value(&small.hash()),
+        Some(BlobLocation::Packed { .. })
+    ));
+    assert!(matches!(
+        store.locate_value(&big.hash()),
+        Some(BlobLocation::File(_))
+    ));
+    assert!(store.contains_value(&small.hash()));
+    assert!(store.contains_value(&big.hash()));
+    // Both reload verified from a fresh open (the pack index is rebuilt
+    // from the file, not remembered).
+    drop(store);
+    let (store, report) = DiskStore::open(dir.path()).unwrap();
+    assert_eq!(report.packed_values, 1);
+    assert_eq!(report.pack_recovery, None);
+    assert_eq!(
+        store.load_value(&small.hash()).unwrap().data(),
+        small.data()
+    );
+    assert_eq!(store.load_value(&big.hash()).unwrap().data(), big.data());
+}
+
+#[test]
+fn torn_pack_tail_is_truncated_and_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = value(ValueData::Number(1.0));
+    let second = value(ValueData::Number(2.0));
+    {
+        let (store, _) = DiskStore::open(dir.path()).unwrap();
+        store.store_value(&first).unwrap();
+        store.store_value(&second).unwrap();
+    }
+    // Tear the last frame: drop its final byte (a crash mid-append).
+    let pack = dir.path().join("values").join("pack.bin");
+    let mut bytes = std::fs::read(&pack).unwrap();
+    bytes.pop();
+    std::fs::write(&pack, &bytes).unwrap();
+    let (store, report) = DiskStore::open(dir.path()).unwrap();
+    assert_eq!(
+        report.pack_recovery,
+        Some(cicada_sched::LogRecovery::TornTail)
+    );
+    assert_eq!(report.packed_values, 1, "the whole frame survives");
+    assert!(store.contains_value(&first.hash()));
+    assert!(!store.contains_value(&second.hash()), "torn frame is gone");
+    // Re-storing the torn value appends cleanly after the truncation point
+    // and replays on the next open.
+    store.store_value(&second).unwrap();
+    drop(store);
+    let (store, report) = DiskStore::open(dir.path()).unwrap();
+    assert_eq!(report.pack_recovery, None);
+    assert_eq!(report.packed_values, 2);
+    assert_eq!(
+        store.load_value(&second.hash()).unwrap().data(),
+        second.data()
+    );
 }
 
 #[test]
@@ -184,18 +269,18 @@ fn corrupted_blob_is_refused_loudly() {
         let (store, _) = DiskStore::open(dir.path()).unwrap();
         store.store_value(&input).unwrap();
     }
-    // Flip the blob's content.
-    let hex = input.hash().to_hex();
-    let blob = dir
-        .path()
-        .join("values")
-        .join(&hex[..2])
-        .join(format!("{hex}.zst"));
-    let mut bytes = std::fs::read(&blob).unwrap();
-    let last = bytes.len() - 1;
-    bytes[last] ^= 0xFF;
-    std::fs::write(&blob, bytes).unwrap();
-
+    // Flip the blob's content, wherever it lives (a small Text packs).
+    let (store, _) = DiskStore::open(dir.path()).unwrap();
+    let location = store.locate_value(&input.hash()).expect("stored");
+    let BlobLocation::Packed { path, offset, len } = &location else {
+        panic!("a small value lives in the pack, got {location:?}");
+    };
+    let mut bytes = std::fs::read(path).unwrap();
+    let start = usize::try_from(*offset).unwrap();
+    bytes[start + *len as usize - 1] ^= 0xFF;
+    std::fs::write(path, bytes).unwrap();
+    // Reopen so the flipped bytes are what gets read (no memory copy).
+    drop(store);
     let (store, _) = DiskStore::open(dir.path()).unwrap();
     let error = store
         .load_value(&input.hash())
@@ -208,10 +293,16 @@ fn corrupted_blob_is_refused_loudly() {
         "got {error}"
     );
     // Regression (adversarial review, stage 3): the failed load QUARANTINES
-    // the bad blob, so a re-store writes good bytes and the address heals —
-    // never "Ok forever on store, error forever on load".
-    assert!(!blob.exists(), "bad blob moved aside");
+    // the bad bytes (a packed frame is forgotten; a file is moved aside),
+    // so a re-store writes good bytes and the address heals — never "Ok
+    // forever on store, error forever on load".
+    assert!(!store.contains_value(&input.hash()), "bad bytes forgotten");
     store.store_value(&input).unwrap();
+    let healed = store.load_value(&input.hash()).unwrap();
+    assert_eq!(healed.data(), input.data());
+    // ...and the healed frame wins on replay (later frames supersede).
+    drop(store);
+    let (store, _) = DiskStore::open(dir.path()).unwrap();
     let healed = store.load_value(&input.hash()).unwrap();
     assert_eq!(healed.data(), input.data());
 }

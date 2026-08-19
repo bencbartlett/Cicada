@@ -60,7 +60,12 @@ same-value detection needed — content addressing *is* the detection.
 Two levels:
 
 1. **Value store** — content-addressed blobs: `hash → zstd(bytes)`.
-   Deduplicated across nodes, solves, and time by construction.
+   Deduplicated across nodes, solves, and time by construction. Small
+   blobs (≤ 256 KiB compressed — points, numbers, cells, parts) live in
+   one append-only **pack** file indexed at open; only big blobs get a
+   file of their own. Stage-6 measurement: a cold 1,500-element fan-out
+   spent seconds creating one file per value (syscall-bound, NTFS);
+   packed it is ~0.1 s. Same torn-tail recovery as the memo log.
 2. **Memo table** — `NodeKey → {output hashes, status, warnings with
    element IDs, cost samples, display-cost samples}`.
 

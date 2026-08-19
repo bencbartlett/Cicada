@@ -1192,6 +1192,24 @@ fn preview_survives_a_panicking_observer_and_surfaces_the_panic() {
 // A memo entry whose blob was corrupted on disk: the first solve fails
 // LOUDLY (typed error) and tombstones the entry + quarantines the blob;
 // the next solve recomputes cleanly — never a permanent wedge.
+
+/// Overwrite a stored value's bytes with garbage, wherever the store keeps
+/// them (pack frame or blob file) — the corruption tests must damage the
+/// REAL bytes, not a path the store no longer uses.
+fn corrupt_value_bytes(store: &DiskStore, hash: &cicada_core::hash::ValueHash) {
+    match store.locate_value(hash).expect("value is stored") {
+        cicada_sched::BlobLocation::File(path) => std::fs::write(&path, b"garbage").unwrap(),
+        cicada_sched::BlobLocation::Packed { path, offset, len } => {
+            let mut bytes = std::fs::read(&path).unwrap();
+            let start = usize::try_from(offset).unwrap();
+            for byte in &mut bytes[start..start + len as usize] {
+                *byte ^= 0xFF;
+            }
+            std::fs::write(&path, bytes).unwrap();
+        }
+    }
+}
+
 #[test]
 fn broken_memo_promise_heals_across_solves() {
     let dir = tempfile::tempdir().unwrap();
@@ -1234,14 +1252,12 @@ fn broken_memo_promise_heals_across_solves() {
         let report = solve(&scheduler, &graph(1.0), &[NodeId(1)], &Recorder::default());
         report.outcome(NodeId(0)).output_hashes().unwrap()[0]
     };
-    // Corrupt `up`'s blob on disk.
-    let hex = up_hash.to_hex();
-    let blob = dir
-        .path()
-        .join("values")
-        .join(&hex[..2])
-        .join(format!("{hex}.zst"));
-    std::fs::write(&blob, b"garbage").unwrap();
+    // Corrupt `up`'s bytes on disk, wherever the store put them (small
+    // values live in the pack, large ones in their own file).
+    {
+        let (store, _) = DiskStore::open(dir.path()).unwrap();
+        corrupt_value_bytes(&store, &up_hash);
+    }
 
     // Solve 2 (fresh store, nothing in memory; down's param changed so it
     // MISSES): up cache-hits hash-only, down computes and needs up's

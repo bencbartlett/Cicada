@@ -39,4 +39,7 @@ pub use exec::{
 pub use graph::{GraphError, Input, NodeDecl, NodeError, NodeFn, NodeId, SolveGraph};
 pub use key::{CACHE_EPOCH, KeyInputs, NodeKey, node_key};
 pub use preview::{PreviewJob, PreviewSession};
-pub use store::{DiskStore, LogRecovery, MemoEntry, OpenReport, StoreError, project_cache_dir};
+pub use store::{
+    BlobLocation, DiskStore, LogRecovery, MemoEntry, OpenReport, PACK_MAX_BYTES, StoreError,
+    project_cache_dir,
+};

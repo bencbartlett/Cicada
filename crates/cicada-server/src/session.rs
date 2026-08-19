@@ -340,6 +340,21 @@ impl Session {
                  later cached work were dropped and will recompute"
             )),
         }
+        match open_report.pack_recovery {
+            None => {}
+            Some(LogRecovery::TornTail) => notices.push(
+                "value pack ended in a torn frame (crash mid-write?); truncated there — the \
+                 values before it were kept, the torn one recomputes"
+                    .to_owned(),
+            ),
+            Some(LogRecovery::CorruptRecord {
+                offset,
+                bytes_dropped,
+            }) => notices.push(format!(
+                "value pack had an unframeable record at byte {offset}; {bytes_dropped} bytes of \
+                 later cached values were dropped and will recompute"
+            )),
+        }
         let scheduler = Arc::new(Scheduler::new(
             Arc::new(store),
             Arc::new(MonotonicClock::new()),

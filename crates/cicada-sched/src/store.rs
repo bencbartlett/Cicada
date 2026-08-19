@@ -44,6 +44,10 @@ use crate::key::NodeKey;
 /// docs for why this is a constant in the spike.
 pub const DEFAULT_MEM_BUDGET: usize = 2 * 1024 * 1024 * 1024;
 
+/// Lists with at least this many fresh (unstored) children persist them
+/// on the rayon pool; below it the fork costs more than the writes.
+const PARALLEL_STORE_MIN: usize = 16;
+
 /// Store failures — all loud, all typed.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -147,7 +151,63 @@ pub struct OpenReport {
     pub sample_records: usize,
     /// Log damage found and recovered, if any.
     pub recovery: Option<LogRecovery>,
+    /// Small-blob pack entries indexed.
+    pub packed_values: usize,
+    /// Pack damage found and recovered, if any (same truncate-at-damage
+    /// semantics as the memo log; the dropped blobs recompute).
+    pub pack_recovery: Option<LogRecovery>,
 }
+
+/// Compressed blobs up to this size live in the append-only pack file
+/// (`values/pack.bin`) instead of one file each. A cold wall-scale solve
+/// persists tens of thousands of small values — points, numbers, cells,
+/// parts — and one blob create per value is syscall-bound (≈0.3 ms each
+/// even in parallel on NTFS); an append is microseconds. Larger blobs stay
+/// one file each so the pack never grows by gigabytes per generation.
+pub const PACK_MAX_BYTES: usize = 256 * 1024;
+
+/// Where a value's bytes live on disk (see [`DiskStore::locate_value`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlobLocation {
+    /// One file per blob (compressed size above [`PACK_MAX_BYTES`]).
+    File(PathBuf),
+    /// A frame in the small-blob pack: the payload starts at `offset`.
+    Packed {
+        /// The pack file.
+        path: PathBuf,
+        /// Byte offset of the compressed payload.
+        offset: u64,
+        /// Compressed payload length.
+        len: u32,
+    },
+}
+
+/// Where a packed blob lives: byte offset of its payload and its length.
+#[derive(Debug, Clone, Copy)]
+struct PackSlot {
+    offset: u64,
+    len: u32,
+}
+
+/// The small-blob pack: frames of `[u32 LE len][32-byte hash][zstd]`
+/// (`len` covers hash + payload), append-only, indexed in memory at open.
+/// A later frame for a hash supersedes an earlier one, so a re-store after
+/// a quarantine heals the address in place.
+struct Pack {
+    index: HashMap<ValueHash, PackSlot>,
+    /// Append handle (every frame is one `write_all` — atomic per
+    /// append on both Windows and POSIX).
+    write: fs::File,
+    /// Read handle (positioned reads; never shares the writer's cursor).
+    read: fs::File,
+    /// Bytes in the file as this process knows them (= the next append
+    /// offset — another process appending concurrently is invisible to
+    /// this index, exactly like the memo log).
+    len: u64,
+}
+
+/// The pack frame header: the length word plus the content hash.
+const PACK_HEADER: usize = 4 + 32;
 
 /// One memo entry: the output value hashes of a completed computation, in
 /// output-port order.
@@ -190,7 +250,7 @@ pub fn project_cache_dir(project: &Path) -> Result<PathBuf, StoreError> {
 /// Move a bad blob aside (`.zst.corrupt`) so a future `store_value` can
 /// rewrite the address with good bytes. Best-effort — the load error
 /// itself is the loud signal; rename (not delete) preserves the evidence.
-fn quarantine(path: &Path) {
+fn quarantine_file(path: &Path) {
     let _ = fs::rename(path, path.with_extension("zst.corrupt"));
 }
 
@@ -419,6 +479,138 @@ impl MemCache {
     }
 }
 
+impl Pack {
+    /// Open (creating if absent) the pack at `path`, indexing its frames.
+    /// A torn tail or an unframeable record is truncated away and reported,
+    /// exactly like the memo log — dropped blobs recompute; nothing is
+    /// silently trusted.
+    fn open(path: &Path) -> Result<(Self, Option<LogRecovery>), StoreError> {
+        let io = |path: &Path| {
+            let path = path.to_owned();
+            move |source| StoreError::Io { path, source }
+        };
+        let mut index = HashMap::new();
+        let mut recovery = None;
+        let mut len = 0u64;
+        if path.exists() {
+            let bytes = fs::read(path).map_err(io(path))?;
+            let mut offset = 0usize;
+            while offset < bytes.len() {
+                let Some(header) = bytes.get(offset..offset + 4) else {
+                    recovery = Some(LogRecovery::TornTail);
+                    break;
+                };
+                let frame_len = header
+                    .try_into()
+                    .map(u32::from_le_bytes)
+                    .unwrap_or_default() as usize;
+                if frame_len < 32 {
+                    recovery = Some(LogRecovery::CorruptRecord {
+                        offset,
+                        bytes_dropped: bytes.len() - offset,
+                    });
+                    break;
+                }
+                let Some(frame) = bytes.get(offset + 4..offset + 4 + frame_len) else {
+                    recovery = Some(LogRecovery::TornTail);
+                    break;
+                };
+                let mut hash = [0u8; 32];
+                hash.copy_from_slice(&frame[..32]);
+                // Later frames supersede earlier ones (a healed re-store).
+                index.insert(
+                    ValueHash::from_bytes(hash),
+                    PackSlot {
+                        offset: (offset + PACK_HEADER) as u64,
+                        len: u32::try_from(frame_len - 32).unwrap_or(u32::MAX),
+                    },
+                );
+                offset += 4 + frame_len;
+            }
+            if recovery.is_some() {
+                let file = fs::OpenOptions::new()
+                    .write(true)
+                    .open(path)
+                    .map_err(io(path))?;
+                file.set_len(offset as u64).map_err(io(path))?;
+            }
+            len = offset as u64;
+        }
+        let write = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(io(path))?;
+        let read = fs::OpenOptions::new()
+            .read(true)
+            .open(path)
+            .map_err(io(path))?;
+        Ok((
+            Self {
+                index,
+                write,
+                read,
+                len,
+            },
+            recovery,
+        ))
+    }
+
+    /// Append one blob frame; returns nothing, indexes it.
+    fn append(&mut self, path: &Path, hash: &ValueHash, payload: &[u8]) -> Result<(), StoreError> {
+        let frame_len = u32::try_from(32 + payload.len()).map_err(|_| StoreError::Decode {
+            path: path.to_owned(),
+            message: "pack frame over 4 GiB".to_owned(),
+        })?;
+        let mut framed = Vec::with_capacity(PACK_HEADER + payload.len());
+        framed.extend_from_slice(&frame_len.to_le_bytes());
+        framed.extend_from_slice(hash.as_bytes());
+        framed.extend_from_slice(payload);
+        self.write
+            .write_all(&framed)
+            .map_err(|source| StoreError::Io {
+                path: path.to_owned(),
+                source,
+            })?;
+        self.write.flush().map_err(|source| StoreError::Io {
+            path: path.to_owned(),
+            source,
+        })?;
+        let offset = self.len + PACK_HEADER as u64;
+        self.len += framed.len() as u64;
+        self.index.insert(
+            *hash,
+            PackSlot {
+                offset,
+                len: u32::try_from(payload.len()).unwrap_or(u32::MAX),
+            },
+        );
+        Ok(())
+    }
+
+    /// Read a packed blob's compressed bytes, if indexed.
+    fn read(&mut self, path: &Path, hash: &ValueHash) -> Result<Option<Vec<u8>>, StoreError> {
+        use std::io::{Read as _, Seek as _, SeekFrom};
+        let Some(slot) = self.index.get(hash).copied() else {
+            return Ok(None);
+        };
+        let io = |source| StoreError::Io {
+            path: path.to_owned(),
+            source,
+        };
+        self.read.seek(SeekFrom::Start(slot.offset)).map_err(io)?;
+        let mut bytes = vec![0u8; slot.len as usize];
+        self.read.read_exact(&mut bytes).map_err(io)?;
+        Ok(Some(bytes))
+    }
+
+    /// Forget a packed blob (its bytes failed verification); the next
+    /// store appends a fresh frame that supersedes it on replay.
+    fn forget(&mut self, hash: &ValueHash) {
+        self.index.remove(hash);
+    }
+}
+
 /// The persistent store. Thread-safe: the executor's parallel chunks write
 /// through it concurrently.
 pub struct DiskStore {
@@ -427,6 +619,8 @@ pub struct DiskStore {
     samples: RwLock<HashMap<String, CostStats>>,
     log: Mutex<fs::File>,
     mem: Mutex<MemCache>,
+    /// The small-blob pack (see [`PACK_MAX_BYTES`]).
+    pack: Mutex<Pack>,
     /// Monotonic LRU tick (coarse, cross-thread).
     tick: AtomicU64,
     /// Uniquifier for temp blob files.
@@ -537,6 +731,9 @@ impl DiskStore {
             .open(&log_path)
             .map_err(io(&log_path))?;
 
+        let (pack, pack_recovery) = Pack::open(&root.join("values").join("pack.bin"))?;
+        let packed_values = pack.index.len();
+
         Ok((
             Self {
                 root: root.to_owned(),
@@ -548,6 +745,7 @@ impl DiskStore {
                     total_bytes: 0,
                     budget: mem_budget,
                 }),
+                pack: Mutex::new(pack),
                 tick: AtomicU64::new(0),
                 temp_counter: AtomicU64::new(0),
             },
@@ -555,8 +753,42 @@ impl DiskStore {
                 memo_entries,
                 sample_records,
                 recovery,
+                packed_values,
+                pack_recovery,
             },
         ))
+    }
+
+    /// Where a value's bytes live on disk, if this store knows of them
+    /// (diagnostics and tests — corruption tests damage the real bytes).
+    #[must_use]
+    pub fn locate_value(&self, hash: &ValueHash) -> Option<BlobLocation> {
+        let slot = self
+            .pack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .index
+            .get(hash)
+            .copied();
+        if let Some(slot) = slot {
+            return Some(BlobLocation::Packed {
+                path: self.pack_path(),
+                offset: slot.offset,
+                len: slot.len,
+            });
+        }
+        let path = self.blob_path(hash);
+        path.exists().then_some(BlobLocation::File(path))
+    }
+
+    /// How many values the small-blob pack holds (tests and diagnostics).
+    #[must_use]
+    pub fn packed_values(&self) -> usize {
+        self.pack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .index
+            .len()
     }
 
     /// The store root.
@@ -687,9 +919,11 @@ impl DiskStore {
             .join(format!("{hex}.zst"))
     }
 
-    /// True when a value blob exists (memory or disk).
-    #[must_use]
-    pub fn contains_value(&self, hash: &ValueHash) -> bool {
+    /// True when the in-memory layer or the pack index holds the value —
+    /// which implies it is on disk: every `mem` insert happens after a
+    /// successful blob write (`store_value`) or a verified blob read
+    /// (`load_inner`), and the pack index is the pack file. No stat.
+    fn known_stored(&self, hash: &ValueHash) -> bool {
         let tick = self.tick.fetch_add(1, Ordering::Relaxed);
         if self
             .mem
@@ -700,7 +934,21 @@ impl DiskStore {
         {
             return true;
         }
-        self.blob_path(hash).exists()
+        self.pack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .index
+            .contains_key(hash)
+    }
+
+    /// True when a value blob exists (memory, pack, or disk).
+    #[must_use]
+    pub fn contains_value(&self, hash: &ValueHash) -> bool {
+        self.known_stored(hash) || self.blob_path(hash).exists()
+    }
+
+    fn pack_path(&self) -> PathBuf {
+        self.root.join("values").join("pack.bin")
     }
 
     /// Persist a value (children first — a stored list PROMISES its
@@ -708,19 +956,41 @@ impl DiskStore {
     /// already-present value is a cheap no-op, which is exactly what makes
     /// warming and re-solves trivially incremental (docs/12).
     ///
+    /// A list's fresh children are written **in parallel** (rayon): a cold
+    /// 1,500-element fan-out is one blob create per element, and blob
+    /// creates are syscall-bound (the stage-5 probe measured a cold
+    /// `construct_point ×1500` at seconds — all of it file creation, none
+    /// of it compute). Content addressing makes the parallel writes
+    /// trivially safe: two writers of one hash race to identical bytes.
+    ///
     /// # Errors
     ///
     /// [`StoreError`] on I/O or encoding failure.
     pub fn store_value(&self, value: &Arc<HashedValue>) -> Result<(), StoreError> {
         if let ValueData::List(list) = value.data() {
-            for element in list.slots.iter().flatten() {
-                self.store_value(element)?;
+            // Persist the children that are not already known — in
+            // parallel once there are enough to pay for the fork.
+            let fresh: Vec<&Arc<HashedValue>> = list
+                .slots
+                .iter()
+                .flatten()
+                .filter(|element| !self.known_stored(&element.hash()))
+                .collect();
+            if fresh.len() >= PARALLEL_STORE_MIN {
+                use rayon::prelude::*;
+                fresh
+                    .par_iter()
+                    .try_for_each(|element| self.store_value(element))?;
+            } else {
+                for element in fresh {
+                    self.store_value(element)?;
+                }
             }
         }
-        let path = self.blob_path(&value.hash());
-        if path.exists() {
+        if self.known_stored(&value.hash()) {
             return Ok(());
         }
+        let path = self.blob_path(&value.hash());
         let encoded = postcard::to_allocvec(&to_stored(value.data())).map_err(|error| {
             StoreError::Decode {
                 path: path.clone(),
@@ -732,11 +1002,31 @@ impl DiskStore {
                 path: path.clone(),
                 source,
             })?;
+        if compressed.len() <= PACK_MAX_BYTES {
+            // Small blob: one append under the pack lock. A concurrent
+            // store of the same hash (parallel children of two lists)
+            // appends a second identical frame — harmless, and the index
+            // check under the lock keeps it rare.
+            let pack_path = self.pack_path();
+            let mut pack = self
+                .pack
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !pack.index.contains_key(&value.hash()) {
+                pack.append(&pack_path, &value.hash(), &compressed)?;
+            }
+            drop(pack);
+            let tick = self.tick.fetch_add(1, Ordering::Relaxed);
+            self.mem
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(Arc::clone(value), compressed.len(), tick);
+            return Ok(());
+        }
+        if path.exists() {
+            return Ok(());
+        }
         let parent = path.parent().unwrap_or(&self.root).to_owned();
-        fs::create_dir_all(&parent).map_err(|source| StoreError::Io {
-            path: parent.clone(),
-            source,
-        })?;
         // Write-then-rename so a crash never leaves a torn blob under its
         // content address. The temp name carries the PROCESS id: two
         // processes storing the same fresh value must not share a temp
@@ -750,10 +1040,22 @@ impl DiskStore {
             std::process::id(),
             self.temp_counter.fetch_add(1, Ordering::Relaxed)
         ));
-        fs::write(&temp, &compressed).map_err(|source| StoreError::Io {
-            path: temp.clone(),
-            source,
-        })?;
+        // The shard directory is created on demand — on the first miss,
+        // not with a `create_dir_all` stat per blob (one syscall of the
+        // five a cold element used to cost).
+        if let Err(source) = fs::write(&temp, &compressed) {
+            if source.kind() != std::io::ErrorKind::NotFound {
+                return Err(StoreError::Io { path: temp, source });
+            }
+            fs::create_dir_all(&parent).map_err(|source| StoreError::Io {
+                path: parent.clone(),
+                source,
+            })?;
+            fs::write(&temp, &compressed).map_err(|source| StoreError::Io {
+                path: temp.clone(),
+                source,
+            })?;
+        }
         if let Err(source) = fs::rename(&temp, &path) {
             let _ = fs::remove_file(&temp);
             if !path.exists() {
@@ -803,21 +1105,46 @@ impl DiskStore {
         }
         visiting.push(*hash);
 
+        // Where the bytes live: the pack (small blobs) or a file.
         let path = self.blob_path(hash);
-        let compressed = fs::read(&path).map_err(|source| {
-            if source.kind() == std::io::ErrorKind::NotFound {
-                StoreError::MissingValue {
-                    hash: hash.to_hex(),
+        let packed = {
+            let pack_path = self.pack_path();
+            self.pack
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .read(&pack_path, hash)?
+        };
+        let from_pack = packed.is_some();
+        let compressed = match packed {
+            Some(bytes) => bytes,
+            None => fs::read(&path).map_err(|source| {
+                if source.kind() == std::io::ErrorKind::NotFound {
+                    StoreError::MissingValue {
+                        hash: hash.to_hex(),
+                    }
+                } else {
+                    StoreError::Io {
+                        path: path.clone(),
+                        source,
+                    }
                 }
+            })?,
+        };
+        // Bad bytes are moved aside (file) or forgotten (pack) so a
+        // re-store heals the address — never "Ok forever on store, error
+        // forever on load".
+        let quarantine = |this: &Self| {
+            if from_pack {
+                this.pack
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .forget(hash);
             } else {
-                StoreError::Io {
-                    path: path.clone(),
-                    source,
-                }
+                quarantine_file(&path);
             }
-        })?;
+        };
         let Ok(encoded) = zstd::stream::decode_all(compressed.as_slice()) else {
-            quarantine(&path);
+            quarantine(self);
             return Err(StoreError::Decode {
                 path,
                 message: "zstd decode failed".to_owned(),
@@ -826,7 +1153,7 @@ impl DiskStore {
         let stored: StoredValue = match postcard::from_bytes(&encoded) {
             Ok(stored) => stored,
             Err(error) => {
-                quarantine(&path);
+                quarantine(self);
                 return Err(StoreError::Decode {
                     path,
                     message: error.to_string(),
@@ -840,7 +1167,7 @@ impl DiskStore {
             // Child-load errors pass through untouched (the child is the
             // problem, and it quarantined itself if corrupt).
             Err(error @ StoreError::ValueRejected { .. }) => {
-                quarantine(&path);
+                quarantine(self);
                 return Err(error);
             }
             Err(error) => return Err(error),
@@ -848,14 +1175,14 @@ impl DiskStore {
         let value = match HashedValue::new(data) {
             Ok(value) => value,
             Err(error) => {
-                quarantine(&path);
+                quarantine(self);
                 return Err(StoreError::ValueRejected {
                     message: error.to_string(),
                 });
             }
         };
         if value.hash() != *hash {
-            quarantine(&path);
+            quarantine(self);
             return Err(StoreError::CorruptValue {
                 expected: hash.to_hex(),
                 got: value.hash().to_hex(),

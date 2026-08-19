@@ -116,6 +116,20 @@ pub fn run(args: &RunArgs) -> anyhow::Result<()> {
              bytes of later cached work were dropped and will recompute"
         ),
     }
+    match open_report.pack_recovery {
+        None => {}
+        Some(cicada_sched::store::LogRecovery::TornTail) => eprintln!(
+            "note: value pack ended in a torn frame (crash mid-write?); it was truncated \
+             there — the values before it were kept, the torn one recomputes"
+        ),
+        Some(cicada_sched::store::LogRecovery::CorruptRecord {
+            offset,
+            bytes_dropped,
+        }) => eprintln!(
+            "note: value pack had an unframeable record at byte {offset}; {bytes_dropped} \
+             bytes of later cached values were dropped and will recompute"
+        ),
+    }
     let scheduler = Scheduler::new(
         Arc::new(store),
         Arc::new(MonotonicClock::new()),
