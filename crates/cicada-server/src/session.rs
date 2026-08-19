@@ -224,6 +224,8 @@ struct StatusBoard {
     changed: BTreeMap<String, NodeStatus>,
     summary: SolveSummary,
     started: Option<Instant>,
+    /// The running generation's queue wait (job accepted → start).
+    queued: Option<Duration>,
     /// Predicted nanos per pending node (cost-weighted ETA).
     predicted: HashMap<String, Option<u64>>,
     dirty: bool,
@@ -253,7 +255,9 @@ struct Core {
     timings: Mutex<std::collections::VecDeque<GenerationTiming>>,
 }
 
-/// One generation's timing record.
+/// One generation's timing record (docs/15 measurement protocol; read
+/// from `/debug/state` → `timings`). Preview latency on the server side is
+/// `queued_ms + elapsed_ms`.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct GenerationTiming {
     /// The generation.
@@ -262,10 +266,22 @@ pub struct GenerationTiming {
     pub kind: &'static str,
     /// Milliseconds since the session opened when it started.
     pub started_ms: f64,
+    /// Wall milliseconds the job waited before starting: from the session
+    /// accepting the work (a `param_preview` intent's arrival, before its
+    /// lowering; the structural debounce firing; the load) to the
+    /// generation's start. `0` for explicit runs (they never queue).
+    pub queued_ms: f64,
     /// Wall milliseconds from start to completion (frames included).
     pub elapsed_ms: Option<f64>,
     /// Ended cancelled.
     pub cancelled: bool,
+    /// Present only when an explicit cancel (Esc) ended this generation:
+    /// server-side wall milliseconds from the first `cancel()` call to the
+    /// solve loop flipping idle (completion hooks and frame emission
+    /// included) — the docs/15 "Esc always works" currency, measured where
+    /// the client's poll cannot blur it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancel_to_idle_ms: Option<f64>,
     /// Nodes computed / cached.
     pub computed: usize,
     /// Cache hits.
@@ -274,8 +290,11 @@ pub struct GenerationTiming {
     pub frame_bytes: usize,
 }
 
-/// How many timing records to keep.
-pub const TIMINGS_KEPT: usize = 256;
+/// How many timing records to keep: a 5 s slider stream at 60 Hz is 300
+/// generations (more when the cone is cheaper than the tick), and the
+/// harness reads them all back afterwards — the ring must hold a whole
+/// measurement with room to spare.
+pub const TIMINGS_KEPT: usize = 1024;
 
 /// A live pipeline session.
 pub struct Session {
@@ -400,6 +419,7 @@ impl Session {
                 changed: BTreeMap::new(),
                 summary: SolveSummary::default(),
                 started: None,
+                queued: None,
                 predicted: HashMap::new(),
                 dirty: false,
             }),
@@ -779,6 +799,9 @@ impl Session {
                 Ok(())
             }
             ClientMessage::ParamPreview { node, port, value } => {
+                // The queue clock starts HERE — the lowering below is part
+                // of what the user waits for after moving the slider.
+                let accepted = Instant::now();
                 let job = {
                     let inner = self.core.lock_inner();
                     let mut scratch = inner.loaded.document.clone();
@@ -797,6 +820,7 @@ impl Session {
                         lowered: Arc::new(lowered),
                         targets,
                         kind: JobKind::Preview,
+                        submitted: accepted,
                     }
                 };
                 self.solve.submit(job);
@@ -1242,8 +1266,10 @@ impl Session {
             generation,
             kind: "explicit",
             started_ms: (started - self.core.epoch).as_secs_f64() * 1000.0,
+            queued_ms: 0.0,
             elapsed_ms: Some(started.elapsed().as_secs_f64() * 1000.0),
             cancelled: report.cancelled,
+            cancel_to_idle_ms: None,
             computed: report
                 .outcomes
                 .iter()
@@ -1966,6 +1992,7 @@ impl Core {
                 lowered: Arc::clone(&inner.lowered),
                 targets: all_targets(&inner.lowered),
                 kind: JobKind::Structural,
+                submitted: Instant::now(),
             }
         };
         let solve = self
@@ -2417,7 +2444,9 @@ impl SolveSink for Core {
             running: true,
             ..SolveSummary::default()
         };
-        status.started = Some(Instant::now());
+        let now = Instant::now();
+        status.started = Some(now);
+        status.queued = Some(now.saturating_duration_since(job.submitted));
         status.predicted.clear();
         let cone = job.lowered.graph.ancestors(&job.targets);
         let store = self.scheduler.store();
@@ -2461,6 +2490,22 @@ impl SolveSink for Core {
 
     fn on_error(&self, generation: u64, _job: &Job, error: &SolveError) {
         self.on_error_impl(generation, error);
+    }
+
+    fn on_cancel_settled(&self, generation: u64, cancel_to_idle: Duration) {
+        let mut timings = self
+            .timings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The record was pushed by `on_complete`; an engine error leaves
+        // none (nothing to annotate — the error notice already said so).
+        if let Some(timing) = timings
+            .iter_mut()
+            .rev()
+            .find(|t| t.generation == generation)
+        {
+            timing.cancel_to_idle_ms = Some(cancel_to_idle.as_secs_f64() * 1000.0);
+        }
     }
 }
 
@@ -2551,11 +2596,18 @@ impl Core {
     }
 
     fn on_complete_impl(&self, generation: u64, job: &Job, report: &Arc<SolveReport>) {
+        // Read the start/queue marks BEFORE the status board forgets them
+        // (finishing the statuses clears `started`).
+        let (started_ms, queued_ms) = {
+            let status = self.lock_status();
+            (
+                status
+                    .started
+                    .map_or(0.0, |s| (s - self.epoch).as_secs_f64() * 1000.0),
+                status.queued.map_or(0.0, |q| q.as_secs_f64() * 1000.0),
+            )
+        };
         self.finish_statuses(generation, &job.lowered, report, true);
-        let started_ms = self
-            .lock_status()
-            .started
-            .map_or(0.0, |s| (s - self.epoch).as_secs_f64() * 1000.0);
         let began = Instant::now();
         let mut frame_bytes = 0;
         {
@@ -2589,8 +2641,10 @@ impl Core {
                 JobKind::Preview => "preview",
             },
             started_ms,
+            queued_ms,
             elapsed_ms: Some(elapsed),
             cancelled: report.cancelled,
+            cancel_to_idle_ms: None,
             computed: report
                 .outcomes
                 .iter()
@@ -3148,6 +3202,86 @@ mod tests {
         assert!(
             !session.reload_from_disk("again", false).unwrap(),
             "unchanged → no-op"
+        );
+    }
+
+    #[test]
+    fn timings_carry_queue_wait_start_marks_and_the_esc_annotation() {
+        // docs/15 measurement currency: every loop generation records when
+        // it started, how long its job waited (accepted → start), and — only
+        // when an Esc ended it — the server-side cancel → idle time.
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, _rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        session.handle(
+            id,
+            None,
+            ClientMessage::ParamPreview {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "3.0".into(),
+            },
+        );
+        session.wait_idle();
+        let state = session.debug_state(false);
+        let timings = state["timings"].as_array().unwrap();
+        let structural = timings
+            .iter()
+            .find(|t| t["kind"] == "structural")
+            .expect("the load's generation is recorded");
+        assert!(
+            structural["started_ms"].as_f64().unwrap() > 0.0,
+            "started_ms is read before the status board forgets the start: {structural}"
+        );
+        assert!(structural["queued_ms"].as_f64().unwrap() >= 0.0);
+        assert!(structural["elapsed_ms"].as_f64().unwrap() > 0.0);
+        assert!(
+            structural.get("cancel_to_idle_ms").is_none(),
+            "no Esc, no annotation: {structural}"
+        );
+        let preview = timings
+            .iter()
+            .find(|t| t["kind"] == "preview")
+            .expect("the preview's generation is recorded");
+        assert!(preview["queued_ms"].as_f64().unwrap() >= 0.0);
+        assert!(preview["started_ms"].as_f64().unwrap() > 0.0);
+        assert!(preview.get("cancel_to_idle_ms").is_none());
+
+        // The loop's Esc hook annotates exactly the generation it names.
+        let generation = preview["generation"].as_u64().unwrap();
+        session
+            .core
+            .on_cancel_settled(generation, Duration::from_micros(12_500));
+        let state = session.debug_state(false);
+        let annotated: Vec<&serde_json::Value> = state["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|t| t.get("cancel_to_idle_ms").is_some())
+            .collect();
+        assert_eq!(annotated.len(), 1, "{annotated:?}");
+        assert_eq!(annotated[0]["generation"], generation);
+        assert!((annotated[0]["cancel_to_idle_ms"].as_f64().unwrap() - 12.5).abs() < 1e-9);
+        // An unknown generation (an errored one left no record) is a no-op.
+        session
+            .core
+            .on_cancel_settled(999_999, Duration::from_millis(1));
+        let state = session.debug_state(false);
+        assert_eq!(
+            state["timings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|t| t.get("cancel_to_idle_ms").is_some())
+                .count(),
+            1
         );
     }
 }

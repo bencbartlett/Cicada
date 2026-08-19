@@ -20,6 +20,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use cicada_sched::{CancelToken, Event, NodeId, Observer, Scheduler, SolveError, SolveReport};
 
@@ -43,6 +44,13 @@ pub struct Job {
     pub targets: Vec<NodeId>,
     /// Why.
     pub kind: JobKind,
+    /// When the session accepted the work this job carries — a preview:
+    /// the `param_preview` intent's arrival (BEFORE its lowering, so the
+    /// queue time covers everything between the message and the solve
+    /// starting); structural: the debounce firing / the load. The
+    /// generation's `queued_ms` (docs/15 preview-latency currency) is
+    /// start − this.
+    pub submitted: Instant,
 }
 
 /// The session's hooks — called on the loop thread (events also arrive on
@@ -59,12 +67,21 @@ pub trait SolveSink: Send + Sync {
     fn on_complete(&self, generation: u64, job: &Job, report: Arc<SolveReport>);
     /// A generation failed at the engine level.
     fn on_error(&self, generation: u64, job: &Job, error: &SolveError);
+    /// An explicit [`SolveLoop::cancel`] (Esc) ended this generation and
+    /// the loop is idle again: `cancel_to_idle` is the server-side wall
+    /// time from the FIRST `cancel()` call during the generation to the
+    /// loop flipping idle (after `on_complete`/`on_error` returned — frame
+    /// emission included). Structural supersession is not a cancel in this
+    /// sense and never reports here. Called after `on_complete`.
+    fn on_cancel_settled(&self, generation: u64, cancel_to_idle: Duration);
 }
 
 struct State {
     pending: Option<Job>,
     current: Option<CancelToken>,
     in_flight: bool,
+    /// The first explicit `cancel()` during the in-flight generation.
+    cancel_at: Option<Instant>,
     shutdown: bool,
 }
 
@@ -115,6 +132,7 @@ impl SolveLoop {
                 pending: None,
                 current: None,
                 in_flight: false,
+                cancel_at: None,
                 shutdown: false,
             }),
             wake: Condvar::new(),
@@ -157,6 +175,10 @@ impl SolveLoop {
         if let Some(token) = &state.current {
             token.cancel();
             self.shared.scripts.kill();
+            // The first Esc during this generation starts the
+            // cancel-to-idle clock (a second Esc is the user hammering the
+            // key — the honest latency is from the first).
+            state.cancel_at.get_or_insert_with(Instant::now);
         }
         state.pending.take().is_some()
     }
@@ -268,13 +290,20 @@ fn worker_loop(shared: &Shared) {
             Ok(report) => shared.sink.on_complete(generation, &job, Arc::new(report)),
             Err(error) => shared.sink.on_error(generation, &job, &error),
         }
-        {
+        let cancel_to_idle = {
             let mut state = shared
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // Measured at the idle flip itself; `is_busy` pollers see idle
+            // the moment this lock drops.
+            let cancel_to_idle = state.cancel_at.take().map(|at| at.elapsed());
             state.in_flight = false;
             state.current = None;
+            cancel_to_idle
+        };
+        if let Some(cancel_to_idle) = cancel_to_idle {
+            shared.sink.on_cancel_settled(generation, cancel_to_idle);
         }
         shared.wake.notify_all();
     }
@@ -294,6 +323,7 @@ mod tests {
         starts: AtomicUsize,
         completes: Mutex<Vec<(u64, bool)>>,
         events: AtomicUsize,
+        settled: AtomicUsize,
     }
 
     impl SolveSink for Recorder {
@@ -311,6 +341,9 @@ mod tests {
         }
         fn on_error(&self, _generation: u64, _job: &Job, error: &SolveError) {
             panic!("engine error: {error}");
+        }
+        fn on_cancel_settled(&self, _generation: u64, _cancel_to_idle: Duration) {
+            self.settled.fetch_add(1, Ordering::SeqCst);
         }
     }
 
@@ -363,6 +396,7 @@ mod tests {
             starts: AtomicUsize::new(0),
             completes: Mutex::new(Vec::new()),
             events: AtomicUsize::new(0),
+            settled: AtomicUsize::new(0),
         });
         let solve = SolveLoop::new(scheduler, ScriptCancel::new(), recorder.clone());
         for x in 0..20 {
@@ -370,6 +404,7 @@ mod tests {
                 lowered: graph(f64::from(x)),
                 targets: vec![NodeId(0)],
                 kind: JobKind::Preview,
+                submitted: Instant::now(),
             });
         }
         solve.wait_idle();
@@ -388,23 +423,47 @@ mod tests {
             lowered: graph(19.0),
             targets: vec![NodeId(0)],
             kind: JobKind::Structural,
+            submitted: Instant::now(),
         });
         solve.wait_idle();
         let completes = recorder.completes.lock().unwrap();
         assert!(completes.len() >= 2);
         drop(completes);
+        assert_eq!(
+            recorder.settled.load(Ordering::SeqCst),
+            0,
+            "supersession is not an Esc: no cancel-to-idle record without cancel()"
+        );
         drop(solve);
     }
 
-    struct Last(Mutex<Option<Arc<SolveReport>>>);
+    struct Last {
+        report: Mutex<Option<Arc<SolveReport>>>,
+        /// `(generation, cancel → idle)` per Esc-ended generation.
+        settled: Mutex<Vec<(u64, Duration)>>,
+    }
+    impl Last {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                report: Mutex::new(None),
+                settled: Mutex::new(Vec::new()),
+            })
+        }
+    }
     impl SolveSink for Last {
         fn on_start(&self, _: u64, _: &Job) {}
         fn on_event(&self, _: u64, _: &Event<'_>) {}
         fn on_complete(&self, _: u64, _: &Job, report: Arc<SolveReport>) {
-            *self.0.lock().unwrap() = Some(report);
+            *self.report.lock().unwrap() = Some(report);
         }
         fn on_error(&self, _: u64, _: &Job, error: &SolveError) {
             panic!("{error}");
+        }
+        fn on_cancel_settled(&self, generation: u64, cancel_to_idle: Duration) {
+            self.settled
+                .lock()
+                .unwrap()
+                .push((generation, cancel_to_idle));
         }
     }
 
@@ -426,7 +485,7 @@ mod tests {
             )
             .unwrap(),
         );
-        let last = Arc::new(Last(Mutex::new(None)));
+        let last = Last::new();
         let runs = Arc::new(AtomicUsize::new(0));
         let solve = SolveLoop::new(scheduler, ScriptCancel::new(), last.clone());
         let slow = |x: f64, runs: Arc<AtomicUsize>| -> Arc<Lowered> {
@@ -465,6 +524,7 @@ mod tests {
             lowered: slow(1.0, runs.clone()),
             targets: vec![NodeId(0)],
             kind: JobKind::Preview,
+            submitted: Instant::now(),
         });
         // Let it start, then stream newer previews: none may cancel it.
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -473,10 +533,11 @@ mod tests {
                 lowered: slow(f64::from(x), runs.clone()),
                 targets: vec![NodeId(0)],
                 kind: JobKind::Preview,
+                submitted: Instant::now(),
             });
         }
         solve.wait_idle();
-        let report = last.0.lock().unwrap().clone().unwrap();
+        let report = last.report.lock().unwrap().clone().unwrap();
         assert!(!report.cancelled, "the newest preview ran to completion");
         // The first generation completed (1 run) and the newest ran (1 run);
         // intermediates were superseded before starting: exactly 2 runs.
@@ -498,16 +559,17 @@ mod tests {
             )
             .unwrap(),
         );
-        let last = Arc::new(Last(Mutex::new(None)));
+        let last = Last::new();
         let solve = SolveLoop::new(scheduler, ScriptCancel::new(), last.clone());
         solve.submit(Job {
             lowered: graph(1.0),
             targets: vec![NodeId(0)],
             kind: JobKind::Structural,
+            submitted: Instant::now(),
         });
         let dropped = solve.cancel();
         solve.wait_idle();
-        let report = last.0.lock().unwrap().clone();
+        let report = last.report.lock().unwrap().clone();
         // Three honest outcomes, none wedged: the cancel dropped the job
         // before it started (no report), or it landed while the node ran
         // (Cancelled), or the node was too fast (Computed).
@@ -520,5 +582,91 @@ mod tests {
                     | NodeOutcome::CacheHit { .. }
             )),
         }
+    }
+
+    #[test]
+    fn esc_mid_generation_reports_cancel_to_idle_once_for_that_generation() {
+        // Deterministic: the node blocks on a channel until the test has
+        // called cancel() (no sleeps, no wall-clock races) — so the Esc
+        // provably lands mid-generation, and the loop reports exactly one
+        // cancel → idle duration for exactly that generation, after the
+        // completion hook.
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = DiskStore::open(dir.path()).unwrap();
+        let scheduler = Arc::new(
+            Scheduler::new(
+                Arc::new(store),
+                Arc::new(MonotonicClock::new()),
+                SchedulerConfig {
+                    threads: 1,
+                    ..SchedulerConfig::default()
+                },
+            )
+            .unwrap(),
+        );
+        let last = Last::new();
+        let solve = SolveLoop::new(scheduler, ScriptCancel::new(), last.clone());
+        let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let release_rx = Mutex::new(release_rx);
+        let run: cicada_sched::NodeFn = Arc::new(move |_inputs: &[Option<Arc<HashedValue>>]| {
+            started_tx.send(()).unwrap();
+            release_rx.lock().unwrap().recv().unwrap();
+            Ok(vec![HashedValue::new(ValueData::Number(1.0)).unwrap()])
+        });
+        let decl = NodeDecl {
+            name: "gate".to_owned(),
+            op: "gate".to_owned(),
+            version: 1,
+            body_hash: None,
+            tolerance: None,
+            inputs: vec![],
+            fan: vec![],
+            output_count: 1,
+            effectful: false,
+            run,
+        };
+        let lowered = Arc::new(Lowered {
+            graph: SolveGraph::new(vec![decl]).unwrap(),
+            bindings: HashMap::new(),
+            output_names: vec![vec!["out".to_owned()]],
+            excluded: BTreeMap::new(),
+        });
+        solve.submit(Job {
+            lowered,
+            targets: vec![NodeId(0)],
+            kind: JobKind::Structural,
+            submitted: Instant::now(),
+        });
+        started_rx.recv().unwrap();
+        assert!(solve.is_busy());
+        let dropped = solve.cancel();
+        assert!(
+            !dropped,
+            "nothing was pending — the Esc hit the in-flight generation"
+        );
+        let dropped_again = solve.cancel();
+        assert!(!dropped_again);
+        release_tx.send(()).unwrap();
+        solve.wait_idle();
+        let report = last.report.lock().unwrap().clone().unwrap();
+        assert!(report.cancelled, "the generation ended cancelled");
+        let settled = last.settled.lock().unwrap().clone();
+        assert_eq!(settled.len(), 1, "two Esc presses, one record: {settled:?}");
+        assert_eq!(
+            settled[0].0, 1,
+            "the first generation is the one the Esc ended"
+        );
+        assert!(settled[0].1 > Duration::ZERO);
+        // The next generation runs clean: no stale cancel clock leaks.
+        solve.submit(Job {
+            lowered: graph(2.0),
+            targets: vec![NodeId(0)],
+            kind: JobKind::Structural,
+            submitted: Instant::now(),
+        });
+        solve.wait_idle();
+        assert_eq!(last.settled.lock().unwrap().len(), 1);
+        assert!(!last.report.lock().unwrap().clone().unwrap().cancelled);
     }
 }
