@@ -48,11 +48,23 @@ function sweepStaleScratch(root: string): void {
     }
   }
 }
-sweepStaleScratch(tmpdir());
-const scratch = join(tmpdir(), `${SCRATCH_PREFIX}${process.pid}`);
-rmSync(scratch, { recursive: true, force: true });
-mkdirSync(scratch, { recursive: true });
-cpSync(join(repo, "examples"), join(scratch, "examples"), { recursive: true });
+// The scratch dir is shared through an env var so it is STABLE across
+// processes: Playwright evaluates this config in the main process AND again
+// in each worker (a test that does `import config` re-runs it), each with a
+// different pid — deriving the path from `process.pid` alone would give the
+// worker a different directory than the server serves, and a test reading
+// `metadata.scratch` would write into a dir nobody serves. The first
+// evaluation (main) creates and populates it and records the path; later
+// evaluations reuse it and skip the copy.
+const scratch =
+  process.env.CICADA_E2E_SCRATCH ?? join(tmpdir(), `${SCRATCH_PREFIX}${process.pid}`);
+if (process.env.CICADA_E2E_SCRATCH === undefined) {
+  process.env.CICADA_E2E_SCRATCH = scratch;
+  sweepStaleScratch(tmpdir());
+  rmSync(scratch, { recursive: true, force: true });
+  mkdirSync(scratch, { recursive: true });
+  cpSync(join(repo, "examples"), join(scratch, "examples"), { recursive: true });
+}
 
 const webDir = process.env.CICADA_WEB_DIR ?? (existsSync(join(web, "dist")) ? join(web, "dist") : null);
 // Say which binary and scratch dir the smoke uses — a worktree that forgot

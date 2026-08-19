@@ -141,8 +141,18 @@ function installDebugHandle(): void {
   const handle = {
     /** A snapshot of the store (authoritative mirror + ui). */
     state: () => useCicada.getState(),
-    /** Frames received so far. */
-    frames: () => ({ received: frameBus.received, bytes: frameBus.bytes }),
+    /**
+     * Frame counters (docs/15 measurement harness): `received`/`bytes` so
+     * far, `lastAt` = `performance.now()` of the last frame (the client end
+     * of a preview round-trip), `lastGeneration` = the highest generation
+     * any frame carried.
+     */
+    frames: () => ({
+      received: frameBus.received,
+      bytes: frameBus.bytes,
+      lastAt: frameBus.lastAt,
+      lastGeneration: frameBus.lastGeneration,
+    }),
     /** Send an intent (tests drive gestures through the same op pipeline). */
     send: (message: ClientMessage) => useCicada.getState().send(message),
     /** Viewport render → PNG blob (same path as /debug/screenshot). */

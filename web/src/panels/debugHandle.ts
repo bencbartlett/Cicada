@@ -7,6 +7,10 @@
 export interface FrameCounters {
   received: number;
   bytes: number;
+  /** `performance.now()` of the last frame received (0 before any). */
+  lastAt: number;
+  /** Highest generation any frame carried (0 before any). */
+  lastGeneration: number;
 }
 
 export function readFrameCounters(): FrameCounters | null {

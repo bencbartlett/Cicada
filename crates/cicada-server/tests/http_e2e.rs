@@ -353,9 +353,23 @@ async fn serve_snapshot_frames_intents_and_debug_state() {
         0,
         "refused handshakes never join the session"
     );
+    let timings = state["timings"].as_array().unwrap();
+    assert!(timings.len() >= 2, "generation timings are exposed");
+    // docs/15 measurement currency: every timing carries the queue wait and
+    // the start mark (preview latency = queued_ms + elapsed_ms); a
+    // never-cancelled generation omits cancel_to_idle_ms.
+    let first = &timings[0];
     assert!(
-        state["timings"].as_array().unwrap().len() >= 2,
-        "generation timings are exposed"
+        first["queued_ms"].is_number(),
+        "queued_ms is exposed: {first}"
+    );
+    assert!(
+        first["started_ms"].is_number(),
+        "started_ms is exposed: {first}"
+    );
+    assert!(
+        timings.iter().all(|t| t.get("cancel_to_idle_ms").is_none()),
+        "no Esc happened, so no generation is annotated with cancel_to_idle_ms"
     );
 
     handle.shutdown().await;
