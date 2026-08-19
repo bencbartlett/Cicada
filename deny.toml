@@ -6,6 +6,14 @@ all-features = true
 
 [advisories]
 yanked = "deny"
+ignore = [
+  # ttf-parser was declared unmaintained (2026). Cicada parses only the
+  # BUNDLED DejaVu Sans Bold bytes (trusted, offline, read-only) through a
+  # small seam in crates/cicada-geom/src/text.rs; swap to skrifa (fontations)
+  # when fonts become user-supplied (DECISIONS.md rented-kernels row, stage-6
+  # note). Stage 6, 2026-08-19.
+  { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained; only bundled trusted font bytes are parsed; skrifa swap planned with user-supplied fonts" },
+]
 
 [licenses]
 # The workspace itself is unpublished (all rights reserved while private);
