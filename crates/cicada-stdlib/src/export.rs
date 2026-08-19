@@ -47,6 +47,16 @@ pub fn export_obj(input: ExportObjIn) {
     if let Err(error) = fs::write(&input.path, obj) {
         panic!("export_obj: writing `{}` failed: {error}", input.path);
     }
+    // Say WHERE it landed, absolutely — an export whose destination the
+    // user has to hunt for is halfway to wall lesson 7 (probe friction:
+    // relative paths resolve against the invocation's working directory,
+    // and nothing said so).
+    let resolved = fs::canonicalize(&input.path)
+        .map_or_else(|_| input.path.clone(), |p| p.display().to_string());
+    eprintln!(
+        "export_obj: wrote {} mesh(es) to {resolved}",
+        input.meshes.len()
+    );
 }
 
 #[cfg(test)]

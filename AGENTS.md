@@ -51,7 +51,7 @@ stage; do not reference them in code or docs as if they work today.
 | Path | Contents |
 |---|---|
 | `crates/cicada-core` | Value model (blake3 hash-at-construction, interning, Merkle lists/axes/Optional, ProjectConfig) + node/port specs, registry (specs + erased invokers), marshalling traits, catalog renderer |
-| `crates/cicada-macros` | `#[node]`, `#[derive(Ports)]` proc macros — zero workspace deps by design; compile-fail tests live in cicada-stdlib |
+| `crates/cicada-macros` | `#[node]`, `#[derive(Ports)]` proc macros — zero workspace deps by design; compile-fail tests live in cicada-core (tests/ui + macro_ui.rs) |
 | `crates/cicada-geom` | Geometry types, tolerance ops, rented-kernel FFI seams (stage 4) |
 | `crates/cicada-lang` | `.cic` dialect: lossless parser, minimal-edit writer (place/wire/lift/set-param/delete/rename), checker-lite, doc-11 diagnostics |
 | `crates/cicada-stdlib` | The node catalog — pure functions, never depends on sched |
@@ -122,16 +122,30 @@ Python 3 on PATH (or `CICADA_PYTHON`); worker protocol is dependency-free
 - The engine cache itself never has this problem — it lives in the user
   cache directory, never the project folder (DECISIONS.md).
 - **cmake for the Manifold kernel build**: `manifold-csg-sys` compiles
-  upstream Manifold via cmake on first build (per profile). cmake is not
-  on this machine's PATH; prepend the VS Build Tools copy per shell:
+  upstream Manifold via cmake. cmake is not on this machine's PATH;
+  prepend the VS Build Tools copy per shell:
 
   ```powershell
   $env:Path = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;$env:Path"
   ```
 
-  First builds clone Manifold v3.5.2 + oneTBB (network needed once per
-  target dir) and have a KNOWN transient FetchContent failure — retry
-  once before diagnosing. CI runners have cmake preinstalled.
+  Fresh builds git-clone Manifold v3.5.2 + oneTBB (network needed once
+  per `OUT_DIR`). Two truths learned the hard way (stage-4 probe):
+  1. The kernel rebuilds more often than "once per profile": different
+     feature-unification contexts (`--workspace` vs `-p <crate>` vs
+     `--release`) fingerprint separately — budget ~4 multi-minute kernel
+     compiles on a fresh target dir; the recompiles are not errors.
+  2. The clone failure once called "transient" is a DETERMINISTIC
+     Windows long-path failure (oneTBB's `rfcs/` doc assets exceed
+     MAX_PATH, worse under the longer worktree target dirs); a bare
+     retry only "works" because git leaves the offending doc files
+     deleted. The real fix, set machine-wide on 2026-08-18:
+     `git config --global core.longpaths true`. In environments without
+     that global (fresh CI-like shells), pass it per process:
+     `$env:GIT_CONFIG_COUNT="1"; $env:GIT_CONFIG_KEY_0="core.longpaths"; $env:GIT_CONFIG_VALUE_0="true"`.
+  CI runners have cmake preinstalled (and Windows images ship
+  `core.longpaths` enabled); ci.yml still primes the kernel build with
+  one retry as a belt.
 
 ## Working rules
 

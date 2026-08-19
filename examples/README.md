@@ -24,9 +24,11 @@ Notes that save a first-timer some head-scratching:
   skips the export; `--node dump` is the explicit action that writes the
   file. Exports are also never served from cache — they really run,
   every time.
-- Everything is cached in the user cache directory: the second run of
-  any example prints `… from cache` timings. Edit a slider value and
-  only its cone recomputes.
+- Everything is cached in the user cache directory — deliberately, so
+  the playground demonstrates warm reopens (pass `--cache-dir <dir>` to
+  keep experiments out of it; tests/CI always do). With `--time`, the
+  second run of any example reports `0 computed, N from cache`. Edit a
+  slider value and only its cone recomputes.
 - `--hashes` prints stable content hashes instead of values — two runs
   (or two machines) producing the same hashes is the determinism
   contract, testable from the shell.

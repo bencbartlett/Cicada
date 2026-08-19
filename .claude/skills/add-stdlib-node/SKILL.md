@@ -43,8 +43,10 @@ Worked examples: `crates/cicada-stdlib/src/maths.rs` (multi-output:
    Extra flags: `effectful` (exporters), `uses_tolerance` (DECISIONS.md
    tolerance row), `name = "…"` (dialect-name override — note `fn move_`
    auto-registers as `move`; the underscore never reaches the dialect).
-3. **Placement**: `crates/cicada-stdlib/src/<category>.rs`, keeping fns in
-   docs/08 row order; a multi-node row (`Add / Subtract / Multiply / …`)
+3. **Placement**: `crates/cicada-stdlib/src/<category>.rs`. Put the new
+   node next to its closest siblings (ADJACENCY, not strict docs/08 row
+   order — the files already group by kinship, e.g. the domain nodes sit
+   between `add` and `subtract`); a multi-node row (`Add / Subtract / …`)
    orders left-to-right. Catalog order within a category is module path
    (alphabetical), then source line — so inside one module, source order
    is catalog order.
@@ -84,9 +86,9 @@ Worked examples: `crates/cicada-stdlib/src/maths.rs` (multi-output:
 
 `#[node]`/`#[derive(Ports)]` refuse malformed input loudly — missing
 version, bad doc line, missing field docs, multiple args, generic
-structs/fns, non-literal defaults, `Option<Vec<…>>` ports (optional LISTS
+structs/fns, non-literal defaults without `default_doc`, `Option<Vec<…>>` ports (optional LISTS
 have no representation yet). Compile-fail messages are snapshot-tested in
-`crates/cicada-stdlib/tests/ui/`; if you change macro diagnostics,
+`crates/cicada-core/tests/ui/`; if you change macro diagnostics,
 re-bless (PowerShell):
 
 ```powershell
