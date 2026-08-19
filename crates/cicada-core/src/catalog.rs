@@ -48,7 +48,8 @@ pub fn render_markdown(specs: &[&NodeSpec]) -> String {
          One line per registered node: `signature` — Title — description, plus the\n\
          node's runtime contract (its `# Panics` conditions — when it goes red) where\n\
          one exists. Type variables: `T` = any transformable kind (kind-preserving),\n\
-         `E` = any element kind, `Any` = display-sink catch-all.\n",
+         `E` = any element kind, optionality included (an `E` port takes absent slots;\n\
+         the `?` rides through to `E` outputs), `Any` = display-sink catch-all.\n",
     );
 
     let mut categories: Vec<&'static str> = Vec::new();

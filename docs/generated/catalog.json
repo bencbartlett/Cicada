@@ -549,13 +549,13 @@
     {
       "name": "item",
       "title": "List Item",
-      "description": "one element of a list by index.",
+      "description": "one element of a list by index. Selecting an absent (`Optional`) slot yields an absent element — `E` carries the `?`, so the output is `Point?` exactly when the list is `[Point?]`.",
       "category": "List & axis",
       "tier": "S",
-      "version": 1,
+      "version": 2,
       "pure": true,
       "uses_tolerance": false,
-      "panics": "the list is empty, or when `index` is out of range and `wrap` is off. Lists with absent (`Optional`) slots refuse at marshalling — hole-aware selection arrives with the Optional-flow nodes (v0.1).",
+      "panics": "the list is empty, or when `index` is out of range and `wrap` is off.",
       "inputs": [
         {
           "name": "list",
@@ -605,10 +605,10 @@
       "inputs": [
         {
           "name": "list",
-          "type": "[E?]",
+          "type": "[E]",
           "base": "E",
           "list_depth": 1,
-          "optional": true,
+          "optional": false,
           "doc": "The list — absent (`Optional`) slots count too."
         }
       ],
@@ -619,6 +619,196 @@
           "base": "Integer",
           "list_depth": 0,
           "optional": false
+        }
+      ]
+    },
+    {
+      "name": "flatten",
+      "title": "Flatten",
+      "description": "one nesting level removed: the inner lists concatenated in order (`[[a, b], [c]]` → `[a, b, c]`). One level only, always (docs/09: `flatten_all` for every level, and says so); absent inner slots are preserved as absent slots of the output.",
+      "category": "List & axis",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "an OUTER slot is absent (a missing inner list — refused at marshalling with its index: optional lists have no representation, so there is nothing slot-preserving to do with one); the node itself has no other refusal.",
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[[E]]",
+          "base": "E",
+          "list_depth": 2,
+          "optional": false,
+          "doc": "The nested list."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "partition",
+      "title": "Partition",
+      "description": "consecutive groups of the given sizes (`[a, b, c, d]` with sizes `[1, 3]` → `[[a], [b, c, d]]`). Slot-preserving: absent slots land in their group as absent slots.",
+      "category": "List & axis",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "a size is negative (the offending index and value in the message) or when the sizes do not sum to the list's slot count (both counts in the message) — never a silent short or padded last group.",
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The list to split."
+        },
+        {
+          "name": "sizes",
+          "type": "[Integer]",
+          "base": "Integer",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "Consecutive group sizes; they must sum to the list's slot count."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[[E]]",
+          "base": "E",
+          "list_depth": 2,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "chunk",
+      "title": "Chunk",
+      "description": "consecutive groups of `size` slots; the last group may be short (GH Partition List). Slot-preserving: absent slots land in their group as absent slots; an empty list chunks to no groups.",
+      "category": "List & axis",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "`size < 1`.",
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The list to split."
+        },
+        {
+          "name": "size",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Group size (the last group may be shorter)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[[E]]",
+          "base": "E",
+          "list_depth": 2,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "concat",
+      "title": "Concat",
+      "description": "`a` then `b`, one list (GH Merge for two lists). Slot-preserving: absent slots of either input keep their places in the output.",
+      "category": "List & axis",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "inputs": [
+        {
+          "name": "a",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The leading list."
+        },
+        {
+          "name": "b",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The trailing list."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "cull",
+      "title": "Cull",
+      "description": "keep the slots where the pattern is true and drop the rest, returning the kept list and the index map back into the source (the sanctioned way elements leave a list — identity survives).",
+      "category": "List & axis",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "the pattern's length differs from the list's slot count — strict zip, both counts in the message (GH's repeating Cull Pattern is the silent-mismatch behavior docs/09 retires).",
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The list to filter."
+        },
+        {
+          "name": "pattern",
+          "type": "[Boolean]",
+          "base": "Boolean",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "Keep the slot where true, drop it where false — one entry per slot"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "kept",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The kept slots, in order (absent slots kept as absent when their"
+        },
+        {
+          "name": "map",
+          "type": "IndexMap",
+          "base": "IndexMap",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Provenance: `map[i]` is the source index of `kept[i]` (docs/08 rule 6)."
         }
       ]
     },
@@ -947,6 +1137,55 @@
       ]
     },
     {
+      "name": "construct_plane",
+      "title": "Construct Plane",
+      "description": "a frame from an origin and two axes: x unitized, y orthonormalized against x (Gram–Schmidt), so the stored plane is a right-handed orthonormal frame with normal x × y.",
+      "category": "Point · Vector · Plane",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": true,
+      "panics": "`x` has no length at tolerance, or `y` is parallel to `x` at tolerance (its component off the x line has no length) — red with the measured length, never a NaN frame.",
+      "inputs": [
+        {
+          "name": "origin",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false,
+          "default": "origin",
+          "doc": "Plane origin."
+        },
+        {
+          "name": "x",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "default": "unit_x",
+          "doc": "The x axis (any length; unitized)."
+        },
+        {
+          "name": "y",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "default": "unit_y",
+          "doc": "The y direction (any length; its component along x is removed, then"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
       "name": "line",
       "title": "Line",
       "description": "a straight segment between two points.",
@@ -1229,6 +1468,53 @@
           "optional": false,
           "default": "64",
           "doc": "Tessellation density for curved profiles (circles)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Watertight<Mesh>",
+          "base": "Watertight<Mesh>",
+          "list_depth": 0,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "loft",
+      "title": "Loft",
+      "description": "a ruled solid between two closed sections, capped at both ends (the wall's frusta: Voronoi cell → tip cap; cones and chamfers from circle → circle). Sections pair vertex `i` with vertex `i` (polylines vertex-to-vertex as given — no resampling, seam = vertex 0; analytic sections tessellated to `segments` vertices starting at the plane's x axis), walls are two triangles per quad, caps are ear-clipped (non-convex sections welcome), orientation is fixed by signed volume and the result is re-verified watertight. Lift with `each()` to loft per part (`loft(start=each(cells), end=each(caps))`).",
+      "category": "Surface & solid",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": true,
+      "panics": "the vertex counts differ (both counts in the message), a section is open, degenerate at tolerance, non-planar, or self-intersecting, the sections wind in opposite directions, the sections coincide or are coplanar (zero volume), `segments < 3` for an analytic section, or the result is not watertight.",
+      "inputs": [
+        {
+          "name": "start",
+          "type": "Closed<Curve>",
+          "base": "Closed<Curve>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The first closed section (the wall's base cell)."
+        },
+        {
+          "name": "end",
+          "type": "Closed<Curve>",
+          "base": "Closed<Curve>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The second closed section (the wall's tip cap) — same vertex count as"
+        },
+        {
+          "name": "segments",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "default": "64",
+          "doc": "Tessellation density for analytic sections (circles, rectangles):"
         }
       ],
       "outputs": [

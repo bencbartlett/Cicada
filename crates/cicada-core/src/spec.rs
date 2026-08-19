@@ -299,7 +299,7 @@ impl_port_leaf!(
 impl_port_leaf!(crate::geometry::Transformable, "T");
 impl_port_leaf!(crate::geometry::GeometryValue, "Geometry");
 impl_port_leaf!(crate::marshal::AnyValue, "Any");
-impl_port_leaf!(crate::marshal::ElemValue, "E");
+impl_port_leaf!(crate::marshal::ElemSlot, "E");
 
 /// One compile-time node registration. `#[node]` submits these; never
 /// construct by hand.

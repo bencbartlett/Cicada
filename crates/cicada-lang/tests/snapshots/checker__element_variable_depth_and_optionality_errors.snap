@@ -1,0 +1,69 @@
+---
+source: crates/cicada-lang/tests/checker.rs
+expression: "check(\"# cicada 1\\n\\\n         pts = scatter(count=10, seed=1)\\n\\\n         shallow = flatten(list=pts)\\n\\\n         groups = chunk(list=pts, size=3)\\n\\\n         deeper = chunk(list=each(groups), size=2)\\n\\\n         too_deep = flatten(list=deeper)\\n\\\n         holey = holes()\\n\\\n         both = concat(a=pts, b=holey)\\n\\\n         total = sum_list(values=both)\\n\\\n         culled = cull(list=both, pattern=[True])\\n\\\n         moved = move(geometry=each(culled.kept), motion=culled.kept)\\n\")"
+---
+[
+  {
+    "actual": "[Point]",
+    "expected": "[[E]]",
+    "kind": "type_mismatch",
+    "message": "[Point] into a [[E]] port",
+    "node": "shallow",
+    "span": {
+      "col_end": 26,
+      "col_start": 23,
+      "line": 3
+    }
+  },
+  {
+    "actual": "[[[Point]]]",
+    "expected": "[[E]]",
+    "fix": {
+      "label": "wrap in each()"
+    },
+    "kind": "needs_lift",
+    "message": "[[[Point]]] into a [[E]] port — map over it?",
+    "node": "too_deep",
+    "span": {
+      "col_end": 30,
+      "col_start": 24,
+      "line": 6
+    }
+  },
+  {
+    "actual": "[Point?]",
+    "expected": "[Number]",
+    "kind": "type_mismatch",
+    "message": "[Point?] into a [Number] port",
+    "node": "total",
+    "span": {
+      "col_end": 28,
+      "col_start": 24,
+      "line": 9
+    }
+  },
+  {
+    "actual": "Point?",
+    "expected": "Point",
+    "kind": "type_mismatch",
+    "message": "`culled` carries optional elements; `geometry` wants them present — `compact` removes the holes (and returns the IndexMap)",
+    "node": "moved",
+    "span": {
+      "col_end": 39,
+      "col_start": 22,
+      "line": 11
+    }
+  },
+  {
+    "actual": "[Point?]",
+    "expected": "Vector",
+    "kind": "type_mismatch",
+    "message": "[Point?] into a Vector port",
+    "node": "moved",
+    "span": {
+      "col_end": 59,
+      "col_start": 48,
+      "line": 11
+    }
+  }
+]
