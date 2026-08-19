@@ -134,7 +134,59 @@ lands. Rough calendar: week 1 = stages 0–3; week 2 = 4 + 5; week 3 =
 Hardware note: numbers are recorded with the dev machine's spec
 attached; targets assume a mid-to-high-end desktop (doc 12).
 
+## Stage-6 results (measured)
+
+Dev machine, 2026-08-19, commit of the stage-6 slice: **Intel Core
+i7-13700KF** (24 threads), **64 GB RAM**, NVMe SSD, Windows 11; the engine
+built `--release`; the cache on the SSD in the user temp dir; every number
+best-of-three where a spread is quoted. The wall slice is **1,200 parts**
+(the frozen production layout — the wall shipped 1,200; "~1,500" in the
+protocol was the candidate count before culling). The harness lives in
+`corpus/measure/`.
+
+| Criterion | Target | Measured | Verdict |
+|---|---|---|---|
+| **Carve speed** (`corpus/wall.cic --node carved`, cold cache) | full labeled carve < 10 s; warm < 100 ms | **cold 6.5 s** (solve wall; best 6.48 s), **warm 0.13 ms** | **PASS** — the wall's Rhino carve was ~30 min |
+| **Live slider loop** — cheap cone (02-solids `size`) | p50 ≤ 16 ms, p95 ≤ 33 ms | server **p50 0.5 ms / p95 1.4 ms**, client round-trip p50 0.6 ms / p95 1.7 ms, 300/300 previews at 60 Hz | **PASS** |
+| **Live slider loop** — the wall's `amps` (the field cone) | (as above) | server **p50 0.4 ms / p95 17.9 ms**, ~59 previews/s, no freeze | **PASS at p50**; the p95 is the one preview/s that lands mid-flight of the ~50 ms Python field solve — honest, not a freeze |
+| **Live slider loop** — full-pipeline `deboss` (dirties labels → glyphs → carve) | full-pipeline slider degrades honestly (progress, no freeze) | ~4 s/generation, latest-wins supersession, continuous `running` statuses, longest server silence 174 ms | **PASS** (degrades honestly, as the protocol allows) |
+| **Esc always works** (`esc.mjs`, deboss → carved, ×20) | time-to-idle p95 < 250 ms | client **p50 172 / p95 214 / max 219 ms**; server cancel→idle **p50 169 / p95 182 ms**, 0 missed | **PASS** |
+| **Canvas round-trip** (`web/e2e/roundtrip.spec.ts`) | byte-exact writer fixtures; file edit → canvas < 500 ms | writer output byte-exact; file edit → canvas **30 / 100 / 111 / 99 / 104 ms** (5 trials) | **PASS** |
+| **Output equivalence** (`normalize.py all`) | byte-identical modulo declared noise; every diff documented | overall **NOISE** — no unexplained difference | **PASS** |
+
+Output-equivalence detail (`corpus/tools/normalize.py`, against
+`corpus/golden/production/`): the two **pristine** production 3MFs (the H2
+teal and sky-blue plate files) match entry-for-entry after normalization —
+build-item translations within **3 µm**, bboxes within **10 µm**, volumes
+within **0.09 %** — with triangle counts reported, not compared (Manifold's
+tessellation vs Rhino's is the declared noise, and the deboss uses the
+bundled DejaVu Sans Bold in place of Arial Black). The three **X1C** files
+were re-saved by Bambu Studio (thumbnails added, XML rewritten, a dozen
+objects nudged by hand); the normalizer detects the re-save and reports its
+entry/XML/translation differences as declared noise while keeping object
+names, plate membership, bbox and volume as hard checks — all of which
+pass. The board **DXF** matches every entity of `board_postprocessed.dxf`
+within **1 µm** across all five layers (OUTLINES, PINHOLES, BOARDCUT,
+STOCK, TEXT). The `manifest.csv` matches all 1,137 rows to last-digit
+rounding. Declared deviations, all documented in `corpus/README.md`: the
+bundled font, 3MF zip timestamps fixed at 1980-01-01 (production stamped
+the wall clock), Manifold vs Rhino tessellation, and the recovered-layout
+sub-µm coordinate rounding.
+
+What the measurements bought, recorded in the commits that made each number
+(the scheduler stopped paying for work no consumer asked for): small value
+blobs pack into one append-only file (cold 1,500-element fan-out 2.2 s →
+0.14 s); the executor hydrates one output port instead of a node's whole
+output vector (the wall-layout node's slider cone 250 ms → sub-ms); the
+store reuses zstd contexts and batches a list's leaf appends; the cancel
+check moved between elements (not only between chunks) and a cancelled
+generation paints nothing (Esc ~246 ms at stage 5 → ~170 ms); and
+`mesh_difference` uses Manifold's batch difference.
+
 ## Kill / pivot criteria
+
+**Outcome: the gate passed — all five criteria met (results above).** None of the pivots below fired; they stay recorded as the tripwires they were.
+
 
 - Carve not dramatically under the Rhino baseline → the mesh-tier
   assumption is wrong somewhere (binding overhead, mesh quality);
@@ -148,7 +200,7 @@ attached; targets assume a mid-to-high-end desktop (doc 12).
 
 ## After the spike
 
-Planning is closed (docs 01–16). If the gate passes, v0.1 begins:
+Planning is closed (docs 01–16). The gate PASSED (stage-6 results above), so v0.1 begins:
 OCCT-backed Solid, the full catalog, WASM script host, undo, git
 panel, scrub caching, time transport — in whatever order the spike's
 learnings argue for.

@@ -80,6 +80,19 @@ jobs:
     steps:
       - run: echo "stub — cicada-guest and the WASM host land in v0.1 (doc 15 out-of-scope)"
 
+  corpus-offline:
+    # The wall corpus's Python script nodes + normalizer, offline (no
+    # engine, no wall repo — the production cross-checks skip). The full
+    # engine end-to-end + output-hash comparison is nightly (wall-corpus).
+    name: corpus scripts · normalizer (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m unittest discover -s corpus/tools -p "test_*.py"
+
   playwright-smoke:
     # doc 15 stage 5 DoD: serve → place → wire → drag → screenshot asserts
     # geometry changed, headless, against the RELEASE shape (SPA embedded).

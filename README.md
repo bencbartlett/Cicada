@@ -50,14 +50,20 @@ hour that project lost to Grasshopper's failure modes.
 
 ## Status
 
-Pre-v0, spike in progress. The founding documents synthesize design
-conversations from the wall-piece project (2026). The current milestone is
-the [vertical-slice spike](docs/15-spike-plan.md): the wall pipeline's
-hardest stretch running on the Rust engine + web UI stack (DECISIONS.md
-web-first row), measured. Stages 0–1 are complete (workspace + CI +
-operating manual; value model, hashing, `#[node]` registry, catalog
-pipeline); the current stage lives in [AGENTS.md](AGENTS.md)'s status
-line.
+Pre-v0. **The vertical-slice spike is complete and the empirical gate
+passed.** The wall pipeline's hardest stretch — the 1,200-part
+magnetic-field pyramid wall: field solve → Voronoi → frusta → debossed
+labels → pin-hole carve → pack → Bambu 3MF + DXF — runs end to end on the
+Rust engine + web UI stack ([DECISIONS.md](DECISIONS.md) web-first row) and
+reproduces the shipped fabrication files modulo declared noise. All five
+[measurement criteria](docs/15-spike-plan.md#stage-6-results-measured) were
+met on the dev machine (i7-13700KF): the full labeled carve in **6.5 s**
+cold (the wall's Rhino carve was ~30 min), a cheap-cone slider at
+**0.5 ms** p50, **Esc to idle in 170 ms**, **file-edit → canvas in ~100 ms**,
+and byte-comparable 3MF/DXF exports. The corpus and its measurement harness
+live in [`corpus/`](corpus/README.md). Next is v0.1 (OCCT-backed Solid, the
+full catalog, WASM script host, undo, git panel — [docs/15](docs/15-spike-plan.md)
+§After the spike); the working status lives in [AGENTS.md](AGENTS.md).
 
 License: all rights reserved while private; a public license will be
 chosen at first public release.
