@@ -343,6 +343,17 @@ fn start_watcher(state: &Arc<AppState>) -> Result<(), ServeError> {
     let (tx, rx) = std::sync::mpsc::channel::<PathBuf>();
     let mut watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
         if let Ok(event) = result {
+            // Drop ACCESS events (open / read / close): a read is not a
+            // change. This matters because `reload_from_disk` READS the
+            // `.cic` and its sidecar — on Linux inotify those reads fire
+            // CLOSE_NOWRITE events, so forwarding them turned every reload
+            // into read → event → reload → read, a self-sustaining storm
+            // (Windows/macOS never report reads as change events, so it
+            // only showed on Linux). Mutations (Create/Modify/Remove) and
+            // the imprecise catch-alls (Any/Other) still flow.
+            if matches!(event.kind, notify::EventKind::Access(_)) {
+                return;
+            }
             for path in event.paths {
                 let _ = tx.send(path);
             }
