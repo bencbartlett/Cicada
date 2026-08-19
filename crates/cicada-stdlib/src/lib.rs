@@ -20,6 +20,7 @@ pub mod meshes;
 pub mod params;
 pub mod points;
 pub mod sequences;
+pub mod text;
 pub mod transforms;
 
 /// Unwrap a geometry result, turning the error into a node panic — the

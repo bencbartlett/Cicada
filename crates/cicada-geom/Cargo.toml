@@ -12,6 +12,7 @@ glam.workspace = true
 manifold-csg.workspace = true
 spade.workspace = true
 thiserror.workspace = true
+ttf-parser.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

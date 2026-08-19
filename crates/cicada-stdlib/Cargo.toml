@@ -12,6 +12,9 @@ cicada-geom.workspace = true
 cicada-macros.workspace = true
 
 [dev-dependencies]
+# glam (dev only): the text-node tests measure mesh bounding boxes; the
+# library itself reaches glam through core's Point/Vector newtypes.
+glam.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
 

@@ -22,6 +22,7 @@ pub mod curve;
 pub mod export;
 pub mod frame;
 pub mod meshbuild;
+pub mod text;
 pub mod tol;
 pub mod transform;
 pub mod triangulate;
@@ -84,5 +85,11 @@ pub enum GeomError {
     Kernel {
         /// The kernel's reason.
         reason: String,
+    },
+    /// The font has no glyph for a character of the text (text nodes).
+    #[error("no glyph for {character:?} (U+{:04X}) in the font", *character as u32)]
+    MissingGlyph {
+        /// The character the font lacks.
+        character: char,
     },
 }
