@@ -211,16 +211,17 @@ variants ("/") compress sibling nodes.
 
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
-| List Item | `(list: [E], index: Integer, wrap: Boolean = false) → E` | S | `E` binds per call: item of a `[Point]` is a Point; holes refuse loudly (hole-aware selection: v0.1) |
-| List Length | `(list: [E?]) → Integer` | S | counts slots, absent included (slot-preserving) |
+| List Item | `(list: [E], index: Integer, wrap: Boolean = false) → E` | S | `E` binds per call: item of a `[Point]` is a Point; hole-aware since stage 6 — an absent slot selects as an absent element (`E` carries `?`) |
+| List Length | `(list: [E]) → Integer` | S | counts slots, absent included (slot-preserving; `E` carries `?`, so `[T?]` is an ordinary `[E]`) |
 | Reverse | `(list: [T]) → [T]` | 1 | |
 | Shift List | `(list: [T], offset: Integer, wrap: Boolean = true) → [T]` | 1 | |
 | Sort | `(keys: [Number], values: [T]) → (sorted: [T], map: IndexMap)` | 1 | stable; map preserves identity |
-| Cull | `(list: [T], pattern: [Boolean]) → (kept: [T], map: IndexMap)` | 1 | the only way elements leave a list |
+| Cull | `(list: [E], pattern: [Boolean]) → (kept: [E], map: IndexMap)` | S | the only way elements leave a list; strict zip (counts in the error), no pattern repetition; `map` = kept index → source index |
 | Dispatch | `(list: [T], pattern: [Boolean]) → (a: [T], b: [T], map: IndexMap)` | 1 | |
 | Weave / Merge / Insert Items / Split List | — | 1 | slot-preserving throughout |
 | Duplicate | `(item: T, count: Integer) → [T]` | 1 | |
-| map / zip / cross / flatten / nest / squeeze / transpose / chunk / group_by / compact | list & nesting combinators | S | wire-level lifts with node forms; strict `zip` (mismatch = error; `pad_last`/`cycle`/`truncate` opt-in); `compact` returns `IndexMap`; doc 09 |
+| flatten / partition / chunk / concat | `(list: [[E]]) → [E]` / `(list: [E], sizes: [Integer]) → [[E]]` / `(list: [E], size: Integer) → [[E]]` / `(a: [E], b: [E]) → [E]` | S | shipped (stage 6, the wall's per-part cutter groups): `flatten` drops one level (absent outer slots refuse, inner holes survive); `partition` sizes must cover the list exactly (counts in the error); `chunk`'s last group may be short (GH Partition List); `concat` is slot-preserving |
+| map / zip / cross / nest / squeeze / transpose / group_by / compact | list & nesting combinators | S | wire-level lifts with node forms; strict `zip` (mismatch = error; `pad_last`/`cycle`/`truncate` opt-in); `compact` returns `IndexMap`; doc 09 |
 
 Path Mapper does not exist; standard combinators and named axes replace
 it (doc 09).
@@ -240,7 +241,7 @@ it (doc 09).
 | Cross / Dot / Angle | `(a: Vector, b: Vector) → …` | 1 | |
 | Rotate Vector | `(vector: Vector, angle: Number, axis: Vector) → Vector` | 1 | |
 | XY / XZ / YZ Plane | `(origin: Point = origin) → Plane` | S | |
-| Construct Plane | `(origin: Point, x: Vector, y: Vector) → Plane` | 1 | |
+| Construct Plane | `(origin: Point = origin, x: Vector = unit_x, y: Vector = unit_y) → Plane` | S | `y` is orthonormalized against `x`; red when `x` is zero-length or `y` is parallel to `x` at tolerance (stage 6: the wall's part/plate frames) |
 | Plane Normal | `(origin: Point, z: Vector) → Plane` | 1 | |
 
 ### 6 · Curve
@@ -279,7 +280,7 @@ it (doc 09).
 | Extrude | `(profile: Closed<Curve>, direction: Vector, segments: Integer = 64) → Watertight<Mesh>` | S | spike form: mesh-backed (doc 15's honest shim), planarity checked at runtime within tolerance (the `Planar` refinement is v0.1); `segments` tessellates curved profiles; v0.1 restores `→ Solid` |
 | Extrude Open | `(curve: Curve, direction: Vector) → Surface` | 1 | |
 | Extrude to Point | `(profile: Closed<Planar<Curve>>, apex: Point) → Solid` | 1 | the wall's frusta |
-| Loft | `(profiles: [Closed<Curve>]) → Solid` | 1 | `Loft Open` for surfaces; explicit `zip over parts` idiom for base/cap pairing |
+| Loft | `(start: Closed<Curve>, end: Closed<Curve>, segments: Integer = 64) → Watertight<Mesh>` | S | spike form (stage 6): a ruled solid between two sections, capped — the wall's frusta (Voronoi cell → triangular tip cap) and its cone/chamfer cutters; polylines pair vertex i ↔ i (seam = vertex 0), analytic sections tessellate to `segments`; red when counts differ, a section is degenerate, the sections coincide, or wind oppositely; v0.1 restores `(profiles: [Closed<Curve>]) → Solid` + `Loft Open` |
 | Sweep1 | `(rail: Curve, profile: Closed<Planar<Curve>>) → Solid` | 1 | Sweep2: tier 2 |
 | Revolve | `(profile: Curve, axis: Line, angle: Domain = full) → Solid` | 1 | |
 | Pipe | `(rail: Curve, radius: Number) → Solid` | 1 | |
@@ -350,7 +351,8 @@ All kind-preserving over `T: Transformable`.
 | Material | `(color: Color, roughness: Number = 0.5, metallic: Number = 0) → Material` | 1 | names map to Blender shaders (doc 04) |
 | Gradient | `(t: Number, stops: [(Number, Color)]) → Color` | 1 | |
 | Text Tag | `(location: Plane, text: Text, size: Number) → ()` | S | display-only |
-| Text Outlines | `(text: Text, font: Text, size: Number, plane: Plane) → [Closed<Curve>]` | 1 | real geometry; ttf-parser; the wall's labels |
+| Text Outlines | `(text: Text, size: Number, plane: Plane = xy_plane, font: Text = "DejaVu Sans Bold", segments: Integer = 8, line_gap: Number = 1.35) → [Closed<Curve>]` | S | real geometry (stage 6): glyph contours as closed polylines, baseline on the plane's x axis, `size` = CAP HEIGHT (how fabrication text is specified), `\n` stacks lines by `line_gap × size`; fonts are BUNDLED in the stdlib (reproducibility — the spike bundles DejaVu Sans Bold; system fonts never) |
+| Text Solids | `(text: Text, size: Number, depth: Number, plane: Plane = xy_plane, font: Text = "DejaVu Sans Bold", segments: Integer = 8, line_gap: Number = 1.35) → [Watertight<Mesh>]` | S | one watertight solid per glyph, counters (holes) handled, extruded `depth` along the plane normal — the wall's deboss cutters; GH needed TextEntity → curves → Boundary Surfaces → Extrude + tree gymnastics for this |
 | Export OBJ (debug) | `(meshes: [Mesh], path: Text) → ()` | S | the stage-4 window into headless geometry (any viewer opens it); effectful — explicit-run only, never memoized; takes ANY meshes (a debug viewer must not demand watertightness) |
 | Export STL / 3MF (plain) | `(solids: [Solid], path: Text) → ()` | 1 | explicit-run |
 | Export 3MF (Bambu project) | `(plates: [Plate], path: Text) → ()` | 1 | ported wall writer; brings `Plate` types |
@@ -386,5 +388,8 @@ All kind-preserving over `T: Transformable`.
   should just be a script node.
 - **Fabrication types** (`Plate`, machine profiles): namespaced with the
   exporters or promoted to core kinds.
-- **Font resolution determinism** for Text Outlines (bundle fonts vs
-  system lookup — reproducibility says bundle).
+- ~~**Font resolution determinism** for Text Outlines (bundle fonts vs
+  system lookup — reproducibility says bundle).~~ Resolved stage 6:
+  fonts are bundled in the stdlib binary and named by the `font` port;
+  a name that is not bundled is red with the bundled list. Which fonts
+  ship beyond DejaVu Sans Bold is a v0.1 catalog question, not a design one.

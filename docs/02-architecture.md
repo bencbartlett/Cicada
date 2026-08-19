@@ -137,8 +137,13 @@ User code enters at two tiers, ports auto-derived in both:
 
 - Input-struct fields → input ports; output-struct fields → named
   output ports (bare return = single `out` port; Python script nodes
-  mirror the ABI with dataclasses); the doc comment's first line → the
-  node title.
+  mirror the ABI in the signature itself — kwargs with string type
+  annotations in, and the RETURN annotation declares the output ports:
+  `-> "[Number]"` is one port `out`, a dict literal
+  `-> {"dirs": "[Vector]", "mags": "[Number]"}` is a multi-output node
+  returning a dict with exactly those keys, `-> None` is an exporter
+  with no outputs; `@cicada.node(title, description, effectful=False)`);
+  the doc comment's first line → the node title.
 - Re-parse on save (hot reload). When a signature changes, stale wires
   become **type errors, not silent deletions** — GH dropping wires on
   param edits was one of its worst behaviors.

@@ -180,8 +180,11 @@ the same language as the canvas Expression node editor.
 User code beyond a formula lives in `scripts/` (doc 02 §4): **Rust by
 default** — including AI-generated nodes — compiled to sandboxed WASM;
 a **Python 3 script node** is available for ecosystem work. Script
-files self-register by function name (`#[node]` in Rust, decorator in
-Python); the dialect calls them like any stdlib node. Resolution
+files self-register by function name (`#[node]` in Rust,
+`@cicada.node(title, description, effectful=False)` in Python, where the
+string-annotated signature is the ports and the return annotation names
+the outputs — `-> "T"`, `-> {"a": "T", …}`, or `-> None` for exporters;
+docs/14 §script ABI); the dialect calls them like any stdlib node. Resolution
 order: local bindings → project `scripts/` → stdlib; a collision is an
 error demanding qualification (`std.move` / `scripts.carve_pins`). AI
 prompt provenance and contract tests live in the script file itself as

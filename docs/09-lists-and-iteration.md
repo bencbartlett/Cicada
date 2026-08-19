@@ -106,7 +106,17 @@ failures:
 | `chunk` / `partition` | `[T] → [[T]]` | Partition List | by size / by sizes |
 | `group_by` | `(keys: [K], values: [T]) → (groups: [[T]], keys: [K])` | Path Mapper folklore | the honest version of most path recipes |
 | `compact` | `[T?] → ([T], IndexMap)` | Clean Tree | the only way slots disappear |
-| `concat` / `wrap` / `unzip` | list assembly/disassembly | Merge / Entwine / Explode Tree | |
+| `concat` / `wrap` / `unzip` | list assembly/disassembly | Merge / Entwine / Explode Tree | `concat` shipped (stage 6) |
+
+Shipped in the spike (stage 6, for the wall's per-part cutter groups):
+`flatten` (one level; absent outer slots refuse, inner holes survive),
+`partition(list, sizes)` (sizes must cover the list exactly — counts in
+the error), `chunk(list, size)` (last group may be short), `concat`,
+and `cull(list, pattern)` (strict zip, no pattern repetition; returns
+`kept` + the `IndexMap`). The element variable `E` carries optionality:
+a `[T?]` flows through every slot-preserving list node as `[T?]`, and
+`item` of an absent slot is an absent element — never green at check
+time and red at run time.
 
 ## Path Mapper recipes, typed
 

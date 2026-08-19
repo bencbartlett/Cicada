@@ -135,10 +135,29 @@ struct Mesh {
 
 - **Python** (ecosystem fallback): persistent worker subprocesses;
   length-prefixed MessagePack frames over pipes. Geometry crosses as
-  typed extensions wrapping flat `f64` binaries — `numpy.frombuffer`
-  views them zero-copy. Kill = cancel; workers respawn. Impurity
-  breaks caching honestly: the engine hashes declared inputs only,
-  and the docs say so loudly.
+  typed maps wrapping flat `f64`/`u32` binaries (msgpack `bin`) —
+  `array('d').frombytes` / `numpy.frombuffer` view them without a
+  per-float Python loop (stage-6 measurement: 7,200 meshes × 100
+  vertices cross in ~0.1 s release, either direction). Kill = cancel;
+  workers respawn. Impurity breaks caching honestly: the engine hashes
+  declared inputs only, and the docs say so loudly.
+  **As shipped (stage 6)**: `@cicada.node(title, description,
+  effectful=False)`; inputs are kwargs with string annotations in
+  catalog notation; the return annotation declares the outputs —
+  `-> "T"` (port `out`), `-> {"name": "T", …}` (multi-output; the
+  function returns a dict with exactly those keys, order = port order),
+  `-> None` (exporters; no outputs, effectful). Kinds that cross:
+  Number, Integer, Boolean, Text, Point, Vector, Domain, Plane, Mesh,
+  `Watertight<Mesh>`, Curve (polyline, line, circle, rectangle),
+  `Closed<Curve>`, `[…]` to any depth, `?` optionality (Python `None` =
+  absent slot). Declared refinements are RE-CHECKED on the way back
+  from Python (an unwatertight mesh behind a `Watertight<Mesh>`
+  annotation is red with counts) and dropped to the base kind on the
+  way in. The `cicada` module offers `Mesh` (flat arrays +
+  `from_triangles`), `Plane`, `Polyline`, `Line`, `Circle`,
+  `Rectangle`, `Vector`, `Domain`; a plain 3-tuple is a Point.
+  Effectful script leaves skip in `cicada run` unless named with
+  `--node`, and run from the app via `POST /api/run/{node}`.
 - **WASM** (the Rust script default): wasmtime with epoch
   interruption (per-call deadlines), a memory cap (default 512 MB),
   and **no WASI filesystem/network** — script nodes are pure compute.

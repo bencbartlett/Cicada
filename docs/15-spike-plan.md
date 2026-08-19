@@ -127,7 +127,7 @@ lands. Rough calendar: week 1 = stages 0–3; week 2 = 4 + 5; week 3 =
 |---|---|---|
 | Carve speed | `cicada run corpus/wall.cic --node carved --time`, cold cache, dev desktop | Full ~1,500-part labeled carve **< 10 s** (wall baseline: ~30 min in Rhino); warm rerun < 100 ms |
 | Live slider loop | Drag the demo cone's slider 5 s; tracing spans report preview-generation latency | p50 ≤ 16 ms (60 fps) on the cheap cone; p95 ≤ 33 ms; the full-pipeline slider degrades honestly (progress, no freeze) |
-| Esc always works | Scripted cancel injected mid-carve ×20 | Time-to-idle p95 **< 250 ms**; UI thread never blocks |
+| Esc always works | Scripted cancel injected mid-carve ×20 (`corpus/measure/esc.mjs`; server-side `timings[].cancel_to_idle_ms` from the cancel call to the loop idle, plus the client's poll-observed time-to-idle) | Time-to-idle p95 **< 250 ms**; UI thread never blocks |
 | Canvas round-trip | Playwright: place + wire → assert file text; edit file → assert canvas | Byte-exact writer fixtures; canvas reflects file edits < 500 ms |
 | Output equivalence | Hash-compare 3MF/DXF against production wall exports through a normalizer (strips timestamps/UUIDs) | Byte-identical modulo declared noise; every legit diff documented |
 
