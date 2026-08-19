@@ -65,6 +65,16 @@ pub struct PortDesc {
     pub default: Option<Arc<HashedValue>>,
 }
 
+/// One output port of a described script node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputDesc {
+    /// Port name (`out` for a single string return annotation; the dict
+    /// key for multi-output).
+    pub name: String,
+    /// Catalog type notation from the annotation.
+    pub ty: String,
+}
+
 /// One `@cicada.node` function found in a script file.
 #[derive(Debug, Clone)]
 pub struct ScriptNodeDesc {
@@ -74,10 +84,14 @@ pub struct ScriptNodeDesc {
     pub title: String,
     /// One-line description.
     pub description: String,
+    /// `@cicada.node(..., effectful=True)`: the engine never memoizes or
+    /// auto-runs the node (exporters, doc 10 §7).
+    pub effectful: bool,
     /// Input ports in signature order.
     pub inputs: Vec<PortDesc>,
-    /// Catalog type notation of the single `out` port.
-    pub output: String,
+    /// Output ports in declaration order: one `out` for `-> "T"`, the dict
+    /// keys for `-> {"a": "T", ...}`, empty for `-> None`.
+    pub outputs: Vec<OutputDesc>,
 }
 
 /// A described script file: its nodes plus the interpreter identity
@@ -315,7 +329,11 @@ impl WorkerPool {
 
     /// Invoke one script node over its SOURCE text. `inputs` maps port
     /// names to values; absent optional ports are omitted (the Python
-    /// default applies — one source of default truth).
+    /// default applies — one source of default truth). Returns one value
+    /// per declared output, in declaration order (empty for `-> None`) —
+    /// the worker has already refused a return whose shape disagrees
+    /// with the annotation (non-dict / missing or extra keys for
+    /// multi-output, a value for `-> None`), as [`ScriptError::Script`].
     ///
     /// # Errors
     ///
@@ -329,7 +347,7 @@ impl WorkerPool {
         fn_name: &str,
         inputs: &BTreeMap<String, Arc<HashedValue>>,
         kill: &KillSwitch,
-    ) -> Result<Arc<HashedValue>, ScriptError> {
+    ) -> Result<Vec<Arc<HashedValue>>, ScriptError> {
         let mut wire_inputs = Vec::with_capacity(inputs.len());
         for (name, input) in inputs {
             wire_inputs.push((Wire::from(name.as_str()), value::to_wire(input)?));
@@ -345,9 +363,10 @@ impl WorkerPool {
             (Wire::from("inputs"), Wire::Map(wire_inputs)),
         ]);
         let reply = self.call(&request, kill)?;
-        let output = map_get(&reply, "output")
-            .ok_or_else(|| ScriptError::Protocol("invoke reply has no output".to_owned()))?;
-        value::from_wire(output)
+        let outputs = map_get(&reply, "outputs")
+            .and_then(|outputs| outputs.as_array())
+            .ok_or_else(|| ScriptError::Protocol("invoke reply has no outputs array".to_owned()))?;
+        outputs.iter().map(value::from_wire).collect()
     }
 }
 
@@ -409,11 +428,31 @@ fn decode_node_desc(wire: &Wire) -> Result<ScriptNodeDesc, ScriptError> {
             Ok(PortDesc { name, ty, default })
         })
         .collect::<Result<Vec<_>, ScriptError>>()?;
+    let outputs = map_get(wire, "outputs")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| ScriptError::Protocol("node desc missing outputs".to_owned()))?
+        .iter()
+        .map(|port| {
+            let name = map_get(port, "name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| ScriptError::Protocol("output port missing name".to_owned()))?
+                .to_owned();
+            let ty = map_get(port, "type")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| ScriptError::Protocol(format!("output port `{name}` missing type")))?
+                .to_owned();
+            Ok(OutputDesc { name, ty })
+        })
+        .collect::<Result<Vec<_>, ScriptError>>()?;
+    let effectful = map_get(wire, "effectful")
+        .and_then(rmpv::Value::as_bool)
+        .ok_or_else(|| ScriptError::Protocol("node desc missing effectful flag".to_owned()))?;
     Ok(ScriptNodeDesc {
         name: text("name")?,
         title: text("title")?,
         description: text("description")?,
+        effectful,
         inputs,
-        output: text("output")?,
+        outputs,
     })
 }
