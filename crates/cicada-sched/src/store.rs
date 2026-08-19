@@ -209,6 +209,57 @@ struct Pack {
 /// The pack frame header: the length word plus the content hash.
 const PACK_HEADER: usize = 4 + 32;
 
+/// zstd level for value blobs.
+const ZSTD_LEVEL: i32 = 3;
+
+/// Compress with a thread-local reusable context. `zstd::stream::encode_all`
+/// builds a fresh compression context per call — ~30 µs — which made
+/// persisting 1,200 fresh scalars cost 38 ms per slider tick (stage-6
+/// measurement); a reused bulk compressor is a microsecond or two.
+fn compress(bytes: &[u8]) -> std::io::Result<Vec<u8>> {
+    thread_local! {
+        static COMPRESSOR: std::cell::RefCell<Option<zstd::bulk::Compressor<'static>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    COMPRESSOR.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(zstd::bulk::Compressor::new(ZSTD_LEVEL)?);
+        }
+        match slot.as_mut() {
+            Some(compressor) => compressor.compress(bytes),
+            None => Err(std::io::Error::other("zstd compressor unavailable")),
+        }
+    })
+}
+
+/// Decompress with a thread-local reusable context when the frame carries
+/// its content size (bulk-compressed blobs do); frames without one (written
+/// by the streaming encoder before stage 6) take the streaming path.
+fn decompress(bytes: &[u8]) -> std::io::Result<Vec<u8>> {
+    thread_local! {
+        static DECOMPRESSOR: std::cell::RefCell<Option<zstd::bulk::Decompressor<'static>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    let content_size = zstd::zstd_safe::get_frame_content_size(bytes)
+        .ok()
+        .flatten()
+        .and_then(|size| usize::try_from(size).ok());
+    let Some(capacity) = content_size else {
+        return zstd::stream::decode_all(bytes);
+    };
+    DECOMPRESSOR.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(zstd::bulk::Decompressor::new()?);
+        }
+        match slot.as_mut() {
+            Some(decompressor) => decompressor.decompress(bytes, capacity),
+            None => Err(std::io::Error::other("zstd decompressor unavailable")),
+        }
+    })
+}
+
 /// One memo entry: the output value hashes of a completed computation, in
 /// output-port order.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -588,6 +639,51 @@ impl Pack {
         Ok(())
     }
 
+    /// Append many blob frames in ONE write, indexing each.
+    fn append_many(&mut self, path: &Path, items: &[(ValueHash, &[u8])]) -> Result<(), StoreError> {
+        if items.is_empty() {
+            return Ok(());
+        }
+        let total: usize = items
+            .iter()
+            .map(|(_, payload)| PACK_HEADER + payload.len())
+            .sum();
+        let mut framed = Vec::with_capacity(total);
+        let mut slots = Vec::with_capacity(items.len());
+        for (hash, payload) in items {
+            let frame_len = u32::try_from(32 + payload.len()).map_err(|_| StoreError::Decode {
+                path: path.to_owned(),
+                message: "pack frame over 4 GiB".to_owned(),
+            })?;
+            let offset = self.len + framed.len() as u64 + PACK_HEADER as u64;
+            framed.extend_from_slice(&frame_len.to_le_bytes());
+            framed.extend_from_slice(hash.as_bytes());
+            framed.extend_from_slice(payload);
+            slots.push((
+                *hash,
+                PackSlot {
+                    offset,
+                    len: u32::try_from(payload.len()).unwrap_or(u32::MAX),
+                },
+            ));
+        }
+        self.write
+            .write_all(&framed)
+            .map_err(|source| StoreError::Io {
+                path: path.to_owned(),
+                source,
+            })?;
+        self.write.flush().map_err(|source| StoreError::Io {
+            path: path.to_owned(),
+            source,
+        })?;
+        self.len += framed.len() as u64;
+        for (hash, slot) in slots {
+            self.index.insert(hash, slot);
+        }
+        Ok(())
+    }
+
     /// Read a packed blob's compressed bytes, if indexed.
     fn read(&mut self, path: &Path, hash: &ValueHash) -> Result<Option<Vec<u8>>, StoreError> {
         use std::io::{Read as _, Seek as _, SeekFrom};
@@ -951,6 +1047,70 @@ impl DiskStore {
         self.root.join("values").join("pack.bin")
     }
 
+    /// Persist leaf values (no children): encode in parallel, then append
+    /// every small blob to the pack under one lock in one write; the rare
+    /// big leaf takes the file path.
+    fn store_leaves(&self, leaves: &[&Arc<HashedValue>]) -> Result<(), StoreError> {
+        if leaves.is_empty() {
+            return Ok(());
+        }
+        let encode = |value: &Arc<HashedValue>| -> Result<(Arc<HashedValue>, Vec<u8>), StoreError> {
+            let path = self.blob_path(&value.hash());
+            let encoded = postcard::to_allocvec(&to_stored(value.data())).map_err(|error| {
+                StoreError::Decode {
+                    path: path.clone(),
+                    message: error.to_string(),
+                }
+            })?;
+            let compressed =
+                compress(&encoded).map_err(|source| StoreError::Io { path, source })?;
+            Ok((Arc::clone(value), compressed))
+        };
+        let encoded: Vec<(Arc<HashedValue>, Vec<u8>)> = if leaves.len() >= PARALLEL_STORE_MIN {
+            use rayon::prelude::*;
+            leaves
+                .par_iter()
+                .map(|value| encode(value))
+                .collect::<Result<_, _>>()?
+        } else {
+            leaves
+                .iter()
+                .map(|value| encode(value))
+                .collect::<Result<_, _>>()?
+        };
+        let (small, big): (Vec<_>, Vec<_>) = encoded
+            .into_iter()
+            .partition(|(_, compressed)| compressed.len() <= PACK_MAX_BYTES);
+        for (value, _) in &big {
+            self.store_value(value)?;
+        }
+        if small.is_empty() {
+            return Ok(());
+        }
+        let pack_path = self.pack_path();
+        {
+            let mut pack = self
+                .pack
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let items: Vec<(ValueHash, &[u8])> = small
+                .iter()
+                .filter(|(value, _)| !pack.index.contains_key(&value.hash()))
+                .map(|(value, compressed)| (value.hash(), compressed.as_slice()))
+                .collect();
+            pack.append_many(&pack_path, &items)?;
+        }
+        let tick = self.tick.fetch_add(1, Ordering::Relaxed);
+        let mut mem = self
+            .mem
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for (value, compressed) in small {
+            mem.insert(value, compressed.len(), tick);
+        }
+        Ok(())
+    }
+
     /// Persist a value (children first — a stored list PROMISES its
     /// elements are loadable). Content-addressed: storing an
     /// already-present value is a cheap no-op, which is exactly what makes
@@ -968,24 +1128,31 @@ impl DiskStore {
     /// [`StoreError`] on I/O or encoding failure.
     pub fn store_value(&self, value: &Arc<HashedValue>) -> Result<(), StoreError> {
         if let ValueData::List(list) = value.data() {
-            // Persist the children that are not already known — in
-            // parallel once there are enough to pay for the fork.
+            // Persist the children that are not already known. Leaf
+            // children are encoded in parallel and appended to the pack in
+            // ONE write (a slider tick over a 1,200-element list used to
+            // cost 1,200 append syscalls — stage-6 measurement); nested
+            // lists recurse, in parallel once there are enough.
             let fresh: Vec<&Arc<HashedValue>> = list
                 .slots
                 .iter()
                 .flatten()
                 .filter(|element| !self.known_stored(&element.hash()))
                 .collect();
-            if fresh.len() >= PARALLEL_STORE_MIN {
+            let (leaves, lists): (Vec<_>, Vec<_>) = fresh
+                .into_iter()
+                .partition(|element| !matches!(element.data(), ValueData::List(_)));
+            if lists.len() >= PARALLEL_STORE_MIN {
                 use rayon::prelude::*;
-                fresh
+                lists
                     .par_iter()
                     .try_for_each(|element| self.store_value(element))?;
             } else {
-                for element in fresh {
+                for element in lists {
                     self.store_value(element)?;
                 }
             }
+            self.store_leaves(&leaves)?;
         }
         if self.known_stored(&value.hash()) {
             return Ok(());
@@ -997,11 +1164,10 @@ impl DiskStore {
                 message: error.to_string(),
             }
         })?;
-        let compressed =
-            zstd::stream::encode_all(encoded.as_slice(), 3).map_err(|source| StoreError::Io {
-                path: path.clone(),
-                source,
-            })?;
+        let compressed = compress(&encoded).map_err(|source| StoreError::Io {
+            path: path.clone(),
+            source,
+        })?;
         if compressed.len() <= PACK_MAX_BYTES {
             // Small blob: one append under the pack lock. A concurrent
             // store of the same hash (parallel children of two lists)
@@ -1143,7 +1309,7 @@ impl DiskStore {
                 quarantine_file(&path);
             }
         };
-        let Ok(encoded) = zstd::stream::decode_all(compressed.as_slice()) else {
+        let Ok(encoded) = decompress(&compressed) else {
             quarantine(self);
             return Err(StoreError::Decode {
                 path,

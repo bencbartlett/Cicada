@@ -2623,10 +2623,16 @@ impl Core {
                     report: Arc::clone(report),
                 });
             }
-            if newer {
-                // Frames for what completed — cancelled generations still
-                // painted whatever finished (generation-tagged; the client
-                // keeps the newest per node).
+            if newer && !report.cancelled {
+                // Frames for what completed. A CANCELLED generation paints
+                // nothing: its finished upstream outputs with the previous
+                // generation's downstream ones would be an incoherent mix,
+                // and doc 04 says a cancelled solve leaves the last
+                // coherent frame — the previous generation's. (It also
+                // cost the Esc latency: encoding ~100 MB of half-finished
+                // wall cutters stood between cancel() and idle — stage-6
+                // measurement.) The completed work is memoized; the next
+                // generation paints it in milliseconds.
                 frame_bytes = self.emit_frames(&mut inner, generation, &job.lowered, report);
             }
         }
@@ -3203,6 +3209,105 @@ mod tests {
             !session.reload_from_disk("again", false).unwrap(),
             "unchanged → no-op"
         );
+    }
+
+    #[test]
+    fn cancelled_generation_paints_nothing_and_keeps_the_last_coherent_display() {
+        // doc 04: a cancelled solve leaves the LAST COHERENT frame. A
+        // cancelled generation's half-finished outputs must not be painted
+        // over the previous generation's (an incoherent mix) — and not
+        // encoding them is what keeps Esc → idle fast (stage 6: ~100 MB of
+        // half-done wall cutters used to sit between cancel() and idle).
+        // Deterministic: the completion hook is driven directly with a
+        // report marked cancelled.
+        let (_dir, config) = project(
+            "# cicada 1
+             size = slider(value=2.0, min=0.5, max=5.0)
+             span = construct_domain(start=0.0, end=size)
+             block = box(x=span, y=span, z=span)
+",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let before = session.debug_state(false);
+        let shown_before = before["display"]["block.out"]["generation"]
+            .as_u64()
+            .expect("the box is displayed");
+        let (lowered, generation) = {
+            let inner = session.core.lock_inner();
+            (
+                Arc::clone(&inner.lowered),
+                inner.last_complete.as_ref().map_or(0, |k| k.generation),
+            )
+        };
+        let targets = all_targets(&lowered);
+        let job = Job {
+            lowered: Arc::clone(&lowered),
+            targets,
+            kind: JobKind::Structural,
+            submitted: Instant::now(),
+        };
+        let cancelled = generation + 1;
+        session.core.on_start(cancelled, &job);
+        // The cancelled generation DID finish the box — with a different
+        // mesh (a bigger box), stored so it is paintable. Painting it would
+        // be the incoherent mix the rule forbids.
+        let bigger = cicada_geom::meshbuild::box_mesh(
+            &cicada_core::spatial::Plane::world_xy(),
+            cicada_core::scalar::Domain::new(0.0, 4.0),
+            cicada_core::scalar::Domain::new(0.0, 4.0),
+            cicada_core::scalar::Domain::new(0.0, 4.0),
+            1e-6,
+        )
+        .unwrap();
+        let bigger =
+            cicada_core::value::HashedValue::new(cicada_core::value::ValueData::Mesh(bigger))
+                .unwrap();
+        session.core.scheduler.store().store_value(&bigger).unwrap();
+        let block_id = lowered
+            .graph
+            .nodes()
+            .iter()
+            .position(|n| n.name == "block")
+            .expect("block is lowered");
+        let report = Arc::new(cicada_sched::SolveReport {
+            generation: cancelled,
+            cancelled: true,
+            outcomes: lowered
+                .graph
+                .nodes()
+                .iter()
+                .enumerate()
+                .map(|(index, _)| {
+                    if index == block_id {
+                        cicada_sched::NodeOutcome::Computed {
+                            outputs: vec![bigger.hash()],
+                            elements: 1,
+                            nanos: 1,
+                        }
+                    } else {
+                        cicada_sched::NodeOutcome::Cancelled
+                    }
+                })
+                .collect(),
+        });
+        session.core.on_complete(cancelled, &job, report);
+        let after = session.debug_state(false);
+        assert_eq!(
+            after["display"]["block.out"]["generation"]
+                .as_u64()
+                .unwrap(),
+            shown_before,
+            "the display keeps the previous generation's frame"
+        );
+        let timing = after["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["generation"].as_u64() == Some(cancelled))
+            .expect("the cancelled generation is recorded");
+        assert_eq!(timing["cancelled"], true);
+        assert_eq!(timing["frame_bytes"], 0, "nothing painted: {timing}");
     }
 
     #[test]

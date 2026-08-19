@@ -50,8 +50,14 @@ cap_curves = as_closed(curve=each(cap_rings))
 frusta = loft(start=each(cells), end=each(cap_curves))
 
 # --- labels: IDs + deboss placement (labels.py), glyph solids from the bundled font
-labels = wall_labels(cells=cells, centroids=geom.centroid, directions=field.directions, board_min=layout.board_min, ids_expected=layout.ids_production)
-glyphs = text_solids(text=each(labels.deboss_text), plane=each(labels.deboss_plane), size=each(labels.deboss_size), depth=2.0, segments=4)
+# The deboss depth is the full-pipeline slider (docs/15: the heavy cone that
+# must degrade honestly): it dirties the labels, the glyph cutters and the
+# carve. The glyph frame sits `deboss` above the base face and cuts twice
+# that far (the lower half cuts air below the part — production's UNDER).
+deboss = slider(value=1.0, min=0.5, max=2.0, step=0.1)
+cut = deboss * 2.0
+labels = wall_labels(cells=cells, centroids=geom.centroid, directions=field.directions, board_min=layout.board_min, deboss_under=deboss, ids_expected=layout.ids_production)
+glyphs = text_solids(text=each(labels.deboss_text), plane=each(labels.deboss_plane), size=each(labels.deboss_size), depth=cut, segments=4)
 
 # --- pin cutters (pin_holes.py): bore + chamfer + cone ceiling per pin, slot on the lean pin
 pins = pin_cutters(centroids=geom.centroid, directions=field.directions, cells=cells)

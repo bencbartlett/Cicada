@@ -110,14 +110,25 @@ def solve_field(
         falloff_power = 2.0
     # Assemble wire list: (x, y, signed current) -- one current for
     # every wire (magnetic_field.py:301-315, broadcast branch).
+    #
+    # adapted: the solve runs with UNIT currents (+1 / -1) and the shared
+    # `current` scales the magnitudes afterwards. Mathematically identical
+    # (one current factors out of the superposition), but unlike the
+    # production code it keeps the unit DIRECTIONS bit-identical when the
+    # current changes: with `current` folded into every term, b / |b|
+    # flipped by an ulp for ~10% of the points on each slider tick, and the
+    # engine — which is exactly as sensitive as it should be — recomputed
+    # those parts' caps, labels, pins and carve (stage-6 measurement).
+    sign = -1.0 if float(current) < 0.0 else 1.0  # a negative current flips the field, as in production
     wires = []
     for (wx, wy, _wz) in wires_out:
-        wires.append((wx, wy, float(current)))
+        wires.append((wx, wy, sign))
     for (wx, wy, _wz) in wires_in:
-        wires.append((wx, wy, -float(current)))
+        wires.append((wx, wy, -sign))
     dirs, mags, weights = solve(points, wires, core_radius, influence_radius, falloff_power)
+    scale = abs(float(current))
     return {
         "directions": [cicada.Vector(ux, uy, 0.0) for (ux, uy) in dirs],
-        "magnitudes": mags,
+        "magnitudes": [m * scale for m in mags],
         "weights": weights,
     }

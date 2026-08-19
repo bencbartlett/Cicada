@@ -286,9 +286,16 @@ fn worker_loop(shared: &Shared) {
                 message: cicada_sched::exec::panic_message(payload.as_ref()),
             })
         });
+        let solve_returned = Instant::now();
         match result {
             Ok(report) => shared.sink.on_complete(generation, &job, Arc::new(report)),
             Err(error) => shared.sink.on_error(generation, &job, &error),
+        }
+        if std::env::var_os("CICADA_TRACE").is_some_and(|v| !v.is_empty()) {
+            eprintln!(
+                "trace: generation {generation} completion hooks {:.3} ms",
+                solve_returned.elapsed().as_secs_f64() * 1000.0
+            );
         }
         let cancel_to_idle = {
             let mut state = shared

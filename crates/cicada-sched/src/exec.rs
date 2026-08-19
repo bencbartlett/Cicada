@@ -147,6 +147,15 @@ pub trait Observer: Send + Sync {
     fn on_event(&self, event: &Event<'_>);
 }
 
+/// `CICADA_TRACE=1` prints per-node phase timings (key/memo, hydrate,
+/// run, commit) to stderr — the measurement loop's profiler until the real
+/// one lands (docs/12 §Progress; stage 6 used it to find a 250 ms hydrate
+/// hiding behind a 15 ms Python node). Read once.
+fn trace_enabled() -> bool {
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var_os("CICADA_TRACE").is_some_and(|v| !v.is_empty()))
+}
+
 /// Ignores everything.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoopObserver;
@@ -350,7 +359,7 @@ impl Scheduler {
             needed,
             pending,
             outcomes: (0..graph.len()).map(|_| OnceLock::new()).collect(),
-            values: (0..graph.len()).map(|_| Mutex::new(None)).collect(),
+            values: (0..graph.len()).map(|_| Mutex::new(Vec::new())).collect(),
             keys: (0..graph.len()).map(|_| OnceLock::new()).collect(),
             token,
             observer,
@@ -432,7 +441,11 @@ struct Ctx<'a> {
     /// Hydrated output values per node (computed this generation, or
     /// lazily loaded from the store on first downstream need — a warm
     /// solve whose values nobody asks for loads no blobs at all).
-    values: Vec<Mutex<Option<Vec<Arc<HashedValue>>>>>,
+    /// Hydrated output values per node, PER PORT (`None` = not loaded
+    /// yet): a consumer of one port of a 17-output node must not pay for
+    /// loading the other sixteen (stage-6 measurement: hydrating the wall
+    /// layout node cost 250 ms per slider tick for one 1,200-point port).
+    values: Vec<Mutex<Vec<Option<Arc<HashedValue>>>>>,
     /// Each node's `NodeKey`, recorded at resolve time — hydrate failures
     /// invalidate the promising memo entry through it (self-heal).
     keys: Vec<OnceLock<NodeKey>>,
@@ -517,6 +530,8 @@ impl Ctx<'_> {
             }
         }
 
+        let trace = trace_enabled();
+        let phase_started = std::time::Instant::now();
         // Input hashes → key. Hash-only: no value is loaded for a memo hit.
         let input_hashes: Vec<Option<ValueHash>> = decl
             .inputs
@@ -547,6 +562,13 @@ impl Ctx<'_> {
             if entry.outputs.len() == decl.output_count {
                 self.observer
                     .on_event(&Event::NodeCacheHit { node: &decl.name });
+                if trace {
+                    eprintln!(
+                        "trace: {} cache hit in {:.3} ms",
+                        decl.name,
+                        phase_started.elapsed().as_secs_f64() * 1000.0
+                    );
+                }
                 return NodeOutcome::CacheHit {
                     outputs: entry.outputs,
                 };
@@ -561,7 +583,21 @@ impl Ctx<'_> {
             }
         }
 
-        // Miss: hydrate input values and compute.
+        self.compute_and_record(id, decl, key, trace, phase_started)
+    }
+
+    /// The memo-miss path: hydrate inputs, compute, persist, memoize —
+    /// with the optional phase trace.
+    fn compute_and_record(
+        &self,
+        id: NodeId,
+        decl: &NodeDecl,
+        key: NodeKey,
+        trace: bool,
+        phase_started: std::time::Instant,
+    ) -> NodeOutcome {
+        let key_ms = phase_started.elapsed().as_secs_f64() * 1000.0;
+        let hydrate_started = std::time::Instant::now();
         let input_values = match self.gather_input_values(decl) {
             Ok(values) => values,
             Err(error) => {
@@ -569,12 +605,16 @@ impl Ctx<'_> {
                 return NodeOutcome::Cancelled;
             }
         };
+        let hydrate_ms = hydrate_started.elapsed().as_secs_f64() * 1000.0;
+        let run_started = std::time::Instant::now();
         let computed = if decl.fan.iter().any(|&depth| depth > 0) {
             self.compute_fanned(id, decl, &input_values)
         } else {
             self.compute_scalar(id, decl, &input_values)
         };
-        match computed {
+        let run_ms = run_started.elapsed().as_secs_f64() * 1000.0;
+        let commit_started = std::time::Instant::now();
+        let outcome = match computed {
             Computed::Cancelled => NodeOutcome::Cancelled,
             Computed::Failed(failure) => NodeOutcome::Failed(failure),
             Computed::Done {
@@ -583,7 +623,15 @@ impl Ctx<'_> {
                 computed,
                 nanos,
             } => self.record_done(decl, key, outputs, elements, computed, nanos),
+        };
+        if trace {
+            eprintln!(
+                "trace: {} key {key_ms:.3} ms, hydrate {hydrate_ms:.3} ms, run+persist {run_ms:.3} ms, memo {:.3} ms",
+                decl.name,
+                commit_started.elapsed().as_secs_f64() * 1000.0
+            );
         }
+        outcome
     }
 
     /// Memo + cost sample + event for a completed compute.
@@ -639,20 +687,19 @@ impl Ctx<'_> {
             .map(|input| match input {
                 Input::Value(value) => Ok(Some(Arc::clone(value))),
                 Input::Absent => Ok(None),
-                Input::Port { node, output } => self
-                    .hydrate(*node)
-                    .map(|values| Some(values[*output].clone())),
+                Input::Port { node, output } => self.hydrate(*node, *output).map(Some),
             })
             .collect()
     }
 
-    /// A node's output values, loading from the store on first need.
-    fn hydrate(&self, id: NodeId) -> Result<Vec<Arc<HashedValue>>, StoreError> {
-        let mut slot = self.values[id.0]
+    /// One output value of a node, loading it from the store on first need
+    /// (only that port — the others stay hashes until someone asks).
+    fn hydrate(&self, id: NodeId, output: usize) -> Result<Arc<HashedValue>, StoreError> {
+        let mut slots = self.values[id.0]
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(values) = slot.as_ref() {
-            return Ok(values.clone());
+        if let Some(Some(value)) = slots.get(output) {
+            return Ok(Arc::clone(value));
         }
         let Some(hashes) = self.outcomes[id.0]
             .get()
@@ -661,27 +708,34 @@ impl Ctx<'_> {
         else {
             unreachable!("hydrate on a node without outputs — wavefront invariant broken");
         };
-        let mut values = Vec::with_capacity(hashes.len());
-        for hash in &hashes {
-            match self.scheduler.store.load_value(hash) {
-                Ok(value) => values.push(value),
-                Err(error) => {
-                    // The memo entry PROMISED this value was loadable and
-                    // broke the promise (quarantined blob). Tombstone the
-                    // entry so the NEXT solve recomputes instead of
-                    // re-hitting a dead record forever; this generation
-                    // still fails loudly with the load error.
-                    if let Some(key) = self.keys[id.0].get()
-                        && let Err(invalidate_error) = self.scheduler.store.invalidate_memo(*key)
-                    {
-                        return Err(invalidate_error);
-                    }
-                    return Err(error);
+        if slots.len() < hashes.len() {
+            slots.resize(hashes.len(), None);
+        }
+        let Some(hash) = hashes.get(output) else {
+            unreachable!(
+                "hydrate of output {output} on a node with {} outputs",
+                hashes.len()
+            );
+        };
+        match self.scheduler.store.load_value(hash) {
+            Ok(value) => {
+                slots[output] = Some(Arc::clone(&value));
+                Ok(value)
+            }
+            Err(error) => {
+                // The memo entry PROMISED this value was loadable and
+                // broke the promise (quarantined blob). Tombstone the
+                // entry so the NEXT solve recomputes instead of
+                // re-hitting a dead record forever; this generation
+                // still fails loudly with the load error.
+                if let Some(key) = self.keys[id.0].get()
+                    && let Err(invalidate_error) = self.scheduler.store.invalidate_memo(*key)
+                {
+                    return Err(invalidate_error);
                 }
+                Err(error)
             }
         }
-        *slot = Some(values.clone());
-        Ok(values)
     }
 
     /// Store outputs and stash them for downstream reuse.
@@ -691,12 +745,25 @@ impl Ctx<'_> {
         values: Vec<Arc<HashedValue>>,
     ) -> Result<Vec<ValueHash>, StoreError> {
         for value in &values {
+            let started = std::time::Instant::now();
             self.scheduler.store.store_value(value)?;
+            if trace_enabled() {
+                eprintln!(
+                    "trace:   store {} ({} bytes-ish) in {:.3} ms",
+                    value.data().kind_name(),
+                    match value.data() {
+                        ValueData::List(list) => list.slots.len(),
+                        _ => 1,
+                    },
+                    started.elapsed().as_secs_f64() * 1000.0
+                );
+            }
         }
         let hashes = values.iter().map(|value| value.hash()).collect();
         *self.values[id.0]
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(values);
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            values.into_iter().map(Some).collect();
         Ok(hashes)
     }
 
