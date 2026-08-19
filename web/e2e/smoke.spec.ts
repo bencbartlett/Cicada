@@ -122,7 +122,13 @@ test("serve → load → place → wire → drag → screenshot asserts geometry
   // (the roundtrip spec shares this server's watched dir) can momentarily
   // re-seed it to "queued", so a single read right after the text lands is
   // racy under CI load.
-  await expect.poll(async () => (await debugState(page)).statuses["sphere_1"]?.state).toBe("done");
+  await expect
+    .poll(async () => {
+      const state = (await debugState(page)).statuses["sphere_1"]?.state;
+      // "cached" (a memo hit on a re-solve) is as solved as "done".
+      return state === "done" || state === "cached";
+    })
+    .toBe(true);
   const wired = await debugState(page);
   expect(wired.display["sphere_1.out"]?.stats.triangles ?? 0).toBeGreaterThan(0);
 
