@@ -159,6 +159,11 @@ Python 3 on PATH (or `CICADA_PYTHON`); worker protocol is dependency-free
   CI runners have cmake preinstalled (and Windows images ship
   `core.longpaths` enabled); ci.yml still primes the kernel build with
   one retry as a belt.
+- **PowerShell execution policy blocks `npm`/`npx`** in an interactive PS
+  5.1 shell (`npm.ps1 cannot be loaded because running scripts is
+  disabled`). Use `npm.cmd` / `npx.cmd`, or once per user:
+  `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`. Agent shells are
+  unaffected (Bash), which is why this only shows up in Ben's terminal.
 - **Playwright** (stage 5): browsers install per machine —
   `cd web && npx playwright install chromium` (done here 2026-08-19).
   The app WRITES the served project's files: never point `cicada serve`
