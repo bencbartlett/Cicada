@@ -1,0 +1,5 @@
+# Bundled font assets are byte-verbatim copies of their upstream files —
+# the license text included, CRLF line endings and all. No EOL
+# normalization here (the repo-wide `* text=auto eol=lf` would rewrite
+# the license on commit).
+* -text

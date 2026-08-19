@@ -73,6 +73,11 @@ tokio-tungstenite = "0.29"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "fs", "io-util", "signal"] }
 tower-http = { version = "0.6", features = ["fs"] }
 trybuild = "1"
+# Glyph outlines for the text nodes (DECISIONS.md rented-kernels row:
+# ttf-parser for text outlines). Parsing only — no layout tables, no
+# variable fonts, no glyph names: the stdlib bundles one static font and
+# lays text out itself (stage 6).
+ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
 zstd = "0.13"
 
 [workspace.lints.rust]

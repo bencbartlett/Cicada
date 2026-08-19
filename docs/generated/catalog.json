@@ -1851,6 +1851,165 @@
         }
       ],
       "outputs": []
+    },
+    {
+      "name": "text_outlines",
+      "title": "Text Outlines",
+      "description": "glyph contours as closed polylines (béziers flattened to `segments` per curve span), laid out left-to-right from the plane origin along +x with the baseline on the x axis; `size` is the capital-letter height; a newline in `text` stacks lines downward by `line_gap` × `size`, left-aligned. Fonts are bundled in the binary (reproducibility); the spike bundles `DejaVu Sans Bold` only. One curve per contour, in text order then the font's contour order; whitespace advances the pen and yields no curve.",
+      "category": "Output, display & export",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": true,
+      "panics": "the font is not bundled (the message lists the bundled names), `size` is not above tolerance, a glyph is missing from the font (names the character), `segments < 1`, or the plane is degenerate.",
+      "inputs": [
+        {
+          "name": "text",
+          "type": "Text",
+          "base": "Text",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The text to set; `\\n` starts the next line."
+        },
+        {
+          "name": "size",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Capital-letter height (cap height) in document units.",
+          "dimension": "length"
+        },
+        {
+          "name": "plane",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "default": "xy_plane",
+          "doc": "The frame: text runs along +x from the origin, baseline on the x"
+        },
+        {
+          "name": "font",
+          "type": "Text",
+          "base": "Text",
+          "list_depth": 0,
+          "optional": false,
+          "default": "\"DejaVu Sans Bold\"",
+          "doc": "A bundled font name."
+        },
+        {
+          "name": "segments",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "default": "8",
+          "doc": "Chords per bézier span when flattening the outlines."
+        },
+        {
+          "name": "line_gap",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "1.35",
+          "doc": "Baseline-to-baseline distance between lines, in multiples of `size`."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[Closed<Curve>]",
+          "base": "Closed<Curve>",
+          "list_depth": 1,
+          "optional": false
+        }
+      ]
+    },
+    {
+      "name": "text_solids",
+      "title": "Text Solids",
+      "description": "one watertight solid per glyph (counters handled: the glyph region is triangulated with its holes), extruded `depth` along the plane normal (negative = the other way), same layout as `text_outlines` (cap-height `size`, baseline on the plane's x axis, newline stacks lines by `line_gap` × `size`). Glyphs of several pieces (`i`, `%`, `\"`) are one mesh with several shells; whitespace yields no solid. The wall's label deboss cutters.",
+      "category": "Output, display & export",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": true,
+      "panics": "`text_outlines` would (the font is not bundled — the message lists the bundled names —, `size` is not above tolerance, a glyph is missing from the font — names the character —, `segments < 1`, the plane is degenerate), when `depth` is within tolerance of zero, or when a glyph's contours cannot be triangulated into a watertight prism (touching or self-intersecting outlines — a font defect, named by character).",
+      "inputs": [
+        {
+          "name": "text",
+          "type": "Text",
+          "base": "Text",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The text to set; `\\n` starts the next line."
+        },
+        {
+          "name": "size",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Capital-letter height (cap height) in document units.",
+          "dimension": "length"
+        },
+        {
+          "name": "depth",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Extrusion depth along the plane normal (x × y); negative extrudes",
+          "dimension": "length"
+        },
+        {
+          "name": "plane",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "default": "xy_plane",
+          "doc": "The frame: text runs along +x from the origin, baseline on the x"
+        },
+        {
+          "name": "font",
+          "type": "Text",
+          "base": "Text",
+          "list_depth": 0,
+          "optional": false,
+          "default": "\"DejaVu Sans Bold\"",
+          "doc": "A bundled font name."
+        },
+        {
+          "name": "segments",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "default": "8",
+          "doc": "Chords per bézier span when flattening the outlines."
+        },
+        {
+          "name": "line_gap",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "1.35",
+          "doc": "Baseline-to-baseline distance between lines, in multiples of `size`."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[Watertight<Mesh>]",
+          "base": "Watertight<Mesh>",
+          "list_depth": 1,
+          "optional": false
+        }
+      ]
     }
   ]
 }
