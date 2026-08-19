@@ -20,7 +20,7 @@ against the files that were actually fabricated from.
 | `tools/test_*.py` | Offline unit tests for the scripts and the normalizer (`python -m unittest discover -s corpus/tools -p "test_*.py"`; the production cross-checks skip without the wall repo) |
 | `measure/` | The docs/15 measurement harness: `carve.sh`/`carve.ps1` (cold/warm carve), `slider_loop.mjs` (preview latency), `esc.mjs` (cancel time-to-idle); Node ≥ 20, no deps |
 | `golden/production/` | The production references: `board_postprocessed.dxf` and `manifest.csv` (copies of the shop files), `coil_manifest.csv`, per-file `plates_*.summary.json` (canonical summaries of the five 50–116 MB production 3MFs, which stay outside the repo), the extraction and seed-recovery reports |
-| `golden/cicada/` | Our own golden hashes of the normalized outputs (the nightly determinism check) |
+| `golden/cicada/` | Reserved for our own golden output hashes (a normalize-time determinism check, v0.1); the nightly job compares against `golden/production/` today |
 | `out/` | Where the exporters write (gitignored) |
 
 ## Running it
