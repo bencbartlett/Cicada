@@ -662,8 +662,18 @@ def _describe(path, source):
                     "port `%s` of `%s` needs a cicada type annotation "
                     '(a string like "[Point]" or "Number")' % (parameter.name, name)
                 )
+            # A `= None` default is the idiomatic spelling of an optional
+            # port that defaults to absent (e.g. `scale: "Number?" = None`).
+            # It carries NO catalog default literal — nil on the wire, which
+            # the host reads as "no default" (pool.rs: `Some(Wire::Nil) =>
+            # None`); the Python-side None still applies when the port is
+            # unwired. Marshalling None as a value would crash describe
+            # (_to_wire has no None branch) and abort ALL script discovery.
             default = None
-            if parameter.default is not inspect.Parameter.empty:
+            if (
+                parameter.default is not inspect.Parameter.empty
+                and parameter.default is not None
+            ):
                 default = _to_wire(parameter.default)
             inputs.append({"name": parameter.name, "type": annotation, "default": default})
         _, outputs = _outputs_of(fn, name)

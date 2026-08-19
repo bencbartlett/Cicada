@@ -133,6 +133,10 @@ def bin_echo(mesh: "Mesh") -> "Mesh":
     assert isinstance(mesh.positions, array) and mesh.positions.typecode == "d"
     assert isinstance(mesh.indices, array) and mesh.indices.itemsize == 4
     return mesh
+
+@cicada.node(title="Opt None", description="an optional port with the idiomatic None default.")
+def opt_none(x: "Number", scale: "Number?" = None) -> "Number":
+    return x if scale is None else x * scale
 "#;
 
 fn label() -> &'static Path {
@@ -235,6 +239,47 @@ fn describe_reports_signature_ports_defaults_and_toolchain() {
         *gain.default.as_ref().unwrap().data(),
         ValueData::Number(2.0)
     );
+}
+
+#[test]
+fn optional_port_with_none_default_describes_and_defaults_to_absent() {
+    // Regression (adversarial review, stage 6): a `= None` default is the
+    // idiomatic optional-port spelling; marshalling it as a value crashed
+    // describe and aborted ALL script discovery. It carries no catalog
+    // default literal (nil → host reads "no default"), and the Python-side
+    // None applies when the port is unwired.
+    let pool = WorkerPool::new().expect("pool");
+    let described = pool
+        .describe(label(), FIXTURE)
+        .expect("describe must not crash");
+    let names: Vec<&str> = described.nodes.iter().map(|n| n.name.as_str()).collect();
+    let opt = &described.nodes[names.iter().position(|n| *n == "opt_none").unwrap()];
+    let scale = &opt.inputs[1];
+    assert_eq!(scale.name, "scale");
+    assert_eq!(scale.ty, "Number?");
+    assert!(
+        scale.default.is_none(),
+        "a None default is not a catalog default literal"
+    );
+    // Unwired: the host omits the slot; the Python default None applies.
+    let out = invoke_one(
+        &pool,
+        "opt_none",
+        &BTreeMap::from([("x".to_owned(), number(4.0))]),
+    )
+    .expect("invokes with scale omitted");
+    assert_eq!(*out.data(), ValueData::Number(4.0));
+    // Wired: the value is used.
+    let out = invoke_one(
+        &pool,
+        "opt_none",
+        &BTreeMap::from([
+            ("x".to_owned(), number(4.0)),
+            ("scale".to_owned(), number(2.5)),
+        ]),
+    )
+    .expect("invokes with scale wired");
+    assert_eq!(*out.data(), ValueData::Number(10.0));
 }
 
 #[test]

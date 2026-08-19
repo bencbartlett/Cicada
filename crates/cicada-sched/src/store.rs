@@ -233,22 +233,36 @@ fn compress(bytes: &[u8]) -> std::io::Result<Vec<u8>> {
     })
 }
 
-/// Decompress with a thread-local reusable context when the frame carries
-/// its content size (bulk-compressed blobs do); frames without one (written
-/// by the streaming encoder before stage 6) take the streaming path.
+/// Bytes to pre-allocate at most from a frame's declared content size. The
+/// size is UNTRUSTED — bit-rot or a torn write can set it to anything, and
+/// the bulk decoder would `Vec::with_capacity` it verbatim, aborting the
+/// process on a ~1 TiB header (adversarial review, stage 6). No single
+/// value blob in this system is anywhere near this; a genuinely larger one
+/// (or a corrupt header) falls through to the streaming decoder, which
+/// grows from the ACTUAL output and errors loudly on corruption.
+const DECOMPRESS_HINT_CAP: usize = 64 * 1024 * 1024;
+
+/// Decompress with a thread-local reusable context, hinted by the frame's
+/// content size but never trusting it for allocation: the hint is clamped,
+/// and anything absent, implausibly large, or wrong falls back to
+/// `zstd::stream::decode_all`, which sizes its buffer from the real output
+/// (memory-safe) and returns a loud `Err` on a corrupt or truncated frame —
+/// so the load path quarantines the bytes and the address self-heals,
+/// instead of aborting the process.
 fn decompress(bytes: &[u8]) -> std::io::Result<Vec<u8>> {
     thread_local! {
         static DECOMPRESSOR: std::cell::RefCell<Option<zstd::bulk::Decompressor<'static>>> =
             const { std::cell::RefCell::new(None) };
     }
-    let content_size = zstd::zstd_safe::get_frame_content_size(bytes)
+    let hint = zstd::zstd_safe::get_frame_content_size(bytes)
         .ok()
         .flatten()
-        .and_then(|size| usize::try_from(size).ok());
-    let Some(capacity) = content_size else {
+        .and_then(|size| usize::try_from(size).ok())
+        .filter(|&size| size <= DECOMPRESS_HINT_CAP);
+    let Some(capacity) = hint else {
         return zstd::stream::decode_all(bytes);
     };
-    DECOMPRESSOR.with(|cell| {
+    let bulk = DECOMPRESSOR.with(|cell| {
         let mut slot = cell.borrow_mut();
         if slot.is_none() {
             *slot = Some(zstd::bulk::Decompressor::new()?);
@@ -257,7 +271,11 @@ fn decompress(bytes: &[u8]) -> std::io::Result<Vec<u8>> {
             Some(decompressor) => decompressor.decompress(bytes, capacity),
             None => Err(std::io::Error::other("zstd decompressor unavailable")),
         }
-    })
+    });
+    // A wrong hint (the real output exceeds the clamp) or a corrupt frame
+    // errors here; retry through the streaming decoder, which is bounded by
+    // the actual output and is the sole arbiter of "corrupt" (a loud Err).
+    bulk.or_else(|_| zstd::stream::decode_all(bytes))
 }
 
 /// One memo entry: the output value hashes of a completed computation, in
@@ -1431,5 +1449,47 @@ impl DiskStore {
             }
             StoredValue::Nothing => ValueData::Nothing,
         })
+    }
+}
+
+#[cfg(test)]
+mod decompress_tests {
+    use super::{compress, decompress};
+
+    /// A valid zstd frame with a raw single-byte block and an explicit
+    /// 8-byte content size — `fcs` is written verbatim so a test can corrupt
+    /// it. Layout: magic, FHD 0xE0 (8-byte FCS, single segment), FCS, then a
+    /// raw last block of one byte.
+    fn frame_with_fcs(fcs: u64, content: u8) -> Vec<u8> {
+        let mut f = vec![0x28, 0xB5, 0x2F, 0xFD, 0xE0];
+        f.extend_from_slice(&fcs.to_le_bytes());
+        f.extend_from_slice(&[0x09, 0x00, 0x00]); // raw block, size 1, last
+        f.push(content);
+        f
+    }
+
+    #[test]
+    fn round_trips_a_bulk_blob() {
+        let bytes = b"the wall's field magnitudes, packed and reloaded";
+        let compressed = compress(bytes).unwrap();
+        assert_eq!(decompress(&compressed).unwrap(), bytes);
+    }
+
+    #[test]
+    fn a_corrupt_content_size_header_refuses_loudly_and_never_aborts() {
+        // Regression (adversarial review, stage 6): a frame whose declared
+        // content size is corrupted to an enormous value must NOT drive a
+        // `Vec::with_capacity(that)` — that aborts the process before any
+        // Err can be returned, bypassing the load path's quarantine + heal.
+        // A plausible small FCS decodes; an implausible one falls to the
+        // streaming decoder, which errors on the size mismatch. Neither
+        // panics.
+        assert_eq!(decompress(&frame_with_fcs(1, 0x41)).unwrap(), vec![0x41]);
+        // > isize::MAX: the old code's `Vec::with_capacity` panicked
+        // "capacity overflow"; now it is a clamped-out Err.
+        assert!(decompress(&frame_with_fcs(u64::MAX, 0x41)).is_err());
+        // ~1 TiB: the old code attempted a real 1 TiB allocation (abort);
+        // now clamped out to the streaming path, which rejects the lie.
+        assert!(decompress(&frame_with_fcs(1 << 40, 0x41)).is_err());
     }
 }

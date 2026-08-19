@@ -900,6 +900,34 @@ def main(argv=None):
             verdicts.append(compare_3mf(ours_path, ref_path, args.level, report=rep))
             if ref_path.endswith(".ref-summary.json"):
                 os.remove(ref_path)
+        # Plate COVERAGE: every reference plate must have an ours file. The
+        # loop above only iterates OUR plates, so a regression that drops a
+        # whole colour/printer bin (export_bambu writes fewer files, exits 0)
+        # would leave a reference plate unchecked and pass. Enumerate the
+        # reference plate set (per-file summaries + any plates_f*.3mf) and
+        # FAIL on any missing from ours. (Within-plate part loss is already
+        # caught by compare_3mf's object-count check.)
+        ours_bases = {re.sub(r"\.3mf$", "", f) for f in plates}
+        ref_bases = set()
+        for cand in os.listdir(args.ref):
+            m = re.match(r"(plates_f\d+_.*?)(?:\.summary)?\.json$", cand)
+            if m and re.match(r"plates_f\d+_", m.group(1)):
+                ref_bases.add(m.group(1))
+            m = re.match(r"(plates_f\d+_[^.]*)\.3mf$", cand)
+            if m:
+                ref_bases.add(m.group(1))
+        missing = sorted(b for b in ref_bases if b not in ours_bases)
+        rep.section("plate coverage")
+        if missing:
+            rep.verdict("plate coverage", FAIL,
+                        "%d reference plate(s) have no ours file: %s" % (len(missing), missing))
+            rep.diff_class("plate-coverage",
+                           "the engine emitted fewer plates than production (a dropped colour/printer bin)",
+                           False)
+            verdicts.append(FAIL)
+        else:
+            rep.verdict("plate coverage", PASS,
+                        "%d reference plate(s), all present in ours" % len(ref_bases))
         ours_dxf = os.path.join(args.ours, "board.dxf")
         ref_dxf = None
         for cand in ("board_postprocessed.dxf", "board.dxf"):

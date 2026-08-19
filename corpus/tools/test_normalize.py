@@ -300,5 +300,79 @@ class ThreeMfCompareTest(unittest.TestCase):
             self.assertIn("**Overall: NOISE**", f.read())
 
 
+class AllModeCoverageTest(unittest.TestCase):
+    """Regression (adversarial review, stage 6): `all` mode enumerated only
+    the OURS plates, so a dropped colour/printer bin (export_bambu writes
+    fewer files, exits 0) passed unnoticed — a nightly false green."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.eb = ts.load_script("export_bambu")
+        cls.pc = ts.load_script("pin_cutters")
+        cls.dir = tempfile.mkdtemp(prefix="cicada-nz-all-")
+        cls.profile = json.dumps(
+            {"printable_area": ["0x0", "256x0", "256x256", "0x256"], "sparse_infill_density": "0%"}
+        ).encode()
+        cls.ranges = cls.eb.layer_ranges_xml(
+            3, '<range min_z="0" max_z="4">\n   <option opt_key="wall_loops">3</option>\n  </range>'
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    def _parts(self, k):
+        name, w, h = (("A1", 10.0, 20.0), ("B2", 12.0, 15.0))[k % 2]
+        verts, tris = self.pc.prism_mesh([(0, 0), (w, 0), (w, w), (0, w)], 0.0, h)
+        cverts, center = self.eb.center_mesh(verts)
+        return [(name, cverts, tris, (center[0], center[1], center[2]))]
+
+    def _plate(self, d, base):
+        path = os.path.join(d, base + ".3mf")
+        self.eb.write_bbl_3mf(path, self._parts(0), [[1]], self.profile, self.ranges, None)
+        return path
+
+    def _run_all(self, ours, ref):
+        import contextlib
+        import io
+
+        sink = io.StringIO()
+        with contextlib.redirect_stdout(sink):
+            code = nz.main(["all", "--ours", ours, "--ref", ref])
+        return code, sink.getvalue()
+
+    def test_all_fails_when_a_reference_plate_has_no_ours_file(self):
+        bases = ["plates_f0_emerald_X1C", "plates_f1_forest_green_X1C"]
+        ours = os.path.join(self.dir, "ours")
+        ref = os.path.join(self.dir, "ref")
+        os.makedirs(ours, exist_ok=True)
+        os.makedirs(ref, exist_ok=True)
+        # ref has two plate summaries + a DXF + a manifest; ours has both
+        # plates + matching DXF/manifest → baseline passes.
+        import contextlib
+        import io
+
+        for base in bases:
+            p = self._plate(ours, base)
+            with contextlib.redirect_stdout(io.StringIO()):
+                nz.main(["summarize", p, "-o", os.path.join(ref, base + ".summary.json")])
+        for d in (ours, ref):
+            with open(os.path.join(d, "manifest.csv"), "w", newline="") as f:
+                f.write("id\nA1\n")
+        # a trivial matching DXF in both
+        dxf = "0\nSECTION\n2\nHEADER\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nENDSEC\n0\nEOF\n"
+        for d in (ours, ref):
+            with open(os.path.join(d, "board.dxf" if d == ours else "board_postprocessed.dxf"), "w") as f:
+                f.write(dxf)
+        code, _ = self._run_all(ours, ref)
+        self.assertEqual(code, 0, "baseline: both plates present → PASS/NOISE")
+        # Now DROP one ours plate; the reference summary still exists.
+        os.remove(os.path.join(ours, bases[1] + ".3mf"))
+        code, text = self._run_all(ours, ref)
+        self.assertEqual(code, 1, "a missing reference plate must FAIL")
+        self.assertIn("plate coverage", text)
+        self.assertIn(bases[1], text)
+
+
 if __name__ == "__main__":
     unittest.main()
