@@ -660,13 +660,54 @@
 .cicada-canvas[data-lod="mid"] .cn-port-label,
 .cicada-canvas[data-lod="mid"] .cn-literal,
 .cicada-canvas[data-lod="mid"] .cn-note,
-.cicada-canvas[data-lod="mid"] .cn-widget-value,
 .cicada-canvas[data-lod="mid"] .cn-widget-kind {
   visibility: hidden;
 }
 
+/* the slider's number stays readable at mid zoom (probe friction) */
+.cicada-canvas[data-lod="mid"] .cn-widget-value {
+  font-size: 13px;
+}
+
 .cicada-canvas[data-lod="mid"] .cn-name {
   font-size: 15px;
+}
+
+/* blocked-port reason during a wire drag (title tooltips do not show while
+   a button is held) */
+.cn-port.probe-blocked[data-reason]:hover::after {
+  content: attr(data-reason);
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-left: 8px;
+  padding: 2px 6px;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--error);
+  background: var(--bg-elev);
+  border: 1px solid var(--error);
+  border-radius: var(--radius);
+  pointer-events: none;
+  z-index: 20;
+}
+
+/* fallback glyph (docs/16 §Icons) */
+.cn-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-right: 4px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--bg);
+  background: var(--glyph-color, var(--kind-neutral));
+  flex: none;
 }
 
 /* ----------------------------------------------------------------- wires */

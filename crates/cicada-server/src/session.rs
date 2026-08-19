@@ -854,7 +854,7 @@ impl Session {
                 Ok(())
             }
             ClientMessage::Cancel {} => {
-                self.solve.cancel();
+                self.cancel();
                 Ok(())
             }
             ClientMessage::Inspect { node } => {
@@ -1097,7 +1097,10 @@ impl Session {
 
     /// Block until the solve loop is idle (tests, `/debug/state?wait=1`).
     pub fn wait_idle(&self) {
-        // Let a pending debounce fire first.
+        // Quiet means: no armed debounce AND no queued/in-flight generation,
+        // observed in one pass (an edit arms the debounce; the debounce
+        // thread submits before disarming; so looping until both are clear
+        // covers every interleaving).
         loop {
             let pending = self
                 .core
@@ -1105,18 +1108,39 @@ impl Session {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .is_some();
-            if !pending {
+            if pending {
+                std::thread::sleep(Duration::from_millis(5));
+                continue;
+            }
+            self.solve.wait_idle();
+            let rearmed = self
+                .core
+                .debounce
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some();
+            if !rearmed && !self.solve.is_busy() {
                 break;
             }
-            std::thread::sleep(Duration::from_millis(5));
         }
-        self.solve.wait_idle();
         self.core.flush_status(true);
     }
 
-    /// Cancel the running generation.
+    /// Cancel (Esc): the running generation stops and a queued edit's
+    /// solve is dropped; the summary says so and the next edit resubmits.
     pub fn cancel(&self) {
-        self.solve.cancel();
+        let dropped_pending = self.solve.cancel();
+        if dropped_pending {
+            let inner = self.core.lock_inner();
+            broadcast(
+                &inner,
+                &ServerMessage::Notice {
+                    level: "info".to_owned(),
+                    message: "cancelled — the latest edit's solve was dropped too; any edit or                               slider move resumes solving"
+                        .to_owned(),
+                },
+            );
+        }
     }
 
     // -------------------------------------------------- effectful runs --
@@ -1831,11 +1855,14 @@ fn debounce_loop(core: &Core) {
                 continue;
             }
         }
+        // Submit FIRST, then clear the deadline: a `wait_idle` caller always
+        // sees either the armed debounce or the queued/in-flight job — never
+        // a gap in which the edit is nowhere (probe friction: stale oracle).
+        core.submit_structural();
         *core
             .debounce
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-        core.submit_structural();
     }
 }
 
@@ -2308,7 +2335,7 @@ impl Core {
     fn flush_status(&self, force: bool) {
         let payload = {
             let mut status = self.lock_status();
-            if !status.dirty && !force {
+            if !status.dirty && !force && !status.summary.running {
                 return;
             }
             if status.summary.running
@@ -2386,9 +2413,18 @@ impl SolveSink for Core {
             }
             let decl = job.lowered.graph.node(NodeId(index));
             pending += 1;
+            // Cost-weighted prediction = per-element sample × the node's
+            // LAST element count (a fan-out of 1,500 is not a fan-out of 1);
+            // no sample or no known count → None → the ETA shows as rough.
+            let last_elements = status
+                .nodes
+                .get(&decl.name)
+                .and_then(|s| s.elements)
+                .filter(|&n| n > 0);
             let predicted = store
                 .stats(&decl.op)
-                .and_then(|stats| stats.per_element_nanos());
+                .and_then(|stats| stats.per_element_nanos())
+                .and_then(|per| last_elements.map(|n| per.saturating_mul(n)));
             status.predicted.insert(decl.name.clone(), predicted);
             set_status(
                 &mut status,

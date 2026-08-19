@@ -85,8 +85,11 @@ function InputRow({
   // (and a dropped connection) see the literal text.
   const literalKind =
     writer && input.wired === undefined && node.param?.port !== input.name ? literalKindOf(input) : null;
+  // During a wire drag the browser shows no title tooltips (a button is
+  // held), so the verdict reason is rendered as a label via CSS.
+  const reason = probing && !freeVar && verdict?.verdict === "blocked" ? (verdict.reason ?? "blocked") : undefined;
   return (
-    <div className={cls.join(" ")} title={title}>
+    <div className={cls.join(" ")} title={title} data-reason={reason}>
       <Handle
         type="target"
         position={Position.Left}
@@ -277,6 +280,9 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
         </div>
       )}
       <div className="cn-header" title={headerTitle}>
+        <span className="cn-glyph" aria-hidden="true" style={{ ["--glyph-color" as string]: kindColor(view.outputs[0]?.base ?? "") }}>
+          {glyphOf(view)}
+        </span>
         <span className="cn-name">{name}</span>
         <span className="cn-func">{subtitle}</span>
         <span className="cn-badges">
@@ -347,3 +353,12 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
 }
 
 export const CicadaNode = memo(CicadaNodeImpl);
+
+/** The spike's fallback glyph (docs/16 §Icons): two letters on the node's
+ * output kind hue — the generated icon set lands with the v0.1 catalog. */
+function glyphOf(view: { func?: string; kind: string; name: string }): string {
+  const source = view.func ?? (view.kind === "expression" ? "fx" : view.kind === "literal" ? "#" : view.name);
+  const parts = source.split("_").filter((p) => p.length > 0);
+  if (parts.length >= 2) return (parts[0]![0]! + parts[1]![0]!).toUpperCase();
+  return source.slice(0, 2).toUpperCase();
+}

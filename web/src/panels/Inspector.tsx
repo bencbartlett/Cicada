@@ -133,7 +133,15 @@ function NodeInspect({ name, extra }: { name: string; extra: number }) {
     try {
       const response = await fetch(
         `/api/run/${encodeURIComponent(name)}?pipeline=${encodeURIComponent(pipeline)}`,
-        { method: "POST", headers: { "X-Cicada-Token": token } },
+        {
+          method: "POST",
+          headers: {
+            "X-Cicada-Token": token,
+            // The write lease is required for effectful runs (they write
+            // files); the server checks this id holds it.
+            "X-Cicada-Client": String(useCicada.getState().hello?.clientId ?? ""),
+          },
+        },
       );
       const text = await response.text();
       if (!response.ok) {
@@ -264,7 +272,7 @@ function NodeInspect({ name, extra }: { name: string; extra: number }) {
           {node.effectful && (
             <button
               className="run"
-              disabled={runBusy || connection !== "open"}
+              disabled={runBusy || !canWrite(useCicada.getState())}
               title="solve this node's cone and run it (exporters never auto-run)"
               onClick={() => void run()}
               data-testid="action-run"

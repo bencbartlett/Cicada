@@ -147,13 +147,18 @@ impl SolveLoop {
         self.shared.wake.notify_all();
     }
 
-    /// Cancel the in-flight generation (Esc). Pending jobs stay pending.
-    pub fn cancel(&self) {
-        let state = self.lock();
+    /// Cancel (Esc): the in-flight generation is cancelled AND a pending
+    /// job is dropped — from the user's seat "Esc" means "stop solving",
+    /// not "stop this one and start the next"; the next edit (or a
+    /// preview tick) resubmits. Returns true when a pending job was dropped.
+    #[must_use]
+    pub fn cancel(&self) -> bool {
+        let mut state = self.lock();
         if let Some(token) = &state.current {
             token.cancel();
             self.shared.scripts.kill();
         }
+        state.pending.take().is_some()
     }
 
     /// Is a generation in flight (or queued)?
@@ -500,14 +505,20 @@ mod tests {
             targets: vec![NodeId(0)],
             kind: JobKind::Structural,
         });
-        solve.cancel();
+        let dropped = solve.cancel();
         solve.wait_idle();
-        let report = last.0.lock().unwrap().clone().unwrap();
-        // Either the cancel landed before the node ran (Cancelled) or the
-        // node was too fast (Computed) — both honest, neither wedged.
-        assert!(matches!(
-            report.outcome(NodeId(0)),
-            NodeOutcome::Cancelled | NodeOutcome::Computed { .. } | NodeOutcome::CacheHit { .. }
-        ));
+        let report = last.0.lock().unwrap().clone();
+        // Three honest outcomes, none wedged: the cancel dropped the job
+        // before it started (no report), or it landed while the node ran
+        // (Cancelled), or the node was too fast (Computed).
+        match report {
+            None => assert!(dropped, "no report means the pending job was dropped"),
+            Some(report) => assert!(matches!(
+                report.outcome(NodeId(0)),
+                NodeOutcome::Cancelled
+                    | NodeOutcome::Computed { .. }
+                    | NodeOutcome::CacheHit { .. }
+            )),
+        }
     }
 }

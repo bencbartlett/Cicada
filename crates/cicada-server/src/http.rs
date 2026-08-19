@@ -20,7 +20,9 @@ use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{HeaderMap, StatusCode, Uri, header};
-use axum::response::{Html, IntoResponse, Response};
+#[cfg(not(feature = "embed"))]
+use axum::response::Html;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use cicada_core::config::ProjectConfig;
 use futures_util::{SinkExt as _, StreamExt as _};
@@ -115,6 +117,13 @@ pub enum ServeError {
     /// No OS randomness for the session token.
     #[error("OS randomness unavailable — refusing to serve with a guessable token; pass --token")]
     NoRandomness,
+    /// The project has no such pipeline file.
+    #[error("no pipeline `{0}` in the project (see /api/project for the list)")]
+    NoSuchPipeline(String),
+    /// An HTTP action needs the write lease (`X-Cicada-Client` must be the
+    /// writer's id).
+    #[error("the write lease is required: send X-Cicada-Client: <your client id> as the writer")]
+    NotWriter,
 }
 
 struct AppState {
@@ -281,6 +290,9 @@ fn resolve_in_project(project_dir: &Path, relative: &str) -> Result<(PathBuf, St
             addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             source,
         })?;
+    if !candidate.is_file() {
+        return Err(ServeError::NoSuchPipeline(relative.to_owned()));
+    }
     let canonical = std::fs::canonicalize(&candidate).map_err(|_| ServeError::OutsideProject {
         path: candidate.clone(),
         project: project_dir.to_owned(),
@@ -505,6 +517,7 @@ fn session_for(
             ServeError::BadPipelineRef(_) | ServeError::OutsideProject { .. } => {
                 StatusCode::BAD_REQUEST
             }
+            ServeError::NoSuchPipeline(_) => StatusCode::NOT_FOUND,
             _ => StatusCode::UNPROCESSABLE_ENTITY,
         };
         Box::new((status, format!("opening {relative}: {error}")).into_response())
@@ -600,11 +613,22 @@ async fn api_run(
     State(state): State<Arc<AppState>>,
     AxumPath(node): AxumPath<String>,
     Query(query): Query<PipelineQuery>,
+    headers: HeaderMap,
 ) -> Response {
     let session = match session_for(&state, &query) {
         Ok(session) => session,
         Err(response) => return *response,
     };
+    // Effectful runs write files: the write lease is required (docs/13 —
+    // observers are read-only). HTTP has no socket identity, so the
+    // caller names its client id; the session checks it holds the lease.
+    let client = headers
+        .get("x-cicada-client")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u32>().ok());
+    if !client.is_some_and(|id| session.is_writer(id)) {
+        return (StatusCode::FORBIDDEN, ServeError::NotWriter.to_string()).into_response();
+    }
     match tokio::task::spawn_blocking(move || session.run_effectful(&node)).await {
         Ok(Ok(value)) => axum::Json(value).into_response(),
         Ok(Err(message)) => (StatusCode::CONFLICT, message).into_response(),

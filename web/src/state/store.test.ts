@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { canWrite, roleChangeNotice, useCicada, writeBlockReason } from "./store";
+import { beforeEach, describe, expect, it, test } from "vitest";
+import type { GraphView, NodeView, ServerEnvelope } from "../protocol/messages";
+import { canWrite, pruneKeys, roleChangeNotice, useCicada, writeBlockReason } from "./store";
 
 describe("canWrite", () => {
   it("needs the lease AND an open socket", () => {
@@ -90,4 +91,140 @@ describe("lease change notices", () => {
       message: "write lease taken by client #2 — you are read-only now",
     });
   });
+});
+
+
+function node(name: string): NodeView {
+  return {
+    ref: name.length,
+    name,
+    targets: [name],
+    line: 1,
+    text: `${name} = 1.0`,
+    kind: "literal",
+    title: "Constant",
+    category: "Params & input",
+    inputs: [],
+    outputs: [{ name: "out", type: "Number", base: "Number", displayable: false }],
+    diagnostics: [],
+    effectful: false,
+    preview: false,
+    cell: [0, 0],
+    size: [8, 2],
+    manual: false,
+  };
+}
+
+function graph(...names: string[]): GraphView {
+  return { nodes: names.map(node), wires: [], diagnostics: [] };
+}
+
+const hello: ServerEnvelope = {
+  v: 1,
+  seq: 0,
+  type: "hello",
+  payload: {
+    client_id: 7,
+    role: "writer",
+    protocol: 1,
+    engine: "cicada",
+    project: "p",
+    pipeline: "p.cic",
+    unit_px: 24,
+  },
+};
+
+test("pruneKeys keeps the record identity when nothing is pruned", () => {
+  const record = { a: 1, b: 2 };
+  expect(pruneKeys(record, new Set(["a", "b"]))).toBe(record);
+  expect(pruneKeys(record, new Set(["a"]))).toEqual({ a: 1 });
+});
+
+test("a delta prunes dead bindings from statuses and follows renames / my placements", () => {
+  const apply = useCicada.getState().applyServerMessage;
+  apply(hello);
+  apply({
+    v: 1,
+    seq: 1,
+    type: "snapshot",
+    payload: {
+      graph: graph("a", "b"),
+      text: "",
+      statuses: {
+        a: { state: "done", generation: 1 },
+        b: { state: "red", generation: 1 },
+      },
+      summary: {
+        generation: 1,
+        running: false,
+        cancelled: false,
+        computed: 0,
+        cached: 0,
+        pending: 0,
+        red: 1,
+        blocked: 0,
+        elapsed_ms: 0,
+        eta_rough: false,
+      },
+      lease: { writer: 7, clients: [[7, "writer"]] },
+      barrier: false,
+      reason: "initial",
+    },
+  });
+  useCicada.getState().selectNodes(["b"]);
+  // Rename b → c: the selection follows, b's status is gone.
+  apply({
+    v: 1,
+    seq: 2,
+    type: "delta",
+    payload: {
+      source: { client: 7, intent_id: "r", label: "rename b → c" },
+      graph: graph("a", "c"),
+      text: "",
+      dirty: ["c"],
+    },
+  });
+  let state = useCicada.getState();
+  expect(state.selection.nodes).toEqual(["c"]);
+  expect(Object.keys(state.statuses)).toEqual(["a"]);
+  // Delete c: nothing selected, nothing phantom.
+  apply({
+    v: 1,
+    seq: 3,
+    type: "delta",
+    payload: {
+      source: { client: 7, intent_id: "d", label: "delete c" },
+      graph: graph("a"),
+      text: "",
+      dirty: [],
+    },
+  });
+  state = useCicada.getState();
+  expect(state.selection.nodes).toEqual([]);
+  expect(Object.keys(state.statuses)).toEqual(["a"]);
+  // My own placement selects what I placed; someone else's does not.
+  apply({
+    v: 1,
+    seq: 4,
+    type: "delta",
+    payload: {
+      source: { client: 7, intent_id: "p", label: "place add" },
+      graph: graph("a", "add_1"),
+      text: "",
+      dirty: ["add_1"],
+    },
+  });
+  expect(useCicada.getState().selection.nodes).toEqual(["add_1"]);
+  apply({
+    v: 1,
+    seq: 5,
+    type: "delta",
+    payload: {
+      source: { client: 9, intent_id: "p", label: "place add" },
+      graph: graph("a", "add_1", "add_2"),
+      text: "",
+      dirty: ["add_2"],
+    },
+  });
+  expect(useCicada.getState().selection.nodes).toEqual(["add_1"]);
 });

@@ -15,7 +15,7 @@ pub const COLUMN_GAP: i64 = 3;
 /// Grid rows between stacked nodes.
 pub const ROW_GAP: i64 = 1;
 /// Default node width in units.
-pub const NODE_WIDTH: u32 = 8;
+pub const NODE_WIDTH: u32 = 9;
 
 /// One node's layout input.
 #[derive(Debug, Clone)]
@@ -79,6 +79,30 @@ pub fn auto_layout(nodes: &[LayoutNode<'_>]) -> HashMap<String, [i64; 2]> {
         column_x[column] = x;
         x += (*width).max(i64::from(NODE_WIDTH)) + COLUMN_GAP;
     }
+    // Manual nodes sit where they are; auto nodes flow around them — a
+    // hand-placed node must never end up underneath an auto-placed one
+    // (probe friction: nudging one node made its neighbour jump beneath it).
+    let manual_rects: Vec<[i64; 4]> = nodes
+        .iter()
+        .filter_map(|node| {
+            node.manual.map(|[x, y]| {
+                [
+                    x,
+                    y,
+                    x + i64::from(node.size[0]),
+                    y + i64::from(node.size[1]),
+                ]
+            })
+        })
+        .collect();
+    let overlaps = |x: i64, y: i64, w: u32, h: u32| -> Option<i64> {
+        let (x1, y1) = (x + i64::from(w), y + i64::from(h));
+        manual_rects
+            .iter()
+            .filter(|r| x < r[2] && x1 > r[0] && y < r[3] && y1 > r[1])
+            .map(|r| r[3])
+            .max()
+    };
     let mut cursor = vec![0_i64; column_count];
     let mut cells = HashMap::with_capacity(nodes.len());
     for (i, node) in nodes.iter().enumerate() {
@@ -87,9 +111,14 @@ pub fn auto_layout(nodes: &[LayoutNode<'_>]) -> HashMap<String, [i64; 2]> {
             continue;
         }
         let column = depth[i];
-        let y = cursor[column];
+        let x = column_x[column];
+        let mut y = cursor[column];
+        // Slide down past any manual node occupying this slot.
+        while let Some(below) = overlaps(x, y, node.size[0], node.size[1]) {
+            y = below + ROW_GAP;
+        }
         cursor[column] = y + i64::from(node.size[1]) + ROW_GAP;
-        cells.insert(node.name.to_owned(), [column_x[column], y]);
+        cells.insert(node.name.to_owned(), [x, y]);
     }
     cells
 }
@@ -130,6 +159,18 @@ mod tests {
         let cells = auto_layout(&nodes);
         assert_eq!(cells["a"], [40, 9]);
         assert_eq!(cells["b"], [0, 0], "b takes the top slot a vacated");
+    }
+
+    #[test]
+    fn auto_nodes_flow_around_manual_ones() {
+        // `a` is nudged one cell right of its auto slot; `b` (same column)
+        // must not be laid underneath it but slide below.
+        let mut nodes = vec![node("a", &[], 3), node("b", &[], 2), node("c", &[], 2)];
+        nodes[0].manual = Some([1, 0]);
+        let cells = auto_layout(&nodes);
+        assert_eq!(cells["a"], [1, 0]);
+        assert_eq!(cells["b"], [0, 3 + ROW_GAP], "slid below the manual node");
+        assert_eq!(cells["c"], [0, 3 + ROW_GAP + 2 + ROW_GAP]);
     }
 
     #[test]

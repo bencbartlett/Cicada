@@ -56,11 +56,12 @@ Run everything headless first; touch the browser only for UI-facing changes.
 
    ```bash
    # serve a SCRATCH copy (the app writes the served files) with a fixed token
-   cp -r examples "$TMP/cicada-probe/"; cd "$TMP/cicada-probe"
+   SCRATCH="$LOCALAPPDATA/Temp/cicada-probe"; mkdir -p "$SCRATCH" && cp -r examples "$SCRATCH/"
+   cd "$SCRATCH"
    "$CARGO_TARGET_DIR/debug/cicada" serve examples/02-solids.cic --port 8450 --token t \
-       --cache-dir "$TMP/cicada-probe/cache" --web-dir <repo>/web/dist &   # after `npm run build`
-   curl "http://127.0.0.1:8450/debug/state?token=t&wait=true"              # the authoritative oracle
-   curl -o shot.png "http://127.0.0.1:8450/debug/screenshot?token=t"       # needs a connected page
+       --cache-dir "$SCRATCH/cache" --web-dir <repo>/web/dist &   # after `npm run build`
+   curl "http://127.0.0.1:8450/debug/state?token=t&wait=true"     # the authoritative oracle
+   curl -o shot.png "http://127.0.0.1:8450/debug/screenshot?token=t"   # needs a connected page
    ```
 
    Open `http://127.0.0.1:8450/?token=t&pipeline=02-solids.cic` with

@@ -336,6 +336,16 @@ export const useCicada = create<CicadaState>((set, get) => ({
         const p = envelope.payload;
         const state = get();
         const live = new Set(p.graph.nodes.map((n) => n.name));
+        const before = new Set(state.graph.nodes.map((n) => n.name));
+        const added = p.graph.nodes.map((n) => n.name).filter((n) => !before.has(n));
+        const mine = state.hello !== null && p.source.client === state.hello.clientId;
+        // Selection follows the edit: a vanished selected name with exactly
+        // one new name is a rename (or a replace) → select the new one; my
+        // own place → select what I placed.
+        let nodes = state.selection.nodes.filter((n) => live.has(n));
+        const lost = state.selection.nodes.filter((n) => !live.has(n));
+        if (lost.length > 0 && added.length === 1) nodes = [added[0]!];
+        else if (mine && added.length > 0 && p.source.label.startsWith("place ")) nodes = added;
         set({
           seq,
           graph: p.graph,
@@ -344,11 +354,15 @@ export const useCicada = create<CicadaState>((set, get) => ({
           lastDeltaLabel: p.source.label,
           selection: {
             ...state.selection,
-            nodes: state.selection.nodes.filter((n) => live.has(n)),
+            nodes,
             wire: p.graph.wires.some((w) => w.id === state.selection.wire)
               ? state.selection.wire
               : null,
           },
+          // Dead bindings never linger: a deleted red node must not keep the
+          // solve bar red (probe friction: "1 red · 0 diagnostics").
+          statuses: pruneKeys(state.statuses, live),
+          nodeValues: pruneKeys(state.nodeValues, live),
         });
         break;
       }
@@ -471,6 +485,17 @@ export const useCicada = create<CicadaState>((set, get) => ({
   closeSearch: () => set({ search: null }),
   clearRunNotice: () => set({ runNotice: null }),
 }));
+
+/** Keep only the entries whose key is a live binding. */
+export function pruneKeys<T>(record: Record<string, T>, live: Set<string>): Record<string, T> {
+  let changed = false;
+  const out: Record<string, T> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (live.has(key)) out[key] = value;
+    else changed = true;
+  }
+  return changed ? out : record;
+}
 
 // ------------------------------------------------------------- selectors --
 

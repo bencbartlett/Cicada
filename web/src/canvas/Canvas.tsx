@@ -522,6 +522,7 @@ function CanvasInner() {
           },
           { label: "disable", separator: true, onClick: notice("disable arrives with #off support (v0.1)") },
           { label: "isolate", onClick: notice("isolate arrives later") },
+          { label: "history", onClick: notice("per-node history arrives with the git panel (doc 10)") },
           {
             label: "delete",
             danger: true,
@@ -638,7 +639,7 @@ function CanvasInner() {
         snapToGrid
         snapGrid={[unit, unit]}
         minZoom={0.1}
-        maxZoom={4}
+        maxZoom={2.5}
         // Del belongs to the keyboard map (docs/16), and React Flow's own
         // arrow-key nudge would move nodes with no `move_node` behind it.
         deleteKeyCode={null}

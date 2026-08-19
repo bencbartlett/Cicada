@@ -55,6 +55,10 @@ mkdirSync(scratch, { recursive: true });
 cpSync(join(repo, "examples"), join(scratch, "examples"), { recursive: true });
 
 const webDir = process.env.CICADA_WEB_DIR ?? (existsSync(join(web, "dist")) ? join(web, "dist") : null);
+// Say which binary and scratch dir the smoke uses — a worktree that forgot
+// its private CARGO_TARGET_DIR would otherwise silently smoke the main
+// checkout's engine (AGENTS.md dev notes).
+console.log(`[cicada e2e] engine: ${bin}\n[cicada e2e] scratch: ${scratch}${webDir ? `\n[cicada e2e] web: ${webDir}` : " (SPA embedded in the binary)"}`);
 const serveArgs = [
   "serve",
   join(scratch, "examples", "02-solids.cic"),

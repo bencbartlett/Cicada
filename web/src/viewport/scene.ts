@@ -152,7 +152,9 @@ export function fitDistance(radius: number, fovDeg: number, aspect: number): num
   const vFov = (fovDeg * Math.PI) / 180;
   const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
   const fov = Math.min(vFov, hFov);
-  return (radius / Math.sin(fov / 2)) * 1.1;
+  // The bounding SPHERE over-estimates boxes and plates (half-diagonal);
+  // 0.85 fills the view without clipping at ordinary angles.
+  return (radius / Math.sin(fov / 2)) * 0.85;
 }
 
 export class ViewportScene {
