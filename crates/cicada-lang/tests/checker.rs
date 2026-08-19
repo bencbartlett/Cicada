@@ -46,6 +46,21 @@ const fn opt_port(
     }
 }
 
+/// A port whose ELEMENTS are optional (`[Point?]`).
+const fn opt_elem_port(name: &'static str, base: &'static str, depth: u8) -> PortSpec {
+    PortSpec {
+        name,
+        ty: PortType {
+            base,
+            list_depth: depth,
+            optional: true,
+        },
+        default: None,
+        doc: "",
+        dimension: None,
+    }
+}
+
 const fn node(
     name: &'static str,
     inputs: &'static [PortSpec],
@@ -149,11 +164,32 @@ static ITEM: NodeSpec = node(
 );
 static PANEL: NodeSpec = node("panel", &[port("data", "Any", 0)], &[]);
 static PREVIEW: NodeSpec = node("preview", &[port("geometry", "Geometry", 0)], &[]);
+// Stage-6 shapes: `E` across list depths (`[[E]] → [E]`, `[E] → [[E]]`), a
+// multi-output node with `E`-typed outputs, `E` absorbing element
+// optionality, and a producer of optional elements — fakes again.
+static FLATTEN: NodeSpec = node("flatten", &[port("list", "E", 2)], &[port("out", "E", 1)]);
+static CHUNK: NodeSpec = node(
+    "chunk",
+    &[port("list", "E", 1), port("size", "Integer", 0)],
+    &[port("out", "E", 2)],
+);
+static CONCAT: NodeSpec = node(
+    "concat",
+    &[port("a", "E", 1), port("b", "E", 1)],
+    &[port("out", "E", 1)],
+);
+static CULL: NodeSpec = node(
+    "cull",
+    &[port("list", "E", 1), port("pattern", "Boolean", 1)],
+    &[port("kept", "E", 1), port("map", "IndexMap", 0)],
+);
+static HOLES: NodeSpec = node("holes", &[], &[opt_elem_port("out", "Point", 1)]);
 
 fn catalog_specs() -> Vec<&'static NodeSpec> {
     vec![
         &SLIDER, &CIRCLE, &SCATTER, &MOVE, &EXTRUDE, &DIVIDE, &ADD, &LOOP_A, &LOOP_B, &AS_CLOSED,
-        &SUM, &NESTED, &TRANSLATE, &ARRAY, &ITEM, &PANEL, &PREVIEW,
+        &SUM, &NESTED, &TRANSLATE, &ARRAY, &ITEM, &PANEL, &PREVIEW, &FLATTEN, &CHUNK, &CONCAT,
+        &CULL, &HOLES,
     ]
 }
 
@@ -259,6 +295,150 @@ fn type_variables_preserve_kinds_end_to_end() {
     assert_eq!(ty("row"), "[Curve]", "variable under a list output");
     assert_eq!(ty("first"), "Point", "E bound to the element kind");
     assert_eq!(ty("v"), "Vector", "E binds independently per call");
+}
+
+// Stage 6: `E` binds across list depths (the depth is structural on the
+// port), through multi-output nodes (`cull.kept` is `[Point]`, not `[E]`),
+// and WITH element optionality (a `[Point?]` flows through the slot-
+// preserving combinators as `[Point?]`, a `[Point]` as `[Point]`).
+#[test]
+fn element_variable_binds_across_depths_outputs_and_optionality() {
+    let source = "# cicada 1\n\
+         pts = scatter(count=10, seed=1)\n\
+         groups = chunk(list=pts, size=3)\n\
+         flat = flatten(list=groups)\n\
+         holey = holes()\n\
+         both = concat(a=pts, b=holey)\n\
+         same = concat(a=pts, b=pts)\n\
+         culled = cull(list=pts, pattern=[True, False])\n\
+         first = item(list=culled.kept, index=0)\n\
+         gap = item(list=holey, index=0)\n\
+         regrouped = chunk(list=both, size=2)\n\
+         shown = panel(data=culled.map)\n\
+         bad = move(geometry=first, motion=first)\n";
+    let specs = catalog_specs();
+    let catalog = Catalog::new(&specs);
+    let document = Document::parse(source);
+    let resolution = cicada_lang::resolve(&document, &catalog);
+    // The only red: `move`'s fake spec wants a Vector motion; `first` is a
+    // Point — proving `culled.kept` really resolved to `[Point]` through
+    // the multi-output node's `E`, and `item` then bound `E = Point`.
+    assert_eq!(
+        resolution.diagnostics.len(),
+        1,
+        "{:#?}",
+        resolution.diagnostics
+    );
+    let ty = |name: &str| match resolution.bindings.get(name) {
+        Some(BindingType::Value { ty, .. }) => ty.render(),
+        other => panic!("`{name}` resolved to {other:?}"),
+    };
+    assert_eq!(
+        ty("groups"),
+        "[[Point]]",
+        "[E] → [[E]] nests the bound kind"
+    );
+    assert_eq!(ty("flat"), "[Point]", "[[E]] → [E] binds E from depth 2");
+    assert_eq!(
+        ty("both"),
+        "[Point?]",
+        "E widens to `?` when any occurrence is optional"
+    );
+    assert_eq!(ty("same"), "[Point]", "no `?` appears from nowhere");
+    assert_eq!(ty("first"), "Point");
+    assert_eq!(
+        ty("gap"),
+        "Point?",
+        "a hole-able list selects a hole-able element"
+    );
+    assert_eq!(
+        ty("regrouped"),
+        "[[Point?]]",
+        "optionality rides through nesting"
+    );
+    assert!(
+        matches!(
+            resolution.bindings.get("culled"),
+            Some(BindingType::Node { node, lift: 0 }) if node == "cull"
+        ),
+        "the multi-output binding keeps its public shape"
+    );
+}
+
+// Two occurrences of one variable join on the kind lattice: the binding
+// widens to the kind every occurrence upcasts to (`[Integer]` ⊔ `[Number]`
+// = `[Number]`, `[Closed<Curve>]` ⊔ `[Curve]` = `[Curve]`); incomparable
+// kinds red with the existing binding named. And an UNBOUND variable output
+// (its call already red with a lift offer) never cascades a second red.
+#[test]
+fn element_variable_joins_compatible_kinds_and_never_cascades() {
+    let source = "# cicada 1\n\
+         ints = [1, 2, 3]\n\
+         nums = [1.5, 2.5]\n\
+         widened = concat(a=ints, b=nums)\n\
+         widened_back = concat(a=nums, b=ints)\n\
+         c = circle(radius=1.0)\n\
+         cc = as_closed(curve=c)\n\
+         closed_list = chunk(list=cc, size=1)\n\
+         pts = scatter(count=3, seed=1)\n\
+         groups = chunk(list=pts, size=2)\n\
+         first_group = item(list=groups, index=0)\n\
+         quiet = concat(a=pts, b=first_group)\n\
+         mixed = concat(a=pts, b=nums)\n";
+    let specs = catalog_specs();
+    let catalog = Catalog::new(&specs);
+    let document = Document::parse(source);
+    let resolution = cicada_lang::resolve(&document, &catalog);
+    let ty = |name: &str| match resolution.bindings.get(name) {
+        Some(BindingType::Value { ty, .. }) => ty.render(),
+        other => panic!("`{name}` resolved to {other:?}"),
+    };
+    assert_eq!(ty("widened"), "[Number]", "Integer ⊔ Number = Number");
+    assert_eq!(ty("widened_back"), "[Number]", "join is order-independent");
+    let kinds: Vec<&str> = resolution
+        .diagnostics
+        .iter()
+        .map(|d| d.node.as_deref().unwrap_or(""))
+        .collect();
+    // Reds: `closed_list` (scalar into a [E] port — honest mismatch),
+    // `first_group` (lift offer: E binds base kinds, never a list), and
+    // `mixed` (Point vs Number). NOT `quiet`: `first_group` is unknowable,
+    // its call is already red.
+    assert_eq!(
+        kinds,
+        vec!["closed_list", "first_group", "mixed"],
+        "{:#?}",
+        resolution.diagnostics
+    );
+    let mixed = &resolution.diagnostics[2];
+    assert!(
+        mixed.message.contains("`E` is already Point in this call"),
+        "{}",
+        mixed.message
+    );
+    assert_eq!(mixed.expected.as_deref(), Some("[Point]"));
+    assert_eq!(mixed.actual.as_deref(), Some("[Number]"));
+}
+
+#[test]
+fn element_variable_depth_and_optionality_errors() {
+    // `[Point]` into a `[[E]]` port is a plain mismatch (no lift can add a
+    // level); `[[[Point]]]` into it is a lift offer; and a `[Point?]` that
+    // LEFT the E-world still reds a present-only port with its honest
+    // actual type — `E` carried the `?`, it did not launder it.
+    insta::assert_json_snapshot!(check(
+        "# cicada 1\n\
+         pts = scatter(count=10, seed=1)\n\
+         shallow = flatten(list=pts)\n\
+         groups = chunk(list=pts, size=3)\n\
+         deeper = chunk(list=each(groups), size=2)\n\
+         too_deep = flatten(list=deeper)\n\
+         holey = holes()\n\
+         both = concat(a=pts, b=holey)\n\
+         total = sum_list(values=both)\n\
+         culled = cull(list=both, pattern=[True])\n\
+         moved = move(geometry=each(culled.kept), motion=culled.kept)\n"
+    ));
 }
 
 #[test]

@@ -5,7 +5,8 @@
 One line per registered node: `signature` — Title — description, plus the
 node's runtime contract (its `# Panics` conditions — when it goes red) where
 one exists. Type variables: `T` = any transformable kind (kind-preserving),
-`E` = any element kind, `Any` = display-sink catch-all.
+`E` = any element kind, optionality included (an `E` port takes absent slots;
+the `?` rides through to `E` outputs), `Any` = display-sink catch-all.
 
 ## Params & input
 
@@ -32,8 +33,13 @@ one exists. Type variables: `T` = any transformable kind (kind-preserving),
 
 ## List & axis
 
-- `item(list: [E], index: Integer, wrap: Boolean = false) → E` — List Item — one element of a list by index. Red when: the list is empty, or when `index` is out of range and `wrap` is off. Lists with absent (`Optional`) slots refuse at marshalling — hole-aware selection arrives with the Optional-flow nodes (v0.1).
-- `length(list: [E?]) → Integer` — List Length — the number of slots in a list (absent slots included — slot-preserving nulls keep their places, docs/08 rule 6).
+- `item(list: [E], index: Integer, wrap: Boolean = false) → E` — List Item — one element of a list by index. Selecting an absent (`Optional`) slot yields an absent element — `E` carries the `?`, so the output is `Point?` exactly when the list is `[Point?]`. Red when: the list is empty, or when `index` is out of range and `wrap` is off.
+- `length(list: [E]) → Integer` — List Length — the number of slots in a list (absent slots included — slot-preserving nulls keep their places, docs/08 rule 6).
+- `flatten(list: [[E]]) → [E]` — Flatten — one nesting level removed: the inner lists concatenated in order (`[[a, b], [c]]` → `[a, b, c]`). One level only, always (docs/09: `flatten_all` for every level, and says so); absent inner slots are preserved as absent slots of the output. Red when: an OUTER slot is absent (a missing inner list — refused at marshalling with its index: optional lists have no representation, so there is nothing slot-preserving to do with one); the node itself has no other refusal.
+- `partition(list: [E], sizes: [Integer]) → [[E]]` — Partition — consecutive groups of the given sizes (`[a, b, c, d]` with sizes `[1, 3]` → `[[a], [b, c, d]]`). Slot-preserving: absent slots land in their group as absent slots. Red when: a size is negative (the offending index and value in the message) or when the sizes do not sum to the list's slot count (both counts in the message) — never a silent short or padded last group.
+- `chunk(list: [E], size: Integer) → [[E]]` — Chunk — consecutive groups of `size` slots; the last group may be short (GH Partition List). Slot-preserving: absent slots land in their group as absent slots; an empty list chunks to no groups. Red when: `size < 1`.
+- `concat(a: [E], b: [E]) → [E]` — Concat — `a` then `b`, one list (GH Merge for two lists). Slot-preserving: absent slots of either input keep their places in the output.
+- `cull(list: [E], pattern: [Boolean]) → (kept: [E], map: IndexMap)` — Cull — keep the slots where the pattern is true and drop the rest, returning the kept list and the index map back into the source (the sanctioned way elements leave a list — identity survives). Red when: the pattern's length differs from the list's slot count — strict zip, both counts in the message (GH's repeating Cull Pattern is the silent-mismatch behavior docs/09 retires).
 
 ## Point · Vector · Plane
 
@@ -46,6 +52,7 @@ one exists. Type variables: `T` = any transformable kind (kind-preserving),
 - `xy_plane(origin: Point = origin) → Plane` — XY Plane — the world XY frame at an origin.
 - `xz_plane(origin: Point = origin) → Plane` — XZ Plane — the world XZ frame at an origin.
 - `yz_plane(origin: Point = origin) → Plane` — YZ Plane — the world YZ frame at an origin.
+- `construct_plane(origin: Point = origin, x: Vector = unit_x, y: Vector = unit_y) → Plane` — Construct Plane — a frame from an origin and two axes: x unitized, y orthonormalized against x (Gram–Schmidt), so the stored plane is a right-handed orthonormal frame with normal x × y. Red when: `x` has no length at tolerance, or `y` is parallel to `x` at tolerance (its component off the x line has no length) — red with the measured length, never a NaN frame.
 
 ## Curve
 
@@ -59,6 +66,7 @@ one exists. Type variables: `T` = any transformable kind (kind-preserving),
 ## Surface & solid
 
 - `extrude(profile: Closed<Curve>, direction: Vector, segments: Integer = 64) → Watertight<Mesh>` — Extrude — extrude a closed planar profile into a watertight prism (mesh-backed under its v0.1 name, doc 15). Red when: the profile is degenerate or non-planar at tolerance, the direction lies in the profile plane, `segments < 3`, or the profile polygon is self-intersecting.
+- `loft(start: Closed<Curve>, end: Closed<Curve>, segments: Integer = 64) → Watertight<Mesh>` — Loft — a ruled solid between two closed sections, capped at both ends (the wall's frusta: Voronoi cell → tip cap; cones and chamfers from circle → circle). Sections pair vertex `i` with vertex `i` (polylines vertex-to-vertex as given — no resampling, seam = vertex 0; analytic sections tessellated to `segments` vertices starting at the plane's x axis), walls are two triangles per quad, caps are ear-clipped (non-convex sections welcome), orientation is fixed by signed volume and the result is re-verified watertight. Lift with `each()` to loft per part (`loft(start=each(cells), end=each(caps))`). Red when: the vertex counts differ (both counts in the message), a section is open, degenerate at tolerance, non-planar, or self-intersecting, the sections wind in opposite directions, the sections coincide or are coplanar (zero volume), `segments < 3` for an analytic section, or the result is not watertight.
 - `box(plane: Plane = xy_plane, x: Domain, y: Domain, z: Domain) → Watertight<Mesh>` — Box — an axis-aligned box in a plane's frame (mesh-backed under its v0.1 name, doc 15). Decreasing domains are normalized. Red when: any extent is empty at tolerance or the plane is degenerate.
 - `sphere(plane: Plane = xy_plane, radius: Number, segments: Integer = 32) → Watertight<Mesh>` — Sphere — a UV sphere at a plane's origin (mesh-backed under its v0.1 name, doc 15). Red when: the radius is not above tolerance, `segments < 3`, or the plane is degenerate.
 

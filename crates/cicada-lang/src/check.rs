@@ -30,7 +30,8 @@ const WIDENINGS: &[(&str, &str)] = &[("Integer", "Number")];
 enum VarConstraint {
     /// `T`: only the listed kinds may bind.
     Kinds(&'static [&'static str]),
-    /// `E`: any kind binds.
+    /// `E`: any kind binds — and the element's optionality binds with it
+    /// (see [`VarBinding`]).
     Unconstrained,
 }
 
@@ -41,15 +42,38 @@ impl VarConstraint {
             Self::Unconstrained => true,
         }
     }
+
+    /// Does this variable absorb element optionality? `E` does: the list
+    /// combinators are slot-preserving (docs/08 rule 6), so a `[Point?]`
+    /// into `flatten`'s `[[E]]`/`concat`'s `[E]` binds `E = Point?` and
+    /// flows out as `[Point?]` — never a "compact first" red, never a
+    /// silently dropped `?`. `T` does not: transforms take present geometry.
+    const fn absorbs_optionality(&self) -> bool {
+        matches!(self, Self::Unconstrained)
+    }
 }
+
+/// What a type variable bound to in one call: the base kind, plus — for
+/// variables that absorb optionality — whether the bound element type is
+/// optional (`E = Point?`). Variable-typed outputs render with both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VarBinding {
+    base: String,
+    optional: bool,
+}
+
+/// Per-call type-variable bindings, by variable name.
+type VarBindings = HashMap<String, VarBinding>;
 
 /// Is `base` a per-call type variable, and what may bind it?
 ///
 /// Known limitation (accepted for the spike): variables bind BASE KINDS
-/// only — `[[Number]]` into `item`'s `[E]` port cannot bind `E =
-/// [Number]`, so it diagnoses as a lift offer instead; `each()` over the
-/// outer axis is the sanctioned (and semantically sound) route. Depth-
-/// carrying variables arrive if a v0.1 node needs them.
+/// (plus optionality for `E`) — never list depth: `[[Number]]` into
+/// `item`'s `[E]` port cannot bind `E = [Number]`, so it diagnoses as a
+/// lift offer instead; `each()` over the outer axis is the sanctioned (and
+/// semantically sound) route. Depth is structural on the port instead
+/// (`flatten(list: [[E]]) → [E]` binds `E = Point` from a `[[Point]]`).
+/// Depth-carrying variables arrive if a v0.1 node needs them.
 fn type_var(base: &str) -> Option<VarConstraint> {
     if base == VAR_TRANSFORMABLE {
         Some(VarConstraint::Kinds(TRANSFORMABLE_KINDS))
@@ -263,8 +287,18 @@ pub fn check(document: &Document, catalog: &Catalog<'_>) -> Vec<Diagnostic> {
 /// Internal binding state (borrows the spec).
 #[derive(Debug, Clone)]
 enum BindingKind<'a> {
-    Value { ty: WireType, from_single_out: bool },
-    Node { spec: &'a NodeSpec, lift: u8 },
+    Value {
+        ty: WireType,
+        from_single_out: bool,
+    },
+    /// A whole multi-output (or sink) node. `vars` are the call's
+    /// type-variable bindings, applied when a later statement selects a
+    /// variable-typed port (`cull.kept` is `[Point]`, not `[E]`).
+    Node {
+        spec: &'a NodeSpec,
+        lift: u8,
+        vars: VarBindings,
+    },
     Poisoned,
 }
 
@@ -314,7 +348,7 @@ impl<'a> Checker<'a> {
                             ty: ty.clone(),
                             from_single_out: *from_single_out,
                         },
-                        BindingKind::Node { spec, lift } => BindingType::Node {
+                        BindingKind::Node { spec, lift, .. } => BindingType::Node {
                             node: spec.name.to_owned(),
                             lift: *lift,
                         },
@@ -674,21 +708,9 @@ impl<'a> Checker<'a> {
             return poisoned(&statement.targets);
         };
 
-        let mut vars: HashMap<String, String> = HashMap::new();
+        let mut vars: VarBindings = HashMap::new();
         let lift = self.check_call_kwargs(line, &node, call, spec, &mut vars);
-
-        // A variable-typed output carries the kind its variable bound to
-        // in THIS call (kind-preserving); unbound (arguments missing or
-        // poisoned — already diagnosed) degrades quietly to Any.
-        let substitute = |mut ty: WireType| {
-            if type_var(&ty.base).is_some() {
-                ty.base = vars
-                    .get(&ty.base)
-                    .cloned()
-                    .unwrap_or_else(|| ANY.to_owned());
-            }
-            ty
-        };
+        let substitute = |ty: WireType| substitute_vars(ty, &vars);
 
         // Outputs → target bindings.
         let mut bindings = HashMap::new();
@@ -735,13 +757,10 @@ impl<'a> Checker<'a> {
                 },
             );
         } else {
-            // Multi-output or sink (zero outputs) — both bind the node.
-            // NOTE: a multi-output node with variable-typed outputs would
-            // lose its per-call binding here (port selection happens in a
-            // later statement, outside this call's scope); no such node
-            // exists — keep it that way until BindingKind::Node carries
-            // substitutions.
-            bindings.insert(node, BindingKind::Node { spec, lift });
+            // Multi-output or sink (zero outputs) — both bind the node,
+            // carrying the call's variable bindings for later port
+            // selection (`cull(list: [E], …) → (kept: [E], map: IndexMap)`).
+            bindings.insert(node, BindingKind::Node { spec, lift, vars });
         }
         bindings
     }
@@ -755,7 +774,7 @@ impl<'a> Checker<'a> {
         node: &str,
         call: &'a crate::ast::Call,
         spec: &'a NodeSpec,
-        vars: &mut HashMap<String, String>,
+        vars: &mut VarBindings,
     ) -> u8 {
         // Unknown kwargs — remembering did-you-mean targets so a typo'd
         // required port isn't ALSO reported missing (one root cause, one
@@ -903,7 +922,7 @@ impl<'a> Checker<'a> {
         port: &PortSpec,
         value: &WireType,
         already_lifted: bool,
-        vars: &mut HashMap<String, String>,
+        vars: &mut VarBindings,
     ) {
         let span = line_span_to_file(line, kwarg.value.span());
         // `Any` ports are display-sink catch-alls: they absorb any wire at
@@ -911,13 +930,21 @@ impl<'a> Checker<'a> {
         if port.ty.base == ANY {
             return;
         }
+        // An unknowable value with no static length is an UNBOUND variable
+        // output — its producing call was already diagnosed (a lift offer or
+        // mismatch on its `E`/`T` port left the variable unbound). A red never
+        // cascades: fit it anywhere, quietly. (`[]` stays `len: Some(0)` and
+        // keeps its honest lift offer into scalar ports.)
+        if value.base == ANY && value.len.is_none() {
+            return;
+        }
         let Some((fits_base, bindable)) = self.var_base_fit(line, node, kwarg, port, value, vars)
         else {
             return; // constraint violation — already diagnosed
         };
         if fits_base && value.depth == port.ty.list_depth {
-            if bindable {
-                vars.insert(port.ty.base.to_owned(), value.base.clone());
+            if bind_var(port, value, bindable, vars) {
+                return; // `E` absorbed the optionality — nothing left to check
             }
             if value.optional && !port.ty.optional {
                 self.diagnostics.push(
@@ -1014,7 +1041,7 @@ impl<'a> Checker<'a> {
         kwarg: &Kwarg,
         port: &PortSpec,
         value: &WireType,
-        vars: &HashMap<String, String>,
+        vars: &VarBindings,
     ) -> Option<(bool, bool)> {
         let Some(constraint) = type_var(port.ty.base) else {
             return Some((compatible(&value.base, port.ty.base), false));
@@ -1023,7 +1050,38 @@ impl<'a> Checker<'a> {
             return Some((true, false)); // unknowable element type — nothing to bind
         }
         if let Some(bound) = vars.get(port.ty.base) {
-            return Some((bound == &value.base, false));
+            // A later occurrence must agree with the binding up to the
+            // lattice: a kind that upcasts to the bound one fits; a WIDER
+            // kind fits too and widens the binding (`concat(a=[Integer],
+            // b=[Number])` → `E = Number`; `bind_var` performs the join).
+            if compatible(&value.base, &bound.base) || compatible(&bound.base, &value.base) {
+                return Some((true, false));
+            }
+            self.diagnostics.push(
+                Diagnostic::new(
+                    DiagnosticKind::TypeMismatch,
+                    line_span_to_file(line, kwarg.value.span()),
+                    format!(
+                        "`{}` is {} but `{}` is already {} in this call — every `{}` port \
+                         binds one kind",
+                        kwarg_value_name(kwarg),
+                        value.render(),
+                        port.ty.base,
+                        bound.base,
+                        port.ty.base,
+                    ),
+                )
+                .with_types(
+                    {
+                        let mut expected = WireType::from_port(&port.ty);
+                        expected.base.clone_from(&bound.base);
+                        expected.render()
+                    },
+                    value.render(),
+                )
+                .with_node(node.to_owned()),
+            );
+            return None;
         }
         if constraint.allows(&value.base) {
             return Some((true, true));
@@ -1097,8 +1155,8 @@ impl<'a> Checker<'a> {
                 );
                 None
             }
-            (BindingKind::Node { spec, lift }, Some(_)) => {
-                self.node_port_type(line, node, port_ref, spec, lift)
+            (BindingKind::Node { spec, lift, vars }, Some(_)) => {
+                self.node_port_type(line, node, port_ref, spec, lift, &vars)
             }
             (BindingKind::Node { spec, .. }, None) => {
                 let message = if spec.outputs.is_empty() {
@@ -1136,10 +1194,11 @@ impl<'a> Checker<'a> {
         port_ref: &'a PortRef,
         spec: &'a NodeSpec,
         lift: u8,
+        vars: &VarBindings,
     ) -> Option<WireType> {
         let port = port_ref.port.as_ref()?;
         if let Some(out) = spec.outputs.iter().find(|p| p.name == port.name) {
-            return Some(WireType::from_port(&out.ty).lifted(lift));
+            return Some(substitute_vars(WireType::from_port(&out.ty), vars).lifted(lift));
         }
         if spec.outputs.is_empty() {
             self.diagnostics.push(
@@ -1230,6 +1289,61 @@ impl<'a> Checker<'a> {
 }
 
 // --------------------------------------------------------------- helpers --
+
+/// Bind a type-variable port to a fitting value (depth already matched).
+/// `T` binds the base kind only (first fit). `E` takes the element type WITH
+/// its optionality: bound on the first fitting value, widened to `?` when
+/// any later occurrence in the same call is optional (`concat(a=[Point],
+/// b=[Point?])` → `[Point?]`) — so an `E` port never earns the
+/// optional-mismatch red; returns true when it absorbed the check. `[]`
+/// (unknowable element type) binds nothing.
+fn bind_var(port: &PortSpec, value: &WireType, bindable: bool, vars: &mut VarBindings) -> bool {
+    let Some(constraint) = type_var(port.ty.base) else {
+        return false;
+    };
+    let absorbs = constraint.absorbs_optionality();
+    match vars.get_mut(port.ty.base) {
+        Some(bound) => {
+            // The lattice join (`var_base_fit` admitted the value): a wider
+            // kind widens the binding, so the output carries the type every
+            // occurrence upcasts to.
+            if bound.base != value.base && value.base != ANY && compatible(&bound.base, &value.base)
+            {
+                bound.base.clone_from(&value.base);
+            }
+            bound.optional |= absorbs && value.optional;
+        }
+        None if bindable => {
+            vars.insert(
+                port.ty.base.to_owned(),
+                VarBinding {
+                    base: value.base.clone(),
+                    optional: absorbs && value.optional,
+                },
+            );
+        }
+        None => {}
+    }
+    absorbs
+}
+
+/// A variable-typed output carries the kind its variable bound to in THIS
+/// call (kind-preserving), and — for variables that absorb optionality —
+/// the bound `?` as well (`[Point?]` in → `[Point?]` out). Unbound
+/// (arguments missing, poisoned, or `[]` — already diagnosed or unknowable)
+/// degrades quietly to Any.
+fn substitute_vars(mut ty: WireType, vars: &VarBindings) -> WireType {
+    if type_var(&ty.base).is_some() {
+        match vars.get(&ty.base) {
+            Some(bound) => {
+                ty.base.clone_from(&bound.base);
+                ty.optional |= bound.optional;
+            }
+            None => ANY.clone_into(&mut ty.base),
+        }
+    }
+    ty
+}
 
 /// Do this expression's LITERALS and OPERATORS preserve integrality?
 /// (Variables are checked against their resolved types separately.)

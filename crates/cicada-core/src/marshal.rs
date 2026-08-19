@@ -85,7 +85,7 @@ pub trait FromValue: Sized {
 
     /// Convert from the sealed `Arc` — the calling convention of generated
     /// marshalling code. Defaults to [`Self::from_value`]; pass-through
-    /// types ([`AnyValue`], [`ElemValue`]) override it to clone the `Arc`,
+    /// types ([`AnyValue`], [`ElemSlot`]) override it to clone the `Arc`,
     /// so an `Any`/`E` port never re-hashes a mesh-sized payload.
     ///
     /// # Errors
@@ -349,55 +349,111 @@ impl IntoValues for Watertight<Mesh> {
 // ------------------------------------------- runtime-polymorphic ports --
 
 /// A pass-through wire value for `Any` ports (docs/08 Panel): accepts
-/// every kind, converts nothing. Distinct from [`ElemValue`]: `Any` never
+/// every kind, converts nothing. Distinct from [`ElemSlot`]: `Any` never
 /// binds a type variable.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnyValue(pub Arc<HashedValue>);
 
-/// A pass-through wire value for `E`-variable ports (list nodes:
-/// `item(list: [E]) → E`): accepts every kind; the CHECKER binds `E` per
-/// call so the element kind survives statically.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ElemValue(pub Arc<HashedValue>);
-
-macro_rules! impl_marshal_passthrough {
-    ($ty:ident, $name:literal) => {
-        impl FromValue for $ty {
-            fn expected() -> String {
-                $name.to_owned()
-            }
-
-            fn from_value(value: &HashedValue) -> Result<Self, FromValueError> {
-                // Direct-call fallback only: generated marshalling goes
-                // through `from_arc` below, which just clones the Arc.
-                // Re-sealing already-canonical data cannot fail.
-                HashedValue::new(value.data().clone()).map_or_else(
-                    |_| unreachable!("re-sealing an already-sealed value cannot fail"),
-                    |arc| Ok(Self(arc)),
-                )
-            }
-
-            fn from_arc(value: &Arc<HashedValue>) -> Result<Self, FromValueError> {
-                Ok(Self(Arc::clone(value)))
-            }
-        }
-
-        impl IntoValue for $ty {
-            fn into_value(self) -> Result<Arc<HashedValue>, ValueError> {
-                Ok(self.0)
-            }
-        }
-
-        impl IntoValues for $ty {
-            fn into_values(self) -> Result<Vec<Arc<HashedValue>>, InvokeError> {
-                Ok(vec![self.0])
-            }
-        }
-    };
+/// Re-seal a value's data into a fresh `Arc` — the direct-call fallback of
+/// the pass-through types (generated marshalling goes through `from_arc`,
+/// which just clones the `Arc`). Re-sealing already-canonical data cannot
+/// fail.
+fn reseal(value: &HashedValue) -> Arc<HashedValue> {
+    HashedValue::new(value.data().clone())
+        .unwrap_or_else(|_| unreachable!("re-sealing an already-sealed value cannot fail"))
 }
 
-impl_marshal_passthrough!(AnyValue, "Any");
-impl_marshal_passthrough!(ElemValue, "E");
+impl FromValue for AnyValue {
+    fn expected() -> String {
+        "Any".to_owned()
+    }
+
+    fn from_value(value: &HashedValue) -> Result<Self, FromValueError> {
+        Ok(Self(reseal(value)))
+    }
+
+    fn from_arc(value: &Arc<HashedValue>) -> Result<Self, FromValueError> {
+        Ok(Self(Arc::clone(value)))
+    }
+}
+
+impl IntoValue for AnyValue {
+    fn into_value(self) -> Result<Arc<HashedValue>, ValueError> {
+        Ok(self.0)
+    }
+}
+
+impl IntoValues for AnyValue {
+    fn into_values(self) -> Result<Vec<Arc<HashedValue>>, InvokeError> {
+        Ok(vec![self.0])
+    }
+}
+
+/// One slot of an `E`-variable port (list nodes: `item(list: [E]) → E`,
+/// `flatten(list: [[E]]) → [E]`): a pass-through wire value of ANY kind, or
+/// an absent slot (`None`). `E` is the element type *including its
+/// optionality* — the CHECKER binds `E` per call from the wired value's kind
+/// AND its `?`, so a `[Point?]` flows through the list combinators as
+/// `[Point?]` and a `[Point]` as `[Point]` (slot-preserving nulls, docs/08
+/// rule 6), while nodes stay total over holes at runtime. An absent slot
+/// marshals out as `Nothing`, which list canonicalization folds back into a
+/// hole.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ElemSlot(pub Option<Arc<HashedValue>>);
+
+impl ElemSlot {
+    /// Is the slot present?
+    #[must_use]
+    pub const fn is_present(&self) -> bool {
+        self.0.is_some()
+    }
+}
+
+impl FromValue for ElemSlot {
+    fn expected() -> String {
+        "E".to_owned()
+    }
+
+    fn from_value(value: &HashedValue) -> Result<Self, FromValueError> {
+        Ok(Self(match value.data() {
+            ValueData::Nothing => None,
+            _ => Some(reseal(value)),
+        }))
+    }
+
+    fn from_arc(value: &Arc<HashedValue>) -> Result<Self, FromValueError> {
+        Ok(Self(match value.data() {
+            ValueData::Nothing => None,
+            _ => Some(Arc::clone(value)),
+        }))
+    }
+
+    fn from_absent() -> Option<Self> {
+        Some(Self(None))
+    }
+}
+
+impl IntoValue for ElemSlot {
+    fn into_value(self) -> Result<Arc<HashedValue>, ValueError> {
+        match self.0 {
+            // Inside a list, HashedValue canonicalization folds a sealed
+            // Nothing element into a None slot — one spelling of absent.
+            None => HashedValue::new(ValueData::Nothing),
+            Some(value) => Ok(value),
+        }
+    }
+}
+
+impl IntoValues for ElemSlot {
+    fn into_values(self) -> Result<Vec<Arc<HashedValue>>, InvokeError> {
+        Ok(vec![self.into_value().map_err(|source| {
+            InvokeError::Output {
+                port: "out",
+                source,
+            }
+        })?])
+    }
+}
 
 /// One marshalling table for the two runtime-dispatched geometry enums.
 macro_rules! impl_marshal_geometry_enum {
@@ -769,5 +825,46 @@ mod tests {
             Vec::<f64>::from_value(&mixed),
             Err(FromValueError::Element { index: 1, .. })
         ));
+    }
+
+    // `E` slots are total over holes: a `[E]` port takes a holed list
+    // without re-hashing the present payloads, and emits holes back as
+    // holes (stage 6: the slot-preserving list combinators).
+    #[test]
+    fn elem_slots_pass_holes_through_both_ways() {
+        let one = number(1.0);
+        let holed = HashedValue::new(ValueData::List(List {
+            axis: None,
+            slots: vec![Some(Arc::clone(&one)), None],
+        }))
+        .unwrap();
+        let slots = Vec::<ElemSlot>::from_value(&holed).unwrap();
+        assert_eq!(slots.len(), 2);
+        assert!(slots[0].is_present() && !slots[1].is_present());
+        assert!(
+            Arc::ptr_eq(slots[0].0.as_ref().unwrap(), &one),
+            "pass-through clones the Arc"
+        );
+        // Depth 2: inner holes survive, an OUTER hole is a loud refusal
+        // (optional lists have no representation — docs/09).
+        let nested = HashedValue::new(ValueData::List(List {
+            axis: None,
+            slots: vec![Some(Arc::clone(&holed)), None],
+        }))
+        .unwrap();
+        assert_eq!(
+            Vec::<Vec<ElemSlot>>::from_value(&nested),
+            Err(FromValueError::Hole { index: 1 })
+        );
+        // Back out: an absent slot becomes a hole, present slots keep
+        // their hash — the round trip is the identity on the sealed list.
+        let back = vec![ElemSlot(Some(one)), ElemSlot(None)]
+            .into_value()
+            .unwrap();
+        assert_eq!(back.hash(), holed.hash());
+        // A bare absent slot (single `E` output) is the Nothing value.
+        let bare = ElemSlot(None).into_value().unwrap();
+        assert!(matches!(bare.data(), ValueData::Nothing));
+        assert!(!ElemSlot::from_arc(&bare).unwrap().is_present());
     }
 }
