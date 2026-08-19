@@ -1,0 +1,30 @@
+# cicada 1
+# Script nodes beyond numbers (stage 6): scripts/pyramids.py returns
+# MESHES from Python through a multi-output node (`pyr.meshes`,
+# `pyr.volumes`) and exports a CSV through an effectful `-> None` node.
+# Solve:       cargo run -p cicada-cli -- run examples/05-script-geometry.cic --time
+# Write OBJ:   cargo run -p cicada-cli -- run examples/05-script-geometry.cic --node dump
+# Write CSV:   cargo run -p cicada-cli -- run examples/05-script-geometry.cic --node table
+
+# Apex positions: seeded random points on a 40 x 24 board.
+dx = construct_domain(start=2.0, end=38.0)
+dy = construct_domain(start=2.0, end=22.0)
+xs = random(domain=dx, count=12, seed=3)
+ys = random(domain=dy, count=12, seed=5)
+apexes = construct_point(x=each(xs), y=each(ys))
+
+# Heights from 04's field solver (same scripts/ directory, same node).
+amps = slider(value=300.0, min=0.0, max=1000.0)
+field = solve_field(points=apexes, amps=amps)
+field_span = construct_domain(start=0.0, end=300.0)
+height_span = construct_domain(start=1.0, end=8.0)
+heights = remap(value=each(field), source=field_span, target=height_span)
+
+# The multi-output script node: watertight pyramids + their volumes.
+# Declaring Watertight<Mesh> makes the host check every returned mesh.
+pyr = pyramids(points=apexes, heights=heights, base=3.0)
+
+# Exporters are effectful: a plain run solves up to their inputs and
+# skips them; `--node dump` / `--node table` are the explicit actions.
+dump = export_obj(meshes=pyr.meshes, path="05-pyramids.obj")
+table = export_csv(meshes=pyr.meshes, volumes=pyr.volumes, path="05-pyramids.csv")

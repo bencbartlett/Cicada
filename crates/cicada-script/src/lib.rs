@@ -1,5 +1,7 @@
-//! Script hosts (docs/10 §5, docs/12): the Python worker pool (stage 4).
-//! The WASM host (Rust script nodes, the v0.1 default) arrives later.
+//! Script hosts (docs/10 §5, docs/12): the Python worker pool (stage 4,
+//! extended with geometry marshalling, multi-output and effectful nodes
+//! in stage 6). The WASM host (Rust script nodes, the v0.1 default)
+//! arrives later.
 //!
 //! Shape: a pool of persistent `CPython` subprocesses speaking length-framed
 //! `MessagePack` over stdio (DECISIONS.md row 41 — `MessagePack` at the
@@ -9,13 +11,22 @@
 //! `kill -9` on the worker (docs/12: user scripts are hard-cancellable by
 //! construction); the pool respawns workers as needed, so a kill costs
 //! one process start.
+//!
+//! The script ABI (the `worker.py` header is the authoritative mirror):
+//! `@cicada.node(title, description, effectful=False)`; string port
+//! annotations in catalog notation; the return annotation is `-> "T"`
+//! (one `out` port), `-> {"name": "T", ...}` (multi-output, dict order =
+//! port order, the function returns a dict with exactly those keys) or
+//! `-> None` (no outputs). Kinds crossing the wire: Number, Integer,
+//! Boolean, Text, Point, Vector, Domain, Plane, Mesh, Curve (polyline /
+//! line / circle / rectangle) and lists thereof ([`value`]).
 
 use cicada_core::hash::{KindTag, ValueHash, ValueHasher};
 
 pub mod pool;
 pub mod value;
 
-pub use pool::{Described, KillSwitch, PortDesc, ScriptNodeDesc, WorkerPool};
+pub use pool::{Described, KillSwitch, OutputDesc, PortDesc, ScriptNodeDesc, WorkerPool};
 
 /// The embedded Python worker program (protocol + `@cicada.node`
 /// decorator + marshalling). Written to a temp file at pool start; its

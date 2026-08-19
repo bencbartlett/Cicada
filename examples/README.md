@@ -24,6 +24,10 @@ touching the committed examples — the app writes what you do.
   OBJ.
 - **04-field.cic** — the Python script-node host: a numpy field solver
   (`scripts/solve_field.py`) driving per-cell prism heights.
+- **05-script-geometry.cic** — script nodes beyond numbers
+  (`scripts/pyramids.py`): Python returns watertight meshes through a
+  multi-output node (`pyr.meshes`, `pyr.volumes`), and an effectful
+  `-> None` node exports a CSV (`--node table`).
 
 Notes that save a first-timer some head-scratching:
 
