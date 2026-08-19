@@ -117,8 +117,13 @@ test("serve → load → place → wire → drag → screenshot asserts geometry
   await expect
     .poll(async () => (await debugState(page)).text)
     .toContain("sphere_1 = sphere(radius=size)");
+  // Poll for the solve, don't read once: `/debug/state?wait=true` settles a
+  // fresh node to "done" within a generation, but a project-watcher reload
+  // (the roundtrip spec shares this server's watched dir) can momentarily
+  // re-seed it to "queued", so a single read right after the text lands is
+  // racy under CI load.
+  await expect.poll(async () => (await debugState(page)).statuses["sphere_1"]?.state).toBe("done");
   const wired = await debugState(page);
-  expect(wired.statuses["sphere_1"]?.state).toBe("done");
   expect(wired.display["sphere_1.out"]?.stats.triangles ?? 0).toBeGreaterThan(0);
 
   // ---- drag: the size slider on the canvas (previews stream, release commits).

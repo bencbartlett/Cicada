@@ -3311,6 +3311,71 @@ mod tests {
     }
 
     #[test]
+    fn a_self_write_does_not_echo_back_as_an_external_reload() {
+        // The project watcher (http.rs) fires for the server's OWN writes
+        // too. reload_from_disk must recognise them and return Ok(false):
+        // an Ok(true) reschedules a structural solve, and a watcher that
+        // reloads every gesture-write churns forever (a fresh node never
+        // settles to "done" — a Linux-CI Playwright flake, stage 6). The
+        // guard covers BOTH the .cic and the sidecar.
+        let (_dir, config) = project(
+            "# cicada 1
+             size = slider(value=2.0, min=0.5, max=5.0)
+             span = construct_domain(start=0.0, end=size)
+             block = box(x=span, y=span, z=span)
+",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, _rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        // A structural gesture: it writes the .cic (and the sidecar).
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "3.0".into(),
+            },
+        );
+        session.wait_idle();
+        // Now the watcher fires for that write. It must be a no-op.
+        assert!(
+            !session.reload_from_disk("watcher echo", false).unwrap(),
+            "the server's own write must not reload (that would storm)"
+        );
+        // A sidecar-only gesture (move) then a watcher echo: also a no-op.
+        session.handle(
+            id,
+            None,
+            ClientMessage::MoveNode {
+                node: "block".into(),
+                cell: Some([5, 3]),
+            },
+        );
+        session.wait_idle();
+        assert!(
+            !session
+                .reload_from_disk("watcher echo (sidecar)", false)
+                .unwrap(),
+            "the server's own sidecar write must not reload either"
+        );
+        // A GENUINE external edit still reloads.
+        std::fs::write(
+            &session.core.config.pipeline,
+            "# cicada 1
+size = slider(value=4.0, min=0.5, max=5.0)
+",
+        )
+        .unwrap();
+        assert!(
+            session.reload_from_disk("real edit", false).unwrap(),
+            "a real external edit reloads"
+        );
+    }
+
+    #[test]
     fn timings_carry_queue_wait_start_marks_and_the_esc_annotation() {
         // docs/15 measurement currency: every loop generation records when
         // it started, how long its job waited (accepted → start), and — only

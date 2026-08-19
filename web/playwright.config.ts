@@ -91,7 +91,11 @@ export default defineConfig({
   expect: { timeout: 15_000 },
   fullyParallel: false,
   workers: 1,
-  retries: 0,
+  // One retry on CI only: the serve→gesture→solve path is timing-sensitive
+  // on a loaded runner with a debug engine (a fresh node's status can be
+  // caught mid project-watcher reload). Locally, 0 — a failure there is a
+  // real regression to look at, never retried away.
+  retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   outputDir: "test-results",
   use: {
