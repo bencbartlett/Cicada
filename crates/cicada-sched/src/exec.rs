@@ -882,7 +882,18 @@ impl Ctx<'_> {
                     }
                     let clock = &self.scheduler.clock;
                     let begin = clock.now_nanos();
+                    let mut done = 0;
                     for (offset, slot) in chunk_slots.iter_mut().enumerate() {
+                        // The between-ELEMENTS cancellation point: a cold
+                        // fan has no cost stats yet, so its chunks are
+                        // sized by the cost cap (25 elements) — without
+                        // this check an Esc mid-chunk drained up to 25 ×
+                        // one element's wall time (stage-6 measurement:
+                        // the wall carve's cold Esc was bounded by it).
+                        // Unfilled slots stay None → Cancelled above.
+                        if self.token.is_cancelled() {
+                            break;
+                        }
                         let index = start + offset;
                         *slot = Some(self.run_element(
                             decl,
@@ -892,13 +903,14 @@ impl Ctx<'_> {
                             element_cache,
                             executed,
                         ));
+                        done += 1;
                     }
                     let nanos = clock.now_nanos().saturating_sub(begin);
                     total_nanos.fetch_add(nanos, Ordering::Relaxed);
                     self.observer.on_event(&Event::ChunkExecuted {
                         node: &decl.name,
                         start,
-                        len: chunk_slots.len(),
+                        len: done,
                         nanos,
                     });
                 });

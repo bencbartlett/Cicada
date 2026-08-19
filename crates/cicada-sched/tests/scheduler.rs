@@ -1452,6 +1452,56 @@ fn cancelled_cold_fan_still_calibrates() {
 }
 
 #[test]
+fn cancel_mid_chunk_stops_at_the_next_element_not_the_chunk_end() {
+    // Regression (stage 6, the Esc measurement): a COLD fan has no cost
+    // stats, so its chunk is the cost cap — 25 elements at the 1 ms cold
+    // guess. The cancel check used to live only between chunks, so an Esc
+    // mid-chunk drained up to 25 × one element's wall time (the wall's
+    // carve: seconds). One thread, one 25-element chunk, cancel at
+    // element #3 → the chunk stops there, not at #24.
+    let rig = rig(1, |config| {
+        config.chunk_target_nanos = 25_000_000;
+        config.cold_element_nanos = 1_000_000;
+    });
+    let token = CancelToken::new();
+    let ran = Arc::new(AtomicU64::new(0));
+    let run: NodeFn = {
+        let clock = Arc::clone(&rig.clock);
+        let token = token.clone();
+        let ran = Arc::clone(&ran);
+        Arc::new(move |inputs| {
+            clock.advance(1_000_000);
+            ran.fetch_add(1, Ordering::SeqCst);
+            let x = as_number(inputs[0].as_ref().unwrap());
+            if (x - 3.0).abs() < 0.5 {
+                token.cancel();
+            }
+            Ok(vec![number(x)])
+        })
+    };
+    let elements: Vec<f64> = (0..25).map(f64::from).collect();
+    let graph = SolveGraph::new(vec![decl(
+        "mapped",
+        "fake.midchunk",
+        vec![Input::Value(number_list(&elements, None))],
+        vec![1],
+        run,
+    )])
+    .unwrap();
+    let report = rig
+        .scheduler
+        .solve(&graph, &[NodeId(0)], 0, &token, &Recorder::default())
+        .unwrap();
+    assert!(report.cancelled);
+    assert!(matches!(report.outcome(NodeId(0)), NodeOutcome::Cancelled));
+    assert_eq!(
+        ran.load(Ordering::SeqCst),
+        4,
+        "elements 0..=3 ran; the cancel at #3 stopped the chunk before #4"
+    );
+}
+
+#[test]
 fn empty_fan_produces_empty_lists_not_errors() {
     let rig = rig(2, |_| {});
     let graph = SolveGraph::new(vec![decl(
