@@ -1,0 +1,17 @@
+diff --git a/crates/occt-sys/src/lib.rs b/crates/occt-sys/src/lib.rs
+index 0f1b4c3..be0eb06 100644
+--- a/crates/occt-sys/src/lib.rs
++++ b/crates/occt-sys/src/lib.rs
+@@ -40,6 +40,12 @@ pub fn build_occt() {
+         .define("USE_XLIB", "FALSE")
+         .define("INSTALL_DIR_LIB", LIB_DIR)
+         .define("INSTALL_DIR_INCLUDE", INCLUDE_DIR)
++        // The `cmake` crate (0.1.58) defines CMAKE_<LANG>_FLAGS_RELEASE itself on
++        // MSVC and skips every -O//O flag while doing so, which clobbers CMake's
++        // default `/MD /O2 /Ob2 /DNDEBUG`: without these two lines the kernel
++        // is compiled unoptimized (measured 2-2.8x slower, docs/probes/occt-2026-08.md).
++        .define("CMAKE_C_FLAGS_RELEASE", "/MD /O2 /Ob2 /DNDEBUG")
++        .define("CMAKE_CXX_FLAGS_RELEASE", "/MD /O2 /Ob2 /DNDEBUG")
+         .profile("Release")
+         .out_dir(occt_path())
+         .build();
