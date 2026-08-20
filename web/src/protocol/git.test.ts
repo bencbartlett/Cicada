@@ -134,9 +134,15 @@ describe("describeGitError — one readable sentence per kind", () => {
     [{ kind: "operation_in_progress", message: "x", operation: "cherry_pick" }, /a cherry-pick is in progress/],
     [{ kind: "empty_message", message: "x" }, /write a commit message/],
     [{ kind: "no_such_pipeline", message: "x", path: "gone.cic" }, /`gone\.cic`/],
-    [{ kind: "git_failed", message: "x", command: "commit", code: 1, stderr: "hook said no" }, /^git commit failed \(exit 1\): hook said no$/],
-    [{ kind: "git_failed", message: "x", command: "add", code: null, stderr: "" }, /^git add failed \(killed\)$/],
-    [{ kind: "git_timeout", message: "x", command: "status" }, /^git status did not finish in time/],
+    // `command` is the server's `git <args>` line verbatim (git.rs formats it
+    // with the leading `git`): the toast shows it ONCE, never `git git …`.
+    [
+      { kind: "git_failed", message: "x", command: "git commit --quiet --cleanup=verbatim --file=- -- p.cic", code: 1, stderr: "hook said no" },
+      /^git commit --quiet --cleanup=verbatim --file=- -- p\.cic failed \(exit 1\): hook said no$/,
+    ],
+    [{ kind: "git_failed", message: "x", command: "git add -- p.cic", code: null, stderr: "" }, /^git add -- p\.cic failed \(killed\)$/],
+    [{ kind: "git_failed", message: "x", code: 128 }, /^git failed \(exit 128\)$/],
+    [{ kind: "git_timeout", message: "x", command: "git status --porcelain=v2 --no-optional-locks" }, /^git status --porcelain=v2 --no-optional-locks did not finish in time/],
     // Server-side failures and unknown kinds keep the server's sentence.
     [{ kind: "reload_failed", message: "the files are back but the session could not load them" }, /^the files are back/],
     [{ kind: "internal", message: "the git task did not complete" }, /^the git task did not complete$/],
@@ -145,7 +151,9 @@ describe("describeGitError — one readable sentence per kind", () => {
   ];
   for (const [body, expected] of cases) {
     it(`${body.kind}`, () => {
-      expect(describeGitError(body)).toMatch(expected);
+      const sentence = describeGitError(body);
+      expect(sentence).toMatch(expected);
+      expect(sentence, "the command is named once").not.toMatch(/git git/);
     });
   }
 

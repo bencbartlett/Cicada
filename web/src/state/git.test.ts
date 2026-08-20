@@ -7,7 +7,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitStatusResponse, RepoInfo, ServerEnvelope } from "../protocol/messages";
 import { feedGitPolicy } from "./connection";
-import { gitWriteBlockReason } from "./git";
+import {
+  commitBlockReason,
+  GIT_REFRESH_DEBOUNCE_MS,
+  gitPolicy,
+  gitWriteBlockReason,
+  ignoredReason,
+  startGitStatus,
+  stopGitStatus,
+} from "./git";
 import { markersByName, sameGitStatus, useCicada } from "./store";
 
 const INFO: RepoInfo = {
@@ -108,6 +116,99 @@ describe("feedGitPolicy", () => {
   });
 });
 
+/**
+ * The INSTALLED policy (what the app runs), not a hand-built one: the
+ * debounce it is constructed with is the exported ≤1 s constant, the window
+ * `focus` listener reads once, idle time reads nothing, and `stopGitStatus`
+ * takes the listener down. A fake window collects the listeners.
+ */
+describe("startGitStatus — the installed policy", () => {
+  const fakeWindow = () => {
+    const listeners = new Map<string, EventListenerOrEventListenerObject>();
+    return {
+      listeners,
+      addEventListener: vi.fn((type: string, listener: EventListenerOrEventListenerObject) => {
+        listeners.set(type, listener);
+      }),
+      removeEventListener: vi.fn((type: string) => {
+        listeners.delete(type);
+      }),
+      focus() {
+        const listener = listeners.get("focus");
+        if (listener === undefined) throw new Error("no focus listener installed");
+        (listener as () => void)();
+      },
+    };
+  };
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    stopGitStatus(null);
+    vi.useRealTimers();
+  });
+
+  it("debounces writes by the exported constant, which is ≤ 1 s (docs/17: '≤1 s debounced after every delta')", async () => {
+    expect(GIT_REFRESH_DEBOUNCE_MS).toBeLessThanOrEqual(1000);
+    expect(GIT_REFRESH_DEBOUNCE_MS).toBeGreaterThan(0);
+    const read = vi.fn(() => Promise.resolve());
+    const policy = startGitStatus(null, read);
+    expect(policy.debounceMs).toBe(GIT_REFRESH_DEBOUNCE_MS);
+    expect(gitPolicy()).toBe(policy);
+    expect(read, "installing reads nothing — the hello does").toHaveBeenCalledTimes(0);
+    // The way the connection module feeds it: one delta → one read, exactly the debounce later.
+    feedGitPolicy(policy, {
+      v: 1,
+      seq: 2,
+      type: "delta",
+      payload: { source: { client: 1, label: "set size" }, graph: GRAPH, text: "# cicada 1\n", dirty: [], history: HISTORY },
+    });
+    await vi.advanceTimersByTimeAsync(GIT_REFRESH_DEBOUNCE_MS - 1);
+    expect(read).toHaveBeenCalledTimes(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(read).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    expect(read, "never on a timer while idle").toHaveBeenCalledTimes(1);
+  });
+
+  it("installs ONE window `focus` listener that reads now; stopGitStatus removes it and disposes the policy", async () => {
+    const win = fakeWindow();
+    const read = vi.fn(() => Promise.resolve());
+    const policy = startGitStatus(win, read);
+    expect(win.addEventListener).toHaveBeenCalledTimes(1);
+    expect(win.addEventListener.mock.calls[0]?.[0]).toBe("focus");
+    win.focus();
+    expect(read, "focus → read now (a shell may have moved HEAD)").toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(0);
+    win.focus();
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(policy.reads).toBe(2);
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    expect(read, "no timer between focus events").toHaveBeenCalledTimes(2);
+
+    stopGitStatus(win);
+    expect(win.removeEventListener).toHaveBeenCalledWith("focus", expect.any(Function));
+    expect(win.listeners.has("focus")).toBe(false);
+    expect(gitPolicy()).toBeNull();
+    policy.onWrite();
+    policy.onFocus();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(read, "a disposed policy reads no more").toHaveBeenCalledTimes(2);
+  });
+
+  it("a second start replaces the first: the old listener is gone, one policy is live", () => {
+    const win = fakeWindow();
+    const first = startGitStatus(win, () => Promise.resolve());
+    const second = startGitStatus(win, () => Promise.resolve());
+    expect(second).not.toBe(first);
+    expect(gitPolicy()).toBe(second);
+    expect(win.addEventListener).toHaveBeenCalledTimes(2);
+    expect(win.removeEventListener).toHaveBeenCalledTimes(1);
+    expect(win.listeners.size).toBe(1);
+    stopGitStatus(win);
+  });
+});
+
 describe("the git slice", () => {
   beforeEach(() => {
     useCicada.setState({
@@ -161,7 +262,7 @@ describe("the git slice", () => {
 
   it("a refused read keeps the last good answer beside the error; the next good answer clears it", () => {
     useCicada.getState().setGitStatus(REPO);
-    useCicada.getState().setGitError({ kind: "git_failed", message: "git status failed", command: "status", code: 128 });
+    useCicada.getState().setGitError({ kind: "git_failed", message: "git status failed", command: "git status --porcelain=v2 --no-optional-locks", code: 128 });
     let s = useCicada.getState();
     expect(s.git.status).toEqual(REPO);
     expect(s.git.error?.kind).toBe("git_failed");
@@ -215,6 +316,24 @@ describe("gitWriteBlockReason", () => {
     expect(gitWriteBlockReason()).toMatch(/a rebase is in progress/);
     withState({ kind: "repo", ...INFO, operation: "cherry_pick" });
     expect(gitWriteBlockReason()).toMatch(/a cherry-pick is in progress/);
+  });
+
+  it("commitBlockReason: the shared gate, then an IGNORED pipeline (one sentence, shared with the dialog and the tab), then the empty scope, then the blank message", () => {
+    const state = () => useCicada.getState();
+    expect(commitBlockReason(state(), "")).toBe("write a commit message first");
+    expect(commitBlockReason(state(), "m")).toBeNull();
+    const ignored: GitStatusResponse = {
+      ...REPO,
+      pipeline: { path: "ign.cic", tracked: false, ignored: true, dirty: true, nodes: [{ name: "n", change: "added" }], removed: [] },
+      scope: [],
+    };
+    useCicada.setState({ git: { status: ignored, error: null, loading: false, busy: null, answers: 1 } });
+    expect(commitBlockReason(state(), "m")).toBe(ignoredReason("ign.cic"));
+    expect(ignoredReason("ign.cic")).toMatch(/^`ign\.cic` is ignored by a \.gitignore rule/);
+    useCicada.setState({ git: { status: { ...REPO, scope: [] }, error: null, loading: false, busy: null, answers: 1 } });
+    expect(commitBlockReason(state(), "m")).toMatch(/^nothing to commit/);
+    useCicada.setState({ role: "observer" });
+    expect(commitBlockReason(state(), "m")).toBe("read-only observer");
   });
 
   it("before the first answer it says so; after a refused first read it quotes the refusal", () => {

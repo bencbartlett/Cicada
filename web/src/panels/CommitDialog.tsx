@@ -10,7 +10,7 @@
  */
 import { useEffect } from "react";
 import { gitRepoInfo } from "../protocol/messages";
-import { gitWriteBlockReason } from "../state/git";
+import { gitWriteBlockReason, ignoredReason } from "../state/git";
 import { canWrite, useCicada } from "../state/store";
 import { describeHead, dirtyCount } from "./gitFormat";
 import { CommitForm, ScopeList } from "./GitPanel";
@@ -42,7 +42,13 @@ export function CommitDialog() {
   if (!open) return null;
   const status = git.status;
   const info = status === null ? null : gitRepoInfo(status.state);
-  const canCommitHere = writer && info !== null && blocked === null;
+  // An ignored pipeline blocks the dialog like an observer or a missing
+  // repo does: one sentence, no form — a "nothing to commit — the scope
+  // matches HEAD" line over a Commit button whose tooltip says "ignored"
+  // would be two contradictory statements on one screen.
+  const ignored = status !== null && info !== null && status.pipeline.ignored ? ignoredReason(status.pipeline.path) : null;
+  const reason = blocked ?? ignored;
+  const canCommitHere = writer && info !== null && reason === null;
 
   return (
     <div className="git-dialog-backdrop" onPointerDown={close} data-testid="commit-dialog-backdrop">
@@ -75,7 +81,7 @@ export function CommitDialog() {
             <div className="git-dialog-scope">
               <div className="insp-h" style={{ marginBottom: 4 }}>
                 files to commit
-                <span className={`badge${dirtyCount(status) > 0 ? " warn" : ""}`}>{dirtyCount(status)}</span>
+                <span className={`badge${(dirtyCount(status) ?? 0) > 0 ? " warn" : ""}`}>{dirtyCount(status) ?? 0}</span>
               </div>
               {status.scope.length === 0 ? (
                 <div className="faint" data-testid="commit-dialog-clean">
@@ -89,7 +95,7 @@ export function CommitDialog() {
           </>
         ) : (
           <div className="git-dialog-blocked" data-testid="commit-dialog-blocked">
-            <div>{blocked ?? "cannot commit right now"}</div>
+            <div>{reason ?? "cannot commit right now"}</div>
             <div className="actions" style={{ marginTop: 8 }}>
               <button
                 onClick={() => {

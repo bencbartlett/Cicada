@@ -960,7 +960,7 @@ aside.inspector {
 .git-status-added,
 .git-status-untracked {
   color: var(--ok);
-  background: rgba(122, 211, 138, 0.14);
+  background: var(--ok-bg);
 }
 
 .git-mark-modified,

@@ -12,7 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import type { GitState, NodeChange, RemovedNode, ScopeFile } from "../protocol/messages";
 import { gitRepoInfo } from "../protocol/messages";
 import { describeGitError } from "../protocol/git";
-import { commitBlockReason, commitFromApp, gitWriteBlockReason, refreshGitNow, revertToHead } from "../state/git";
+import { commitBlockReason, commitFromApp, gitWriteBlockReason, ignoredReason, refreshGitNow, revertToHead } from "../state/git";
 import { canWrite, useCicada } from "../state/store";
 import { useCommitDraft } from "./commitDraft";
 import { describeHead, groupMarkers, markerBadge, revertable } from "./gitFormat";
@@ -282,8 +282,8 @@ function ScopeSection({
       </div>
       {ignored && (
         <div className="excluded red" data-testid="git-ignored">
-          <code>{pipelinePath}</code> is ignored by a .gitignore rule — git refuses to add it. Un-ignore it (or{" "}
-          <code>git add -f</code> it once in a shell) to commit from the app.
+          {ignoredReason(pipelinePath)} (or <code>git add -f</code> it once in a shell — git refuses to add an ignored
+          file otherwise).
         </div>
       )}
       {!ignored && !tracked && (
@@ -343,12 +343,9 @@ export function CommitForm({
       void submit();
       return;
     }
-    if (ctrl && (event.key === "s" || event.key === "S")) {
-      // Ctrl+S IS the commit dialog (docs/16) — inside its own message
-      // field it must not open the browser's save dialog.
-      event.preventDefault();
-      return;
-    }
+    // Ctrl+S inside the message field: the window key router consumes it
+    // before its text-entry gate (`keyboard.ts` createKeyRouter) — the
+    // browser's save never opens, and the dialog is already open.
     if (event.key === "Escape" && onCancel !== undefined) {
       event.preventDefault();
       onCancel();
@@ -398,7 +395,11 @@ export function CommitForm({
  * Revert to HEAD with an inline confirm step: it discards EVERY uncommitted
  * edit in the scope's files that have a HEAD version (untracked files are
  * left alone — the server never deletes), and the reload barrier clears
- * the undo history — said in so many words before the second click.
+ * the undo history — said in so many words before the second click. The
+ * confirmation is BINDING: the POST names exactly the files it listed
+ * (`paths`), so a file that joined the scope between the last status read
+ * and the click is not reverted unseen — the server refuses anything
+ * outside the scope and the next read lists the newcomer for a second ask.
  */
 function RevertControl({ scope }: { scope: ScopeFile[] }) {
   const shared = useCicada(gitWriteBlockReason);
@@ -449,7 +450,7 @@ function RevertControl({ scope }: { scope: ScopeFile[] }) {
           disabled={blocked !== null || busy !== null}
           onClick={() => {
             setConfirming(false);
-            void revertToHead();
+            void revertToHead(files.map((f) => f.path));
           }}
           data-testid="git-revert-confirm-yes"
         >

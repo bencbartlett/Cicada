@@ -175,10 +175,15 @@ export function describeGitError(error: GitErrorBody): string {
   }
 }
 
-/** `git <command>` when the body names one (`git_failed` / `git_timeout`), else `git`. */
+/**
+ * The command a `git_failed` / `git_timeout` body names, as the server
+ * wrote it — `git commit --quiet --cleanup=verbatim --file=- -- p.cic`
+ * (`git.rs` formats `git <args>`; it already starts with `git`) — else
+ * `git` when the body carries none.
+ */
 function gitCommand(error: GitErrorBody): string {
   const command = error.command?.trim();
-  return command ? `git ${command}` : "git";
+  return command ? command : "git";
 }
 
 /** The toast sentence for anything a git action threw (typed or not). */

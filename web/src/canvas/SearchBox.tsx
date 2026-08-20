@@ -6,6 +6,7 @@
  */
 import { useReactFlow } from "@xyflow/react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { isCommitChord } from "../keyboard";
 import { categoryLabel } from "../kinds";
 import { useCicada } from "../state/store";
 import { sendWrite } from "./flow";
@@ -79,6 +80,13 @@ export function SearchBox({ left, top }: Props) {
   };
 
   const onKeyDown = (event: React.KeyboardEvent) => {
+    // Ctrl+S is the commit dialog (docs/16) from EVERY surface: let it
+    // bubble to the window key router, which consumes it — a stopped
+    // native event never reaches the window, and the browser's own save
+    // dialog would open over the search box.
+    if (isCommitChord(event)) return;
+    // Everything else typed here is the search's: never the hotkey map's,
+    // never React Flow's document-level key handling (Space = pan, etc.).
     event.stopPropagation();
     switch (event.key) {
       case "Escape":

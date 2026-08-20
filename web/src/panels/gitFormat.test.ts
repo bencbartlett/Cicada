@@ -109,9 +109,25 @@ describe("gitChip", () => {
     expect(upToDate.notes).toEqual([]);
   });
 
+  it("an IGNORED pipeline is never `clean`: no dirty count, an `ignored` note in warn tone, the tooltip says why", () => {
+    // git lists nothing for an ignored file and refuses to add it: the scope
+    // is empty BY CONSTRUCTION while every node wears `+` — `0` here was the
+    // silent wrong answer.
+    const ignored: GitStatusResponse = {
+      ...CLEAN,
+      pipeline: { path: "ign.cic", tracked: false, ignored: true, dirty: true, nodes: [{ name: "n", change: "added" }], removed: [] },
+      scope: [],
+    };
+    expect(dirtyCount(ignored)).toBeNull();
+    const chip = gitChip(slice(ignored));
+    expect(chip).toMatchObject({ label: "main", dirty: null, notes: ["ignored"], tone: "warn" });
+    expect(chip.title).toMatch(/`ign\.cic` is ignored by a \.gitignore rule/);
+    expect(chip.title).not.toMatch(/nothing to commit/);
+  });
+
   it("detached HEAD is a warning tone; a refused re-read over a good answer is error tone with the reason", () => {
     expect(gitChip(slice({ ...CLEAN, state: { kind: "repo", ...INFO, branch: null } })).tone).toBe("warn");
-    const chip = gitChip(slice(CLEAN, { kind: "git_timeout", message: "git status did not finish", command: "status" }));
+    const chip = gitChip(slice(CLEAN, { kind: "git_timeout", message: "git status did not finish", command: "git status --porcelain=v2 --no-optional-locks" }));
     expect(chip.label).toBe("main");
     expect(chip.tone).toBe("error");
     expect(chip.title).toMatch(/last read refused: git status did not finish/);
@@ -141,7 +157,11 @@ describe("groupMarkers / markerCount / revertable / markerBadge", () => {
     expect(markerCount(pipeline)).toBe(5);
   });
 
-  it("revertable = the scope files with a HEAD version", () => {
+  it("revertable = the scope files with a HEAD version, by the server's own rule (a rename's new path has none)", () => {
+    // Mirrors `git.rs` `Entry::in_head`: tracked, not an index addition,
+    // not the new side of a rename. The list is POSTed as `paths`, and the
+    // server refuses an explicit ask for a file it would have to delete
+    // (`409 untracked`) — so `renamed` here would fail the whole revert.
     expect(
       revertable([
         { path: "p.cic", status: "modified" },
@@ -150,7 +170,7 @@ describe("groupMarkers / markerCount / revertable / markerBadge", () => {
         { path: "scripts/old.py", status: "deleted" },
         { path: "scripts/moved.py", status: "renamed" },
       ]).map((f) => f.path),
-    ).toEqual(["p.cic", "scripts/old.py", "scripts/moved.py"]);
+    ).toEqual(["p.cic", "scripts/old.py"]);
   });
 
   it("badges: glyph + tooltip per kind, the rename naming the HEAD name", () => {

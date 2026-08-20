@@ -223,19 +223,64 @@ test.describe("git panel", () => {
   });
 
   test("Ctrl+S → message → Ctrl+Enter commits VERBATIM: `git log` agrees, the badge clears, the toast names the short hash", async () => {
-    // Focus the page (not a text field) so the hotkey map sees Ctrl+S.
-    await page.locator(".react-flow__pane").click({ position: { x: 20, y: 20 } });
-    await page.keyboard.press("Control+s");
     const dialog = page.getByTestId("commit-dialog");
+    const message = dialog.getByTestId("git-message");
+
+    // Ctrl+S from a TEXT FIELD reaches the dialog too: the text-entry gate
+    // that keeps typing off the hotkey map must not swallow the save reflex
+    // where it lands most — and the two canvas text fields that stop their
+    // keys from reaching React Flow (the search box, a literal input) must
+    // let this one chord through to the window, or the browser's own save
+    // dialog opens over them. Real DOM events here: a unit test that drives
+    // the router directly cannot see a stopped event.
+    const literal = page.getByTestId("lit-span-start");
+    await literal.click();
+    await expect(literal).toBeFocused();
+    await literal.press("Control+s");
+    await expect(dialog).toHaveCount(1);
+    await expect(message).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(literal).toHaveValue("0");
+    expect((await store(page)).commitDialog).toBe(false);
+
+    const pane = page.locator(".react-flow__pane");
+    const paneBox = await pane.boundingBox();
+    if (paneBox === null) throw new Error("no canvas pane");
+    await pane.dblclick({ position: { x: paneBox.width * 0.9, y: paneBox.height * 0.9 } });
+    const search = page.getByTestId("search-input");
+    await expect(search).toBeFocused();
+    await search.press("Control+s");
+    await expect(dialog).toHaveCount(1);
+    await expect(message).toBeFocused();
+    // Esc closes the dialog and ONLY the dialog (the hotkey map closes it
+    // before it would touch the search box or the selection).
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(search).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(search).toHaveCount(0);
+    expect((await store(page)).commitDialog).toBe(false);
+    // None of that was an edit: still the one dirty file, the same status.
+    await expect(page.getByTestId("tb-git-dirty")).toHaveText("1 dirty");
+
+    // Focus the page (not a text field) so the hotkey map sees Ctrl+S.
+    await pane.click({ position: { x: 20, y: 20 } });
+    await page.keyboard.press("Control+s");
     await expect(dialog).toBeVisible();
     await expect(page.getByTestId("commit-dialog-head")).toHaveText("main");
     await expect(dialog.getByTestId(`git-file-${PIPELINE}`)).toBeVisible();
-    const message = dialog.getByTestId("git-message");
     await expect(message).toBeFocused();
     const submit = dialog.getByTestId("git-commit-submit");
     await expect(submit).toBeDisabled();
     await message.fill(MESSAGE);
     await expect(submit).toBeEnabled();
+    // The reflex inside the dialog's own message field: consumed, one
+    // dialog, the draft and the focus untouched.
+    await message.press("Control+s");
+    await expect(dialog).toHaveCount(1);
+    await expect(message).toBeFocused();
+    await expect(message).toHaveValue(MESSAGE);
     await message.press("Control+Enter");
 
     await expect(dialog).toHaveCount(0);

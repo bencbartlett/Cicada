@@ -40,9 +40,14 @@ export function describeHead(state: GitState): string {
   return info.head_short !== null ? `detached @${info.head_short}` : "detached";
 }
 
-/** The dirty files of the pipeline's commit scope (what `commit` would stage). */
-export function dirtyCount(status: GitStatusResponse): number {
-  return status.scope.length;
+/**
+ * The dirty files of the pipeline's commit scope (what `commit` would
+ * stage) — or null for an IGNORED pipeline: git lists nothing for it and
+ * `git add` refuses it, so the scope is empty by construction and `0` /
+ * `clean` would be the silent wrong answer (every node wears `+`).
+ */
+export function dirtyCount(status: GitStatusResponse): number | null {
+  return status.pipeline.ignored ? null : status.scope.length;
 }
 
 /** The chip for the current slice (loading · refused · no repo · repo facts). */
@@ -85,6 +90,10 @@ export function gitChip(slice: GitSlice): GitChip {
     notes.push("locked");
     tone = "warn";
   }
+  if (status.pipeline.ignored) {
+    notes.push("ignored");
+    tone = "warn";
+  }
   const dirty = dirtyCount(status);
   const titleParts = [
     info.branch !== null ? `branch ${info.branch}` : "detached HEAD",
@@ -92,9 +101,11 @@ export function gitChip(slice: GitSlice): GitChip {
     info.upstream !== null
       ? `upstream ${info.upstream.name} (ahead ${info.upstream.ahead}, behind ${info.upstream.behind})`
       : "no upstream",
-    dirty === 0
-      ? "nothing to commit in this pipeline's scope"
-      : `${dirty} dirty ${dirty === 1 ? "file" : "files"} in this pipeline's scope`,
+    dirty === null
+      ? `\`${status.pipeline.path}\` is ignored by a .gitignore rule — git will not track it; nothing can be committed from the app`
+      : dirty === 0
+        ? "nothing to commit in this pipeline's scope"
+        : `${dirty} dirty ${dirty === 1 ? "file" : "files"} in this pipeline's scope`,
     info.operation !== undefined ? `a ${info.operation.replace("_", "-")} is in progress — finish it in your shell` : null,
     status.state.kind === "locked" ? "index.lock is held — commit and revert wait" : null,
     error !== null ? `last read refused: ${error.message}` : null,
@@ -141,12 +152,17 @@ export function markerCount(pipeline: PipelineGitStatus): number {
 }
 
 /**
- * The scope files `revert` can put back: those with a HEAD version. An
- * `untracked` or index-only `added` file has none — the server leaves them
- * alone (it never deletes) and says so in `untracked`.
+ * The scope files `revert` can put back: those with a HEAD version —
+ * EXACTLY the server's rule (`git.rs` `Entry::in_head`: tracked, not an
+ * index addition, not the new side of a rename). An `untracked` or
+ * index-only `added` file has none, and neither does a `renamed` one (its
+ * path is new; HEAD knows the old name) — the server leaves them alone (it
+ * never deletes) and says so in `untracked`. This list is what the confirm
+ * step shows AND what the POST names, so a status the server would refuse
+ * as an explicit ask (`409 untracked`) must never be in it.
  */
 export function revertable(scope: ScopeFile[]): ScopeFile[] {
-  return scope.filter((f) => f.status === "modified" || f.status === "deleted" || f.status === "renamed");
+  return scope.filter((f) => f.status === "modified" || f.status === "deleted");
 }
 
 /** The canvas badge for a marker: glyph + tooltip (docs/16 canvas badges; removed nodes are never on the canvas). */

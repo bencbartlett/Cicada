@@ -49,15 +49,22 @@ export async function readGitStatus(): Promise<void> {
   }
 }
 
+/** What `startGitStatus` needs of the window: the `focus` event. */
+export type FocusSource = Pick<Window, "addEventListener" | "removeEventListener">;
+
 /**
  * Install the policy for this page's connection (once, from the connection
- * module): the window focus listener and the policy itself. Returns the
- * policy so the connection module can feed it `hello` / `delta` / barrier
- * events; `window` is optional so tests can run without a DOM.
+ * module): the window focus listener and the policy itself, with the ≤1 s
+ * debounce. Installing reads nothing — the socket's `hello` does (a read
+ * before the session exists would race the server's own hydration for no
+ * answer the hello's read will not give). Returns the policy so the
+ * connection module can feed it `hello` / `delta` / barrier events;
+ * `window` is optional so tests can run without a DOM, and `read` is
+ * injectable so they can count reads without a server.
  */
-export function startGitStatus(win: Pick<Window, "addEventListener" | "removeEventListener"> | null): GitRefreshPolicy {
+export function startGitStatus(win: FocusSource | null, read: () => Promise<void> = readGitStatus): GitRefreshPolicy {
   stopGitStatus(win);
-  policy = new GitRefreshPolicy(readGitStatus, GIT_REFRESH_DEBOUNCE_MS);
+  policy = new GitRefreshPolicy(read, GIT_REFRESH_DEBOUNCE_MS);
   if (win !== null) {
     focusListener = () => policy?.onFocus();
     win.addEventListener("focus", focusListener);
@@ -65,7 +72,7 @@ export function startGitStatus(win: Pick<Window, "addEventListener" | "removeEve
   return policy;
 }
 
-export function stopGitStatus(win: Pick<Window, "addEventListener" | "removeEventListener"> | null): void {
+export function stopGitStatus(win: FocusSource | null): void {
   policy?.dispose();
   policy = null;
   if (win !== null && focusListener !== null) win.removeEventListener("focus", focusListener);
@@ -112,6 +119,11 @@ export function gitWriteBlockReason(
   }
 }
 
+/** The sentence for a pipeline `.gitignore` matches: git refuses to add it, so nothing here can be committed. */
+export function ignoredReason(path: string): string {
+  return `\`${path}\` is ignored by a .gitignore rule — un-ignore it to commit from the app`;
+}
+
 /**
  * Why the Commit button is disabled (null = it is enabled): the shared
  * write gate, then this pipeline's own refusals, then the empty scope and
@@ -125,9 +137,7 @@ export function commitBlockReason(
   if (shared !== null) return shared;
   const status = state.git.status;
   if (status === null) return "reading git status…";
-  if (status.pipeline.ignored) {
-    return `\`${status.pipeline.path}\` is ignored by a .gitignore rule — un-ignore it to commit from the app`;
-  }
+  if (status.pipeline.ignored) return ignoredReason(status.pipeline.path);
   if (status.scope.length === 0) return "nothing to commit — the scope matches HEAD";
   if (message.trim() === "") return "write a commit message first";
   return null;
@@ -166,11 +176,12 @@ export async function commitFromApp(message: string): Promise<CommitResponse | n
 }
 
 /**
- * `POST /api/git/revert` for the whole dirty scope (or `paths`): every
- * uncommitted edit in those files is discarded — the caller has confirmed.
- * The session reloads through the barrier (the store's snapshot handler
- * already says "reloaded from disk (git revert)"); this toasts what went
- * back and what was left alone.
+ * `POST /api/git/revert` for `paths` — the files the confirm step LISTED,
+ * so what the user agreed to is exactly what goes back (absent = the whole
+ * dirty scope, for a caller with no list to show): every uncommitted edit
+ * in those files is discarded. The session reloads through the barrier
+ * (the store's snapshot handler already says "reloaded from disk (git
+ * revert)"); this toasts what went back and what was left alone.
  */
 export async function revertToHead(paths?: string[]): Promise<RevertResponse | null> {
   const state = useCicada.getState();
