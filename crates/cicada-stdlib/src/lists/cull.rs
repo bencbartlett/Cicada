@@ -47,7 +47,7 @@ pub fn cull(input: CullIn) -> CullOut {
     assert!(
         input.pattern.len() == input.list.len(),
         "cull: pattern has {} entries for a list of {} slots — zip is strict \
-         (pad_last / repeat / truncate are the opt-in adapters)",
+         (`pad_last` / `repeat` / `truncate` are the opt-in adapters)",
         input.pattern.len(),
         input.list.len()
     );
