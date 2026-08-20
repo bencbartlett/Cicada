@@ -73,16 +73,52 @@ Two loops, sharply separated by cost:
 
 ## Read tools (grounding, not guessing)
 
-Agents query the live graph instead of inferring state from text:
+Agents query the engine instead of inferring state from text. The
+catalog and checker tools shipped in v0.1 as **`cicada mcp`** — a Model
+Context Protocol server over stdio (the `rmcp` SDK; register it with
+`.mcp.json.example` at the repo root, or point any MCP client at
+`cicada mcp [--project <dir-or-pipeline>]`). It serves the SAME data as
+`/api/catalog` (the server's renderer) and runs THE checker
+(`cicada_server::compile::check_source`, the function `cicada run` and
+the live session call) — never a second copy of either. Every tool's
+description tells the model when to use it; every refusal is a
+structured tool error (`{error, message, …}`) the model can read, never
+an opaque protocol error; stdout carries nothing but JSON-RPC.
+
+- `catalog_search {query, category?, limit?}` — ranked retrieval over
+  the node catalog (docs/08): every query word scores against the
+  dialect name, title, Grasshopper component name (`gh` — migrants
+  search by the component they know), port names and description;
+  returns name, title, gh, category and the one-line signature per hit
+  — scoped retrieval instead of dumping the specs into context. An
+  empty query lists the catalog; `category` scopes it.
+- `node_doc {name}` — one node's full spec: the `/api/catalog` node
+  object (title, description, category, tier, version, `pure`,
+  `uses_tolerance`, `panics` = the red-when contract, `gh`, runnable
+  `examples`, every input and output port with type / default / doc /
+  dimension) plus `signature` and `effectful`. An unknown name returns
+  the checker's own did-you-mean.
+- `list_categories` — the ribbon tabs with node counts.
+- `check {text | path}` — parse + typecheck in milliseconds, no
+  geometry: `ok`, the doc-11 diagnostics (kind, node, span, message,
+  expected/actual, fix with a machine-applicable `replacement` when the
+  fix is a pure splice), and the binding names. `path` resolves against
+  the `--project` directory; a file's own `scripts/` joins its catalog.
+
+With `--project`, the project's Python script nodes join the catalog
+(the server's discovery, re-run whenever `scripts/*.py` change on
+disk). The server is read-only by construction — edits land through
+the running app's atomic `POST /api/edit/apply_text` (doc 13).
+
+Still to come, over the live session (they need a running solve, so
+they belong to the app's server rather than a stdio process):
 
 - `what_feeds(node)` / `who_consumes(node)` — the dependency cone.
 - `wire_type(wire)` / `wire_summary(wire)` — checker type + cached
   data summary (counts, bounds, samples).
-- `catalog_search(query)` — the JSON node catalog (docs/08), scoped
-  retrieval instead of dumping ~130 specs into context.
 - `profile(node)` — compute + display cost from the profiler (powers
   "why is this slow").
-- `diagnostics()` — current red nodes and errors.
+- `diagnostics()` — current red nodes and errors of the open pipeline.
 
 ## Refactor primitives (mechanical ops as tools)
 

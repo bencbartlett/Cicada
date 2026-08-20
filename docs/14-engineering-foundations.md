@@ -221,8 +221,10 @@ the build when any registered node lacks a piece — the doc pieces from
 the registry, the layout (`src/<category>/<node>.rs`, one `#[node]`
 per file) and the three tests from the source. One source renders
 every view: `CATALOG.md`, `catalog.json`,
-`/api/catalog`, `cicada mcp` (catalog search + node docs + the checker
-for agents, v0.1), and `cicada docs`. Node icons are generated assets in the
+`/api/catalog`, `cicada mcp` (shipped 2026-08-20: the MCP tools
+`catalog_search` / `node_doc` / `list_categories` / `check` for agents —
+`node_doc` IS the `/api/catalog` node object and `check` IS
+`compile::check_source`, doc 11 §Read tools), and `cicada docs`. Node icons are generated assets in the
 same spirit (doc 16): produced by the AI icon pipeline from
 NodeSpecs, committed, CI-warned when missing.
 

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cicada": {
+      "command": "cargo",
+      "args": ["run", "-q", "-p", "cicada-cli", "--", "mcp", "--project", "examples"]
+    }
+  }
+}

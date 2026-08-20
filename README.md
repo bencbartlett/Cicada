@@ -67,5 +67,17 @@ measurement harness in [`tools/`](tools/). Next is v0.1 (OCCT-backed Solid, the
 full catalog, WASM script host, undo, git panel — [docs/15](docs/15-spike-plan.md)
 §After the spike); the working status lives in [AGENTS.md](AGENTS.md).
 
+### Agents: the catalog and the checker over MCP
+
+`cicada mcp` serves the node catalog and the `.cic` checker to any Model
+Context Protocol client — the read tools of
+[docs/11](docs/11-ai-integration.md): `catalog_search`, `node_doc`,
+`list_categories`, `check`. For Claude Code, copy
+[`.mcp.json.example`](.mcp.json.example) to `.mcp.json` at the repo root
+(it runs `cargo run -q -p cicada-cli -- mcp --project examples`; swap
+`--project` for your own project directory or `.cic` file so its
+`scripts/*.py` join the catalog). Any other client: point it at the built
+binary, `cicada mcp [--project <dir-or-pipeline>]`, over stdio.
+
 License: all rights reserved while private; a public license will be
 chosen at first public release.

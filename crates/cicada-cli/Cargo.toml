@@ -1,6 +1,6 @@
 [package]
 name = "cicada-cli"
-description = "The cicada binary: serve, run, fmt, docs, catalog, cache"
+description = "The cicada binary: serve, run, mcp, fmt, docs, catalog, cache"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -21,6 +21,10 @@ cicada-sched.workspace = true
 cicada-server.workspace = true
 cicada-stdlib.workspace = true
 clap.workspace = true
+# `cicada mcp`: the MCP server over stdio (doc 11 read tools, v0.1).
+rmcp.workspace = true
+schemars.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 

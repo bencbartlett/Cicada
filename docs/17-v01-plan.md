@@ -23,7 +23,7 @@ runs in parallel from day 1:
 | 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | pending |
 | 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | pending |
 | 6 | WASM script host — load precompiled guests, epoch cancellation, `cicada-guest` SDK | last | weeks | pending |
-| C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); **C1 done** (2026-08-20: 48 nodes — lists, maths tail, sequences; the diagnostics name real nodes and a test keeps it so; `compact` satisfiable at check time; `examples/06-lists.cic`); `cicada mcp` not started; C2+ pending |
+| C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); **C1 done** (2026-08-20: 48 nodes — lists, maths tail, sequences; the diagnostics name real nodes and a test keeps it so; `compact` satisfiable at check time; `examples/06-lists.cic`); **`cicada mcp` done** (2026-08-20: the four doc-11 read tools over stdio on `rmcp`); C2+ pending |
 
 Out of v0.1 (unchanged from doc 05): fillets/chamfers and B-rep
 maturity, the Blender bridge, fidget, the .gh importer, Tauri, the AI
@@ -333,7 +333,40 @@ format, doc 08.
   riding with item 3.
 - **`cicada mcp`**: catalog search, node docs, the checker — from the
   same data as `/api/catalog`; its own package after C1 (C1 shipped
-  without it).
+  without it). **Done 2026-08-20**
+  (`wt/catalog`, one commit): `cicada mcp [--project <dir-or-pipeline>]`
+  is a Model Context Protocol server over stdio on `rmcp` 3 (the
+  official Rust SDK, Apache-2.0; `server` + `transport-io` features
+  only — no macros, the tools are plain routed functions the workspace
+  lints see; 17 new crates in the native build graph — 32 lockfile
+  entries counting the platform-only ones (wasm-bindgen / js-sys,
+  windows-core, core-foundation, android, haiku) — every one MIT
+  and/or Apache-2.0, `cargo deny check` green, no new duplicate
+  versions). Tools: `catalog_search {query, category?,
+  limit?}` (per-word scoring over name / title / `gh` / ports /
+  description, exact > prefix > contains, prose at word starts only;
+  empty query lists), `node_doc {name}` (the `/api/catalog` node object
+  from the server's own renderer — `catalog::node_value`, an additive
+  accessor — plus `signature` and `effectful`; unknown names get the
+  checker's did-you-mean by checking a one-binding probe), `list_categories`,
+  `check {text | path}` (the doc-11 diagnostics from
+  `compile::check_source`, the new shared entry `load` and the session's
+  `reload_text` now call — one checker). `--project` discovers the
+  project's scripts through `compile::catalog_specs_in` /
+  `scripts::discover_in` (additive) and re-discovers when the bytes of
+  `scripts/*.py` change; a broken `scripts/` refuses at startup.
+  Refusals are structured tool errors, stdout is protocol-only, the
+  server exits on EOF. Tests: `crates/cicada-cli/tests/mcp.rs` drives the
+  built binary with JSON-RPC framing (handshake, `tools/list` shapes,
+  every tool, the `slider` doc's ports + GH name, the did-you-mean
+  diagnostic, `--project` script nodes + relative paths + live
+  re-discovery, the startup refusal) plus unit tests in `mcp.rs`.
+  `.mcp.json.example` registers it for Claude Code; docs 11 and 14 and
+  the AGENTS.md palette carry the surface. Deliberately NOT in this
+  slice: the live-graph tools (`what_feeds`, `wire_summary`, `profile`,
+  `diagnostics`) — they need a running solve and belong to the app's
+  server; a `volatile` flag in `node_doc` — `NodeSpec` has none until
+  item 3b adds it (only `pure` / `effectful` are reported).
 Every node: the three tests, the doc format, catalog regenerated in the
 same commit (skill `add-stdlib-node`).
 

@@ -59,7 +59,15 @@ proc-macro2 = "1"
 proptest = "1"
 quote = "1"
 rayon = "1"
+# The official MCP Rust SDK (Apache-2.0) behind `cicada mcp` (DECISIONS.md
+# documentation-pipeline row, 2026-08-19). Server + stdio transport only:
+# no `macros` (the tools are plain `ToolBase`/`SyncTool` impls the
+# workspace lints can see), no HTTP/auth/client features.
+rmcp = { version = "3", default-features = false, features = ["server", "transport-io"] }
 rmpv = "1"
+# JSON Schema derive for the MCP tools' inputs and outputs (rmcp's schema
+# engine; MIT).
+schemars = "1"
 # The embedded SPA (doc 13: `cicada serve` is the whole app) — behind the
 # server's `embed` feature so debug/test builds need no `web/dist`.
 rust-embed = { version = "8", features = ["interpolate-folder-path", "debug-embed"] }

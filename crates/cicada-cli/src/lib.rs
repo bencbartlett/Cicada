@@ -3,11 +3,13 @@
 //! `main.rs` is argument parsing only.
 //!
 //! Live today: `catalog` (stage 1), `run` (stage 3 — the first end-to-end
-//! surface), and `serve` (stage 5 — the app). `fmt`, `docs`, and `cache`
+//! surface), `serve` (stage 5 — the app), and `mcp` (v0.1 — the catalog
+//! and the checker for agents over stdio). `fmt`, `docs`, and `cache`
 //! land with their stages. The lowering and script discovery that lived
 //! here through stage 4 moved into `cicada-server` (its hydration path);
-//! `run` is a printer over them.
+//! `run` is a printer over them and `mcp` a protocol adapter.
 
 pub mod catalog;
+pub mod mcp;
 pub mod run;
 pub mod serve;
