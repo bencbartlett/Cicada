@@ -15,6 +15,10 @@ pub struct LineIn {
 
 /// Line — a straight segment between two points.
 ///
+/// # Returns
+///
+/// The segment from `a` to `b`.
+///
 /// # Examples
 ///
 /// ```cic

@@ -45,6 +45,10 @@ pub struct TextSolidsIn {
 /// (`i`, `%`, `"`) are one mesh with several shells; whitespace yields no
 /// solid. The wall's label deboss cutters.
 ///
+/// # Returns
+///
+/// One watertight solid per glyph, in text order.
+///
 /// # Panics
 ///
 /// Panics when `text_outlines` would (the font is not bundled — the message

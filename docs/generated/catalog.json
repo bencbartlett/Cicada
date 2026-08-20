@@ -83,7 +83,8 @@
           "type": "Number",
           "base": "Number",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The current value, within `min..=max`."
         }
       ]
     },
@@ -116,7 +117,8 @@
           "type": "Boolean",
           "base": "Boolean",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The on/off state."
         }
       ]
     },
@@ -166,7 +168,8 @@
           "type": "[Number]",
           "base": "Number",
           "list_depth": 1,
-          "optional": false
+          "optional": false,
+          "doc": "`count` uniform draws in `domain`, in draw order — identical for the same seed on every platform."
         }
       ]
     },
@@ -218,7 +221,8 @@
           "type": "[Number]",
           "base": "Number",
           "list_depth": 1,
-          "optional": false
+          "optional": false,
+          "doc": "`count` numbers, `start` first, each `step` after the previous."
         }
       ]
     },
@@ -259,7 +263,8 @@
           "type": "Number",
           "base": "Number",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The sum `a + b`."
         }
       ]
     },
@@ -300,7 +305,8 @@
           "type": "Domain",
           "base": "Domain",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The interval from `start` to `end` (a decreasing interval is legal)."
         }
       ]
     },
@@ -383,7 +389,8 @@
           "type": "Number",
           "base": "Number",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The quotient `a / b` (±∞ when `b` is zero)."
         }
       ]
     },
@@ -425,7 +432,8 @@
           "type": "Number",
           "base": "Number",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The remainder of `a / b`, with the sign of `a`."
         }
       ]
     },
@@ -466,7 +474,8 @@
           "type": "Number",
           "base": "Number",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The product `a * b`."
         }
       ]
     },
@@ -507,7 +516,8 @@
           "type": "Number",
           "base": "Number",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "`a` raised to the power `b`."
         }
       ]
     },
@@ -557,7 +567,8 @@
           "type": "Number",
           "base": "Number",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The value mapped into the target domain (extrapolated outside the source)."
         }
       ]
     },
@@ -598,7 +609,8 @@
           "type": "Number",
           "base": "Number",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The difference `a - b`."
         }
       ]
     },
@@ -640,7 +652,8 @@
           "type": "[[E]]",
           "base": "E",
           "list_depth": 2,
-          "optional": false
+          "optional": false,
+          "doc": "The groups in order; every group but the last has exactly `size` slots."
         }
       ]
     },
@@ -681,7 +694,8 @@
           "type": "[E]",
           "base": "E",
           "list_depth": 1,
-          "optional": false
+          "optional": false,
+          "doc": "One list: the slots of `a` followed by the slots of `b`."
         }
       ]
     },
@@ -766,7 +780,8 @@
           "type": "[E]",
           "base": "E",
           "list_depth": 1,
-          "optional": false
+          "optional": false,
+          "doc": "The inner lists concatenated in order, one nesting level down."
         }
       ]
     },
@@ -817,7 +832,8 @@
           "type": "E",
           "base": "E",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The selected element — absent when the selected slot is absent."
         }
       ]
     },
@@ -850,7 +866,8 @@
           "type": "Integer",
           "base": "Integer",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The slot count, absent slots included."
         }
       ]
     },
@@ -892,7 +909,8 @@
           "type": "[[E]]",
           "base": "E",
           "list_depth": 2,
-          "optional": false
+          "optional": false,
+          "doc": "The groups in order, with the given sizes."
         }
       ]
     },
@@ -945,7 +963,8 @@
           "type": "Plane",
           "base": "Plane",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The right-handed orthonormal frame at `origin`."
         }
       ]
     },
@@ -1000,7 +1019,8 @@
           "type": "Point",
           "base": "Point",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The point at (x, y, z)."
         }
       ]
     },
@@ -1084,7 +1104,8 @@
           "type": "Vector",
           "base": "Vector",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The vector (factor, 0, 0)."
         }
       ]
     },
@@ -1118,7 +1139,8 @@
           "type": "Vector",
           "base": "Vector",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The vector (0, factor, 0)."
         }
       ]
     },
@@ -1152,7 +1174,8 @@
           "type": "Vector",
           "base": "Vector",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The vector (0, 0, factor)."
         }
       ]
     },
@@ -1203,7 +1226,8 @@
           "type": "Vector",
           "base": "Vector",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The vector from `a` to `b`, unit length when `unitize` is on."
         }
       ]
     },
@@ -1237,7 +1261,8 @@
           "type": "Plane",
           "base": "Plane",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The world-aligned XY frame with its origin at `origin`."
         }
       ]
     },
@@ -1271,7 +1296,8 @@
           "type": "Plane",
           "base": "Plane",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The world-aligned XZ frame with its origin at `origin`."
         }
       ]
     },
@@ -1305,7 +1331,8 @@
           "type": "Plane",
           "base": "Plane",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The world-aligned YZ frame with its origin at `origin`."
         }
       ]
     },
@@ -1339,7 +1366,8 @@
           "type": "Closed<Curve>",
           "base": "Closed<Curve>",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The curve as a checked closed curve."
         }
       ]
     },
@@ -1383,7 +1411,8 @@
           "type": "Closed<Curve>",
           "base": "Closed<Curve>",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The closed circle, centered at the plane's origin."
         }
       ]
     },
@@ -1484,7 +1513,8 @@
           "type": "Curve",
           "base": "Curve",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The segment from `a` to `b`."
         }
       ]
     },
@@ -1526,7 +1556,8 @@
           "type": "Curve",
           "base": "Curve",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The polyline through the vertices in order, closed when `closed` is on."
         }
       ]
     },
@@ -1577,7 +1608,8 @@
           "type": "Closed<Curve>",
           "base": "Closed<Curve>",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The closed rectangle spanning `x` and `y` in the plane."
         }
       ]
     },
@@ -1679,7 +1711,8 @@
           "type": "Watertight<Mesh>",
           "base": "Watertight<Mesh>",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The watertight box mesh."
         }
       ]
     },
@@ -1730,7 +1763,8 @@
           "type": "Watertight<Mesh>",
           "base": "Watertight<Mesh>",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The watertight prism: the profile swept along `direction`."
         }
       ]
     },
@@ -1781,7 +1815,8 @@
           "type": "Watertight<Mesh>",
           "base": "Watertight<Mesh>",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The watertight solid between the two sections, capped at both ends."
         }
       ]
     },
@@ -1834,7 +1869,8 @@
           "type": "Watertight<Mesh>",
           "base": "Watertight<Mesh>",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The watertight UV-sphere mesh."
         }
       ]
     },
@@ -1868,7 +1904,8 @@
           "type": "Watertight<Mesh>",
           "base": "Watertight<Mesh>",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The mesh as a checked watertight solid."
         }
       ]
     },
@@ -1910,7 +1947,8 @@
           "type": "Watertight<Mesh>",
           "base": "Watertight<Mesh>",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The carved solid — `mesh` minus every cutter (possibly empty)."
         }
       ]
     },
@@ -1952,7 +1990,8 @@
           "type": "Watertight<Mesh>",
           "base": "Watertight<Mesh>",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The solid common to `a` and `b` (possibly empty)."
         }
       ]
     },
@@ -1986,7 +2025,8 @@
           "type": "Watertight<Mesh>",
           "base": "Watertight<Mesh>",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "One solid: the union of all the meshes."
         }
       ]
     },
@@ -2088,7 +2128,8 @@
           "type": "[T]",
           "base": "T",
           "list_depth": 1,
-          "optional": false
+          "optional": false,
+          "doc": "The `count` copies, the original first, each stepped by `direction`."
         }
       ]
     },
@@ -2129,7 +2170,8 @@
           "type": "T",
           "base": "T",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The geometry translated by `motion`."
         }
       ]
     },
@@ -2179,7 +2221,8 @@
           "type": "T",
           "base": "T",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The geometry carried from `source` onto `target`."
         }
       ]
     },
@@ -2231,7 +2274,8 @@
           "type": "T",
           "base": "T",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The geometry rotated by `angle` about the plane's normal."
         }
       ]
     },
@@ -2282,7 +2326,8 @@
           "type": "T",
           "base": "T",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The geometry scaled by `factor` about `center`."
         }
       ]
     },
@@ -2429,7 +2474,8 @@
           "type": "[Closed<Curve>]",
           "base": "Closed<Curve>",
           "list_depth": 1,
-          "optional": false
+          "optional": false,
+          "doc": "One closed polyline per glyph contour, in text order."
         }
       ]
     },
@@ -2517,7 +2563,8 @@
           "type": "[Watertight<Mesh>]",
           "base": "Watertight<Mesh>",
           "list_depth": 1,
-          "optional": false
+          "optional": false,
+          "doc": "One watertight solid per glyph, in text order."
         }
       ]
     },

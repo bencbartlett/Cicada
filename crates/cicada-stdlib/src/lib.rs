@@ -64,12 +64,20 @@ mod naming_fixtures {
     }
 
     /// Loop Fixture — keyword-dodging fn name must register as `loop`.
+    ///
+    /// # Returns
+    ///
+    /// The truthy value.
     #[node(category = "Maths & logic", tier = "S", version = 1, gh = none)]
     pub fn loop_(input: FixtureIn) -> f64 {
         input.r#true
     }
 
     /// Renamed Fixture — the explicit name override must win.
+    ///
+    /// # Returns
+    ///
+    /// The truthy value.
     #[node(
         category = "Maths & logic",
         tier = "S",
@@ -135,6 +143,13 @@ mod tests {
         );
         assert_eq!(a.doc, "First addend.");
         assert_eq!(add.signature(), "add(a: Number, b: Number) → Number");
+        // The bare single output carries the `# Returns` line as its doc
+        // (one doc line per port — the output included).
+        let [out] = add.outputs else {
+            panic!("add has one output")
+        };
+        assert_eq!((out.name, out.ty.render().as_str()), ("out", "Number"));
+        assert_eq!(out.doc, "The sum `a + b`.");
     }
 
     #[test]

@@ -6,6 +6,10 @@ use super::BinaryIn;
 
 /// Modulo — IEEE remainder of `a / b` (sign follows `a`).
 ///
+/// # Returns
+///
+/// The remainder of `a / b`, with the sign of `a`.
+///
 /// # Panics
 ///
 /// `a % 0` is NaN, which value construction refuses — the node goes red.

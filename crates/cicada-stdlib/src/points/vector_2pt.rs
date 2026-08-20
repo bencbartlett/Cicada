@@ -18,6 +18,10 @@ pub struct Vector2PtIn {
 
 /// Vector 2Pt — the vector from `a` to `b`, optionally unitized.
 ///
+/// # Returns
+///
+/// The vector from `a` to `b`, unit length when `unitize` is on.
+///
 /// # Panics
 ///
 /// Panics when `unitize` is on and the points coincide within tolerance —

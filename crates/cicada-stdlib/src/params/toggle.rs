@@ -11,6 +11,10 @@ pub struct ToggleIn {
 
 /// Boolean Toggle — an on/off parameter.
 ///
+/// # Returns
+///
+/// The on/off state.
+///
 /// # Examples
 ///
 /// ```cic

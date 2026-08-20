@@ -7,6 +7,10 @@ use super::WorldPlaneIn;
 
 /// XY Plane — the world XY frame at an origin.
 ///
+/// # Returns
+///
+/// The world-aligned XY frame with its origin at `origin`.
+///
 /// # Examples
 ///
 /// ```cic

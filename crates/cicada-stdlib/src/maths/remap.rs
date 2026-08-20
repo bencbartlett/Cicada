@@ -17,6 +17,10 @@ pub struct RemapIn {
 /// Remap — map a value linearly from a source domain to a target domain.
 /// Values outside the source domain extrapolate linearly (no clamping).
 ///
+/// # Returns
+///
+/// The value mapped into the target domain (extrapolated outside the source).
+///
 /// # Panics
 ///
 /// Panics when the source domain is empty (`start == end`) — the map is

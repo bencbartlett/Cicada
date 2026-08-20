@@ -7,6 +7,10 @@ use super::UnitIn;
 
 /// Unit Y — the world y direction, scaled.
 ///
+/// # Returns
+///
+/// The vector (0, factor, 0).
+///
 /// # Examples
 ///
 /// ```cic

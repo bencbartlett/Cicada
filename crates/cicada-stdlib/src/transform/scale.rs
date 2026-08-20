@@ -21,6 +21,10 @@ pub struct ScaleIn {
 /// Scale — uniform scale about a center. Negative factors point-reflect
 /// (mesh orientation is preserved by winding correction).
 ///
+/// # Returns
+///
+/// The geometry scaled by `factor` about `center`.
+///
 /// # Panics
 ///
 /// Panics when `|factor|` is within tolerance of zero — geometry would

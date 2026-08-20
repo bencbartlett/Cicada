@@ -22,6 +22,10 @@ pub struct CircleIn {
 /// Circle — an analytic circle in a plane. The stored frame is
 /// orthonormalized at construction, so downstream evaluation is exact.
 ///
+/// # Returns
+///
+/// The closed circle, centered at the plane's origin.
+///
 /// # Panics
 ///
 /// Panics when the radius is not above tolerance or the plane's axes are

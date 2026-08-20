@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: a node returning one value needs a `# Returns` doc section (one line) — it becomes the `out` port's doc: one doc line per port, DECISIONS.md stdlib row
+  --> tests/ui/missing_returns.rs:18:1
+   |
+18 | #[node(category = "Maths & logic", tier = "S", version = 1, gh = none)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `__CICADA_NODE_OUTPUTS_BAD` failed here

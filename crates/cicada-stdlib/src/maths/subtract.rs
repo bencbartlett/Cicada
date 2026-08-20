@@ -6,6 +6,10 @@ use super::BinaryIn;
 
 /// Subtract — difference of two numbers.
 ///
+/// # Returns
+///
+/// The difference `a - b`.
+///
 /// # Examples
 ///
 /// ```cic

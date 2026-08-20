@@ -24,6 +24,10 @@ pub struct RotateIn {
 
 /// Rotate — rotate geometry about a plane's normal through its origin.
 ///
+/// # Returns
+///
+/// The geometry rotated by `angle` about the plane's normal.
+///
 /// # Panics
 ///
 /// Panics when the plane is degenerate (zero-length or parallel axes).

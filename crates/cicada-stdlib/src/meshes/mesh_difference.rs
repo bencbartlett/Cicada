@@ -18,6 +18,10 @@ pub struct MeshDifferenceIn {
 /// result may be the empty solid. Lift with `each()` to carve per part
 /// (`mesh_difference(mesh=each(frusta), cutters=each(cutter_groups))`).
 ///
+/// # Returns
+///
+/// The carved solid — `mesh` minus every cutter (possibly empty).
+///
 /// # Panics
 ///
 /// Panics when Manifold refuses the mesh or a cutter (named by index).

@@ -25,6 +25,10 @@ pub struct BoxIn {
 /// Box — an axis-aligned box in a plane's frame (mesh-backed under its
 /// v0.1 name, doc 15). Decreasing domains are normalized.
 ///
+/// # Returns
+///
+/// The watertight box mesh.
+///
 /// # Panics
 ///
 /// Panics when any extent is empty at tolerance or the plane is

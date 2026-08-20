@@ -8,8 +8,9 @@
 //! no exceptions.
 //!
 //! What the compiler already guarantees (the macro refuses a node without
-//! a `Title — description` line, an undocumented input port, a missing
-//! `gh`, or an untagged example fence) is asserted again here cheaply:
+//! a `Title — description` line, an undocumented input port, a bare single
+//! output without a `# Returns` line, a missing `gh`, or an untagged
+//! example fence) is asserted again here cheaply:
 //! the test is the single place that states the format, and it would catch
 //! a macro regression that let one piece through. What the compiler cannot
 //! check — that an example exists and actually calls the node — is the
@@ -103,15 +104,15 @@ fn every_port_is_documented() {
                 problems.push(format!("input port `{}` has no doc line", port.name));
             }
         }
-        // A single bare output renders as its type (`→ Number`) and is
-        // described by the title line itself; it has no field to document.
-        // Named outputs (multi-output structs) each carry a doc line.
-        let bare_single_out = matches!(spec.outputs, [single] if single.name == "out");
-        if !bare_single_out {
-            for port in spec.outputs {
-                if port.doc.trim().is_empty() {
-                    problems.push(format!("output port `{}` has no doc line", port.name));
-                }
+        // EVERY output too: a bare single `out` carries the node's
+        // `# Returns` line (the macro refuses a single-output node without
+        // one), named outputs carry their struct fields' docs. No
+        // exemption — the C0 review caught the first version of this rule
+        // skipping `out`, which left 47 output ports undocumented in
+        // catalog.json.
+        for port in spec.outputs {
+            if port.doc.trim().is_empty() {
+                problems.push(format!("output port `{}` has no doc line", port.name));
             }
         }
         problems

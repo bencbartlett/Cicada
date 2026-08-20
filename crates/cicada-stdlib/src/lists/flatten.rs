@@ -15,6 +15,10 @@ pub struct FlattenIn {
 /// `flatten_all` for every level, and says so); absent inner slots are
 /// preserved as absent slots of the output.
 ///
+/// # Returns
+///
+/// The inner lists concatenated in order, one nesting level down.
+///
 /// # Panics
 ///
 /// Panics when an OUTER slot is absent (a missing inner list — refused at

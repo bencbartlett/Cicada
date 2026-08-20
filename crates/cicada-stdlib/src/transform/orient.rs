@@ -23,6 +23,10 @@ pub struct OrientIn {
 /// Orient — the rigid motion carrying the source plane onto the target
 /// plane (the wall's part-to-plate workhorse).
 ///
+/// # Returns
+///
+/// The geometry carried from `source` onto `target`.
+///
 /// # Panics
 ///
 /// Panics when either plane is degenerate.

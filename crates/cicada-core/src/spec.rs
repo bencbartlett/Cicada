@@ -138,7 +138,10 @@ pub struct NodeSpec {
     /// Input ports in declaration order. A port with a default is optional.
     pub inputs: &'static [PortSpec],
     /// Output ports in declaration order. Single-output nodes use one port
-    /// named `out`.
+    /// named `out`, whose doc is the node's `# Returns` line (the macro
+    /// attaches it — see [`documented_outputs`]); a multi-output node's
+    /// ports carry their struct fields' docs. One doc line per port, either
+    /// way (DECISIONS.md stdlib row).
     pub outputs: &'static [PortSpec],
     /// Defining module (`module_path!`) — names the source in the
     /// duplicate-name refusal; never an ordering key.
@@ -231,6 +234,72 @@ impl<T: PortTyped> AsOutputs for Option<T> {
 
 impl AsOutputs for () {
     const OUTPUTS: &'static [PortSpec] = &[];
+}
+
+/// Const `==` on byte strings (`str::eq` is not `const`).
+const fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// Is this output list a bare single value — one port named `out`, the
+/// shape every `AsOutputs` leaf impl produces? `const` so the `#[node]`
+/// macro can ask at compile time.
+#[doc(hidden)]
+#[must_use]
+pub const fn is_single_out(outputs: &[PortSpec]) -> bool {
+    matches!(outputs, [single] if bytes_eq(single.name.as_bytes(), b"out"))
+}
+
+/// The output ports of a node with its `# Returns` line attached: a bare
+/// single `out` port gets `returns` as its doc (the per-type `AsOutputs`
+/// impls cannot know any one node's doc); every other shape is copied
+/// through unchanged. `N` is `raw.len()` — the macro derives both from the
+/// same `OUTPUTS` — so the result can live in a `static` without
+/// allocation. The macro asserts the format rule (`# Returns` present
+/// exactly when the output is a bare single value) before calling this.
+#[doc(hidden)]
+#[must_use]
+pub const fn documented_outputs<const N: usize>(
+    raw: &'static [PortSpec],
+    returns: &'static str,
+) -> [PortSpec; N] {
+    assert!(
+        raw.len() == N,
+        "documented_outputs: N must be the output count (macro invariant)"
+    );
+    let single_out = is_single_out(raw);
+    let mut ports: [PortSpec; N] = [const {
+        PortSpec {
+            name: "",
+            ty: PortType::named(""),
+            default: None,
+            doc: "",
+            dimension: None,
+        }
+    }; N];
+    let mut i = 0;
+    while i < N {
+        let port = &raw[i];
+        ports[i] = PortSpec {
+            name: port.name,
+            ty: port.ty,
+            default: port.default,
+            doc: if single_out { returns } else { port.doc },
+            dimension: port.dimension,
+        };
+        i += 1;
+    }
+    ports
 }
 
 impl<T: PortTyped> PortTyped for Vec<T> {
@@ -492,5 +561,34 @@ mod tests {
             spec.signature(),
             "divide_curve(curve: Curve, count: Integer = 10) → (points: [Point], tangents: [Vector])"
         );
+    }
+
+    // The macro's const-time step: a bare single `out` takes the node's
+    // `# Returns` line as its doc; named outputs keep their field docs.
+    // Evaluated in `const` here, exactly as the macro evaluates it.
+    #[test]
+    fn documented_outputs_attaches_returns_to_a_bare_out_only() {
+        const SINGLE: [PortSpec; 1] =
+            documented_outputs(<Vec<f64> as AsOutputs>::OUTPUTS, "The numbers.");
+        const MANY: [PortSpec; 2] = documented_outputs(DIVIDE_OUT, "");
+        const NONE: [PortSpec; 0] = documented_outputs(<() as AsOutputs>::OUTPUTS, "");
+
+        assert_eq!(SINGLE[0].name, "out");
+        assert_eq!(SINGLE[0].ty.render(), "[Number]");
+        assert_eq!(SINGLE[0].doc, "The numbers.");
+
+        assert_eq!(MANY[0].name, "points");
+        assert_eq!(MANY[1].name, "tangents");
+        assert_eq!(MANY[0].doc, "");
+        assert_eq!(MANY[0].ty.render(), "[Point]");
+
+        assert!(NONE.is_empty());
+
+        assert!(is_single_out(<f64 as AsOutputs>::OUTPUTS));
+        assert!(!is_single_out(DIVIDE_OUT));
+        assert!(!is_single_out(&[]));
+        // A single NAMED output (a one-field output struct) is not a bare
+        // `out`: its field doc stands, `# Returns` would be refused.
+        assert!(!is_single_out(&DIVIDE_OUT[..1]));
     }
 }

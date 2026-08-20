@@ -16,6 +16,10 @@ pub struct PolylineIn {
 
 /// Polyline — a vertex chain, open or closed.
 ///
+/// # Returns
+///
+/// The polyline through the vertices in order, closed when `closed` is on.
+///
 /// # Examples
 ///
 /// ```cic

@@ -15,6 +15,10 @@ pub struct MeshUnionIn {
 /// Mesh Union — the union of watertight meshes via Manifold (docs/08:
 /// watertight, parallel, seconds).
 ///
+/// # Returns
+///
+/// One solid: the union of all the meshes.
+///
 /// # Panics
 ///
 /// Panics when Manifold refuses an operand (named by index) — its

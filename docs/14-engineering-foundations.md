@@ -197,10 +197,16 @@ Each file holds, in this order: the input struct (`#[derive(Ports)]`,
 one doc line per field — units where relevant — `#[port(default)]`
 for optional ports); the node doc comment with fixed sections — line 1
 `Title — one-sentence description`, an optional paragraph of
-semantics, `# Panics` (rendered as "Red when"), `# Examples` (a
-runnable `.cic` snippet CI solves — REQUIRED); the `#[node(category,
-tier, version, gh = "Move" | none)]` function (`gh` = the Grasshopper
-component it replaces, fed to search-to-place and the docs); and the
+semantics, `# Returns` (one line: the doc of a bare single `out` port
+— REQUIRED for, and only for, a node returning one bare value; a
+multi-output node returns a second `Ports` struct whose fields carry
+their own doc lines, so every port is documented either way),
+`# Panics` (rendered as "Red when"), `# Examples` (a runnable `.cic`
+snippet CI solves — REQUIRED); the `#[node(category, tier, version,
+gh = "Move" | none)]` function (`gh` = the Grasshopper component it
+replaces, carried in the catalog and `/api/catalog` for the docs and
+for search-to-place — the client-side search wiring is a pending web
+follow-up, tracked in doc 17 Track C); and the
 three tests (table cases, property test, golden hash). A conformance
 test in the crate fails the build when any registered node lacks a
 piece. One source renders every view: `CATALOG.md`, `catalog.json`,

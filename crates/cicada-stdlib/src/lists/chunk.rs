@@ -16,6 +16,10 @@ pub struct ChunkIn {
 /// (GH Partition List). Slot-preserving: absent slots land in their group
 /// as absent slots; an empty list chunks to no groups.
 ///
+/// # Returns
+///
+/// The groups in order; every group but the last has exactly `size` slots.
+///
 /// # Panics
 ///
 /// Panics when `size < 1`.

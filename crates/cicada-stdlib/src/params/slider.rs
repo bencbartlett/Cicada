@@ -23,6 +23,10 @@ pub struct SliderIn {
 
 /// Number Slider — a bounded numeric parameter.
 ///
+/// # Returns
+///
+/// The current value, within `min..=max`.
+///
 /// # Panics
 ///
 /// Panics when `value` lies outside `min..=max` or the bounds are

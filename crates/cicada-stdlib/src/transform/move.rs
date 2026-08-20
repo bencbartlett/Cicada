@@ -16,6 +16,10 @@ pub struct MoveIn {
 
 /// Move — translate geometry along a vector.
 ///
+/// # Returns
+///
+/// The geometry translated by `motion`.
+///
 /// # Examples
 ///
 /// ```cic

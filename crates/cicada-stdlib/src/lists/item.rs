@@ -19,6 +19,10 @@ pub struct ItemIn {
 /// (`Optional`) slot yields an absent element — `E` carries the `?`, so
 /// the output is `Point?` exactly when the list is `[Point?]`.
 ///
+/// # Returns
+///
+/// The selected element — absent when the selected slot is absent.
+///
 /// # Panics
 ///
 /// Panics when the list is empty, or when `index` is out of range and

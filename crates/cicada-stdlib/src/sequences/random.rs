@@ -20,6 +20,11 @@ pub struct RandomIn {
 /// platform); each draw uses the high 53 bits, so results are exact
 /// dyadic fractions of the domain.
 ///
+/// # Returns
+///
+/// `count` uniform draws in `domain`, in draw order — identical for the same
+/// seed on every platform.
+///
 /// # Panics
 ///
 /// Panics when `count` is negative.

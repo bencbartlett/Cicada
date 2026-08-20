@@ -6,6 +6,10 @@ use super::BinaryIn;
 
 /// Multiply — product of two numbers.
 ///
+/// # Returns
+///
+/// The product `a * b`.
+///
 /// # Examples
 ///
 /// ```cic

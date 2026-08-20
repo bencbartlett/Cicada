@@ -24,6 +24,10 @@ pub struct SphereIn {
 /// Sphere — a UV sphere at a plane's origin (mesh-backed under its v0.1
 /// name, doc 15).
 ///
+/// # Returns
+///
+/// The watertight UV-sphere mesh.
+///
 /// # Panics
 ///
 /// Panics when the radius is not above tolerance, `segments < 3`, or the

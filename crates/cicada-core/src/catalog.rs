@@ -51,8 +51,9 @@ pub fn render_markdown(specs: &[&NodeSpec]) -> String {
          one exists. Type variables: `T` = any transformable kind (kind-preserving),\n\
          `E` = any element kind, optionality included (an `E` port takes absent slots;\n\
          the `?` rides through to `E` outputs), `Any` = display-sink catch-all.\n\
-         Runnable examples live in `catalog.json` (`examples`: one `.cic` snippet per\n\
-         node, solved by CI).\n",
+         Port docs (every input and output — the bare `out` carries the node's\n\
+         `# Returns` line) and runnable examples live in `catalog.json` (`examples`:\n\
+         one `.cic` snippet per node, solved by CI).\n",
     );
 
     let mut categories: Vec<&'static str> = Vec::new();

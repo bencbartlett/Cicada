@@ -42,6 +42,10 @@ pub struct TextOutlinesIn {
 /// per contour, in text order then the font's contour order; whitespace
 /// advances the pen and yields no curve.
 ///
+/// # Returns
+///
+/// One closed polyline per glyph contour, in text order.
+///
 /// # Panics
 ///
 /// Panics when the font is not bundled (the message lists the bundled

@@ -19,6 +19,10 @@ pub struct ConstructPointIn {
 
 /// Construct Point — a point from x/y/z coordinates.
 ///
+/// # Returns
+///
+/// The point at (x, y, z).
+///
 /// # Examples
 ///
 /// ```cic

@@ -19,6 +19,10 @@ pub struct LinearArrayIn {
 /// Linear Array — `count` copies stepped along a direction, the first at
 /// the original position.
 ///
+/// # Returns
+///
+/// The `count` copies, the original first, each stepped by `direction`.
+///
 /// # Panics
 ///
 /// Panics when `count < 1`.

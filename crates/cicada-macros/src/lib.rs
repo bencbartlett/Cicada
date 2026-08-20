@@ -8,11 +8,15 @@
 //!   assembles the `NodeSpec` from the function — name (trailing
 //!   keyword-dodging `_` stripped), title/description from the doc comment's
 //!   first line (`Title — description.`), the runtime contract from its
-//!   `# Panics` section, the runnable `.cic` snippets from its `# Examples`
+//!   `# Panics` section, the doc of a bare single `out` port from its
+//!   `# Returns` section, the runnable `.cic` snippets from its `# Examples`
 //!   section (```` ```cic ```` fences), the Grasshopper component it replaces
 //!   from `gh`, ports from the input struct and return type — and registers
 //!   it at compile time. `gh` is required: a node either names the GH
 //!   component it replaces or says `none` (DECISIONS.md stdlib row).
+//!   `# Returns` is required exactly when the node returns one bare value
+//!   (one doc line per port — the output struct's fields carry their own
+//!   docs, a sink has no output to document).
 //!
 //! The macros emit paths into `cicada_core` but do not link against it;
 //! consuming crates must depend on `cicada-core`.
@@ -48,6 +52,9 @@ pub fn derive_ports(input: TokenStream) -> TokenStream {
 /// (folds `ProjectConfig` into the `NodeKey`, doc 49).
 ///
 /// Doc sections: `# Panics` becomes the catalog's "Red when" contract;
+/// `# Returns` (one line) becomes the doc of the single `out` port and is
+/// required for — and only for — a node returning one bare value; a
+/// multi-output node documents each field of its output struct instead;
 /// `# Examples` must hold its `.cic` snippets in fences tagged `cic`
 /// (```` ```cic ````) — a bare fence is refused, because rustdoc would
 /// compile it as a Rust doctest.
@@ -548,6 +555,14 @@ fn panics_tokens(function: &ItemFn) -> TokenStream2 {
     }
 }
 
+/// The text of the fn's `# Returns` doc section ("" when absent), joined
+/// to one line: the doc of a bare single `out` port (one doc line per
+/// port, DECISIONS.md stdlib row), written as a noun phrase the way every
+/// input port's doc is ("The sum of `a` and `b`.").
+fn returns_text(function: &ItemFn) -> String {
+    doc_section(&function.attrs, "Returns")
+}
+
 /// The `examples: &[…]` spec-field tokens from the fn's `# Examples` doc
 /// section: the body of every ```` ```cic ```` fence, lines joined by `\n`.
 /// Prose between fences is documentation, not data. A fence with any other
@@ -691,6 +706,7 @@ fn expand_node(args: &TokenStream2, function: &ItemFn) -> syn::Result<TokenStrea
 
     let (title, description) = parse_title_line(function)?;
     let panics_tokens = panics_tokens(function);
+    let returns = returns_text(function);
     let examples_tokens = examples_tokens(function)?;
 
     let input_ty = input_struct_type(function, parsed.uses_tolerance)?;
@@ -719,6 +735,11 @@ fn expand_node(args: &TokenStream2, function: &ItemFn) -> syn::Result<TokenStrea
     );
     let invoke_ident = format_ident!("__cicada_invoke_{}", fn_ident.unraw());
     let invoke_shim = invoke_shim(&invoke_ident, fn_ident, input_ty, uses_tolerance);
+    let outputs_ident = format_ident!(
+        "__CICADA_NODE_OUTPUTS_{}",
+        fn_ident.unraw().to_string().to_uppercase()
+    );
+    let outputs_static = outputs_static(&outputs_ident, &output_ty, &returns);
 
     Ok(quote! {
         // The struct-in ABI is by-value by design (DECISIONS.md): a node
@@ -726,6 +747,8 @@ fn expand_node(args: &TokenStream2, function: &ItemFn) -> syn::Result<TokenStrea
         // signature — the shim owns the calling convention.
         #[allow(clippy::needless_pass_by_value)]
         #function
+
+        #outputs_static
 
         #[doc(hidden)]
         #[allow(missing_docs, non_upper_case_globals)]
@@ -742,7 +765,7 @@ fn expand_node(args: &TokenStream2, function: &ItemFn) -> syn::Result<TokenStrea
             gh: #gh_tokens,
             examples: #examples_tokens,
             inputs: <#input_ty as cicada_core::spec::Ports>::PORTS,
-            outputs: <#output_ty as cicada_core::spec::AsOutputs>::OUTPUTS,
+            outputs: &#outputs_ident,
             module: module_path!(),
             line: line!(),
         };
@@ -756,6 +779,43 @@ fn expand_node(args: &TokenStream2, function: &ItemFn) -> syn::Result<TokenStrea
             }
         }
     })
+}
+
+/// The node's output-port static: the return type's `AsOutputs` ports with
+/// the `# Returns` line attached to a bare single `out` (whose `AsOutputs`
+/// impl is a per-TYPE const and cannot carry a per-node doc). Evaluated at
+/// compile time; the two assertions are the format's "one doc line per
+/// port" rule for outputs — a failure points at this node's `#[node]` line.
+fn outputs_static(
+    outputs_ident: &proc_macro2::Ident,
+    output_ty: &TokenStream2,
+    returns: &str,
+) -> TokenStream2 {
+    quote! {
+        #[doc(hidden)]
+        #[allow(missing_docs, non_upper_case_globals)]
+        pub static #outputs_ident: [
+            cicada_core::spec::PortSpec;
+            <#output_ty as cicada_core::spec::AsOutputs>::OUTPUTS.len()
+        ] = {
+            const RAW: &[cicada_core::spec::PortSpec] =
+                <#output_ty as cicada_core::spec::AsOutputs>::OUTPUTS;
+            const RETURNS: &str = #returns;
+            let single_out = cicada_core::spec::is_single_out(RAW);
+            assert!(
+                !single_out || !RETURNS.is_empty(),
+                "a node returning one value needs a `# Returns` doc section (one line) — \
+                 it becomes the `out` port's doc: one doc line per port, DECISIONS.md \
+                 stdlib row"
+            );
+            assert!(
+                single_out || RETURNS.is_empty(),
+                "`# Returns` is for a node returning ONE bare value — a multi-output node \
+                 documents each field of its output struct, and a sink returns nothing"
+            );
+            cicada_core::spec::documented_outputs(RAW, RETURNS)
+        };
+    }
 }
 
 /// The type-erased invocation shim (stage 3): marshal in, call the real fn,

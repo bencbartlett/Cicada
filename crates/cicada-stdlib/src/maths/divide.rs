@@ -6,6 +6,10 @@ use super::BinaryIn;
 
 /// Divide — quotient of two numbers (IEEE: dividing by zero yields ±∞).
 ///
+/// # Returns
+///
+/// The quotient `a / b` (±∞ when `b` is zero).
+///
 /// # Examples
 ///
 /// ```cic

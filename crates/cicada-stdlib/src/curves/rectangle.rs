@@ -25,6 +25,10 @@ pub struct RectangleIn {
 /// is orthonormalized at construction. (The rounded-`corner` parameter
 /// arrives with compound curves, v0.1.)
 ///
+/// # Returns
+///
+/// The closed rectangle spanning `x` and `y` in the plane.
+///
 /// # Panics
 ///
 /// Panics when either extent is empty at tolerance or the plane is

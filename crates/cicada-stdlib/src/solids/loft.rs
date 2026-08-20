@@ -32,6 +32,10 @@ pub struct LoftIn {
 /// and the result is re-verified watertight. Lift with `each()` to loft
 /// per part (`loft(start=each(cells), end=each(caps))`).
 ///
+/// # Returns
+///
+/// The watertight solid between the two sections, capped at both ends.
+///
 /// # Panics
 ///
 /// Panics when the vertex counts differ (both counts in the message), a

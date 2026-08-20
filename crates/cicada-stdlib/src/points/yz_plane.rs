@@ -7,6 +7,10 @@ use super::WorldPlaneIn;
 
 /// YZ Plane — the world YZ frame at an origin.
 ///
+/// # Returns
+///
+/// The world-aligned YZ frame with its origin at `origin`.
+///
 /// # Examples
 ///
 /// ```cic

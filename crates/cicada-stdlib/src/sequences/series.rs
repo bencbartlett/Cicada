@@ -17,6 +17,10 @@ pub struct SeriesIn {
 
 /// Series — an arithmetic sequence of numbers.
 ///
+/// # Returns
+///
+/// `count` numbers, `start` first, each `step` after the previous.
+///
 /// # Panics
 ///
 /// Panics when `count` is negative — loud refusal, never a silent empty

@@ -1,6 +1,6 @@
 ---
 name: add-stdlib-node
-description: Add or modify a node in cicada-stdlib end to end — one file per node under src/<category>/, the self-documenting node format (title line, port docs, # Panics, # Examples, gh =), table + property + determinism tests, catalog regeneration. Use for ANY node-catalog work, including editing an existing node's ports or docs.
+description: Add or modify a node in cicada-stdlib end to end — one file per node under src/<category>/, the self-documenting node format (title line, port docs, # Returns, # Panics, # Examples, gh =), table + property + determinism tests in that file, catalog regeneration. Use for ANY node-catalog work, including editing an existing node's ports or docs.
 ---
 
 # Add a stdlib node
@@ -79,6 +79,10 @@ pub struct RemapIn {
 /// Remap — map a value linearly from a source domain to a target domain.
 /// Values outside the source domain extrapolate linearly (no clamping).
 ///
+/// # Returns
+///
+/// The value mapped into the target domain (extrapolated outside the source).
+///
 /// # Panics
 ///
 /// Panics when the source domain is empty (`start == end`) — the map is
@@ -113,6 +117,14 @@ mod tests { /* table, property, golden hash */ }
      When the docs/08 row gives only a signature, write the one-liner in
      the style of the neighbours (`add` → "sum of two numbers.").
    - An optional paragraph of semantics.
+   - `# Returns` — one line, REQUIRED for a node returning one bare value
+     (`-> f64`, `-> Vec<Point>`, `-> Watertight<Mesh>` …): it becomes the
+     doc of the `out` port in catalog.json and `/api/catalog` — one doc
+     line per port, outputs included. Write it as a noun phrase like an
+     input port's doc ("The sum `a + b`."). The macro refuses a
+     single-output node without it, and refuses the section on a
+     multi-output node (the output struct's fields carry the docs) or a
+     sink (`-> ()` has no port).
    - `# Panics` — the red contract, rendered in the catalog as "Red when:".
      Write it as `Panics when <condition>` (the opener is stripped). Omit
      the section entirely for a total node like `add`.
@@ -172,7 +184,9 @@ mod tests { /* table, property, golden hash */ }
 
    The conformance test (`crates/cicada-stdlib/tests/conformance.rs`)
    fails the build when any registered node lacks a title line, a
-   description, a port doc, a `gh` answer, or an example that calls it.
+   description, a doc line on ANY port (inputs, named outputs, and the
+   bare `out` via `# Returns`), a `gh` answer, or an example that calls it
+   (as a whole identifier — `polyline(` is not a call of `line`).
    The runner (`crates/cicada-cli/tests/node_examples.rs`) parses,
    checks (zero diagnostics), lowers and solves every example with a
    fresh cache and reports all failing snippets in one list — it lives in
@@ -194,10 +208,14 @@ mod tests { /* table, property, golden hash */ }
 
 `#[node]`/`#[derive(Ports)]` refuse malformed input loudly — missing
 version, missing `gh` (or `gh = None`/`gh = ""`), a bad doc line, missing
-field docs, multiple args, generic structs/fns, non-literal defaults
-without `default_doc`, `Option<Vec<…>>` ports (optional LISTS have no
-representation yet), a bare or non-`cic` fence in `# Examples`, an empty
-or unterminated fence. Compile-fail messages are snapshot-tested in
+field docs, a single-output node without `# Returns` (or `# Returns` on a
+multi-output node or a sink — these two surface as `evaluation panicked`
+errors at the `#[node]` line: the check runs when the output ports are
+assembled at compile time), multiple args, generic structs/fns,
+non-literal defaults without `default_doc`, `Option<Vec<…>>` ports
+(optional LISTS have no representation yet), a bare or non-`cic` fence in
+`# Examples`, an empty or unterminated fence. Compile-fail messages are
+snapshot-tested in
 `crates/cicada-core/tests/ui/`; if you change macro diagnostics, re-bless
 (PowerShell):
 

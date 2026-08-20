@@ -25,6 +25,10 @@ pub struct ConstructPlaneIn {
 /// orthonormalized against x (Gram–Schmidt), so the stored plane is a
 /// right-handed orthonormal frame with normal x × y.
 ///
+/// # Returns
+///
+/// The right-handed orthonormal frame at `origin`.
+///
 /// # Panics
 ///
 /// Panics when `x` has no length at tolerance, or `y` is parallel to `x`

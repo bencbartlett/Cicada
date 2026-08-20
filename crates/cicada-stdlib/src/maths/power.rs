@@ -6,6 +6,10 @@ use super::BinaryIn;
 
 /// Power — `a` raised to `b` (`^` in expressions).
 ///
+/// # Returns
+///
+/// `a` raised to the power `b`.
+///
 /// # Examples
 ///
 /// ```cic

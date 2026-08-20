@@ -7,6 +7,10 @@ use super::UnitIn;
 
 /// Unit Z — the world z direction, scaled.
 ///
+/// # Returns
+///
+/// The vector (0, 0, factor).
+///
 /// # Examples
 ///
 /// ```cic

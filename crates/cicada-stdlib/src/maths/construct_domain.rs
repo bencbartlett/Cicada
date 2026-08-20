@@ -14,6 +14,10 @@ pub struct ConstructDomainIn {
 
 /// Construct Domain — a numeric interval from its endpoints.
 ///
+/// # Returns
+///
+/// The interval from `start` to `end` (a decreasing interval is legal).
+///
 /// # Examples
 ///
 /// ```cic

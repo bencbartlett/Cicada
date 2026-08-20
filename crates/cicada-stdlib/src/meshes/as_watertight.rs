@@ -14,6 +14,10 @@ pub struct AsWatertightIn {
 /// mesh-tier solid): every edge shared by exactly two consistently
 /// oriented triangles.
 ///
+/// # Returns
+///
+/// The mesh as a checked watertight solid.
+///
 /// # Panics
 ///
 /// Panics when the mesh has open or inconsistently oriented edges — red

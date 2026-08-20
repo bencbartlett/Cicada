@@ -16,6 +16,10 @@ pub struct PartitionIn {
 /// sizes `[1, 3]` → `[[a], [b, c, d]]`). Slot-preserving: absent slots land
 /// in their group as absent slots.
 ///
+/// # Returns
+///
+/// The groups in order, with the given sizes.
+///
 /// # Panics
 ///
 /// Panics when a size is negative (the offending index and value in the

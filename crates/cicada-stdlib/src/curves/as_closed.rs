@@ -18,6 +18,10 @@ pub struct AsClosedIn {
 /// endpoints coincide within tolerance closes (duplicate end vertex
 /// dropped).
 ///
+/// # Returns
+///
+/// The curve as a checked closed curve.
+///
 /// # Panics
 ///
 /// Panics when the curve cannot close: a line, endpoints apart beyond

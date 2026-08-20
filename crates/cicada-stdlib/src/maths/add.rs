@@ -13,6 +13,10 @@ pub struct AddIn {
 
 /// Add — sum of two numbers.
 ///
+/// # Returns
+///
+/// The sum `a + b`.
+///
 /// # Examples
 ///
 /// ```cic

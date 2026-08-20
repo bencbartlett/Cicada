@@ -13,6 +13,10 @@ pub struct LengthIn {
 /// List Length — the number of slots in a list (absent slots included —
 /// slot-preserving nulls keep their places, docs/08 rule 6).
 ///
+/// # Returns
+///
+/// The slot count, absent slots included.
+///
 /// # Examples
 ///
 /// ```cic

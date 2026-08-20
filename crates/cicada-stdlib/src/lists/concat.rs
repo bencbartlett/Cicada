@@ -15,6 +15,10 @@ pub struct ConcatIn {
 /// Concat — `a` then `b`, one list (GH Merge for two lists). Slot-preserving:
 /// absent slots of either input keep their places in the output.
 ///
+/// # Returns
+///
+/// One list: the slots of `a` followed by the slots of `b`.
+///
 /// # Examples
 ///
 /// ```cic

@@ -17,6 +17,10 @@ pub struct MeshIntersectionIn {
 /// Mesh Intersection — the intersection of two watertight meshes via
 /// Manifold; the result may be the empty solid.
 ///
+/// # Returns
+///
+/// The solid common to `a` and `b` (possibly empty).
+///
 /// # Panics
 ///
 /// Panics when Manifold refuses an operand.

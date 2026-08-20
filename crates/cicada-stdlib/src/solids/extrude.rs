@@ -23,6 +23,10 @@ pub struct ExtrudeIn {
 /// Extrude — extrude a closed planar profile into a watertight prism
 /// (mesh-backed under its v0.1 name, doc 15).
 ///
+/// # Returns
+///
+/// The watertight prism: the profile swept along `direction`.
+///
 /// # Panics
 ///
 /// Panics when the profile is degenerate or non-planar at tolerance, the
