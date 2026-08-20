@@ -44,10 +44,12 @@ Two planes over one WebSocket:
 The edit flow is **intent → authoritative delta**:
 
 1. The client sends a gesture-level intent matching doc 10's
-   round-trip table: `place_node`, `connect`, `accept_lift`,
-   `set_param`, `rename`, `delete_node`, `move_node` (layout),
-   `undo`, `redo`, `batch` (several gestures as one op), `apply_text`
-   (whole files, agents) — see §Undo/redo for the last four.
+   round-trip table: `place_node`, `connect`, `disconnect`,
+   `accept_lift`, `set_param`, `rename`, `delete_node`,
+   `toggle_disable` (the `#off` prefix; the delta says `disable x` /
+   `enable x`), `move_node` (layout), `set_preview`, `undo`, `redo`,
+   `batch` (several gestures as one op), `apply_text` (whole files,
+   agents) — see §Undo/redo for the last four.
 2. The engine validates against the checker, applies the edit to the
    text/sidecar (doc 10 writer discipline), assigns it a sequence
    number, and broadcasts the **delta**: graph view-model changes +

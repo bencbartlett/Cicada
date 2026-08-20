@@ -3,7 +3,8 @@
 //! implies — never reformatting, reordering, or realigning existing lines.
 //! Stage-2 gestures (doc 15): place, wire, lift, set-param, delete, rename,
 //! plus `apply_fix` for machine-applicable diagnostic fixes (docs/11);
-//! stage 5 added `remove_kwarg` (deleting a wire on the canvas).
+//! stage 5 added `remove_kwarg` (deleting a wire on the canvas); v0.1 added
+//! `toggle_disable` (the `#off` prefix, DECISIONS.md node-disable row).
 //!
 //! Gestures fail loudly and leave the document UNTOUCHED on failure: an
 //! edit that would turn a parsed statement into a broken one is reverted
@@ -20,6 +21,10 @@ pub enum WriterError {
     /// No statement binds this name.
     #[error("no binding named `{0}`")]
     UnknownBinding(String),
+    /// The binding is `#off`-disabled and the gesture needs a live one
+    /// (wire, unwire, lift, set-param): enable it first.
+    #[error("`{0}` is disabled (`#off`) — enable it to edit")]
+    Disabled(String),
     /// The binding's call has no such kwarg (and the gesture required an
     /// existing one).
     #[error("binding `{binding}` has no kwarg `{kwarg}`")]
@@ -86,8 +91,11 @@ pub fn place(
     if !dependencies.is_empty() {
         let mut last_dependency = 0;
         for dependency in dependencies {
+            // A disabled dependency is still a line to place after: the
+            // new wire to it is red ("disabled") until it is re-enabled.
             let line = document
                 .find_binding(dependency)
+                .or_else(|| document.find_disabled(dependency))
                 .ok_or_else(|| WriterError::UnknownBinding((*dependency).to_owned()))?;
             last_dependency = last_dependency.max(line);
         }
@@ -247,9 +255,7 @@ pub fn set_literal(
     literal_text: &str,
 ) -> Result<(), WriterError> {
     guard_version(document)?;
-    let line = document
-        .find_binding(binding)
-        .ok_or_else(|| WriterError::UnknownBinding(binding.to_owned()))?;
+    let line = live_binding(document, binding)?;
     let Line::Statement { statement, .. } = &document.lines()[line] else {
         return Err(WriterError::UnknownBinding(binding.to_owned()));
     };
@@ -268,18 +274,79 @@ pub fn set_literal(
 /// [`WriterError::UnknownBinding`] / [`WriterError::FutureVersion`].
 pub fn delete(document: &mut Document, binding: &str) -> Result<(), WriterError> {
     guard_version(document)?;
+    // A `#off`-disabled ghost is deletable too — it is the user's line.
     let line = document
         .find_binding(binding)
+        .or_else(|| document.find_disabled(binding))
         .ok_or_else(|| WriterError::UnknownBinding(binding.to_owned()))?;
     document.remove_line(line);
     Ok(())
 }
 
+/// The state [`toggle_disable`] left the binding in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisableState {
+    /// The statement now carries the `#off ` prefix (a ghost; skipped in
+    /// solves; downstream references red as "disabled").
+    Disabled,
+    /// The prefix is gone: a live statement again (or a Broken line, when
+    /// the body behind the prefix never parsed — enabling surfaces it).
+    Enabled,
+}
+
+/// The `#off ` prefix the writer puts on a disabled statement (docs/10
+/// gesture table: "prefix / unprefix the statement with `#off `").
+const OFF_PREFIX: &str = "#off ";
+
+/// Toggle disable on a binding (docs/10 §1 + gesture table; DECISIONS.md
+/// node-disable row): a live statement gets `#off ` in front of its text and
+/// becomes a [`Line::Disabled`] whose parse is kept (ports and wiring
+/// intact on the canvas); a disabled line loses exactly that prefix and is
+/// a statement again. The rest of the line — spacing, comment, CRLF — is
+/// untouched either way, so disable → enable is byte-identical. Re-enabling
+/// a line whose body does not parse yields a `Broken` line: the honest
+/// state of text the prefix was hiding, never a silent refusal.
+///
+/// # Errors
+///
+/// [`WriterError::UnknownBinding`] (neither a live nor a disabled line
+/// binds the name) / [`WriterError::FutureVersion`].
+pub fn toggle_disable(document: &mut Document, binding: &str) -> Result<DisableState, WriterError> {
+    guard_version(document)?;
+    if let Some(line) = document.find_binding(binding) {
+        document.splice(line, LineSpan { start: 0, end: 0 }, OFF_PREFIX);
+        debug_assert!(
+            matches!(document.lines()[line], Line::Disabled { .. }),
+            "`#off ` in front of a parsed statement classifies as Disabled"
+        );
+        return Ok(DisableState::Disabled);
+    }
+    let line = document
+        .find_disabled(binding)
+        .ok_or_else(|| WriterError::UnknownBinding(binding.to_owned()))?;
+    let raw = document.lines()[line].raw();
+    // The prefix sits after any leading whitespace / BOM (`classify_line`
+    // trims exactly that before it looks for `#`).
+    let start = raw
+        .find('#')
+        .filter(|&at| raw[at..].starts_with(OFF_PREFIX))
+        .ok_or_else(|| WriterError::UnknownBinding(binding.to_owned()))?;
+    document.splice(
+        line,
+        LineSpan {
+            start,
+            end: start + OFF_PREFIX.len(),
+        },
+        "",
+    );
+    Ok(DisableState::Enabled)
+}
+
 /// Rename a node (docs/10: rename binding + all references atomically; the
 /// layout sidecar key moves with it at stage 5). Caches key on content
 /// hashes, so a rename never invalidates results. References inside Broken
-/// lines cannot be renamed (they have no parse); the definition and every
-/// parsed reference move together.
+/// lines cannot be renamed (they have no parse); the definition — live or
+/// `#off`-disabled — and every parsed reference move together.
 ///
 /// # Errors
 ///
@@ -290,17 +357,23 @@ pub fn rename(document: &mut Document, old: &str, new: &str) -> Result<(), Write
     if !is_valid_binding_name(new) {
         return Err(WriterError::InvalidName(new.to_owned()));
     }
-    if document.find_binding(new).is_some() {
+    // Taken by a live statement, or held by a `#off`/broken line the user
+    // may re-enable or fix next — either way the rename would plant a
+    // rebinding error.
+    if document.find_binding(new).is_some() || name_shadowed(document, new) {
         return Err(WriterError::NameTaken(new.to_owned()));
     }
     let definition = document
         .find_binding(old)
+        .or_else(|| document.find_disabled(old))
         .ok_or_else(|| WriterError::UnknownBinding(old.to_owned()))?;
 
     // Collect every span to rewrite, per line: the defining target plus
-    // all references (kwarg refs, expression free vars).
+    // all references (kwarg refs, expression free vars) — inside
+    // `#off`-disabled lines too, so re-enabling one never meets a stale
+    // name. References inside Broken lines have no parse to rename.
     let mut edits: Vec<(usize, LineSpan)> = Vec::new();
-    for (line, statement, _) in document.statements() {
+    for (line, statement, _, _) in document.statements_including_disabled() {
         if line == definition {
             for target in &statement.targets {
                 if target.name == old {
@@ -401,28 +474,36 @@ fn auto_name(document: &Document, func: &str) -> String {
     }
 }
 
-/// Names held by Broken or Disabled lines still block auto-naming — the
-/// user fixing/re-enabling their line must not inherit a rebinding error.
+/// Names held by Broken or Disabled lines still block auto-naming and
+/// renames — the user fixing/re-enabling their line must not inherit a
+/// rebinding error.
 fn name_shadowed(document: &Document, name: &str) -> bool {
-    document.lines().iter().any(|line| match line {
-        Line::Broken {
-            node: Some(node), ..
-        } => node == name,
-        Line::Disabled {
-            name: Some(disabled),
-            ..
-        } => disabled == name,
-        _ => false,
-    })
+    document.find_disabled(name).is_some()
+        || document.lines().iter().any(|line| match line {
+            Line::Broken {
+                node: Some(node), ..
+            } => node == name,
+            _ => false,
+        })
+}
+
+/// The line of the LIVE statement binding `binding` — a `#off`-disabled
+/// one is refused by name ("enable it to edit"), never as "no binding".
+fn live_binding(document: &Document, binding: &str) -> Result<usize, WriterError> {
+    if let Some(line) = document.find_binding(binding) {
+        return Ok(line);
+    }
+    if document.find_disabled(binding).is_some() {
+        return Err(WriterError::Disabled(binding.to_owned()));
+    }
+    Err(WriterError::UnknownBinding(binding.to_owned()))
 }
 
 fn call_statement<'a>(
     document: &'a Document,
     binding: &str,
 ) -> Result<(usize, &'a Statement), WriterError> {
-    let line = document
-        .find_binding(binding)
-        .ok_or_else(|| WriterError::UnknownBinding(binding.to_owned()))?;
+    let line = live_binding(document, binding)?;
     let Line::Statement { statement, .. } = &document.lines()[line] else {
         return Err(WriterError::UnknownBinding(binding.to_owned()));
     };

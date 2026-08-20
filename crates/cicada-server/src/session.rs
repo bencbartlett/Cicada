@@ -1159,7 +1159,7 @@ impl Session {
                         source: Box::new(IntentError::Protocol(
                             "not a canvas write gesture — a batch holds place_node / connect / \
                              disconnect / accept_lift / set_param / rename / delete_node / \
-                             move_node / set_preview only"
+                             toggle_disable / move_node / set_preview only"
                                 .to_owned(),
                         )),
                     });
@@ -1419,21 +1419,30 @@ impl Session {
             ClientMessage::DeleteNode { node } => {
                 // Downstream references become red — the dirty set names
                 // them so the client can flash the reds.
-                let dependents: Vec<String> = inner
-                    .loaded
-                    .document
-                    .statements()
-                    .filter(|(_, statement, _)| {
-                        statement.references().iter().any(|r| r.name == node)
-                    })
-                    .map(|(_, statement, _)| statement.name().to_owned())
-                    .collect();
+                let dependents = dependents_of(&inner.loaded.document, &node);
                 writer::delete(&mut inner.loaded.document, &node)?;
                 inner.sidecar.remove(&node);
                 inner.sidecar.remove_from_groups(&node);
                 Ok(Applied {
                     label: format!("delete {node}"),
                     dirty: dependents,
+                    text_changed: true,
+                    refresh_display: false,
+                })
+            }
+            ClientMessage::ToggleDisable { node } => {
+                // Downstream goes red ("disabled") or green again (a cache
+                // hit, usually): the dirty set names the node and them.
+                let mut dirty = vec![node.clone()];
+                dirty.extend(dependents_of(&inner.loaded.document, &node));
+                let state = writer::toggle_disable(&mut inner.loaded.document, &node)?;
+                let verb = match state {
+                    writer::DisableState::Disabled => "disable",
+                    writer::DisableState::Enabled => "enable",
+                };
+                Ok(Applied {
+                    label: format!("{verb} {node}"),
+                    dirty,
                     text_changed: true,
                     refresh_display: false,
                 })
@@ -2472,6 +2481,16 @@ fn restore_state(inner: &mut Inner, target: &StateSnapshot, label: String) -> Ap
     }
 }
 
+/// The live statements referencing `name` (kwarg refs, expression free
+/// vars) — the nodes that go red when `name` is deleted or disabled.
+fn dependents_of(document: &Document, name: &str) -> Vec<String> {
+    document
+        .statements()
+        .filter(|(_, statement, _)| statement.references().iter().any(|r| r.name == name))
+        .map(|(_, statement, _)| statement.name().to_owned())
+        .collect()
+}
+
 /// The names bound on lines whose raw text differs between two documents
 /// (either side) — the dirty set of a whole-text change.
 fn changed_bindings(old: &Document, new: &Document) -> Vec<String> {
@@ -2487,6 +2506,7 @@ fn changed_bindings(old: &Document, new: &Document) -> Vec<String> {
                 Line::Disabled {
                     raw,
                     name: Some(name),
+                    ..
                 }
                 | Line::Broken {
                     raw,
@@ -6047,5 +6067,292 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let (memory, hash) = text_and_hash(&session);
         assert_eq!(memory, text_a, "memory follows the disk");
         assert_eq!(hash, blake3_hex(&memory));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // one story: disable → ghost with ports → enable as a cache hit → undo/redo → batch
+    fn toggle_disable_ghosts_the_node_with_its_ports_and_re_enables_as_a_cache_hit() {
+        let source = "# cicada 1\n\
+                      size = slider(value=2.0, min=0.5, max=5.0)\n\
+                      span = construct_domain(start=0.0, end=size)  # the span\n\
+                      block = box(x=span, y=span, z=span)\n";
+        let (_dir, config) = project(source);
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        drain(&mut rx);
+        let before = session.debug_state(false);
+        assert_eq!(before["statuses"]["block"]["state"], "done");
+
+        // ---- disable `span`: ONE op labelled `disable span`; the text gains
+        // exactly the `#off ` prefix; the ghost keeps its ports, its literal
+        // and its incoming wire; downstream is red for the precise reason.
+        session.handle(
+            id,
+            Some("d1".into()),
+            ClientMessage::ToggleDisable {
+                node: "span".into(),
+            },
+        );
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        let deltas: Vec<_> = msgs.iter().filter(|m| m["type"] == "delta").collect();
+        assert_eq!(deltas.len(), 1, "{msgs:?}");
+        let delta = &deltas[0]["payload"];
+        assert_eq!(delta["source"]["label"], "disable span");
+        assert_eq!(delta["source"]["intent_id"], "d1");
+        let disabled_text = "# cicada 1\n\
+                             size = slider(value=2.0, min=0.5, max=5.0)\n\
+                             #off span = construct_domain(start=0.0, end=size)  # the span\n\
+                             block = box(x=span, y=span, z=span)\n";
+        assert_eq!(delta["text"], disabled_text);
+        assert_eq!(on_disk(&pipeline).0, disabled_text, "persisted at once");
+        assert_eq!(delta["history"]["depth"], 1);
+        assert_eq!(delta["history"]["undo_label"], "disable span");
+        let dirty: Vec<&str> = delta["dirty"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            dirty,
+            ["span", "block"],
+            "the node and its dependents flash"
+        );
+
+        let graph = &delta["graph"];
+        let span = graph["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["name"] == "span")
+            .expect("the ghost is still a node");
+        assert_eq!(span["kind"], "disabled");
+        assert_eq!(span["func"], "construct_domain");
+        assert_eq!(
+            span["title"], "Construct Domain",
+            "the spec's title, not `disabled`"
+        );
+        assert_eq!(span["excluded"]["status"], "red");
+        assert_eq!(span["excluded"]["reason"], "disabled (`#off`)");
+        let inputs: Vec<&str> = span["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(inputs, ["start", "end"], "ports intact");
+        assert_eq!(
+            span["inputs"][0]["literal"], "0.0",
+            "the literal is still shown"
+        );
+        assert_eq!(span["inputs"][1]["wired"]["node"], "size");
+        assert_eq!(span["outputs"][0]["name"], "out");
+        assert_eq!(
+            span["text"], "#off span = construct_domain(start=0.0, end=size)  # the span",
+            "the ghost shows its raw line, prefix and trailing comment included"
+        );
+        let wires: Vec<&str> = graph["wires"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["id"].as_str().unwrap())
+            .collect();
+        assert!(
+            wires.contains(&"size.out->span.end"),
+            "the ghost's incoming wire is drawn: {wires:?}"
+        );
+        assert!(
+            wires.contains(&"span.out->block.x"),
+            "the downstream wire is drawn (red): {wires:?}"
+        );
+        let red = graph["wires"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["id"] == "span.out->block.x")
+            .unwrap();
+        assert_eq!(red["red"], true);
+        assert!(
+            red["reason"].as_str().unwrap().contains("disabled"),
+            "{}",
+            red["reason"]
+        );
+        let block = graph["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["name"] == "block")
+            .unwrap();
+        assert_eq!(block["kind"], "call");
+        assert!(
+            block["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|d| d["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("`span` is disabled")),
+            "downstream names the disabled node, never unknown-name: {}",
+            block["diagnostics"]
+        );
+        let state = session.debug_state(false);
+        assert_eq!(state["statuses"]["block"]["state"], "red");
+        assert_eq!(state["statuses"]["span"]["state"], "red");
+        assert_eq!(
+            state["statuses"]["size"]["state"], "cached",
+            "upstream untouched"
+        );
+
+        // ---- the ghost refuses in-place edits BY NAME (not "no binding").
+        let error = session
+            .dispatch(
+                id,
+                None,
+                ClientMessage::SetParam {
+                    node: "span".into(),
+                    port: Some("start".into()),
+                    value: "1.0".into(),
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), "writer");
+        assert!(error.to_string().contains("`span` is disabled"), "{error}");
+        // …but can be moved (sidecar) and deleted — it is the user's line.
+        session.handle(
+            id,
+            None,
+            ClientMessage::MoveNode {
+                node: "span".into(),
+                cell: Some([9, 9]),
+            },
+        );
+        session.wait_idle();
+        drain(&mut rx);
+        assert_eq!(history_of(&session)["undo_label"], "move span");
+
+        // ---- enable again: `enable span`, the text is byte-identical to the
+        // start, and nothing recomputes — every output is a memo hit.
+        session.handle(
+            id,
+            Some("e1".into()),
+            ClientMessage::ToggleDisable {
+                node: "span".into(),
+            },
+        );
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        let deltas: Vec<_> = msgs.iter().filter(|m| m["type"] == "delta").collect();
+        assert_eq!(deltas.len(), 1, "{msgs:?}");
+        assert_eq!(deltas[0]["payload"]["source"]["label"], "enable span");
+        assert_eq!(deltas[0]["payload"]["text"], source);
+        assert_eq!(on_disk(&pipeline).0, source);
+        let state = session.debug_state(false);
+        assert_eq!(
+            state["statuses"]["span"]["state"], "cached",
+            "{}",
+            state["statuses"]
+        );
+        assert_eq!(
+            state["statuses"]["block"]["state"], "cached",
+            "{}",
+            state["statuses"]
+        );
+        assert_eq!(history_of(&session)["depth"], 3);
+
+        // ---- undo the enable: the ghost is back (with its moved cell);
+        // redo: live again. Snapshots, so both are restores.
+        session.handle(id, None, ClientMessage::Undo {});
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        let delta = msgs.iter().find(|m| m["type"] == "delta").unwrap();
+        assert_eq!(delta["payload"]["source"]["label"], "undo: enable span");
+        assert_eq!(delta["payload"]["text"], disabled_text);
+        let span = delta["payload"]["graph"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["name"] == "span")
+            .unwrap();
+        assert_eq!(span["kind"], "disabled");
+        assert_eq!(span["cell"], serde_json::json!([9, 9]));
+        session.handle(id, None, ClientMessage::Redo {});
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        let delta = msgs.iter().find(|m| m["type"] == "delta").unwrap();
+        assert_eq!(delta["payload"]["source"]["label"], "redo: enable span");
+        assert_eq!(delta["payload"]["text"], source);
+
+        // ---- a multi-select `D` is one batch: two toggles, one op, one
+        // undo; a mixed selection flips each its own way.
+        session.handle(
+            id,
+            None,
+            ClientMessage::ToggleDisable {
+                node: "size".into(),
+            },
+        );
+        session.wait_idle();
+        drain(&mut rx);
+        session.handle(
+            id,
+            Some("b".into()),
+            ClientMessage::Batch {
+                ops: vec![
+                    ClientMessage::ToggleDisable {
+                        node: "size".into(),
+                    },
+                    ClientMessage::ToggleDisable {
+                        node: "block".into(),
+                    },
+                ],
+                label: "toggle 2 nodes".into(),
+            },
+        );
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        let delta = msgs.iter().find(|m| m["type"] == "delta").unwrap();
+        assert_eq!(delta["payload"]["source"]["label"], "toggle 2 nodes");
+        assert_eq!(
+            delta["payload"]["text"],
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)  # the span\n\
+             #off block = box(x=span, y=span, z=span)\n"
+        );
+        let depth = history_of(&session)["depth"].as_u64().unwrap();
+        session.handle(id, None, ClientMessage::Undo {});
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        let delta = msgs.iter().find(|m| m["type"] == "delta").unwrap();
+        assert_eq!(delta["payload"]["source"]["label"], "undo: toggle 2 nodes");
+        assert_eq!(
+            delta["payload"]["text"],
+            "# cicada 1\n\
+             #off size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)  # the span\n\
+             block = box(x=span, y=span, z=span)\n"
+        );
+        assert_eq!(history_of(&session)["depth"], depth - 1);
+
+        // ---- unknown names are loud, and a batch that hits one rolls back whole.
+        let error = session
+            .dispatch(
+                id,
+                None,
+                ClientMessage::ToggleDisable {
+                    node: "nope".into(),
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), "writer");
+        assert!(
+            error.to_string().contains("no binding named `nope`"),
+            "{error}"
+        );
     }
 }

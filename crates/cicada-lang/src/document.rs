@@ -39,15 +39,22 @@ pub enum Line {
         /// The parse.
         statement: Statement,
     },
-    /// A `#off `-disabled binding (docs/10 §1). Recognized so downstream
-    /// references error as "disabled", never unknown-name (DECISIONS.md
-    /// node-disable row); ghost-node rendering and skip-in-solve semantics
-    /// arrive with later stages.
+    /// A `#off `-disabled binding (docs/10 §1, DECISIONS.md node-disable
+    /// row): a comment to generic tools, but Cicada parses the binding
+    /// behind the prefix so the canvas can ghost the node WITH its ports
+    /// and wiring, downstream references error as "disabled" (never
+    /// unknown-name), and the solve skips it. Not a definition: the
+    /// checker, `statements()` and `find_binding` do not see it.
     Disabled {
-        /// Raw text.
+        /// Raw text (prefix included).
         raw: String,
-        /// The disabled binding's name, when extractable.
+        /// The disabled binding's name: the parsed statement's, else the
+        /// first identifier after the prefix, else `None`.
         name: Option<String>,
+        /// The parse of the text after `#off `, when it parses — its spans
+        /// index `raw` exactly like a `Statement`'s do. `None` when the
+        /// body does not parse (re-enabling it yields a `Broken` line).
+        statement: Option<Statement>,
     },
     /// A statement that failed to parse. Reds ITS node; the rest of the
     /// file is unaffected (docs/10 constraint 4).
@@ -148,12 +155,50 @@ impl Document {
     }
 
     /// The 0-based line index of the statement binding `name` (any unpack
-    /// target counts).
+    /// target counts). A `#off`-disabled binding is not one — see
+    /// [`Self::find_disabled`].
     #[must_use]
     pub fn find_binding(&self, name: &str) -> Option<usize> {
         self.statements()
             .find(|(_, statement, _)| statement.targets.iter().any(|t| t.name == name))
             .map(|(index, _, _)| index)
+    }
+
+    /// The 0-based line index of the `#off`-disabled line holding `name`
+    /// (any target of its parsed statement, else its extracted name).
+    #[must_use]
+    pub fn find_disabled(&self, name: &str) -> Option<usize> {
+        self.lines.iter().position(|line| match line {
+            Line::Disabled {
+                statement: Some(statement),
+                ..
+            } => statement.targets.iter().any(|t| t.name == name),
+            Line::Disabled {
+                name: Some(held), ..
+            } => held == name,
+            _ => false,
+        })
+    }
+
+    /// Every parsed statement — live AND `#off`-disabled — with its line
+    /// index, raw text and disabled flag: for the gestures that must see
+    /// through the prefix (rename rewrites references inside a disabled
+    /// line too, so re-enabling it never meets a stale name).
+    pub fn statements_including_disabled(
+        &self,
+    ) -> impl Iterator<Item = (usize, &Statement, &str, bool)> {
+        self.lines
+            .iter()
+            .enumerate()
+            .filter_map(|(index, line)| match line {
+                Line::Statement { statement, raw } => Some((index, statement, raw.as_str(), false)),
+                Line::Disabled {
+                    statement: Some(statement),
+                    raw,
+                    ..
+                } => Some((index, statement, raw.as_str(), true)),
+                _ => None,
+            })
     }
 
     /// Parse-level diagnostics: pragma problems and broken statements.
@@ -284,14 +329,21 @@ fn classify_line(raw: &str, is_first: bool) -> Line {
                 version,
             };
         }
-        // `#off name = …` is doc-10 syntax for a disabled binding. Native
-        // disable semantics arrive with a later stage; recognizing the
-        // name NOW keeps downstream errors honest ("disabled", never
-        // unknown-name — DECISIONS.md node-disable row).
+        // `#off name = …` is doc-10 syntax for a disabled binding. The body
+        // is parsed in place — padded with spaces where the prefix sits, so
+        // every span indexes `raw` exactly as a live statement's would and
+        // the writer's splices work unchanged on a disabled line.
         if let Some(disabled) = rest.strip_prefix("off ") {
+            let offset = parse_region.len() - disabled.len();
+            let padded = format!("{}{disabled}", " ".repeat(offset));
+            let (name, statement) = match parse_statement(&padded) {
+                Ok(statement) => (Some(statement.name().to_owned()), Some(statement)),
+                Err(_) => (first_ident(disabled), None),
+            };
             return Line::Disabled {
                 raw: raw.to_owned(),
-                name: first_ident(disabled),
+                name,
+                statement,
             };
         }
         return Line::Comment {

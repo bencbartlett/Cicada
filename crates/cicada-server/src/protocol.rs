@@ -504,6 +504,15 @@ pub enum ClientMessage {
         /// Node.
         node: String,
     },
+    /// Toggle `#off` on a node (docs/10 gesture table; DECISIONS.md
+    /// node-disable row): a live statement becomes a ghost — ports and
+    /// wiring intact, skipped in solves, downstream red as "disabled" — and
+    /// a ghost becomes live again (usually a pure cache hit). The delta's
+    /// label says which way it went: `disable x` / `enable x`.
+    ToggleDisable {
+        /// Node.
+        node: String,
+    },
     /// Move a node (sidecar only). `None` = snap back to auto.
     MoveNode {
         /// Node.
@@ -534,7 +543,7 @@ pub enum ClientMessage {
     Batch {
         /// The gestures — every one a write gesture (`place_node`,
         /// `connect`, `disconnect`, `accept_lift`, `set_param`, `rename`,
-        /// `delete_node`, `move_node`, `set_preview`).
+        /// `delete_node`, `toggle_disable`, `move_node`, `set_preview`).
         ops: Vec<ClientMessage>,
         /// The op's label.
         label: String,
@@ -602,6 +611,7 @@ pub fn is_write(message: &ClientMessage) -> bool {
             | ClientMessage::ParamPreview { .. }
             | ClientMessage::Rename { .. }
             | ClientMessage::DeleteNode { .. }
+            | ClientMessage::ToggleDisable { .. }
             | ClientMessage::MoveNode { .. }
             | ClientMessage::SetPreview { .. }
             | ClientMessage::Cancel {}
@@ -626,6 +636,7 @@ pub fn is_gesture(message: &ClientMessage) -> bool {
             | ClientMessage::SetParam { .. }
             | ClientMessage::Rename { .. }
             | ClientMessage::DeleteNode { .. }
+            | ClientMessage::ToggleDisable { .. }
             | ClientMessage::MoveNode { .. }
             | ClientMessage::SetPreview { .. }
     )

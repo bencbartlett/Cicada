@@ -1,0 +1,4 @@
+# cicada 1
+seeds = scatter(count=100)
+cells = voronoi(seeds=seeds)  # the cells
+frusta = frustum(profile=each(cells))

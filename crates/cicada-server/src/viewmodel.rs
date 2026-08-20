@@ -76,7 +76,8 @@ pub enum NodeKind {
     Expression,
     /// A statement that failed to parse (reds its node).
     Broken,
-    /// A `#off`-disabled statement (ghost).
+    /// A `#off`-disabled statement (ghost): when its body parses the node
+    /// keeps its ports, literals and wires — only `kind` says it is off.
     Disabled,
 }
 
@@ -331,7 +332,36 @@ pub fn build(
                 node.comment = comment;
                 nodes.push(node);
             }
-            Line::Disabled { raw, name } => {
+            Line::Disabled {
+                raw,
+                name,
+                statement: Some(statement),
+            } => {
+                // A ghost WITH its ports and wiring (DECISIONS.md node-disable
+                // row): the same node the statement would be, flagged off.
+                // `lowered.excluded` carries the "disabled (`#off`)" reason.
+                let comment = take_comment(&mut pending_comment);
+                let mut node = statement_node(
+                    index,
+                    statement,
+                    raw,
+                    resolution,
+                    &spec_by_name,
+                    lowered,
+                    &mut wires,
+                );
+                debug_assert_eq!(name.as_deref(), Some(node.name.as_str()));
+                node.kind = NodeKind::Disabled;
+                node.comment = comment;
+                nodes.push(node);
+            }
+            Line::Disabled {
+                raw,
+                name,
+                statement: None,
+            } => {
+                // The body behind the prefix does not parse: a port-less
+                // ghost that shows its text (enabling it surfaces the error).
                 let comment = take_comment(&mut pending_comment);
                 let name = name
                     .clone()
