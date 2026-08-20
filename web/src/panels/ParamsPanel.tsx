@@ -10,8 +10,12 @@
  * number, in the warn color) and a `pending · N s` hint under the name (a
  * line in the name column, so the range track never changes width under a
  * held pointer; `~` when the estimate is a floor); the viewport is not
- * expected to move until release. Observers see the same from the
- * broadcast. A cheap cone never hears of the policy and previews live.
+ * expected to move until release. A release on the committed value writes
+ * nothing and is the `end_drag` intent instead — decided on the pointer's /
+ * key's release, because the native `change` never fires for a drag that
+ * returns to its start. Observers see the same from the broadcast, and
+ * `drag_ended` takes it down for them. A cheap cone never hears of the
+ * policy and previews live.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CATEGORY_ORDER } from "../kinds";
@@ -237,15 +241,18 @@ function SliderWidget({
       return;
     }
     const snapped = snapSlider(value, min, max, step);
-    setDraft(snapped);
     if (snapped === committed) {
       // Released on the committed value: no write goes out, so nothing
-      // else would take the pending badge down — the server's drag ends
-      // by the gap rule, silently. (A release that writes leaves it to the
-      // delta, which ends the drag server-side.)
-      useCicada.getState().clearPending(node.name, port);
+      // else would take the pending badge down — the store clears it and
+      // tells the server the drag is over (`end_drag`), so a re-grab inside
+      // the gap is a fresh drag and every other client hears `drag_ended`.
+      // (A release that writes leaves it to the delta, which ends the drag
+      // server-side.) No draft to keep: the committed value IS the value.
+      setDraft(null);
+      useCicada.getState().endDrag(node.name, port);
       return;
     }
+    setDraft(snapped);
     commitValue(node.name, param, snapped);
   };
 
@@ -253,6 +260,16 @@ function SliderWidget({
   // onChange fires on every `input` — so preview from React, commit from the
   // native change event (through a ref so the listener sees the latest
   // bounds without re-subscribing).
+  //
+  // But `change` fires only when the released value differs from the value
+  // the interaction STARTED on: a drag that returns to its start never
+  // fires it (review finding, 2026-08-20 — the pending badge stood for
+  // ever after such a drag). The pointer's release and the key's release
+  // are the events that always come, so the no-write end of a drag is
+  // decided there: a draft that snaps onto the committed value is a
+  // release without a write. A draft that differs is left to `change`,
+  // which fires in that case (before or after the pointer event — either
+  // order commits once).
   const commitRef = useRef(commit);
   useEffect(() => {
     commitRef.current = commit;
@@ -264,6 +281,10 @@ function SliderWidget({
     el.addEventListener("change", onChange);
     return () => el.removeEventListener("change", onChange);
   }, []);
+  const release = () => {
+    if (draft === null) return;
+    if (snapSlider(draft, min, max, step) === committed) commit(draft);
+  };
 
   useEffect(
     () => () => {
@@ -291,6 +312,9 @@ function SliderWidget({
           setDraft(v);
           preview(v);
         }}
+        onPointerUp={release}
+        onPointerCancel={release}
+        onKeyUp={release}
       />
       <input
         type="number"

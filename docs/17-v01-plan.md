@@ -19,7 +19,7 @@ runs in parallel from day 1:
 | 2 | Git panel slice 1 — status strip, per-node change markers, commit, revert-to-HEAD | foreground (server/web) | ~1 week | pending |
 | P | OCCT probe — prebuilt 7.8.x build/link on win/mac/linux, determinism, timings, license, CI shape | parallel worktree | hours, cap 1 day | **done** 2026-08-20 — GREEN on win-64 with one rename patch, byte-deterministic, ~3 ms/boolean; Linux/macOS measured by item 3 WP-A's CI job; memo `docs/probes/occt-2026-08.md` |
 | 3 | OCCT-backed Solid — the `Solid` kind, primitives/extrude/loft/revolve/sweep, booleans, `tessellate`, STEP; `mesh_*` renames in the same commit | main geometry track from week 3 | weeks | **unblocked** (probe GREEN) — WP-A next: own fork with the recorded patches, `occt` feature, `tools/fetch_occt.py`, the per-OS CI job |
-| 3b | Scheduler foundations — per-solve cancel handle, `volatile`, idle-class hypothetical solve — plus compute-on-release | parallel (sched/server) | ~1 week | **done** 2026-08-20 (`wt/sched`, seventeen commits after two review rounds: the engine half, then the web half — both sliders show the pending value + estimate from `preview_policy` — with a Playwright drag of the wall's `deboss` as its evidence) |
+| 3b | Scheduler foundations — per-solve cancel handle, `volatile`, idle-class hypothetical solve — plus compute-on-release | parallel (sched/server) | ~1 week | **done** 2026-08-20 (`wt/sched`, eighteen commits after three review rounds: the engine half, then the web half — both sliders show the pending value + estimate from `preview_policy`, the release that writes nothing is `end_drag` and every announced drag's end is `drag_ended` — with a Playwright drag of the wall's `deboss`, an observer page watching, as its evidence) |
 | 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | pending |
 | 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | pending |
 | 6 | WASM script host — load precompiled guests, epoch cancellation, `cicada-guest` SDK | last | weeks | pending |
@@ -258,10 +258,12 @@ Design: DECISIONS.md rows 16 and 42 (revised 2026-08-19), doc 03, doc 08
   drag), on a refused write's `error` (a `lease` refusal excepted — it
   is decided before the drag-ending door), on a snapshot and on a
   disconnect; a release on the committed value writes nothing, so the
-  widget clears it itself; frames and statuses never clear it (a
-  memo-warm tick paints live mid-drag by design); observers render the
-  same from the broadcast; `cached` statuses read `cached · last 43.9
-  s`. Evidence: store unit tests for every transition and
+  widget clears it itself AND sends `end_drag`, and the server's
+  `drag_ended` takes it down everywhere else (see the review round
+  below); frames and statuses never clear it (a memo-warm tick paints
+  live mid-drag by design); observers render the same from the
+  broadcast; `cached` statuses read `cached · last 43.9 s`. Evidence:
+  store unit tests for every transition and
   `web/e2e/compute_on_release.spec.ts` — a real pointer drag of the
   wall's `deboss` on the debug engine (2 threads): cold open 31 s,
   estimate 23 s, 9 ticks withheld, 0 computing previews, the hint up
@@ -273,6 +275,47 @@ Design: DECISIONS.md rows 16 and 42 (revised 2026-08-19), doc 03, doc 08
   generations, 1 policy for the stream (estimate 3.6 s), one 3.6 s
   generation on release; warm reopen estimate 3.9 s, release 0.22 ms
   all cached.
+- **Review round on the web half (2026-08-20)**: three holes, one
+  contract revision (doc 13 §Slider drags, the "end of an announced
+  drag is announced" paragraph; DECISIONS.md row 39). (1) The params
+  panel's slider ended its drag only from the native `change` event,
+  which Chrome does not fire when a drag returns to its start value —
+  the badge stood for ever after such a drag (the canvas widget, which
+  releases from pointer events, did not have the bug); both sliders
+  now decide the no-write release on the pointer's / key's release.
+  (2) Observers (and the non-dragging twin widget, and a writer whose
+  release is refused by the lease) had no signal at all for a drag
+  that ended without a write: the frozen contract's "the server never
+  sends back-to-live" left them a stale badge and a value that was
+  neither committed nor pending. Decided: the release that writes
+  nothing is an intent — `end_drag` — and the server broadcasts
+  `drag_ended` whenever an ANNOUNCED drag ends (after the delta /
+  error / snapshot when there is one; alone for `end_drag`, Esc, the
+  writer's departure, a lease handover), the gap rule's end excepted
+  because a pause is not a release and the badge must not flicker off
+  under a held pointer. (3) A re-grab inside the 300 ms gap after a
+  no-write release continued the server's drag un-announced while the
+  client had already cleared — `end_drag` ends the server's drag at
+  the release, so the re-grab is a fresh drag, announced again. Tests:
+  session tests for every end and both clients (`an_announced_drags_
+  end_is_announced_to_every_client`, `the_writers_departure_and_a_
+  lease_handover_end_the_drag_for_the_observers`), the protocol shapes,
+  store tests for `endDrag` / `drag_ended`, and — new — jsdom +
+  Testing Library component tests for BOTH sliders (the chip and the
+  value while pending, the pending value following the thumb, the
+  drag-return release, the write release, the keyboard path, the
+  observer view; they fail on the review's mutations), and the e2e
+  grew a second half: an observer page, a real pointer drag away and
+  back to the committed value (28 more ticks withheld, both pages'
+  badges down on release, the server's drag ended, nothing written,
+  nothing solved), the re-grab announced again, the canvas twin's chip
+  and value asserted from the DOM (1.7 min on the dev machine). The
+  `cancel` on the canvas sender drops a queued tick on a no-write
+  release (sent after the `end_drag` it would be a fresh drag on the
+  committed value — cold while its own carve is still running). Still
+  not relayed: the writer's later ticks to observers (they see the
+  policy's first withheld value with the badge until the release —
+  doc 13 contract item 4).
 
 ## Item 4 — time transport, Cycle thin slice (~1 week)
 

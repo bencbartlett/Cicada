@@ -146,8 +146,13 @@ export interface WireValues {
  * pending param at a time: every `preview_policy` REPLACES it (for the
  * same param or another — the other's drag has ended). Cleared by the
  * release's delta (any write ends the drag server-side — a refused one
- * too: an `error`), by a snapshot (a reload barrier ends it), a
- * disconnect, or the widget on a release that writes nothing.
+ * too: an `error`), by `drag_ended` (the server announcing the end of an
+ * announced drag: after a release that wrote nothing, an Esc, a refused
+ * write, the writer's departure or a lease handover — the signal observers
+ * and the non-dragging twin widget have for those ends), by a snapshot (a
+ * reload barrier ends it), a disconnect, or the widget itself on its own
+ * release that writes nothing (`endDrag`: optimistic, ahead of the
+ * `drag_ended` its `end_drag` intent earns).
  */
 export interface PendingParam {
   node: string;
@@ -159,7 +164,11 @@ export interface PendingParam {
   /** Predicted wall ms of a live preview — a floor when `rough`. */
   estimateMs: number;
   rough: boolean;
-  /** The `seq` of the `preview_policy` that set this (a new one replaces it). */
+  /**
+   * The session `seq` current when the `preview_policy` arrived — the
+   * write counter, NOT unique per message (two policies between writes
+   * share it). Informational; nothing decides on it.
+   */
   seq: number;
 }
 
@@ -247,8 +256,9 @@ export interface CicadaState {
    * The param whose current drag is compute-on-release, or null
    * (`preview_policy` sets it — the latest arrival replaces it; every
    * delta / error / snapshot / disconnect clears it: a write attempt or a
-   * reload ends the drag server-side). Null for cheap cones, which never
-   * hear of the policy.
+   * reload ends the drag server-side; `drag_ended` clears it when it names
+   * it; the widget's own `endDrag` clears it ahead of that). Null for
+   * cheap cones, which never hear of the policy.
    */
   pending: PendingParam | null;
 
@@ -294,11 +304,18 @@ export interface CicadaState {
   /**
    * The widget released on the committed value — no `set_param` goes out
    * (both sliders skip it then), so no delta will clear this param's
-   * pending entry: the widget does, here. (A release that writes leaves it
-   * to the delta — value and badge change in one render, no snap-back.)
-   * A no-op when this param is not the pending one.
+   * pending entry: the widget clears it here, optimistically, and tells
+   * the server the drag is over (`end_drag`) so the server's drag ends NOW
+   * — a re-grab inside the 300 ms gap is a fresh drag, announced again,
+   * rather than a silent continuation of one this client already took
+   * down — and so every other client hears `drag_ended`. (A release that
+   * writes leaves it to the delta — value and badge change in one render,
+   * no snap-back.) Sent on every release that writes nothing, pending or
+   * not: the server's drag exists for cheap cones too, and a stale one is
+   * a no-op there. Nothing is sent when this client cannot write (the
+   * lease, the socket) — its drag is not the server's then.
    */
-  clearPending: (node: string, port: string | null) => void;
+  endDrag: (node: string, port: string | null) => void;
   addNotice: (level: Notice["level"], message: string) => void;
   dismissNotice: (id: number) => void;
   updateSettings: (patch: Partial<Settings>) => void;
@@ -568,6 +585,18 @@ export const useCicada = create<CicadaState>((set, get) => ({
         });
         break;
       }
+      case "drag_ended": {
+        // The announced drag is over — after a release that wrote nothing
+        // (this client's own `end_drag`, already cleared optimistically, or
+        // the writer's, which is the only way an observer or the twin
+        // widget hears of it), an Esc, a refused write, the writer's
+        // departure or a lease handover; after a landed write it follows
+        // the delta and finds nothing to do. Only the named param: a newer
+        // policy for another param has already replaced this one.
+        const p = envelope.payload;
+        set((state) => (pendingIs(state.pending, p.node, p.port ?? null) ? { pending: null } : state));
+        break;
+      }
       case "screenshot_request":
         // Handled by the connection module (needs the viewport).
         break;
@@ -604,8 +633,11 @@ export const useCicada = create<CicadaState>((set, get) => ({
       if (entry === null || !pendingIs(entry, node, port) || entry.value === value) return state;
       return { pending: { ...entry, value } };
     }),
-  clearPending: (node, port) =>
-    set((state) => (pendingIs(state.pending, node, port) ? { pending: null } : state)),
+  endDrag: (node, port) => {
+    set((state) => (pendingIs(state.pending, node, port) ? { pending: null } : state));
+    const state = get();
+    if (canWrite(state)) state.send({ type: "end_drag", payload: { node, port } });
+  },
 
   addNotice: (level, message) =>
     set((state) => ({

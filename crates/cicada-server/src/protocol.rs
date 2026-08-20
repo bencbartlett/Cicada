@@ -440,6 +440,26 @@ pub enum ServerMessage {
         /// unless the drag moves on; the client tracks later ticks itself.
         pending_value: String,
     },
+    /// An ANNOUNCED drag (one `preview_policy` went out for) has ended
+    /// (docs/13 §Slider drags, contract item 3; additive). Broadcast after
+    /// whatever ended it produced — the delta of a landed write, the
+    /// snapshot of a reload (both already clear the client's pending state;
+    /// this is a no-op there) — and on its own for the ends that produce
+    /// nothing every client hears: the pointer released on the committed
+    /// value (`end_drag`), Esc, a refused write (its `error` is unicast),
+    /// the writer's departure or a lease handover. A pause longer than
+    /// `DRAG_GAP_MS` is NOT an end the server announces: the pointer may
+    /// still be down, and the pending state stands until the release. Never
+    /// sent for a drag that was live throughout (nothing to take down). The
+    /// client clears its pending entry when this names it.
+    DragEnded {
+        /// The param's binding.
+        node: String,
+        /// Its kwarg (`None` for a bare literal) — as the drag's ticks
+        /// spelled it.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        port: Option<String>,
+    },
 }
 
 /// How a drag's previews are handled (`preview_policy.mode`).
@@ -537,6 +557,22 @@ pub enum ClientMessage {
         port: Option<String>,
         /// The literal's source text.
         value: String,
+    },
+    /// The pointer was released on the committed value: no `set_param`
+    /// follows, and the drag is over (docs/13 §Slider drags). Both sliders
+    /// send it on every release that writes nothing — a release that
+    /// writes ends the drag with its `set_param` instead. Ends the session's
+    /// drag when it is this param's (a drag that expired by the gap rule
+    /// included) and broadcasts `drag_ended` if that drag was announced;
+    /// when the standing drag is another param's or there is none (a
+    /// reload, an Esc or a write ended it first) it is a no-op — a routine
+    /// release is never an error. Needs the lease like the ticks do.
+    EndDrag {
+        /// Node.
+        node: String,
+        /// Kwarg (`None` for bare literals).
+        #[serde(default)]
+        port: Option<String>,
     },
     /// Rename a binding (text + references + sidecar, atomically).
     Rename {
@@ -655,6 +691,7 @@ pub fn is_write(message: &ClientMessage) -> bool {
             | ClientMessage::AcceptLift { .. }
             | ClientMessage::SetParam { .. }
             | ClientMessage::ParamPreview { .. }
+            | ClientMessage::EndDrag { .. }
             | ClientMessage::Rename { .. }
             | ClientMessage::DeleteNode { .. }
             | ClientMessage::ToggleDisable { .. }
@@ -759,6 +796,67 @@ mod tests {
         let bare: serde_json::Value = serde_json::from_str(&bare).unwrap();
         assert!(bare["payload"].get("port").is_none(), "{bare}");
         assert_eq!(bare["payload"]["rough"], true);
+    }
+
+    // The frozen wire shape of the drag's end (docs/13 §Slider drags,
+    // contract item 3) and of the release that writes nothing; the web
+    // client mirrors both in messages.ts.
+    #[test]
+    fn drag_ended_and_end_drag_have_the_documented_shapes() {
+        let text = encode(
+            11,
+            &ServerMessage::DragEnded {
+                node: "deboss".into(),
+                port: Some("value".into()),
+            },
+        );
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "v": PROTOCOL_VERSION, "seq": 11, "type": "drag_ended",
+                "payload": { "node": "deboss", "port": "value" }
+            })
+        );
+        let bare = encode(
+            12,
+            &ServerMessage::DragEnded {
+                node: "x".into(),
+                port: None,
+            },
+        );
+        let bare: serde_json::Value = serde_json::from_str(&bare).unwrap();
+        assert_eq!(
+            bare["payload"],
+            serde_json::json!({ "node": "x" }),
+            "no port key for a bare literal"
+        );
+
+        let release: IntentEnvelope = serde_json::from_str(
+            r#"{"v":1,"type":"end_drag","payload":{"node":"deboss","port":"value"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            release.message,
+            ClientMessage::EndDrag {
+                node: "deboss".into(),
+                port: Some("value".into()),
+            }
+        );
+        assert!(
+            is_write(&release.message),
+            "end_drag needs the lease like the ticks"
+        );
+        assert!(!is_gesture(&release.message), "not a batch element");
+        let bare: IntentEnvelope =
+            serde_json::from_str(r#"{"v":1,"type":"end_drag","payload":{"node":"x"}}"#).unwrap();
+        assert_eq!(
+            bare.message,
+            ClientMessage::EndDrag {
+                node: "x".into(),
+                port: None,
+            }
+        );
     }
 
     #[test]

@@ -99,7 +99,8 @@ live preview, a floor when `rough` (some node in the cone has no cost
 evidence yet — render with `~`, like the ETA); `pending_value` is the
 withheld tick's literal — the client tracks later ticks itself and
 clears the pending state on the delta its release `set_param`
-produces (or when the pointer is released without a write). Once a
+produces (or, when the pointer is released without a write, on its
+own `end_drag` and the `drag_ended` it earns — below). Once a
 drag has switched it never switches back: a later tick that is a pure
 cache read (a value visited before, or warmed by scrub caching)
 previews live — that is scrub caching's upgrade path — but any tick
@@ -110,21 +111,52 @@ exactly as before.
 **What a drag is, server-side**: the run of ticks on one param closer
 together than `DRAG_GAP_MS` (300 ms of op-clock time). A drag ends on
 any write attempt (the release's `set_param`, any edit, a reload —
-landed or refused), on Esc, and on a pause longer than the gap; the
+landed or refused), on Esc, on the client's **`end_drag`** (the
+pointer released on the committed value — both sliders skip
+`set_param` then, and send `{"type":"end_drag","payload":{"node":
+"deboss","port":"value"}}` instead, `port: null` for a bare literal;
+it needs the lease like the ticks, ends the drag when it is that
+param's — an expired one included — and is a no-op otherwise, never an
+error: a routine release must not raise a notice), on the writer's
+departure or a lease handover, and on a pause longer than the gap; the
 next tick starts a fresh drag, predicted again and **announced again**
-if withheld, with its own `pending_value`. The gap rule exists because
-both sliders skip `set_param` when the pointer is released on the
-committed value — a drag can end with no write at all, and the next
-one must still hear its policy. Server-side, every write intent but the
-preview tick ends the drag at the dispatcher's door (gestures, undo,
-redo, batch — landed or refused), and `apply_text`, a reload and Esc
-end it at their own entries.
+if withheld, with its own `pending_value`. The gap rule is the
+fallback for a release the server never hears of (a client that died
+mid-drag); the release itself is `end_drag`, so a re-grab inside the
+gap is a fresh drag too. Server-side, every write intent but the
+preview tick and `end_drag` ends the drag at the dispatcher's door
+(gestures, undo, redo, batch — landed or refused), and `apply_text`, a
+reload and Esc end it at their own entries.
+
+**The end of an announced drag is announced** (revised 2026-08-20 —
+the review of the web half found the observer, and the writer's own
+twin widget, had no signal for a drag that ended without a write: a
+stale badge and a value that was neither committed nor pending stood
+indefinitely): whenever a drag that `preview_policy` went out for
+ends, the session broadcasts the additive
+
+```json
+{"v":1,"seq":N,"type":"drag_ended","payload":{"node":"deboss","port":"value"}}
+```
+
+(`port` absent for a bare literal) **after** whatever ended it
+answered with — the delta of a landed write, the error of a refused
+one (unicast: for every other client `drag_ended` is the whole news),
+the snapshot of a reload — and on its own for `end_drag`, Esc, the
+writer's departure and a lease handover. A drag that stayed live
+throughout ends silently (nothing to take down). The one end that is
+**not** announced is the gap rule's: it is decided lazily, at the next
+tick, and a pause is not a release — the pointer may still be down
+and the user looking at a viewport that is honestly not moving — so
+the pending state stands until the release (or the re-announcement
+replaces it).
 
 **The frozen contract for the client** (the web client implements it
 in `web/src/state/store.ts` — one `pending` param, replaced by every
-arrival, cleared by a delta, a non-`lease` error, a snapshot, a
-disconnect, or the widget on a release without a write; both sliders
-render it as `pending · N s`):
+arrival, cleared by a delta, a non-`lease` error, a `drag_ended` that
+names it, a snapshot, a disconnect, or the widget itself on its own
+release without a write, optimistically, as it sends `end_drag`; both
+sliders render it as `pending · N s`):
 
 1. `preview_policy` may arrive more than once for the same param —
    after a pause longer than the gap, after a release, after an Esc,
@@ -135,17 +167,27 @@ render it as `pending · N s`):
    that is a pure cache read (a value visited before, or warmed by
    scrub caching) previews live even after the drag has switched. A
    frame or a status is therefore never "the drag ended" — only the
-   release's delta, the pointer release without a write, or a fresh
-   `preview_policy` changes the pending state.
-3. The server never sends a "back to live" message: a drag's policy
-   stands until the drag ends; the next drag is predicted afresh and
-   is live unless announced otherwise.
-4. `/debug/state` → `solve.previews_deferred` counts withheld ticks in
+   release's delta, `drag_ended`, the client's own release without a
+   write, or a fresh `preview_policy` changes the pending state.
+3. The server never sends a "back to live" message for a **standing**
+   drag: a drag's policy stands until the drag ends, and a pause is
+   not an end (a badge must not flicker off while the pointer is
+   down). It does announce the **end** of every announced drag
+   (`drag_ended`, above), the gap rule's excepted; the next drag is
+   predicted afresh and is live unless announced otherwise.
+4. The server relays no ticks: an observer's slider (and the twin
+   widget of the one being dragged, in the same client, until it
+   tracks the dragging widget's ticks) shows the policy's
+   `pending_value` — the first withheld tick — with the badge, not the
+   writer's live thumb. Honest, and marked pending; the release
+   (`drag_ended` or the delta) brings the value.
+5. `/debug/state` → `solve.previews_deferred` counts withheld ticks in
    total and `solve.drag` shows the standing drag `{node, port, mode:
    "live" | "compute_on_release", deferred, last_tick_ms}` (`null`
    between drags).
 
-`PROTOCOL_VERSION` is unchanged (additive).
+`PROTOCOL_VERSION` is unchanged (additive: two new message types an
+old client ignores).
 
 ## Binary frame format
 

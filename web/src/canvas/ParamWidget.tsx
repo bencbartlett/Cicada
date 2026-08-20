@@ -15,7 +15,10 @@
  * floor); the viewport is NOT expected to move until release. The chip is
  * positioned absolutely so the track never changes width under a held
  * pointer (a narrower track would jump the thumb away from the pointer).
- * A cheap cone never hears of the policy and previews live, as before.
+ * A release on the committed value writes nothing and sends `end_drag`
+ * instead (the server's `drag_ended` then clears the twin widget and the
+ * observers). A cheap cone never hears of the policy and previews live, as
+ * before.
  */
 import { useEffect, useRef, useState } from "react";
 import type { NodeView, ParamView } from "../protocol/messages";
@@ -44,10 +47,10 @@ function SliderWidget({ view, param, writer }: Props) {
   const dragging = useRef(false);
   const dirty = useRef(false);
   const port = param.port ?? null;
-  const { preview, commit } = useParamSender(view.name, port);
+  const { preview, commit, cancel } = useParamSender(view.name, port);
   const pending = useCicada((s) => pendingFor(s, view.name, port));
   const trackPendingValue = useCicada((s) => s.trackPendingValue);
-  const clearPending = useCicada((s) => s.clearPending);
+  const endDrag = useCicada((s) => s.endDrag);
 
   // The server's value wins whenever we are not mid-drag.
   useEffect(() => {
@@ -87,9 +90,13 @@ function SliderWidget({ view, param, writer }: Props) {
       commit(text(local));
     } else {
       // Released on the committed value: no write goes out, so nothing
-      // else would take the badge down — the server's drag ends by the
-      // gap rule, silently.
-      clearPending(view.name, port);
+      // else would take the badge down — the store clears it and tells the
+      // server the drag is over (`end_drag`), so a re-grab inside the gap
+      // is a fresh drag and every other client hears `drag_ended`. The
+      // queued tick (if any) is dropped first: sent after the `end_drag`
+      // it would be a fresh drag on the committed value.
+      cancel();
+      endDrag(view.name, port);
     }
   };
   // A pointer drag is over: hand the focus back to the canvas, so Del /

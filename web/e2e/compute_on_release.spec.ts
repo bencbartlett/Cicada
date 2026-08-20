@@ -14,9 +14,17 @@
  * suite by design — a debug engine carves the wall in tens of seconds, and
  * the release pays a second carve — hence its own timeout. The drag goes
  * through the params panel's range input (a real pointer drag; the canvas
- * twin of the slider is read from the store) and the oracles are the DOM,
+ * twin of the slider is in the DOM — hidden by LOD at the wall's zoom, its
+ * text is still the oracle) and the oracles are the DOM,
  * `window.__cicada.state()` and `/debug/state` (`solve.drag`,
  * `solve.previews_deferred`, the generation timings).
+ *
+ * The second half (review findings, 2026-08-20) is the release that writes
+ * nothing: a pointer drag away and BACK to the committed value — Chrome
+ * fires no `change` for it — with an observer page open. The release must
+ * take both pages' badges down (`end_drag` → `drag_ended`), end the
+ * server's drag at once (a re-grab inside the 300 ms gap is a fresh drag,
+ * announced again), write nothing and solve nothing.
  */
 import { expect, test, type Page } from "@playwright/test";
 import config from "../playwright.config";
@@ -81,6 +89,27 @@ function debossValue(text: string): number {
   const match = /deboss = slider\(value=([0-9.]+),/.exec(text);
   if (match === null) throw new Error(`no deboss slider in the text:\n${text}`);
   return Number(match[1]);
+}
+
+/** The pointer x for `value` on a range input's box (thumb-width aware; `dragTo` corrects by reading back). */
+function xFor(box: { x: number; width: number }, value: number, min: number, max: number): number {
+  const thumb = 16;
+  return box.x + thumb / 2 + ((value - min) / (max - min)) * (box.width - thumb);
+}
+
+/**
+ * With the pointer held down, move along the track until the range reads
+ * exactly `target` — a pixel estimate can land one step off, and the test
+ * needs the release to be ON the committed value, not near it.
+ */
+async function dragTo(page: Page, slider: ReturnType<Page["getByTestId"]>, x: number, y: number, target: string) {
+  await page.mouse.move(x, y, { steps: 8 });
+  for (let i = 0; i < 60 && (await slider.inputValue()) !== target; i += 1) {
+    const shown = Number(await slider.inputValue());
+    x += Number(target) > shown ? 1 : -1;
+    await page.mouse.move(x, y);
+  }
+  expect(await slider.inputValue(), `the thumb must sit on ${target}`).toBe(target);
 }
 
 test.describe.configure({ mode: "serial" });
@@ -202,5 +231,92 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
       `release ${released} solved once in ${structural[0]!.elapsed_ms?.toFixed(0)} ms (settled after ${releaseMs} ms)`,
   );
 
+  // ================================================================
+  // The release that writes nothing (review findings 2026-08-20): a drag
+  // away and back to the committed value, with an observer watching.
+  // ================================================================
+  const observer = await page.context().newPage();
+  const observerErrors: string[] = [];
+  observer.on("pageerror", (error) => observerErrors.push(`pageerror: ${error.message}`));
+  await observer.goto(`/?token=${TOKEN}&pipeline=${PIPELINE}`);
+  await expect(observer.getByTestId("app")).toBeVisible();
+  await observer.getByTestId("insp-tab-params").click();
+  await expect(observer.getByTestId("param-deboss")).toBeVisible();
+  await expect(observer.getByTestId("widget-deboss"), "the second page observes").toBeDisabled();
+  expect(await storePending(observer)).toBeNull();
+  const committed = String(released);
+  const min = Number(await slider.getAttribute("min"));
+  const max = Number(await slider.getAttribute("max"));
+  const box2 = await slider.boundingBox();
+  if (box2 === null) throw new Error("no deboss slider");
+  const y2 = box2.y + box2.height / 2;
+  const xCommitted = xFor(box2, released, min, max);
+  const baseline2 = settled.solve.last_complete_generation ?? 0;
+  const structuralBefore = settled.timings.filter((t) => t.kind === "structural").length;
+
+  // Grab the thumb where it sits and pull it onto cold values.
+  await page.mouse.move(xCommitted, y2);
+  await page.mouse.down();
+  await dragTo(page, slider, xFor(box2, 1.1, min, max), y2, "1.1");
+  await expect(hint).toBeVisible();
+  const pending2 = await storePending(page);
+  expect(pending2).toMatchObject({ node: "deboss", port: "value", mode: "compute_on_release", value: "1.1" });
+  // The canvas twin renders the same entry (hidden by LOD, present in the
+  // DOM): the chip and the value label.
+  await expect(page.getByTestId("pending-deboss")).toHaveCount(1);
+  await expect(page.getByTestId("pending-deboss")).toHaveText(await hint.innerText());
+  await expect(page.getByTestId("slider-value-deboss")).toHaveText("1.1");
+  // The observer hears the broadcast: the hint, the class, the entry.
+  const observerHint = observer.getByTestId("param-pending-deboss");
+  await expect(observerHint).toBeVisible();
+  await expect(observer.getByTestId("param-deboss")).toHaveClass(/pending/);
+  expect(await storePending(observer)).toMatchObject({ node: "deboss", port: "value", mode: "compute_on_release" });
+
+  // Back onto the committed value and release: no `change` fires in
+  // Chrome for a drag that returns to its start.
+  await dragTo(page, slider, xCommitted, y2, committed);
+  await page.mouse.up();
+  await expect(hint).toHaveCount(0);
+  await expect.poll(async () => storePending(page)).toBeNull();
+  await expect(page.getByTestId("number-deboss")).toHaveValue(committed);
+  await expect(page.getByTestId("number-deboss")).not.toHaveClass(/pending/);
+  await expect(page.getByTestId("pending-deboss")).toHaveCount(0);
+  await expect(page.getByTestId("slider-value-deboss")).toHaveText(committed);
+  // … and the observer's badge goes down with it (`drag_ended`), its
+  // number back on the committed value.
+  await expect(observerHint).toHaveCount(0);
+  await expect.poll(async () => storePending(observer)).toBeNull();
+  await expect(observer.getByTestId("number-deboss")).toHaveValue(committed);
+  await expect(observer.getByTestId("param-deboss")).not.toHaveClass(/pending/);
+
+  // The re-grab: a fresh drag, announced again — whether inside the gap
+  // (the release ended the server's drag) or after it (the gap rule).
+  await page.mouse.down();
+  await dragTo(page, slider, xFor(box2, 1.2, min, max), y2, "1.2");
+  await expect(hint, "the re-grab is announced").toBeVisible();
+  await expect(observerHint).toBeVisible();
+  await dragTo(page, slider, xCommitted, y2, committed);
+  await page.mouse.up();
+  await expect(hint).toHaveCount(0);
+  await expect(observerHint).toHaveCount(0);
+
+  // Nothing was written, nothing solved: the text is as released, the
+  // server's drag is gone, no structural generation ran, and every preview
+  // generation since (a warm tick painting as a cache read) computed nothing.
+  const after = await debugState(page, true);
+  expect(debossValue(after.text)).toBe(released);
+  expect(after.solve.drag, "end_drag ended the server's drag").toBeNull();
+  expect(after.timings.filter((t) => t.kind === "structural")).toHaveLength(structuralBefore);
+  for (const t of after.timings.filter((t) => t.kind === "preview" && t.generation > baseline2)) {
+    expect(t.computed, `preview gen ${t.generation} computed nodes during the no-write drags`).toBe(0);
+  }
+  expect(after.solve.previews_deferred).toBeGreaterThan(settled.solve.previews_deferred);
+  console.log(
+    `[compute-on-release] no-write releases: ${after.solve.previews_deferred - settled.solve.previews_deferred} more ticks withheld · ` +
+      `drag ${after.solve.drag === null ? "ended" : "STANDING"} · text ${debossValue(after.text)} · observer cleared`,
+  );
+  await observer.close();
+
   expect(errors, errors.join("\n")).toEqual([]);
+  expect(observerErrors, observerErrors.join("\n")).toEqual([]);
 });

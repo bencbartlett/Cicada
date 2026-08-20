@@ -575,11 +575,16 @@ struct Inner {
     /// The drag in progress (compute-on-release, DECISIONS.md row 39). A
     /// drag is a run of `param_preview`s on one param closer together than
     /// [`DRAG_GAP_MS`]; any write attempt (the release's `set_param`, an
-    /// edit, a reload — landed or refused), an Esc, or a longer pause ends
-    /// it. Every tick is predicted on its own; the drag remembers whether
-    /// `preview_policy` has gone out (once per drag) and that, once
-    /// withheld, it never goes back to solving cold previews. Protected by
-    /// the `Inner` lock like every write site that clears it.
+    /// edit, a reload — landed or refused), an Esc, the client's `end_drag`
+    /// (a release that writes nothing), the writer's departure or a lease
+    /// handover, or a longer pause ends it. Every tick is predicted on its
+    /// own; the drag remembers whether `preview_policy` has gone out (once
+    /// per drag) and that, once withheld, it never goes back to solving
+    /// cold previews. An announced drag's end is announced too
+    /// (`drag_ended`, [`end_drag`] / [`announce_drag_ended`]) — except the
+    /// gap rule's, which is bookkeeping for the NEXT drag's announcement,
+    /// not a release. Protected by the `Inner` lock like every write site
+    /// that clears it.
     drag: Option<Drag>,
     /// Preview ticks withheld under compute-on-release, total (the
     /// measurement harness reads it from `/debug/state`).
@@ -605,15 +610,45 @@ struct Drag {
 /// Does this intent end a drag at the dispatcher's door (docs/13 §Slider
 /// drags: "a write attempt — landed or refused")? The canvas gestures
 /// (the release's `set_param` among them), undo, redo and batch. Not the
-/// preview tick (it IS the drag), and not the writes with entry points of
-/// their own — `apply_text` (also HTTP), `cancel` (also HTTP) — which
-/// clear the drag themselves, as `reload` (the watcher) does.
+/// preview tick (it IS the drag), not `end_drag` (it ends the drag in its
+/// own arm, by name), and not the writes with entry points of their own —
+/// `apply_text` (also HTTP), `cancel` (also HTTP) — which end the drag
+/// themselves, as `reload` (the watcher) does.
 fn ends_drag(message: &ClientMessage) -> bool {
     is_gesture(message)
         || matches!(
             message,
             ClientMessage::Undo {} | ClientMessage::Redo {} | ClientMessage::Batch { .. }
         )
+}
+
+/// End the standing drag, whatever it is, and announce it if it was
+/// announced ([`announce_drag_ended`]). The one way a drag ends outside
+/// [`Core::preview_is_live`]'s gap rule — which is silent on purpose: a
+/// pause is not a release, and the pending state must stand while the
+/// pointer is down.
+fn end_drag(inner: &mut Inner) {
+    if let Some(drag) = inner.drag.take() {
+        announce_drag_ended(inner, &drag);
+    }
+}
+
+/// Broadcast `drag_ended` for a drag that has been taken out of
+/// `inner.drag` — if `preview_policy` went out for it (docs/13 §Slider
+/// drags, contract item 3: every announced drag's end is announced; a
+/// drag that was live throughout has nothing to take down). Called AFTER
+/// whatever ended the drag has been broadcast (the delta, the snapshot),
+/// so a client never sees the pending badge go before the value arrives.
+fn announce_drag_ended(inner: &Inner, drag: &Drag) {
+    if drag.announced {
+        broadcast(
+            inner,
+            &ServerMessage::DragEnded {
+                node: drag.node.clone(),
+                port: drag.port.clone(),
+            },
+        );
+    }
 }
 
 /// The cost model's verdict on one param's dirty cone
@@ -988,6 +1023,9 @@ impl Session {
         inner.clients.remove(&id);
         if inner.writer == Some(id) {
             inner.writer = None;
+            // The drag was the writer's; its release will never come, and
+            // the observers' pending badges must not stand for it.
+            end_drag(&mut inner);
         }
         let lease = lease_view(&inner);
         for client in inner.clients.values() {
@@ -1137,26 +1175,50 @@ impl Session {
 
     // --------------------------------------------------------- intents --
 
-    /// Handle one intent from `client`. Errors are sent back to that
-    /// client as `error` messages; nothing here panics on bad input. Every
-    /// write arm rolls its own mutations back under its own lock hold
-    /// ([`write_or_roll_back`]) — nothing is left for an outer pass to undo
-    /// after the lock was released.
+    /// Handle one intent from `client`: the door (the lease check, the
+    /// drag-ending rule), the intent ([`Self::dispatch`]), then the answers
+    /// in order — the `error` of a refused intent back to that client, and
+    /// the `drag_ended` an ended announced drag earns to everyone. Nothing
+    /// here panics on bad input. Every write arm rolls its own mutations
+    /// back under its own lock hold ([`write_or_roll_back`]) — nothing is
+    /// left for an outer pass to undo after the lock was released.
     pub fn handle(&self, client: u32, intent_id: Option<String>, message: ClientMessage) {
-        let result = self.dispatch(client, intent_id.clone(), message);
-        if let Err(error) = result {
-            let inner = self.core.lock_inner();
-            if let Some(c) = inner.clients.get(&client) {
-                let _ = c.tx.send(Outgoing::Text(encode(
-                    inner.seq,
-                    &ServerMessage::Error {
-                        intent_id,
-                        kind: error.kind().to_owned(),
-                        message: error.to_string(),
-                        details: error.details(),
-                    },
-                )));
+        // The dispatcher's door: the lease check, then the drag-ending rule.
+        let ended = {
+            let mut inner = self.core.lock_inner();
+            if is_write(&message) && inner.writer != Some(client) {
+                send_to(
+                    &inner,
+                    client,
+                    &error_message(intent_id, &IntentError::Lease),
+                );
+                return;
             }
+            // A write attempt ends the drag (docs/13 §Slider drags) —
+            // landed or refused, decided HERE at the door rather than in
+            // every arm: a refused release, an undo mid-drag, a batch
+            // whose third element fails all leave no verdict standing,
+            // and the next tick re-predicts and re-announces. The other
+            // drag-enders end it at their own entry points, which are
+            // also HTTP/watcher entries: `apply_text`, `reload`, `cancel`.
+            if ends_drag(&message) {
+                inner.drag.take()
+            } else {
+                None
+            }
+        };
+        let result = self.dispatch(client, intent_id.clone(), message);
+        let inner = self.core.lock_inner();
+        if let Err(error) = result {
+            send_to(&inner, client, &error_message(intent_id, &error));
+        }
+        // The end of an announced drag is announced AFTER the intent's own
+        // answer — the delta of a landed write, the error of a refused one
+        // — so no client's pending badge goes down before the value (or the
+        // refusal) arrives; the error is unicast, and for every other
+        // client this is the whole news.
+        if let Some(drag) = ended {
+            announce_drag_ended(&inner, &drag);
         }
     }
 
@@ -1167,22 +1229,6 @@ impl Session {
         intent_id: Option<String>,
         message: ClientMessage,
     ) -> Result<(), IntentError> {
-        {
-            let mut inner = self.core.lock_inner();
-            if is_write(&message) && inner.writer != Some(client) {
-                return Err(IntentError::Lease);
-            }
-            // A write attempt ends the drag (docs/13 §Slider drags) —
-            // landed or refused, decided HERE at the door rather than in
-            // every arm: a refused release, an undo mid-drag, a batch
-            // whose third element fails all leave no verdict standing,
-            // and the next tick re-predicts and re-announces. The other
-            // drag-enders clear at their own entry points, which are
-            // also HTTP/watcher entries: `apply_text`, `reload`, `cancel`.
-            if ends_drag(&message) {
-                inner.drag = None;
-            }
-        }
         let source = |label: String| DeltaSource {
             client: Some(client),
             intent_id: intent_id.clone(),
@@ -1247,6 +1293,24 @@ impl Session {
                     }
                 };
                 self.solve.submit(job);
+                Ok(())
+            }
+            ClientMessage::EndDrag { node, port } => {
+                // The pointer came up on the committed value: no set_param
+                // follows, so this is the drag's end — by name, so a stale
+                // release (the drag already ended by a write, an Esc or a
+                // reload; or another param's drag stands) is a no-op, never
+                // an error: a routine release must not raise a notice.
+                // A drag that expired by the gap rule still ends here: the
+                // pause was not the release, this is.
+                let mut inner = self.core.lock_inner();
+                let mine = inner
+                    .drag
+                    .as_ref()
+                    .is_some_and(|drag| drag.node == node && drag.port == port);
+                if mine {
+                    end_drag(&mut inner);
+                }
                 Ok(())
             }
             ClientMessage::Undo {} => {
@@ -1417,6 +1481,12 @@ impl Session {
             ClientMessage::TakeLease {} => {
                 let mut inner = self.core.lock_inner();
                 let previous = inner.writer;
+                if previous != Some(client) {
+                    // A handover ends the previous writer's drag: its ticks
+                    // and its release are refused from here on (`lease`),
+                    // which is decided before the drag-ending door.
+                    end_drag(&mut inner);
+                }
                 inner.writer = Some(client);
                 if let Some(prev) = previous
                     && let Some(c) = inner.clients.get_mut(&prev)
@@ -1925,7 +1995,9 @@ impl Session {
         }
         self.core.rebuild(&mut inner);
         inner.seq += 1;
-        inner.drag = None;
+        // The write ends the drag; its end is announced after the delta
+        // (or the snapshot) below.
+        let ended = inner.drag.take();
         let after = state_snapshot(&inner);
         if after != before {
             // An apply that left text and sidecar as they were (a
@@ -1957,6 +2029,9 @@ impl Session {
                 history: inner.oplog.view(),
             };
             broadcast(&inner, &message);
+        }
+        if let Some(drag) = ended {
+            announce_drag_ended(&inner, &drag);
         }
         if new_text.is_some() || scripts_changed {
             self.core.seed_statuses_locked(&inner);
@@ -2040,7 +2115,7 @@ impl Session {
         reason: &str,
         rescan_scripts: bool,
     ) -> Result<bool, SessionError> {
-        {
+        let ended = {
             // Read UNDER the lock: a read racing a commit (two quick writes,
             // the watcher's read between them) would otherwise compare a
             // stale text against the newer hash and reload the old text
@@ -2083,14 +2158,20 @@ impl Session {
             inner.oplog.clear_by_barrier();
             self.core.rebuild(&mut inner);
             inner.seq += 1;
-            inner.drag = None;
-        }
+            // The barrier ends the drag; its end is announced after the
+            // snapshot below (which already clears every client's pending
+            // state — the announcement is the rule, not the mechanism).
+            inner.drag.take()
+        };
         // Barrier snapshot to everyone.
         let snapshot = self.snapshot(true, reason);
         {
             let inner = self.core.lock_inner();
             for client in inner.clients.values() {
                 let _ = client.tx.send(Outgoing::Text(snapshot.clone()));
+            }
+            if let Some(drag) = &ended {
+                announce_drag_ended(&inner, drag);
             }
             self.core.seed_statuses_locked(&inner);
         }
@@ -2150,8 +2231,9 @@ impl Session {
     pub fn cancel(&self) {
         let dropped_pending = self.solve.cancel();
         // Esc ends the drag too: the next tick starts a fresh one
-        // (re-predicted, re-announced if withheld).
-        self.core.lock_inner().drag = None;
+        // (re-predicted, re-announced if withheld) — and the end of an
+        // announced one is broadcast, Esc being a deliberate stop.
+        end_drag(&mut self.core.lock_inner());
         if dropped_pending {
             let inner = self.core.lock_inner();
             broadcast(
@@ -2552,6 +2634,16 @@ fn broadcast(inner: &Inner, message: &ServerMessage) {
 fn broadcast_binary(inner: &Inner, bytes: &Bytes) {
     for client in inner.clients.values() {
         let _ = client.tx.send(Outgoing::Binary(bytes.clone()));
+    }
+}
+
+/// The `error` answer to a refused intent.
+fn error_message(intent_id: Option<String>, error: &IntentError) -> ServerMessage {
+    ServerMessage::Error {
+        intent_id,
+        kind: error.kind().to_owned(),
+        message: error.to_string(),
+        details: error.details(),
     }
 }
 
@@ -3258,9 +3350,13 @@ impl Core {
     ///   as they always did.
     ///
     /// A drag is the run of ticks on one param closer together than
-    /// [`DRAG_GAP_MS`]; a write attempt, an Esc, a reload or a longer pause
-    /// ends it, and the next tick starts a fresh one — re-predicted and
-    /// re-announced if withheld. No cone, or a cone the model cannot see at
+    /// [`DRAG_GAP_MS`]; a write attempt, an Esc, a reload, the client's
+    /// `end_drag` or a longer pause ends it, and the next tick starts a
+    /// fresh one — re-predicted and re-announced if withheld. The pause is
+    /// the one end that is NOT broadcast as `drag_ended`: it is decided
+    /// lazily here, at the next tick, and the pointer may still be down
+    /// (the user is looking) — the pending state stands until the release
+    /// says otherwise, and the re-announcement replaces it. No cone, or a cone the model cannot see at
     /// all (no node with any evidence): live — the generation measures it,
     /// the next tick knows. A cone predicted slow from PARTIAL evidence is
     /// withheld: the floor already clears the bar.
@@ -6541,6 +6637,303 @@ size = slider(value=4.0, min=0.5, max=5.0)
             1,
             "set_param, undone, redone"
         );
+    }
+
+    /// The message types one client received, in order, with `drag_ended`
+    /// and `preview_policy` carrying their param (`type`, or `type:node.port`).
+    fn drag_events(rx: &mut tokio::sync::mpsc::UnboundedReceiver<Outgoing>) -> Vec<String> {
+        texts(&drain(rx))
+            .into_iter()
+            .filter_map(|m| match m["type"].as_str()? {
+                t @ ("preview_policy" | "drag_ended") => Some(format!(
+                    "{t}:{}.{}",
+                    m["payload"]["node"].as_str().unwrap_or("?"),
+                    m["payload"]["port"].as_str().unwrap_or("-")
+                )),
+                t @ ("delta" | "error" | "snapshot") => Some(t.to_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn end_drag(session: &Session, id: u32) {
+        session.handle(
+            id,
+            None,
+            ClientMessage::EndDrag {
+                node: "size".into(),
+                port: Some("value".into()),
+            },
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // one story: every way an announced drag ends, heard by both clients
+    fn an_announced_drags_end_is_announced_to_every_client() {
+        // Review findings (2026-08-20, web half): the frozen contract had
+        // no signal for a drag that ends without a write — an observer
+        // (and a writer whose panel slider never fired `change`) kept the
+        // pending badge and a value that was neither committed nor pending
+        // indefinitely; and a re-grab inside the gap after a no-write
+        // release continued the server's drag un-announced while the
+        // client had already cleared. The rule now: the client's release
+        // that writes nothing is an intent (`end_drag`), and the end of
+        // every ANNOUNCED drag is broadcast (`drag_ended`) after whatever
+        // ended it answered — the delta, the error — so every client can
+        // take the badge down, and the next tick is a fresh drag.
+        let (_dir, config, clock) = project_with_clock(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        session
+            .core
+            .scheduler
+            .store()
+            .record_sample("box", 1, 5_000_000_000)
+            .unwrap();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let (obs_tx, mut obs_rx) = unbounded_channel();
+        let (obs, role) = session.connect(obs_tx);
+        assert_eq!(role, Role::Observer);
+        let _ = drain(&mut rx);
+        let _ = drain(&mut obs_rx);
+        let baseline = preview_generations(&session);
+
+        // Drag 1: announced to both; the pointer comes up on the committed
+        // value — no set_param, an `end_drag` instead: the end is
+        // broadcast, the drag is gone, nothing was solved.
+        preview(&session, id, "2.5");
+        session.wait_idle();
+        assert_eq!(drag_events(&mut rx), ["preview_policy:size.value"]);
+        assert_eq!(drag_events(&mut obs_rx), ["preview_policy:size.value"]);
+        end_drag(&session, id);
+        assert_eq!(drag_events(&mut rx), ["drag_ended:size.value"]);
+        assert_eq!(drag_events(&mut obs_rx), ["drag_ended:size.value"]);
+        assert!(session.debug_state(false)["solve"]["drag"].is_null());
+
+        // The re-grab INSIDE the gap (finding 3): a fresh drag, announced
+        // again — the release ended the previous one, the gap rule is not
+        // consulted.
+        preview(&session, id, "2.6");
+        session.wait_idle();
+        assert_eq!(drag_events(&mut rx), ["preview_policy:size.value"]);
+        assert_eq!(drag_events(&mut obs_rx), ["preview_policy:size.value"]);
+        assert_eq!(session.debug_state(false)["solve"]["drag"]["deferred"], 1);
+
+        // A pause longer than the gap is NOT announced: the pointer may
+        // still be down. The release after it still ends the (expired)
+        // drag, and says so.
+        clock.advance((DRAG_GAP_MS + 1) * 1_000_000);
+        assert!(drag_events(&mut rx).is_empty(), "a pause announces nothing");
+        assert!(drag_events(&mut obs_rx).is_empty());
+        end_drag(&session, id);
+        assert_eq!(drag_events(&mut rx), ["drag_ended:size.value"]);
+        assert_eq!(drag_events(&mut obs_rx), ["drag_ended:size.value"]);
+
+        // Esc mid-drag: a deliberate stop, announced.
+        preview(&session, id, "2.7");
+        session.wait_idle();
+        let _ = drain(&mut rx);
+        let _ = drain(&mut obs_rx);
+        session.cancel();
+        assert_eq!(drag_events(&mut rx), ["drag_ended:size.value"]);
+        assert_eq!(drag_events(&mut obs_rx), ["drag_ended:size.value"]);
+
+        // A refused release: the writer hears the error FIRST, then the
+        // end; the observer hears the end alone (errors are unicast).
+        preview(&session, id, "2.8");
+        session.wait_idle();
+        let _ = drain(&mut rx);
+        let _ = drain(&mut obs_rx);
+        session.handle(
+            id,
+            Some("bad".into()),
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "size + 1".into(),
+            },
+        );
+        assert_eq!(drag_events(&mut rx), ["error", "drag_ended:size.value"]);
+        assert_eq!(drag_events(&mut obs_rx), ["drag_ended:size.value"]);
+
+        // A landed release: the delta FIRST (it carries the value and
+        // already clears every client's pending state), then the end.
+        preview(&session, id, "2.9");
+        session.wait_idle();
+        let _ = drain(&mut rx);
+        let _ = drain(&mut obs_rx);
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "2.9".into(),
+            },
+        );
+        session.wait_idle();
+        assert_eq!(drag_events(&mut rx), ["delta", "drag_ended:size.value"]);
+        assert_eq!(drag_events(&mut obs_rx), ["delta", "drag_ended:size.value"]);
+
+        // The released value is warm now: a drag that stays live (every
+        // tick a cache read) is never announced, and its `end_drag` is
+        // silent — there is nothing to take down.
+        preview(&session, id, "2.9");
+        session.wait_idle();
+        end_drag(&session, id);
+        assert!(drag_events(&mut rx).is_empty(), "a live drag ends silently");
+        assert!(drag_events(&mut obs_rx).is_empty());
+        assert!(session.debug_state(false)["solve"]["drag"].is_null());
+
+        // An `end_drag` with no drag standing, or for another param's
+        // drag, is a routine no-op — never an error, never an announcement.
+        end_drag(&session, id);
+        session.handle(
+            id,
+            None,
+            ClientMessage::EndDrag {
+                node: "span".into(),
+                port: None,
+            },
+        );
+        assert!(drag_events(&mut rx).is_empty());
+        preview(&session, id, "3.1");
+        session.wait_idle();
+        assert_eq!(drag_events(&mut rx), ["preview_policy:size.value"]);
+        session.handle(
+            id,
+            None,
+            ClientMessage::EndDrag {
+                node: "span".into(),
+                port: None,
+            },
+        );
+        assert!(
+            drag_events(&mut rx).is_empty(),
+            "another param: the drag stands"
+        );
+        assert_eq!(
+            session.debug_state(false)["solve"]["drag"]["node"],
+            "size",
+            "another param's release leaves this drag standing"
+        );
+        // An observer's `end_drag` is refused by the lease, like its ticks.
+        session.handle(
+            obs,
+            Some("o".into()),
+            ClientMessage::EndDrag {
+                node: "size".into(),
+                port: Some("value".into()),
+            },
+        );
+        let msgs = texts(&drain(&mut obs_rx));
+        assert!(
+            msgs.iter().any(|m| m["type"] == "error"
+                && m["payload"]["kind"] == "lease"
+                && m["payload"]["intent_id"] == "o"),
+            "{msgs:?}"
+        );
+        assert!(!session.debug_state(false)["solve"]["drag"].is_null());
+
+        // Throughout: the one landed release was the only solve; every
+        // withheld tick stayed withheld (the warm 2.9 tick previewed as a
+        // cache read).
+        assert_eq!(preview_generations(&session), baseline + 1);
+        assert_eq!(session.debug_state(false)["solve"]["previews_deferred"], 6);
+    }
+
+    #[test]
+    fn the_writers_departure_and_a_lease_handover_end_the_drag_for_the_observers() {
+        // The two ends no intent announces: the dragging writer's socket
+        // dies, or an observer takes the lease mid-drag (the ex-writer's
+        // release is refused by the lease from then on, which is decided
+        // before the drag-ending door). Both leave the observers with a
+        // badge nobody would take down — so the server does.
+        let (_dir, config, _clock) = project_with_clock(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        session
+            .core
+            .scheduler
+            .store()
+            .record_sample("box", 1, 5_000_000_000)
+            .unwrap();
+        let (tx, mut rx) = unbounded_channel();
+        let (writer, _) = session.connect(tx);
+        let (obs_tx, mut obs_rx) = unbounded_channel();
+        let (obs, _) = session.connect(obs_tx);
+        let _ = drain(&mut rx);
+        let _ = drain(&mut obs_rx);
+
+        // The observer takes the lease mid-drag: the drag ends, announced;
+        // the ex-writer's release is a `lease` refusal and ends nothing.
+        preview(&session, writer, "2.5");
+        session.wait_idle();
+        assert_eq!(drag_events(&mut obs_rx), ["preview_policy:size.value"]);
+        let _ = drain(&mut rx);
+        session.handle(obs, None, ClientMessage::TakeLease {});
+        assert_eq!(drag_events(&mut rx), ["drag_ended:size.value"]);
+        assert_eq!(drag_events(&mut obs_rx), ["drag_ended:size.value"]);
+        assert!(session.debug_state(false)["solve"]["drag"].is_null());
+        session.handle(
+            writer,
+            Some("late".into()),
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "2.5".into(),
+            },
+        );
+        assert_eq!(drag_events(&mut rx), ["error"]);
+        assert!(drag_events(&mut obs_rx).is_empty());
+
+        // The new writer drags and its socket dies: the end is announced
+        // to whoever is left.
+        session.handle(
+            obs,
+            None,
+            ClientMessage::ParamPreview {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "2.6".into(),
+            },
+        );
+        session.wait_idle();
+        assert_eq!(drag_events(&mut rx), ["preview_policy:size.value"]);
+        let _ = drain(&mut obs_rx);
+        session.disconnect(obs);
+        assert_eq!(drag_events(&mut rx), ["drag_ended:size.value"]);
+        assert!(session.debug_state(false)["solve"]["drag"].is_null());
+        // A live drag's writer leaving announces nothing (nothing pending).
+        session.transfer_lease_if_free();
+        let _ = drain(&mut rx);
+        session.handle(
+            writer,
+            None,
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "2.6".into(),
+            },
+        );
+        session.wait_idle();
+        let _ = drain(&mut rx);
+        preview(&session, writer, "2.6");
+        session.wait_idle();
+        assert!(drag_events(&mut rx).is_empty(), "warm: live, unannounced");
+        session.disconnect(writer);
+        assert!(session.debug_state(false)["solve"]["drag"].is_null());
     }
 
     #[test]
