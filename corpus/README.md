@@ -41,6 +41,16 @@ scripts never used numpy). The measurement protocol, the recorded numbers,
 and their machine spec live in
 [docs/15-spike-plan.md](../docs/15-spike-plan.md) §Stage-6 results.
 
+The same pipeline runs nightly in CI (`.github/workflows/nightly.yml`,
+`wall-corpus` job): a release build on `ubuntu-latest`, the two exporters
+over a cold cache, then `normalize.py all` against `golden/production/`;
+the job's verdict IS the normalizer's exit code, and the report lands in
+the run's job summary (plus a best-effort artifact). First real run,
+2026-08-20 (commit 63f4212): **overall NOISE** — every difference the
+normalizer found on the Linux build was declared noise, the same verdict
+the Windows dev machine gives; that is the cross-platform evidence the
+golden-hash discipline rests on.
+
 ## What the pipeline does, honestly
 
 `layout.json` is the frozen production layout. The pipeline consumes from

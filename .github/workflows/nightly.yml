@@ -70,8 +70,22 @@ jobs:
           ./target/release/cicada run corpus/wall.cic --node bambu --node dxf --cache-dir "$RUNNER_TEMP/cicada-corpus-cache"
       - name: Compare against production (verdict = exit code; NOISE passes, FAIL blocks)
         run: python corpus/tools/normalize.py all --ours corpus/out --ref corpus/golden/production --report "$RUNNER_TEMP/corpus-report.md"
+      # The report is the evidence, so it rides two channels: the job summary
+      # (always available, no storage quota) and an artifact. The artifact
+      # upload is non-blocking — the first real corpus run (2026-08-20) PASSED
+      # and then went red only because the ACCOUNT-level artifact storage quota
+      # was full; the verdict is the normalizer's exit code, nothing else.
+      - name: Publish the report to the job summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/corpus-report.md" ]; then
+            head -c 900000 "$RUNNER_TEMP/corpus-report.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "no corpus report was written (the compare step did not run to completion)" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
+        continue-on-error: true
         with:
           name: corpus-report
           path: ${{ runner.temp }}/corpus-report.md
