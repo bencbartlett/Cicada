@@ -87,8 +87,9 @@ failures:
     `truncate(list, count)` (the shortest-list emulation).
   - **All-pairs is `cross`**, never inferred.
 - **Empties and nulls are values.** `[]` is data, not a pruned branch;
-  `T?` slots are preserved by every combinator; removal happens only
-  through `compact`, which returns an `IndexMap` so identity survives.
+  `T?` slots are preserved by every combinator; slots leave a list only
+  through `cull` (by pattern) and `compact` (the absent ones), each
+  returning an `IndexMap` so identity survives (docs/08 §4).
 - **Structure changes fail at the wire.** If an upstream edit changes
   nesting depth, downstream lifts become type errors immediately —
   not runtime weirdness three components later, and never a silently
@@ -103,12 +104,12 @@ failures:
 | `pad_last` / `repeat` / `truncate` | length-policy adapters: `(list, count) → [E]` / `(pattern, count) → [E]` | Longest List / Repeat Data / Shortest List | explicit, visible, recorded; shipped C1 (the cyclic one was `cycle` until 2026-08-20) |
 | `cross` | `(a: [A], b: [B]) → (a: [[A]], b: [[B]])` | Cross Reference | two aligned outputs — no tuple wires |
 | `flatten` | `[[T]] → [T]` | Flatten | one level; `flatten_all` for all, and says so |
-| `nest` | `[T] → [[T]]` | Graft | each element its own singleton |
+| `nest` | `[T] → [[T]]` | Graft | each element its own singleton; shipped C1 |
 | `squeeze` | drop singleton levels | Simplify | explicit node, not hidden toggle |
-| `transpose` | `[[T]] → [[T]]` | Flip Matrix | |
+| `transpose` | `[[T]] → [[T]]` | Flip Matrix | rectangular only, ragged is red; shipped C1 |
 | `chunk` / `partition` | `[T] → [[T]]` | Partition List | by size / by sizes |
-| `group_by` | `(keys: [K], values: [T]) → (groups: [[T]], keys: [K])` | Path Mapper folklore | the honest version of most path recipes |
-| `compact` | `[T?] → ([T], IndexMap)` | Clean Tree | the only way slots disappear |
+| `group_by` | `(keys: [Number], values: [T]) → (groups: [[T]], keys: [Number])` | Path Mapper folklore | the honest version of most path recipes; shipped C1 with numeric keys (first-occurrence order, exact compare) — text keys wait for a second type variable, like `cross` |
+| `compact` | `[T?] → ([T], IndexMap)` | Clean Tree | how absent slots disappear (`cull` is the other exit, by pattern); shipped C1 — an `E?` port keeps the wired `?` on the port, so `values` types present |
 | `concat` / `wrap` / `unzip` | list assembly/disassembly | Merge / Entwine / Explode Tree | `concat` shipped (stage 6) |
 
 Shipped in the spike (stage 6, for the wall's per-part cutter groups):

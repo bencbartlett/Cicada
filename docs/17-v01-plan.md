@@ -332,7 +332,8 @@ format, doc 08.
 - **C4+**: the rest of docs/08 S+1, category by category, Solid rows
   riding with item 3.
 - **`cicada mcp`**: catalog search, node docs, the checker — from the
-  same data as `/api/catalog`; lands with C1.
+  same data as `/api/catalog`; its own package after C1 (C1 shipped
+  without it).
 Every node: the three tests, the doc format, catalog regenerated in the
 same commit (skill `add-stdlib-node`).
 
