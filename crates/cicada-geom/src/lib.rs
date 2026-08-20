@@ -1,14 +1,16 @@
 //! Geometry operations and the typed seams to rented kernels (docs/03,
 //! docs/14): tolerance-aware comparisons, frames, curve evaluation,
 //! triangulation, mesh construction, similarity transforms, spade-backed
-//! Voronoi, and Manifold-backed mesh booleans.
+//! Voronoi, Manifold-backed mesh booleans, and — behind the `occt` feature
+//! — the OCCT B-rep seam ([`occt`]).
 //!
 //! The VALUE types live in `cicada-core` (dependency law); this crate is
 //! the constructive layer the stdlib nodes call. Heavy kernel FFI is
 //! quarantined here so iterating on other crates never rebuilds a kernel
 //! binding. `unsafe` is permitted only inside FFI seam modules, each block
 //! with a `// SAFETY:` comment (doc 14) — the current seams (manifold3d,
-//! spade) are safe-Rust crates, so no `unsafe` exists here yet.
+//! spade, and the cxx-bridged OCCT binding) are safe-Rust crates, so no
+//! `unsafe` exists here yet.
 //!
 //! The sanctioned float-comparison API lives in [`tol`]: the ONLY float
 //! comparison path in geometry code (doc 14 §Tolerance). Every operation
@@ -22,6 +24,8 @@ pub mod curve;
 pub mod export;
 pub mod frame;
 pub mod meshbuild;
+#[cfg(feature = "occt")]
+pub mod occt;
 pub mod text;
 pub mod tol;
 pub mod transform;
@@ -91,5 +95,19 @@ pub enum GeomError {
     MissingGlyph {
         /// The character the font lacks.
         character: char,
+    },
+    /// A serialized form could not be written or read (a kernel's
+    /// canonical bytes, e.g. OCCT `BinTools`).
+    #[error("serialization: {reason}")]
+    Serialization {
+        /// What failed.
+        reason: String,
+    },
+    /// A tessellation that had to be closed is not (a kernel's mesher left
+    /// a boundary); refused rather than returned as a leaky mesh.
+    #[error("not watertight: {reason}")]
+    NotWatertight {
+        /// What failed.
+        reason: String,
     },
 }

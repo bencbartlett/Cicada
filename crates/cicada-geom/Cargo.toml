@@ -8,15 +8,25 @@ publish.workspace = true
 
 [dependencies]
 cicada-core.workspace = true
+cxx = { workspace = true, optional = true }
 glam.workspace = true
 manifold-csg.workspace = true
+opencascade-sys = { workspace = true, optional = true }
 spade.workspace = true
 thiserror.workspace = true
 ttf-parser.workspace = true
 
 [dev-dependencies]
+blake3.workspace = true
 proptest.workspace = true
 rayon.workspace = true
+
+[features]
+# The OCCT B-rep seam (src/occt). OFF by default: it compiles the binding's
+# C++ glue against a prebuilt OCCT 7.8.1 (DEP_OCCT_ROOT from
+# tools/fetch_occt.py; cmake + a C++ toolchain on PATH) and needs the OCCT
+# shared libraries on the loader path at run time. CI: the `occt` jobs.
+occt = ["dep:opencascade-sys", "dep:cxx"]
 
 [lints]
 workspace = true
