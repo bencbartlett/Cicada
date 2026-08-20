@@ -1,0 +1,548 @@
+diff --git a/crates/opencascade-sys/include/b_rep.hxx b/crates/opencascade-sys/include/b_rep.hxx
+index 74872521f..bcaf55d09 100644
+--- a/crates/opencascade-sys/include/b_rep.hxx
++++ b/crates/opencascade-sys/include/b_rep.hxx
+@@ -12,21 +12,22 @@
+ 
+ inline const TopoDS_Builder &BRep_Builder_upcast_to_topods_builder(const BRep_Builder &builder) { return builder; }
+ 
+-inline std::unique_ptr<Handle_Geom_Surface> BRep_Tool_Surface(const TopoDS_Face &face) {
+-  return std::unique_ptr<Handle_Geom_Surface>(new opencascade::handle<Geom_Surface>(BRep_Tool::Surface(face)));
++inline std::unique_ptr<RustHandle_Geom_Surface> BRep_Tool_Surface(const TopoDS_Face &face) {
++  return std::unique_ptr<RustHandle_Geom_Surface>(new opencascade::handle<Geom_Surface>(BRep_Tool::Surface(face)));
+ }
+ 
+-inline std::unique_ptr<Handle_Geom_Curve> BRep_Tool_Curve(const TopoDS_Edge &edge, Standard_Real &first,
+-                                                          Standard_Real &last) {
+-  return std::unique_ptr<Handle_Geom_Curve>(new opencascade::handle<Geom_Curve>(BRep_Tool::Curve(edge, first, last)));
++inline std::unique_ptr<RustHandle_Geom_Curve> BRep_Tool_Curve(const TopoDS_Edge &edge, Standard_Real &first,
++                                                              Standard_Real &last) {
++  return std::unique_ptr<RustHandle_Geom_Curve>(
++      new opencascade::handle<Geom_Curve>(BRep_Tool::Curve(edge, first, last)));
+ }
+ 
+ inline std::unique_ptr<gp_Pnt> BRep_Tool_Pnt(const TopoDS_Vertex &vertex) {
+   return std::unique_ptr<gp_Pnt>(new gp_Pnt(BRep_Tool::Pnt(vertex)));
+ }
+ 
+-inline std::unique_ptr<Handle_Poly_Triangulation> BRep_Tool_Triangulation(const TopoDS_Face &face,
+-                                                                          TopLoc_Location &location) {
+-  return std::unique_ptr<Handle_Poly_Triangulation>(
++inline std::unique_ptr<RustHandle_Poly_Triangulation> BRep_Tool_Triangulation(const TopoDS_Face &face,
++                                                                              TopLoc_Location &location) {
++  return std::unique_ptr<RustHandle_Poly_Triangulation>(
+       new opencascade::handle<Poly_Triangulation>(BRep_Tool::Triangulation(face, location)));
+ }
+diff --git a/crates/opencascade-sys/include/bindings_common.hxx b/crates/opencascade-sys/include/bindings_common.hxx
+index b4813171a..68adb5d72 100644
+--- a/crates/opencascade-sys/include/bindings_common.hxx
++++ b/crates/opencascade-sys/include/bindings_common.hxx
+@@ -1,8 +1,43 @@
+ #pragma once
+ #include "rust/cxx.h"
+ #include <NCollection_List.hxx>
++#include <Standard_Handle.hxx>
+ #include <memory>
+ 
++class Geom2d_Curve;
++class Geom2d_Ellipse;
++class Geom2d_TrimmedCurve;
++class Geom_BSplineCurve;
++class Geom_BezierCurve;
++class Geom_BezierSurface;
++class Geom_Curve;
++class Geom_CylindricalSurface;
++class Geom_Plane;
++class Geom_Surface;
++class Geom_TrimmedCurve;
++class Law_Function;
++class Poly_Triangulation;
++class Standard_Type;
++class TColgp_HArray1OfPnt;
++class TopTools_HSequenceOfShape;
++
++using RustHandle_Geom2d_Curve = opencascade::handle<Geom2d_Curve>;
++using RustHandle_Geom2d_Ellipse = opencascade::handle<Geom2d_Ellipse>;
++using RustHandle_Geom2d_TrimmedCurve = opencascade::handle<Geom2d_TrimmedCurve>;
++using RustHandle_Geom_BSplineCurve = opencascade::handle<Geom_BSplineCurve>;
++using RustHandle_Geom_BezierCurve = opencascade::handle<Geom_BezierCurve>;
++using RustHandle_Geom_BezierSurface = opencascade::handle<Geom_BezierSurface>;
++using RustHandle_Geom_Curve = opencascade::handle<Geom_Curve>;
++using RustHandle_Geom_CylindricalSurface = opencascade::handle<Geom_CylindricalSurface>;
++using RustHandle_Geom_Plane = opencascade::handle<Geom_Plane>;
++using RustHandle_Geom_Surface = opencascade::handle<Geom_Surface>;
++using RustHandle_Geom_TrimmedCurve = opencascade::handle<Geom_TrimmedCurve>;
++using RustHandle_Law_Function = opencascade::handle<Law_Function>;
++using RustHandle_Poly_Triangulation = opencascade::handle<Poly_Triangulation>;
++using RustHandle_Standard_Type = opencascade::handle<Standard_Type>;
++using RustHandle_TColgp_HArray1OfPnt = opencascade::handle<TColgp_HArray1OfPnt>;
++using RustHandle_TopTools_HSequenceOfShape = opencascade::handle<TopTools_HSequenceOfShape>;
++
+ // Generic template constructor
+ template <typename T, typename... Args> std::unique_ptr<T> construct_unique(Args... args) {
+   return std::unique_ptr<T>(new T(args...));
+diff --git a/crates/opencascade-sys/include/gc.hxx b/crates/opencascade-sys/include/gc.hxx
+index 25ddc71dd..8419ae6e6 100644
+--- a/crates/opencascade-sys/include/gc.hxx
++++ b/crates/opencascade-sys/include/gc.hxx
+@@ -3,16 +3,16 @@
+ #include <GC_MakeSegment.hxx>
+ #include <bindings_common.hxx>
+ 
+-inline std::unique_ptr<Handle_Geom_TrimmedCurve> GC_MakeSegment_Value(const GC_MakeSegment &segment) {
+-  return std::unique_ptr<Handle_Geom_TrimmedCurve>(new opencascade::handle<Geom_TrimmedCurve>(segment.Value()));
++inline std::unique_ptr<RustHandle_Geom_TrimmedCurve> GC_MakeSegment_Value(const GC_MakeSegment &segment) {
++  return std::unique_ptr<RustHandle_Geom_TrimmedCurve>(new opencascade::handle<Geom_TrimmedCurve>(segment.Value()));
+ }
+ 
+-inline std::unique_ptr<Handle_Geom2d_TrimmedCurve> GCE2d_MakeSegment_point_point(const gp_Pnt2d &p1,
+-                                                                                 const gp_Pnt2d &p2) {
+-  return std::unique_ptr<Handle_Geom2d_TrimmedCurve>(
++inline std::unique_ptr<RustHandle_Geom2d_TrimmedCurve> GCE2d_MakeSegment_point_point(const gp_Pnt2d &p1,
++                                                                                     const gp_Pnt2d &p2) {
++  return std::unique_ptr<RustHandle_Geom2d_TrimmedCurve>(
+       new opencascade::handle<Geom2d_TrimmedCurve>(GCE2d_MakeSegment(p1, p2)));
+ }
+ 
+-inline std::unique_ptr<Handle_Geom_TrimmedCurve> GC_MakeArcOfCircle_Value(const GC_MakeArcOfCircle &arc) {
+-  return std::unique_ptr<Handle_Geom_TrimmedCurve>(new opencascade::handle<Geom_TrimmedCurve>(arc.Value()));
++inline std::unique_ptr<RustHandle_Geom_TrimmedCurve> GC_MakeArcOfCircle_Value(const GC_MakeArcOfCircle &arc) {
++  return std::unique_ptr<RustHandle_Geom_TrimmedCurve>(new opencascade::handle<Geom_TrimmedCurve>(arc.Value()));
+ }
+diff --git a/crates/opencascade-sys/include/geom.hxx b/crates/opencascade-sys/include/geom.hxx
+index b063d9204..33f53cbd4 100644
+--- a/crates/opencascade-sys/include/geom.hxx
++++ b/crates/opencascade-sys/include/geom.hxx
+@@ -7,39 +7,43 @@
+ #include <Geom_TrimmedCurve.hxx>
+ #include <bindings_common.hxx>
+ 
+-inline std::unique_ptr<Handle_Geom_CylindricalSurface> Geom_CylindricalSurface_new(const gp_Ax3 &axis, double radius) {
+-  return std::unique_ptr<Handle_Geom_CylindricalSurface>(
++inline std::unique_ptr<RustHandle_Geom_CylindricalSurface> Geom_CylindricalSurface_new(const gp_Ax3 &axis,
++                                                                                       double radius) {
++  return std::unique_ptr<RustHandle_Geom_CylindricalSurface>(
+       new opencascade::handle<Geom_CylindricalSurface>(new Geom_CylindricalSurface(axis, radius)));
+ }
+ 
+-inline std::unique_ptr<Handle_Geom_Surface> cylinder_to_surface(const Handle_Geom_CylindricalSurface &cylinder_handle) {
+-  return std::unique_ptr<Handle_Geom_Surface>(new opencascade::handle<Geom_Surface>(cylinder_handle));
++inline std::unique_ptr<RustHandle_Geom_Surface>
++cylinder_to_surface(const RustHandle_Geom_CylindricalSurface &cylinder_handle) {
++  return std::unique_ptr<RustHandle_Geom_Surface>(new opencascade::handle<Geom_Surface>(cylinder_handle));
+ }
+ 
+-inline std::unique_ptr<Handle_Geom_BezierSurface> Geom_BezierSurface_new(const TColgp_Array2OfPnt &poles) {
+-  return std::unique_ptr<Handle_Geom_BezierSurface>(
++inline std::unique_ptr<RustHandle_Geom_BezierSurface> Geom_BezierSurface_new(const TColgp_Array2OfPnt &poles) {
++  return std::unique_ptr<RustHandle_Geom_BezierSurface>(
+       new opencascade::handle<Geom_BezierSurface>(new Geom_BezierSurface(poles)));
+ }
+ 
+-inline const gp_Pnt &handle_geom_plane_location(const Handle_Geom_Plane &plane) { return plane->Location(); }
++inline const gp_Pnt &handle_geom_plane_location(const RustHandle_Geom_Plane &plane) { return plane->Location(); }
+ 
+-inline std::unique_ptr<Handle_Geom_BezierCurve>
++inline std::unique_ptr<RustHandle_Geom_BezierCurve>
+ Geom_BezierCurve_to_handle(std::unique_ptr<Geom_BezierCurve> bezier_curve) {
+-  return std::unique_ptr<Handle_Geom_BezierCurve>(new Handle_Geom_BezierCurve(bezier_curve.release()));
++  return std::unique_ptr<RustHandle_Geom_BezierCurve>(new RustHandle_Geom_BezierCurve(bezier_curve.release()));
+ }
+ 
+-inline std::unique_ptr<Handle_Geom_Surface> bezier_to_surface(const Handle_Geom_BezierSurface &bezier_handle) {
+-  return std::unique_ptr<Handle_Geom_Surface>(new opencascade::handle<Geom_Surface>(bezier_handle));
++inline std::unique_ptr<RustHandle_Geom_Surface> bezier_to_surface(const RustHandle_Geom_BezierSurface &bezier_handle) {
++  return std::unique_ptr<RustHandle_Geom_Surface>(new opencascade::handle<Geom_Surface>(bezier_handle));
+ }
+ 
+-inline std::unique_ptr<Handle_Geom_Plane>
+-new_HandleGeomPlane_from_HandleGeomSurface(const Handle_Geom_Surface &surface) {
+-  Handle_Geom_Plane plane_handle = opencascade::handle<Geom_Plane>::DownCast(surface);
+-  return std::unique_ptr<Handle_Geom_Plane>(new opencascade::handle<Geom_Plane>(plane_handle));
++inline std::unique_ptr<RustHandle_Geom_Plane>
++new_HandleGeomPlane_from_HandleGeomSurface(const RustHandle_Geom_Surface &surface) {
++  RustHandle_Geom_Plane plane_handle = opencascade::handle<Geom_Plane>::DownCast(surface);
++  return std::unique_ptr<RustHandle_Geom_Plane>(new opencascade::handle<Geom_Plane>(plane_handle));
+ }
+ 
+-inline std::unique_ptr<gp_Pnt> HandleGeomCurve_Value(const Handle_Geom_Curve &curve, const Standard_Real U) {
++inline std::unique_ptr<gp_Pnt> HandleGeomCurve_Value(const RustHandle_Geom_Curve &curve, const Standard_Real U) {
+   return std::unique_ptr<gp_Pnt>(new gp_Pnt(curve->Value(U)));
+ }
+ 
+-inline const Handle_Standard_Type &DynamicType(const Handle_Geom_Surface &surface) { return surface->DynamicType(); }
++inline const RustHandle_Standard_Type &DynamicType(const RustHandle_Geom_Surface &surface) {
++  return surface->DynamicType();
++}
+diff --git a/crates/opencascade-sys/include/geom2d.hxx b/crates/opencascade-sys/include/geom2d.hxx
+index 938868892..f35c2b6d6 100644
+--- a/crates/opencascade-sys/include/geom2d.hxx
++++ b/crates/opencascade-sys/include/geom2d.hxx
+@@ -2,27 +2,28 @@
+ #include <Geom2d_TrimmedCurve.hxx>
+ #include <bindings_common.hxx>
+ 
+-inline std::unique_ptr<Handle_Geom2d_Ellipse> Geom2d_Ellipse_new(const gp_Ax2d &axis, double major_radius,
+-                                                                 double minor_radius) {
+-  return std::unique_ptr<Handle_Geom2d_Ellipse>(
++inline std::unique_ptr<RustHandle_Geom2d_Ellipse> Geom2d_Ellipse_new(const gp_Ax2d &axis, double major_radius,
++                                                                     double minor_radius) {
++  return std::unique_ptr<RustHandle_Geom2d_Ellipse>(
+       new opencascade::handle<Geom2d_Ellipse>(new Geom2d_Ellipse(axis, major_radius, minor_radius)));
+ }
+ 
+-inline std::unique_ptr<Handle_Geom2d_Curve> ellipse_to_HandleGeom2d_Curve(const Handle_Geom2d_Ellipse &ellipse_handle) {
+-  return std::unique_ptr<Handle_Geom2d_Curve>(new opencascade::handle<Geom2d_Curve>(ellipse_handle));
++inline std::unique_ptr<RustHandle_Geom2d_Curve>
++ellipse_to_HandleGeom2d_Curve(const RustHandle_Geom2d_Ellipse &ellipse_handle) {
++  return std::unique_ptr<RustHandle_Geom2d_Curve>(new opencascade::handle<Geom2d_Curve>(ellipse_handle));
+ }
+ 
+-inline std::unique_ptr<Handle_Geom2d_TrimmedCurve> Geom2d_TrimmedCurve_new(const Handle_Geom2d_Curve &curve, double u1,
+-                                                                           double u2) {
+-  return std::unique_ptr<Handle_Geom2d_TrimmedCurve>(
++inline std::unique_ptr<RustHandle_Geom2d_TrimmedCurve> Geom2d_TrimmedCurve_new(const RustHandle_Geom2d_Curve &curve,
++                                                                               double u1, double u2) {
++  return std::unique_ptr<RustHandle_Geom2d_TrimmedCurve>(
+       new opencascade::handle<Geom2d_TrimmedCurve>(new Geom2d_TrimmedCurve(curve, u1, u2)));
+ }
+ 
+-inline std::unique_ptr<Handle_Geom2d_Curve>
+-HandleGeom2d_TrimmedCurve_to_curve(const Handle_Geom2d_TrimmedCurve &trimmed_curve) {
+-  return std::unique_ptr<Handle_Geom2d_Curve>(new opencascade::handle<Geom2d_Curve>(trimmed_curve));
++inline std::unique_ptr<RustHandle_Geom2d_Curve>
++HandleGeom2d_TrimmedCurve_to_curve(const RustHandle_Geom2d_TrimmedCurve &trimmed_curve) {
++  return std::unique_ptr<RustHandle_Geom2d_Curve>(new opencascade::handle<Geom2d_Curve>(trimmed_curve));
+ }
+ 
+-inline std::unique_ptr<gp_Pnt2d> ellipse_value(const Handle_Geom2d_Ellipse &ellipse, double u) {
++inline std::unique_ptr<gp_Pnt2d> ellipse_value(const RustHandle_Geom2d_Ellipse &ellipse, double u) {
+   return std::unique_ptr<gp_Pnt2d>(new gp_Pnt2d(ellipse->Value(u)));
+ }
+diff --git a/crates/opencascade-sys/include/geom_api.hxx b/crates/opencascade-sys/include/geom_api.hxx
+index 07a104231..2650a1cc9 100644
+--- a/crates/opencascade-sys/include/geom_api.hxx
++++ b/crates/opencascade-sys/include/geom_api.hxx
+@@ -3,6 +3,6 @@
+ #include <Geom_BSplineCurve.hxx>
+ #include <bindings_common.hxx>
+ 
+-inline std::unique_ptr<Handle_Geom_BSplineCurve> GeomAPI_Interpolate_Curve(const GeomAPI_Interpolate &interpolate) {
+-  return std::unique_ptr<Handle_Geom_BSplineCurve>(new opencascade::handle<Geom_BSplineCurve>(interpolate.Curve()));
++inline std::unique_ptr<RustHandle_Geom_BSplineCurve> GeomAPI_Interpolate_Curve(const GeomAPI_Interpolate &interpolate) {
++  return std::unique_ptr<RustHandle_Geom_BSplineCurve>(new opencascade::handle<Geom_BSplineCurve>(interpolate.Curve()));
+ }
+diff --git a/crates/opencascade-sys/include/law.hxx b/crates/opencascade-sys/include/law.hxx
+index 41d00dcd4..2a45f2a43 100644
+--- a/crates/opencascade-sys/include/law.hxx
++++ b/crates/opencascade-sys/include/law.hxx
+@@ -2,8 +2,8 @@
+ #include <Law_Interpol.hxx>
+ #include <bindings_common.hxx>
+ 
+-inline std::unique_ptr<Handle_Law_Function> Law_Function_to_handle(std::unique_ptr<Law_Function> law_function) {
+-  return std::unique_ptr<Handle_Law_Function>(new Handle_Law_Function(law_function.release()));
++inline std::unique_ptr<RustHandle_Law_Function> Law_Function_to_handle(std::unique_ptr<Law_Function> law_function) {
++  return std::unique_ptr<RustHandle_Law_Function>(new RustHandle_Law_Function(law_function.release()));
+ }
+ 
+ inline std::unique_ptr<Law_Function> Law_Interpol_into_Law_Function(std::unique_ptr<Law_Interpol> law_interpol) {
+diff --git a/crates/opencascade-sys/include/poly.hxx b/crates/opencascade-sys/include/poly.hxx
+index 7b35060d4..0894720e7 100644
+--- a/crates/opencascade-sys/include/poly.hxx
++++ b/crates/opencascade-sys/include/poly.hxx
+@@ -2,9 +2,9 @@
+ #include <Poly_Triangulation.hxx>
+ #include <bindings_common.hxx>
+ 
+-inline std::unique_ptr<Handle_Poly_Triangulation>
++inline std::unique_ptr<RustHandle_Poly_Triangulation>
+ Handle_Poly_Triangulation_new(std::unique_ptr<Poly_Triangulation> triangulation) {
+-  return std::unique_ptr<Handle_Poly_Triangulation>(new Handle_Poly_Triangulation(triangulation.release()));
++  return std::unique_ptr<RustHandle_Poly_Triangulation>(new RustHandle_Poly_Triangulation(triangulation.release()));
+ }
+ 
+ inline std::unique_ptr<gp_Dir> Poly_Triangulation_Normal(const Poly_Triangulation &triangulation,
+diff --git a/crates/opencascade-sys/include/standard.hxx b/crates/opencascade-sys/include/standard.hxx
+index 59f2d989f..3c758da1f 100644
+--- a/crates/opencascade-sys/include/standard.hxx
++++ b/crates/opencascade-sys/include/standard.hxx
+@@ -1,4 +1,4 @@
+ #include <Standard_Type.hxx>
+ #include <bindings_common.hxx>
+ 
+-inline rust::String type_name(const Handle_Standard_Type &handle) { return std::string(handle->Name()); }
++inline rust::String type_name(const RustHandle_Standard_Type &handle) { return std::string(handle->Name()); }
+diff --git a/crates/opencascade-sys/include/t_col_gp.hxx b/crates/opencascade-sys/include/t_col_gp.hxx
+index 90f1bab9e..425251c5b 100644
+--- a/crates/opencascade-sys/include/t_col_gp.hxx
++++ b/crates/opencascade-sys/include/t_col_gp.hxx
+@@ -16,7 +16,7 @@ inline std::unique_ptr<gp_Pnt> TColgp_HArray1OfPnt_Value(const TColgp_HArray1OfP
+   return std::unique_ptr<gp_Pnt>(new gp_Pnt(array.Value(index)));
+ }
+ 
+-inline std::unique_ptr<Handle_TColgp_HArray1OfPnt>
++inline std::unique_ptr<RustHandle_TColgp_HArray1OfPnt>
+ new_HandleTColgpHArray1OfPnt_from_TColgpHArray1OfPnt(std::unique_ptr<TColgp_HArray1OfPnt> array) {
+-  return std::unique_ptr<Handle_TColgp_HArray1OfPnt>(new Handle_TColgp_HArray1OfPnt(array.release()));
++  return std::unique_ptr<RustHandle_TColgp_HArray1OfPnt>(new RustHandle_TColgp_HArray1OfPnt(array.release()));
+ }
+\ No newline at end of file
+diff --git a/crates/opencascade-sys/include/top_tools.hxx b/crates/opencascade-sys/include/top_tools.hxx
+index 68e027a96..dbdc67dff 100644
+--- a/crates/opencascade-sys/include/top_tools.hxx
++++ b/crates/opencascade-sys/include/top_tools.hxx
+@@ -5,22 +5,22 @@
+ #include <TopoDS_Face.hxx>
+ #include <bindings_common.hxx>
+ 
+-inline std::unique_ptr<Handle_TopTools_HSequenceOfShape> new_Handle_TopTools_HSequenceOfShape() {
++inline std::unique_ptr<RustHandle_TopTools_HSequenceOfShape> new_Handle_TopTools_HSequenceOfShape() {
+   auto sequence = new TopTools_HSequenceOfShape();
+   auto handle = new opencascade::handle<TopTools_HSequenceOfShape>(sequence);
+ 
+-  return std::unique_ptr<Handle_TopTools_HSequenceOfShape>(handle);
++  return std::unique_ptr<RustHandle_TopTools_HSequenceOfShape>(handle);
+ }
+ 
+-inline void TopTools_HSequenceOfShape_append(Handle_TopTools_HSequenceOfShape &handle, const TopoDS_Shape &shape) {
++inline void TopTools_HSequenceOfShape_append(RustHandle_TopTools_HSequenceOfShape &handle, const TopoDS_Shape &shape) {
+   handle->Append(shape);
+ }
+ 
+-inline Standard_Integer TopTools_HSequenceOfShape_length(const Handle_TopTools_HSequenceOfShape &handle) {
++inline Standard_Integer TopTools_HSequenceOfShape_length(const RustHandle_TopTools_HSequenceOfShape &handle) {
+   return handle->Length();
+ }
+ 
+-inline const TopoDS_Shape &TopTools_HSequenceOfShape_value(const Handle_TopTools_HSequenceOfShape &handle,
++inline const TopoDS_Shape &TopTools_HSequenceOfShape_value(const RustHandle_TopTools_HSequenceOfShape &handle,
+                                                            Standard_Integer index) {
+   return handle->Value(index);
+ }
+diff --git a/crates/opencascade-sys/src/b_rep.rs b/crates/opencascade-sys/src/b_rep.rs
+index 6acf59eee..bcb4dc4cf 100644
+--- a/crates/opencascade-sys/src/b_rep.rs
++++ b/crates/opencascade-sys/src/b_rep.rs
+@@ -10,8 +10,11 @@ mod inner {
+         type TopoDS_Face = crate::topo_ds::TopoDS_Face;
+         type TopoDS_Edge = crate::topo_ds::TopoDS_Edge;
+         type TopoDS_Vertex = crate::topo_ds::TopoDS_Vertex;
++        #[cxx_name = "RustHandle_Geom_Surface"]
+         type Handle_Geom_Surface = crate::geom::Handle_Geom_Surface;
++        #[cxx_name = "RustHandle_Geom_Curve"]
+         type Handle_Geom_Curve = crate::geom::Handle_Geom_Curve;
++        #[cxx_name = "RustHandle_Poly_Triangulation"]
+         type Handle_Poly_Triangulation = crate::poly::Handle_Poly_Triangulation;
+         type TopLoc_Location = crate::top_loc::TopLoc_Location;
+ 
+diff --git a/crates/opencascade-sys/src/b_rep_builder_api.rs b/crates/opencascade-sys/src/b_rep_builder_api.rs
+index 4b42cac9e..0fa00fcd4 100644
+--- a/crates/opencascade-sys/src/b_rep_builder_api.rs
++++ b/crates/opencascade-sys/src/b_rep_builder_api.rs
+@@ -16,9 +16,13 @@ mod inner {
+         type TopoDS_Wire = crate::topo_ds::TopoDS_Wire;
+         type TopoDS_Face = crate::topo_ds::TopoDS_Face;
+         type TopoDS_Shell = crate::topo_ds::TopoDS_Shell;
++        #[cxx_name = "RustHandle_Geom_Curve"]
+         type Handle_Geom_Curve = crate::geom::Handle_Geom_Curve;
++        #[cxx_name = "RustHandle_Geom_Surface"]
+         type Handle_Geom_Surface = crate::geom::Handle_Geom_Surface;
++        #[cxx_name = "RustHandle_Geom2d_Curve"]
+         type Handle_Geom2d_Curve = crate::geom2d::Handle_Geom2d_Curve;
++        #[cxx_name = "RustHandle_Poly_Triangulation"]
+         type Handle_Poly_Triangulation = crate::poly::Handle_Poly_Triangulation;
+ 
+         type BRepBuilderAPI_MakeVertex;
+diff --git a/crates/opencascade-sys/src/b_rep_lib.rs b/crates/opencascade-sys/src/b_rep_lib.rs
+index aa44fa315..45427af19 100644
+--- a/crates/opencascade-sys/src/b_rep_lib.rs
++++ b/crates/opencascade-sys/src/b_rep_lib.rs
+@@ -7,6 +7,7 @@ mod inner {
+ 
+         type TopoDS_Shape = crate::topo_ds::TopoDS_Shape;
+         type TopoDS_Face = crate::topo_ds::TopoDS_Face;
++        #[cxx_name = "RustHandle_Poly_Triangulation"]
+         type Handle_Poly_Triangulation = crate::poly::Handle_Poly_Triangulation;
+ 
+         type BRepLib;
+diff --git a/crates/opencascade-sys/src/b_rep_offset_api.rs b/crates/opencascade-sys/src/b_rep_offset_api.rs
+index 6c560866b..1a37668f9 100644
+--- a/crates/opencascade-sys/src/b_rep_offset_api.rs
++++ b/crates/opencascade-sys/src/b_rep_offset_api.rs
+@@ -19,6 +19,7 @@ mod inner {
+         type GeomAbs_JoinType = crate::geom_abs::GeomAbs_JoinType;
+         type TopTools_ListOfShape = crate::top_tools::TopTools_ListOfShape;
+         type Message_ProgressRange = crate::message::Message_ProgressRange;
++        #[cxx_name = "RustHandle_Law_Function"]
+         type Handle_Law_Function = crate::law::Handle_Law_Function;
+ 
+         type BRepOffset_Mode;
+diff --git a/crates/opencascade-sys/src/gc.rs b/crates/opencascade-sys/src/gc.rs
+index f62cf49da..742a78515 100644
+--- a/crates/opencascade-sys/src/gc.rs
++++ b/crates/opencascade-sys/src/gc.rs
+@@ -7,7 +7,9 @@ mod inner {
+ 
+         type gp_Pnt = crate::gp::gp_Pnt;
+         type gp_Pnt2d = crate::gp::gp_Pnt2d;
++        #[cxx_name = "RustHandle_Geom_TrimmedCurve"]
+         type Handle_Geom_TrimmedCurve = crate::geom::Handle_Geom_TrimmedCurve;
++        #[cxx_name = "RustHandle_Geom2d_TrimmedCurve"]
+         type Handle_Geom2d_TrimmedCurve = crate::geom2d::Handle_Geom2d_TrimmedCurve;
+ 
+         type GC_MakeSegment;
+diff --git a/crates/opencascade-sys/src/geom.rs b/crates/opencascade-sys/src/geom.rs
+index 5f8cb7507..a7d96d81f 100644
+--- a/crates/opencascade-sys/src/geom.rs
++++ b/crates/opencascade-sys/src/geom.rs
+@@ -9,32 +9,41 @@ mod inner {
+         type gp_Pnt = crate::gp::gp_Pnt;
+         type TColgp_Array2OfPnt = crate::t_col_gp::TColgp_Array2OfPnt;
+         type TColgp_HArray1OfPnt = crate::t_col_gp::TColgp_HArray1OfPnt;
++        #[cxx_name = "RustHandle_Standard_Type"]
+         type Handle_Standard_Type = crate::standard::Handle_Standard_Type;
+ 
+         // Handles
++        #[cxx_name = "RustHandle_Geom_Curve"]
+         type Handle_Geom_Curve;
+         pub fn IsNull(self: &Handle_Geom_Curve) -> bool;
+         pub fn HandleGeomCurve_Value(curve: &Handle_Geom_Curve, u: f64) -> UniquePtr<gp_Pnt>;
+ 
++        #[cxx_name = "RustHandle_Geom_BSplineCurve"]
+         type Handle_Geom_BSplineCurve;
+         pub fn IsNull(self: &Handle_Geom_BSplineCurve) -> bool;
+ 
++        #[cxx_name = "RustHandle_Geom_BezierCurve"]
+         type Handle_Geom_BezierCurve;
+         pub fn IsNull(self: &Handle_Geom_BezierCurve) -> bool;
+ 
++        #[cxx_name = "RustHandle_Geom_TrimmedCurve"]
+         type Handle_Geom_TrimmedCurve;
+         pub fn IsNull(self: &Handle_Geom_TrimmedCurve) -> bool;
+ 
++        #[cxx_name = "RustHandle_Geom_Surface"]
+         type Handle_Geom_Surface;
+         pub fn IsNull(self: &Handle_Geom_Surface) -> bool;
+         pub fn DynamicType(surface: &Handle_Geom_Surface) -> &Handle_Standard_Type;
+ 
++        #[cxx_name = "RustHandle_Geom_BezierSurface"]
+         type Handle_Geom_BezierSurface;
+         pub fn IsNull(self: &Handle_Geom_BezierSurface) -> bool;
+ 
++        #[cxx_name = "RustHandle_Geom_Plane"]
+         type Handle_Geom_Plane;
+         pub fn IsNull(self: &Handle_Geom_Plane) -> bool;
+ 
++        #[cxx_name = "RustHandle_Geom_CylindricalSurface"]
+         type Handle_Geom_CylindricalSurface;
+         pub fn IsNull(self: &Handle_Geom_CylindricalSurface) -> bool;
+         // End Handles
+diff --git a/crates/opencascade-sys/src/geom2d.rs b/crates/opencascade-sys/src/geom2d.rs
+index d4abdf33c..701f14f70 100644
+--- a/crates/opencascade-sys/src/geom2d.rs
++++ b/crates/opencascade-sys/src/geom2d.rs
+@@ -9,12 +9,15 @@ mod inner {
+         type gp_Pnt2d = crate::gp::gp_Pnt2d;
+ 
+         // Handles
++        #[cxx_name = "RustHandle_Geom2d_Curve"]
+         type Handle_Geom2d_Curve;
+         pub fn IsNull(self: &Handle_Geom2d_Curve) -> bool;
+ 
++        #[cxx_name = "RustHandle_Geom2d_Ellipse"]
+         type Handle_Geom2d_Ellipse;
+         pub fn IsNull(self: &Handle_Geom2d_Ellipse) -> bool;
+ 
++        #[cxx_name = "RustHandle_Geom2d_TrimmedCurve"]
+         type Handle_Geom2d_TrimmedCurve;
+         pub fn IsNull(self: &Handle_Geom2d_TrimmedCurve) -> bool;
+         // End Handles
+diff --git a/crates/opencascade-sys/src/geom_api.rs b/crates/opencascade-sys/src/geom_api.rs
+index 7c6e4c67b..b6ec62384 100644
+--- a/crates/opencascade-sys/src/geom_api.rs
++++ b/crates/opencascade-sys/src/geom_api.rs
+@@ -7,8 +7,11 @@ mod inner {
+ 
+         type gp_Pnt = crate::gp::gp_Pnt;
+         type gp_Vec = crate::gp::gp_Vec;
++        #[cxx_name = "RustHandle_TColgp_HArray1OfPnt"]
+         type Handle_TColgp_HArray1OfPnt = crate::t_col_gp::Handle_TColgp_HArray1OfPnt;
++        #[cxx_name = "RustHandle_Geom_BSplineCurve"]
+         type Handle_Geom_BSplineCurve = crate::geom::Handle_Geom_BSplineCurve;
++        #[cxx_name = "RustHandle_Geom_Surface"]
+         type Handle_Geom_Surface = crate::geom::Handle_Geom_Surface;
+ 
+         type GeomAPI_Interpolate;
+diff --git a/crates/opencascade-sys/src/law.rs b/crates/opencascade-sys/src/law.rs
+index e78f270ea..c00eff76e 100644
+--- a/crates/opencascade-sys/src/law.rs
++++ b/crates/opencascade-sys/src/law.rs
+@@ -8,6 +8,7 @@ mod inner {
+         type TColgp_Array1OfPnt2d = crate::t_col_gp::TColgp_Array1OfPnt2d;
+ 
+         // Handles
++        #[cxx_name = "RustHandle_Law_Function"]
+         type Handle_Law_Function;
+         pub fn IsNull(self: &Handle_Law_Function) -> bool;
+         // End Handles
+diff --git a/crates/opencascade-sys/src/poly.rs b/crates/opencascade-sys/src/poly.rs
+index 57c02324f..c6ca8ebd4 100644
+--- a/crates/opencascade-sys/src/poly.rs
++++ b/crates/opencascade-sys/src/poly.rs
+@@ -11,6 +11,7 @@ mod inner {
+         type BRepAdaptor_Curve = crate::b_rep_adaptor::BRepAdaptor_Curve;
+ 
+         // Handles
++        #[cxx_name = "RustHandle_Poly_Triangulation"]
+         type Handle_Poly_Triangulation;
+         pub fn IsNull(self: &Handle_Poly_Triangulation) -> bool;
+         #[cxx_name = "handle_try_deref"]
+diff --git a/crates/opencascade-sys/src/shape_analysis.rs b/crates/opencascade-sys/src/shape_analysis.rs
+index 0bb9c581e..e8fa72a35 100644
+--- a/crates/opencascade-sys/src/shape_analysis.rs
++++ b/crates/opencascade-sys/src/shape_analysis.rs
+@@ -6,6 +6,7 @@ mod inner {
+         include!("opencascade-sys/include/shape_analysis.hxx");
+ 
+         type TopoDS_Shape = crate::topo_ds::TopoDS_Shape;
++        #[cxx_name = "RustHandle_TopTools_HSequenceOfShape"]
+         type Handle_TopTools_HSequenceOfShape = crate::top_tools::Handle_TopTools_HSequenceOfShape;
+ 
+         type ShapeAnalysis_FreeBounds;
+diff --git a/crates/opencascade-sys/src/standard.rs b/crates/opencascade-sys/src/standard.rs
+index 945eb70c7..4c62eb195 100644
+--- a/crates/opencascade-sys/src/standard.rs
++++ b/crates/opencascade-sys/src/standard.rs
+@@ -5,6 +5,7 @@ mod inner {
+     unsafe extern "C++" {
+         include!("opencascade-sys/include/standard.hxx");
+ 
++        #[cxx_name = "RustHandle_Standard_Type"]
+         type Handle_Standard_Type;
+         pub fn type_name(handle: &Handle_Standard_Type) -> String;
+         pub fn IsNull(self: &Handle_Standard_Type) -> bool;
+diff --git a/crates/opencascade-sys/src/t_col_gp.rs b/crates/opencascade-sys/src/t_col_gp.rs
+index a9c97e8a0..39f73d5a3 100644
+--- a/crates/opencascade-sys/src/t_col_gp.rs
++++ b/crates/opencascade-sys/src/t_col_gp.rs
+@@ -10,6 +10,7 @@ mod inner {
+         type gp_Pnt2d = crate::gp::gp_Pnt2d;
+ 
+         // Handles
++        #[cxx_name = "RustHandle_TColgp_HArray1OfPnt"]
+         type Handle_TColgp_HArray1OfPnt;
+ 
+         pub fn new_HandleTColgpHArray1OfPnt_from_TColgpHArray1OfPnt(
+diff --git a/crates/opencascade-sys/src/top_tools.rs b/crates/opencascade-sys/src/top_tools.rs
+index 79daf2f08..5996f2174 100644
+--- a/crates/opencascade-sys/src/top_tools.rs
++++ b/crates/opencascade-sys/src/top_tools.rs
+@@ -10,6 +10,7 @@ mod inner {
+         type TopoDS_Face = crate::topo_ds::TopoDS_Face;
+ 
+         // Handles
++        #[cxx_name = "RustHandle_TopTools_HSequenceOfShape"]
+         type Handle_TopTools_HSequenceOfShape;
+         pub fn IsNull(self: &Handle_TopTools_HSequenceOfShape) -> bool;
+         // End Handles

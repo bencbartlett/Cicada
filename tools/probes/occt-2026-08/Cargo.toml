@@ -1,0 +1,39 @@
+# OCCT probe (docs/17 §Item P, docs/probes/occt-2026-08.md). A STANDALONE
+# cargo project: the empty [workspace] table keeps the main workspace from
+# adopting it, so default `cargo check --workspace` never needs OCCT.
+#
+# Build (Windows, MSVC): set DEP_OCCT_ROOT to the conda-forge occt 7.8.1
+# prefix (the dir holding include/, lib/, bin/ and lib/cmake/opencascade),
+# put cmake on PATH, then `cargo build --release`. See the memo for the
+# exact archive + sha256 and the runtime DLL story.
+[package]
+name = "occt-probe"
+version = "0.0.1"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+# No usable crates.io release of the binding exists (the published 0.2.0 is
+# stale); pin to a commit. default-features = false drops `builtin` (the
+# source build of the OCCT submodule) and links a pre-installed OCCT found
+# through DEP_OCCT_ROOT instead.
+opencascade = { git = "https://github.com/bschwind/opencascade-rs", rev = "d114250a464d50cde1901743d3bf523a099d6887", default-features = false }
+# The binding's public API takes glam 0.24 vectors.
+glam = "0.24"
+sha2 = "0.10"
+
+[profile.release]
+debug = false
+
+# MSVC needs one patch on the binding (see the memo §Q1 and patches/): the
+# source-only part of upstream PR #230. Apply it to a scratch clone of the
+# binding at the pinned rev and point this at it:
+#   git clone https://github.com/bschwind/opencascade-rs <dir>
+#   git -C <dir> checkout d114250a464d50cde1901743d3bf523a099d6887
+#   git -C <dir> apply patches/0001-msvc-handle-aliases.diff
+# Cargo has no env expansion in paths, so the path below is the one this
+# machine used (the probe's download cache dir, allowed by the work order).
+[patch."https://github.com/bschwind/opencascade-rs"]
+opencascade = { path = "C:/Users/benja/AppData/Local/cicada-occt/opencascade-rs-patched/crates/opencascade" }
