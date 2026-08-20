@@ -2,8 +2,10 @@
  * The node canvas (docs/16 §Canvas conventions, docs/09 §Blocked wires,
  * docs/10 §Round-trip contract): a React Flow view over the server's graph
  * view-model. Every gesture becomes ONE intent (`move_node`, `connect`,
- * `disconnect`, `place_node`, `set_param`, …); the client only keeps
- * optimistic feel (drag position, slider thumb) until the next delta.
+ * `disconnect`, `place_node`, `set_param`, …) — a gesture on several nodes
+ * or with several edits (multi-move, reconnect) goes as one `batch`, so it
+ * is one op and one Ctrl+Z; the client only keeps optimistic feel (drag
+ * position, slider thumb) until the next delta.
  *
  * Mouse map: left-drag on empty canvas = marquee · middle/right-drag or
  * Space+drag = pan · wheel = zoom · right-click = context menu ·
@@ -35,7 +37,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { WireEnd } from "../protocol/messages";
+import { asOneOp, type GestureMessage, type WireEnd } from "../protocol/messages";
 import { canWrite, useCicada, writeBlockReason } from "../state/store";
 import "./canvas.css";
 import { CicadaEdge } from "./CicadaEdge";
@@ -227,9 +229,12 @@ function CanvasInner() {
   const onNodeDragStop = useCallback<OnNodeDrag<CanvasNode>>(
     (_event, node, dragged) => {
       const moved = dragged.length > 0 ? dragged : [node];
-      for (const n of moved) {
-        sendWrite({ type: "move_node", payload: { node: n.id, cell: pxToCell(n.position.x, n.position.y, unit) } });
-      }
+      // One drag = one op: a multi-select move is a `batch` of `move_node`.
+      const ops: GestureMessage[] = moved.map((n) => ({
+        type: "move_node",
+        payload: { node: n.id, cell: pxToCell(n.position.x, n.position.y, unit) },
+      }));
+      sendWrite(asOneOp(ops, `move ${ops.length} nodes`));
     },
     [unit],
   );
@@ -362,8 +367,12 @@ function CanvasInner() {
       useCicada.getState().addNotice("warning", refusalText(to, verdict));
       return;
     }
-    if (!sendWrite({ type: "connect", payload: { from, to, lift: verdict.verdict === "lift" } })) return;
-    if (!sameTarget) sendWrite({ type: "disconnect", payload: { to: wire.to } });
+    // A reconnect to another target is wire + unwire as ONE op (a `batch`,
+    // all or nothing): the old kwarg never lingers half-moved, and one
+    // Ctrl+Z puts the wire back where it was.
+    const ops: GestureMessage[] = [{ type: "connect", payload: { from, to, lift: verdict.verdict === "lift" } }];
+    if (!sameTarget) ops.push({ type: "disconnect", payload: { to: wire.to } });
+    sendWrite(asOneOp(ops, `rewire ${wire.to.node}.${wire.to.port} → ${to.node}.${to.port}`));
   }, []);
 
   const onReconnectEnd = useCallback(
@@ -387,10 +396,12 @@ function CanvasInner() {
   );
 
   const onEdgesDelete = useCallback((deleted: CanvasEdge[]) => {
+    const ops: GestureMessage[] = [];
     for (const edge of deleted) {
       const wire = edge.data?.wire;
-      if (wire !== undefined) sendWrite({ type: "disconnect", payload: { to: wire.to } });
+      if (wire !== undefined) ops.push({ type: "disconnect", payload: { to: wire.to } });
     }
+    if (ops.length > 0) sendWrite(asOneOp(ops, `unwire ${ops.length} wires`));
   }, []);
 
   // ------------------------------------------------------ clicks / menus

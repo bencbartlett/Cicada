@@ -6,12 +6,12 @@
  * mutates authoritative state.
  */
 import { useEffect } from "react";
+import { asOneOp, type GestureMessage } from "./protocol/messages";
 import { canWrite, nodeByName, useCicada, writeBlockReason } from "./state/store";
 import { viewportApi } from "./viewport/api";
 
 const NOT_YET = {
   disable: "disable arrives with #off support (v0.1)",
-  undo: "undo/redo arrive after the spike (doc 15 out of scope)",
   group: "groups arrive later",
   transport: "transport arrives with time params",
   commit: "commit dialog arrives with the git panel — every op is already saved",
@@ -58,7 +58,9 @@ export function handleHotkey(event: KeyboardEvent): boolean {
     return true;
   }
 
-  if (key === "Delete" || key === "Backspace") {
+  // `Del` only — Backspace does NOT delete (docs/16 keyboard map: GH
+  // parity, 2026-08-19); it falls through unconsumed.
+  if (key === "Delete") {
     if (state.selection.wire !== null) {
       const wire = state.graph.wires.find((w) => w.id === state.selection.wire);
       if (wire === undefined) {
@@ -71,7 +73,9 @@ export function handleHotkey(event: KeyboardEvent): boolean {
     }
     if (selected.length === 0) return false;
     if (needsLease("delete nodes")) return true;
-    for (const node of selected) state.send({ type: "delete_node", payload: { node } });
+    // A multi-delete is ONE op (a `batch`), so one Ctrl+Z brings them all back.
+    const ops: GestureMessage[] = selected.map((node) => ({ type: "delete_node", payload: { node } }));
+    state.send(asOneOp(ops, `delete ${selected.length} nodes`));
     return true;
   }
 
@@ -90,8 +94,18 @@ export function handleHotkey(event: KeyboardEvent): boolean {
     return true;
   }
 
+  // Undo / redo (docs/13 op log): Ctrl+Z · Ctrl+Shift+Z / Ctrl+Y. Sent
+  // even when the mirror says the side is empty — the server's refusal
+  // carries the reason (no edits yet / all undone / the reload barrier).
   if (ctrl && (key === "z" || key === "Z")) {
-    notice("info", NOT_YET.undo);
+    const redo = event.shiftKey;
+    if (needsLease(redo ? "redo" : "undo")) return true;
+    state.send({ type: redo ? "redo" : "undo", payload: {} });
+    return true;
+  }
+  if (ctrl && (key === "y" || key === "Y")) {
+    if (needsLease("redo")) return true;
+    state.send({ type: "redo", payload: {} });
     return true;
   }
   if (ctrl && (key === "g" || key === "G")) {
@@ -119,6 +133,7 @@ export function handleHotkey(event: KeyboardEvent): boolean {
       return true;
     }
     if (needsLease("toggle previews")) return true;
+    const ops: GestureMessage[] = [];
     for (const name of selected) {
       const node = nodeByName(state.graph, name);
       if (node === undefined) continue;
@@ -126,8 +141,9 @@ export function handleHotkey(event: KeyboardEvent): boolean {
         notice("info", `\`${name}\` has no displayable output`);
         continue;
       }
-      state.send({ type: "set_preview", payload: { node: name, on: !node.preview } });
+      ops.push({ type: "set_preview", payload: { node: name, on: !node.preview } });
     }
+    if (ops.length > 0) state.send(asOneOp(ops, `preview ${ops.length} nodes`));
     return true;
   }
 
@@ -147,14 +163,16 @@ export function handleHotkey(event: KeyboardEvent): boolean {
     if (needsLease("move nodes")) return true;
     const dx = key === "ArrowLeft" ? -1 : key === "ArrowRight" ? 1 : 0;
     const dy = key === "ArrowUp" ? -1 : key === "ArrowDown" ? 1 : 0;
+    const ops: GestureMessage[] = [];
     for (const name of selected) {
       const node = nodeByName(state.graph, name);
       if (node === undefined) continue;
-      state.send({
+      ops.push({
         type: "move_node",
         payload: { node: name, cell: [node.cell[0] + dx, node.cell[1] + dy] },
       });
     }
+    if (ops.length > 0) state.send(asOneOp(ops, `move ${ops.length} nodes`));
     return true;
   }
 

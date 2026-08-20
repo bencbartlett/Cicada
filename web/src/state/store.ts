@@ -11,7 +11,10 @@ import { create } from "zustand";
 import type {
   Catalog,
   ClientMessage,
+  ErrorKind,
+  ErrorPayload,
   GraphView,
+  HistoryView,
   LeaseView,
   NodeStatus,
   ProbeCatalogEntry,
@@ -131,6 +134,27 @@ export interface WireValues {
 }
 
 const EMPTY_GRAPH: GraphView = { nodes: [], wires: [], diagnostics: [] };
+/** No ops yet — what the server reports before any edit (and after a reload barrier). */
+export const EMPTY_HISTORY: HistoryView = {
+  can_undo: false,
+  can_redo: false,
+  undo_label: null,
+  redo_label: null,
+  depth: 0,
+};
+
+/** The last refused intent: the `error` payload minus its wire casing. */
+export interface LastError {
+  intentId?: string;
+  kind: ErrorKind;
+  message: string;
+  /** `stale_base`: the hash to rebase on. */
+  currentTextHash?: string;
+  /** `parse_error`: the doc-11 diagnostics. */
+  diagnostics?: ErrorPayload["diagnostics"];
+  /** A failed `batch`: the 0-based index of the op that failed. */
+  index?: number;
+}
 const EMPTY_SUMMARY: SolveSummary = {
   generation: 0,
   running: false,
@@ -164,7 +188,13 @@ export interface CicadaState {
   /** Bindings the last delta named dirty (for a brief flash). */
   dirty: string[];
   lastDeltaLabel: string;
-  lastError: { intentId?: string; kind: string; message: string } | null;
+  /**
+   * Undo/redo state as of the last `delta` / `snapshot` (docs/13 §Undo/redo).
+   * Display + affordance gating only: the server is the authority, and
+   * `undo` / `redo` go out as intents whose refusal says why.
+   */
+  history: HistoryView;
+  lastError: LastError | null;
   /** Number of snapshots received (barrier reloads bump it). */
   snapshots: number;
   displayGeneration: number;
@@ -236,6 +266,7 @@ export const useCicada = create<CicadaState>((set, get) => ({
   summary: EMPTY_SUMMARY,
   dirty: [],
   lastDeltaLabel: "",
+  history: EMPTY_HISTORY,
   lastError: null,
   snapshots: 0,
   displayGeneration: 0,
@@ -318,6 +349,7 @@ export const useCicada = create<CicadaState>((set, get) => ({
           statuses: p.statuses,
           summary: p.summary,
           lease: p.lease,
+          history: p.history,
           snapshots: state.snapshots + 1,
           selection: {
             nodes: state.selection.nodes.filter((n) => live.has(n)),
@@ -352,6 +384,7 @@ export const useCicada = create<CicadaState>((set, get) => ({
           text: p.text,
           dirty: p.dirty,
           lastDeltaLabel: p.source.label,
+          history: p.history,
           selection: {
             ...state.selection,
             nodes,
@@ -384,8 +417,10 @@ export const useCicada = create<CicadaState>((set, get) => ({
       }
       case "error": {
         const p = envelope.payload;
-        set({ lastError: { intentId: p.intent_id, kind: p.kind, message: p.message } });
-        get().addNotice("error", p.message);
+        set({ lastError: lastErrorOf(p) });
+        // An empty undo/redo side is a routine answer to Ctrl+Z, not a
+        // failure: the message still says why (including the barrier).
+        get().addNotice(errorNoticeLevel(p.kind), p.message);
         break;
       }
       case "wire_probe": {
@@ -485,6 +520,26 @@ export const useCicada = create<CicadaState>((set, get) => ({
   closeSearch: () => set({ search: null }),
   clearRunNotice: () => set({ runNotice: null }),
 }));
+
+/** The store's record of an `error` payload (flattened details named). */
+export function lastErrorOf(p: ErrorPayload): LastError {
+  const error: LastError = { kind: p.kind, message: p.message };
+  if (p.intent_id !== undefined) error.intentId = p.intent_id;
+  if (p.current_text_hash !== undefined) error.currentTextHash = p.current_text_hash;
+  if (p.diagnostics !== undefined) error.diagnostics = p.diagnostics;
+  if (p.index !== undefined) error.index = p.index;
+  return error;
+}
+
+/**
+ * The notice level an `error` kind deserves: `nothing_to_undo` /
+ * `nothing_to_redo` are informational (Ctrl+Z on an empty stack is not a
+ * fault — and the server's reason, e.g. the reload barrier, still shows);
+ * everything else is an error.
+ */
+export function errorNoticeLevel(kind: ErrorKind): Notice["level"] {
+  return kind === "nothing_to_undo" || kind === "nothing_to_redo" ? "info" : "error";
+}
 
 /** Keep only the entries whose key is a live binding. */
 export function pruneKeys<T>(record: Record<string, T>, live: Set<string>): Record<string, T> {

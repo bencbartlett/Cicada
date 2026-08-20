@@ -67,22 +67,78 @@ describe("handleHotkey", () => {
     expect(useCicada.getState().search).toBeNull();
   });
 
-  it("Delete removes selected nodes, disconnects a selected wire", () => {
+  it("Delete removes ONE selected node as itself, several as one batch (one undo step)", () => {
+    useCicada.getState().selectNodes(["a"]);
+    expect(handleHotkey(key("Delete"))).toBe(true);
+    expect(sent).toEqual([{ type: "delete_node", payload: { node: "a" } }]);
+    sent = [];
     useCicada.getState().selectNodes(["a", "b"]);
     expect(handleHotkey(key("Delete"))).toBe(true);
     expect(sent).toEqual([
-      { type: "delete_node", payload: { node: "a" } },
-      { type: "delete_node", payload: { node: "b" } },
+      {
+        type: "batch",
+        payload: {
+          label: "delete 2 nodes",
+          ops: [
+            { type: "delete_node", payload: { node: "a" } },
+            { type: "delete_node", payload: { node: "b" } },
+          ],
+        },
+      },
     ]);
-    sent = [];
+  });
+
+  it("Delete disconnects a selected wire", () => {
     useCicada.getState().selectWire("a.out->b.x");
-    expect(handleHotkey(key("Backspace"))).toBe(true);
+    expect(handleHotkey(key("Delete"))).toBe(true);
     expect(sent).toEqual([{ type: "disconnect", payload: { to: { node: "b", port: "x" } } }]);
+  });
+
+  it("Backspace does NOT delete — nodes or wires — and is not consumed (docs/16: Del only, GH parity)", () => {
+    useCicada.getState().selectNodes(["a", "b"]);
+    expect(handleHotkey(key("Backspace"))).toBe(false);
+    useCicada.getState().selectWire("a.out->b.x");
+    expect(handleHotkey(key("Backspace"))).toBe(false);
+    expect(sent).toEqual([]);
+    expect(useCicada.getState().notices).toEqual([]);
   });
 
   it("does not consume Delete with nothing selected", () => {
     expect(handleHotkey(key("Delete"))).toBe(false);
     expect(sent).toEqual([]);
+  });
+
+  it("Ctrl+Z undoes; Ctrl+Shift+Z and Ctrl+Y redo; Cmd works as Ctrl", () => {
+    expect(handleHotkey(key("z", { ctrlKey: true }))).toBe(true);
+    expect(handleHotkey(key("Z", { ctrlKey: true, shiftKey: true }))).toBe(true);
+    expect(handleHotkey(key("y", { ctrlKey: true }))).toBe(true);
+    expect(handleHotkey(key("z", { metaKey: true }))).toBe(true);
+    expect(sent).toEqual([
+      { type: "undo", payload: {} },
+      { type: "redo", payload: {} },
+      { type: "redo", payload: {} },
+      { type: "undo", payload: {} },
+    ]);
+    expect(useCicada.getState().notices).toEqual([]);
+  });
+
+  it("undo/redo are sent even when the mirror's history is empty — the server's refusal says why", () => {
+    useCicada.setState({
+      history: { can_undo: false, can_redo: false, undo_label: null, redo_label: null, depth: 0 },
+    });
+    expect(handleHotkey(key("z", { ctrlKey: true }))).toBe(true);
+    expect(sent).toEqual([{ type: "undo", payload: {} }]);
+  });
+
+  it("undo/redo are writes: observers and dropped sockets get the notice, no intent", () => {
+    useCicada.setState({ role: "observer" });
+    expect(handleHotkey(key("z", { ctrlKey: true }))).toBe(true);
+    expect(handleHotkey(key("y", { ctrlKey: true }))).toBe(true);
+    expect(sent).toEqual([]);
+    expect(useCicada.getState().notices.map((n) => n.message)).toEqual([
+      "read-only observer — take the lease to undo",
+      "read-only observer — take the lease to redo",
+    ]);
   });
 
   it("observers get a notice instead of a write intent", () => {
@@ -116,6 +172,26 @@ describe("handleHotkey", () => {
     expect(useCicada.getState().notices.at(-1)?.message).toMatch(/no displayable output/);
   });
 
+  it("P on several displayable nodes is one batch", () => {
+    useCicada.setState({
+      graph: { ...useCicada.getState().graph, nodes: [fakeNode("a"), fakeNode("c", { preview: true })] },
+    });
+    useCicada.getState().selectNodes(["a", "c"]);
+    expect(handleHotkey(key("P"))).toBe(true);
+    expect(sent).toEqual([
+      {
+        type: "batch",
+        payload: {
+          label: "preview 2 nodes",
+          ops: [
+            { type: "set_preview", payload: { node: "a", on: true } },
+            { type: "set_preview", payload: { node: "c", on: false } },
+          ],
+        },
+      },
+    ]);
+  });
+
   it("arrows nudge by one grid cell from the node's current cell", () => {
     useCicada.getState().selectNodes(["a"]);
     expect(handleHotkey(key("ArrowRight"))).toBe(true);
@@ -126,10 +202,25 @@ describe("handleHotkey", () => {
     ]);
   });
 
+  it("an arrow nudge of a multi-selection is one batch of move_node", () => {
+    useCicada.getState().selectNodes(["a", "b"]);
+    expect(handleHotkey(key("ArrowDown"))).toBe(true);
+    expect(sent).toEqual([
+      {
+        type: "batch",
+        payload: {
+          label: "move 2 nodes",
+          ops: [
+            { type: "move_node", payload: { node: "a", cell: [3, 5] } },
+            { type: "move_node", payload: { node: "b", cell: [3, 5] } },
+          ],
+        },
+      },
+    ]);
+  });
+
   it("deferred features answer with a notice and consume the key", () => {
     for (const [k, mods] of [
-      ["z", { ctrlKey: true }],
-      ["z", { ctrlKey: true, shiftKey: true }],
       ["g", { ctrlKey: true }],
       ["s", { ctrlKey: true }],
       ["d", {}],
@@ -138,7 +229,7 @@ describe("handleHotkey", () => {
       expect(handleHotkey(key(k, mods))).toBe(true);
     }
     expect(sent).toEqual([]);
-    expect(useCicada.getState().notices.length).toBe(6);
+    expect(useCicada.getState().notices.length).toBe(4);
   });
 
   it("leaves unknown keys alone", () => {

@@ -29,7 +29,9 @@ export function sendWrite(message: ClientMessage): boolean {
   if (!canWrite(state)) {
     const why = writeBlockReason(state) ?? "cannot write";
     const hint = state.connection === "open" ? "take the lease to edit" : "waiting for the connection";
-    state.addNotice("warning", `${why} — ${message.type.replace(/_/g, " ")} ignored (${hint})`);
+    // A batch is named by its label (`move 3 nodes`), a gesture by its type.
+    const what = message.type === "batch" ? message.payload.label : message.type.replace(/_/g, " ");
+    state.addNotice("warning", `${why} — ${what} ignored (${hint})`);
     return false;
   }
   state.send(message);

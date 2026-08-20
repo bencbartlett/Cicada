@@ -1,6 +1,15 @@
 import { beforeEach, describe, expect, it, test } from "vitest";
-import type { GraphView, NodeView, ServerEnvelope } from "../protocol/messages";
-import { canWrite, pruneKeys, roleChangeNotice, useCicada, writeBlockReason } from "./store";
+import type { GraphView, HistoryView, NodeView, ServerEnvelope } from "../protocol/messages";
+import {
+  EMPTY_HISTORY,
+  canWrite,
+  errorNoticeLevel,
+  lastErrorOf,
+  pruneKeys,
+  roleChangeNotice,
+  useCicada,
+  writeBlockReason,
+} from "./store";
 
 describe("canWrite", () => {
   it("needs the lease AND an open socket", () => {
@@ -134,6 +143,11 @@ const hello: ServerEnvelope = {
   },
 };
 
+/** The history the server reports right after pushing `label` as op number `depth`. */
+function after(label: string, depth: number): HistoryView {
+  return { can_undo: true, can_redo: false, undo_label: label, redo_label: null, depth };
+}
+
 test("pruneKeys keeps the record identity when nothing is pruned", () => {
   const record = { a: 1, b: 2 };
   expect(pruneKeys(record, new Set(["a", "b"]))).toBe(record);
@@ -169,6 +183,7 @@ test("a delta prunes dead bindings from statuses and follows renames / my placem
       lease: { writer: 7, clients: [[7, "writer"]] },
       barrier: false,
       reason: "initial",
+      history: EMPTY_HISTORY,
     },
   });
   useCicada.getState().selectNodes(["b"]);
@@ -182,6 +197,7 @@ test("a delta prunes dead bindings from statuses and follows renames / my placem
       graph: graph("a", "c"),
       text: "",
       dirty: ["c"],
+      history: after("rename b → c", 1),
     },
   });
   let state = useCicada.getState();
@@ -197,6 +213,7 @@ test("a delta prunes dead bindings from statuses and follows renames / my placem
       graph: graph("a"),
       text: "",
       dirty: [],
+      history: after("delete c", 2),
     },
   });
   state = useCicada.getState();
@@ -212,6 +229,7 @@ test("a delta prunes dead bindings from statuses and follows renames / my placem
       graph: graph("a", "add_1"),
       text: "",
       dirty: ["add_1"],
+      history: after("place add", 3),
     },
   });
   expect(useCicada.getState().selection.nodes).toEqual(["add_1"]);
@@ -224,7 +242,142 @@ test("a delta prunes dead bindings from statuses and follows renames / my placem
       graph: graph("a", "add_1", "add_2"),
       text: "",
       dirty: ["add_2"],
+      history: after("place add", 4),
     },
   });
   expect(useCicada.getState().selection.nodes).toEqual(["add_1"]);
+});
+
+describe("history (docs/13 §Undo/redo)", () => {
+  const summary = {
+    generation: 1,
+    running: false,
+    cancelled: false,
+    computed: 0,
+    cached: 0,
+    pending: 0,
+    red: 0,
+    blocked: 0,
+    elapsed_ms: 0,
+    eta_rough: false,
+  };
+  const snapshot = (history: HistoryView, barrier = false): ServerEnvelope => ({
+    v: 1,
+    seq: 10,
+    type: "snapshot",
+    payload: {
+      graph: graph("a"),
+      text: "a = 1.0\n",
+      statuses: {},
+      summary,
+      lease: { writer: 7, clients: [[7, "writer"]] },
+      barrier,
+      reason: barrier ? "external change" : "initial",
+      history,
+    },
+  });
+  const delta = (label: string, history: HistoryView): ServerEnvelope => ({
+    v: 1,
+    seq: 11,
+    type: "delta",
+    payload: {
+      source: { client: 7, intent_id: "u", label },
+      graph: graph("a"),
+      text: "a = 1.0\n",
+      dirty: [],
+      history,
+    },
+  });
+
+  beforeEach(() => {
+    useCicada.setState({ history: EMPTY_HISTORY, notices: [], lastError: null, lastDeltaLabel: "" });
+    useCicada.getState().applyServerMessage(hello);
+  });
+
+  it("starts empty and mirrors the snapshot's history field for field", () => {
+    expect(useCicada.getState().history).toEqual({
+      can_undo: false,
+      can_redo: false,
+      undo_label: null,
+      redo_label: null,
+      depth: 0,
+    });
+    const h: HistoryView = { can_undo: true, can_redo: true, undo_label: "move a", redo_label: "delete b", depth: 3 };
+    useCicada.getState().applyServerMessage(snapshot(h));
+    expect(useCicada.getState().history).toEqual(h);
+  });
+
+  it("a delta replaces the history wholesale (undo: cursor back, redo available) and keeps the label", () => {
+    useCicada.getState().applyServerMessage(delta("delete a", after("delete a", 1)));
+    expect(useCicada.getState().history).toEqual(after("delete a", 1));
+    const undone: HistoryView = { can_undo: false, can_redo: true, undo_label: null, redo_label: "delete a", depth: 0 };
+    useCicada.getState().applyServerMessage(delta("undo: delete a", undone));
+    const s = useCicada.getState();
+    expect(s.history).toEqual(undone);
+    expect(s.lastDeltaLabel).toBe("undo: delete a");
+  });
+
+  it("a reload barrier snapshot carries the cleared log", () => {
+    useCicada.getState().applyServerMessage(delta("delete a", after("delete a", 1)));
+    useCicada.getState().applyServerMessage(snapshot(EMPTY_HISTORY, true));
+    expect(useCicada.getState().history).toEqual(EMPTY_HISTORY);
+    expect(useCicada.getState().notices.at(-1)?.message).toMatch(/reloaded from disk/);
+  });
+
+  it("nothing_to_undo / nothing_to_redo are info notices that carry the server's reason; other errors stay errors", () => {
+    expect(errorNoticeLevel("nothing_to_undo")).toBe("info");
+    expect(errorNoticeLevel("nothing_to_redo")).toBe("info");
+    expect(errorNoticeLevel("refused")).toBe("error");
+    expect(errorNoticeLevel("lease")).toBe("error");
+    useCicada.getState().applyServerMessage({
+      v: 1,
+      seq: 12,
+      type: "error",
+      payload: {
+        intent_id: "9",
+        kind: "nothing_to_undo",
+        message:
+          "nothing to undo — the op log was cleared by a reload barrier (an external file change — git, an editor)",
+      },
+    });
+    const s = useCicada.getState();
+    expect(s.notices.at(-1)).toMatchObject({ level: "info", message: expect.stringMatching(/reload barrier/) });
+    expect(s.lastError).toEqual({
+      intentId: "9",
+      kind: "nothing_to_undo",
+      message: expect.stringMatching(/^nothing to undo/),
+    });
+  });
+
+  it("a failed batch's error keeps the failing op's kind and index; apply_text details are named", () => {
+    useCicada.getState().applyServerMessage({
+      v: 1,
+      seq: 13,
+      type: "error",
+      payload: {
+        intent_id: "b",
+        kind: "refused",
+        message: "batch `delete 3 nodes` failed at op 2 (delete_node): no node named `c`",
+        index: 2,
+      },
+    });
+    expect(useCicada.getState().lastError).toEqual({
+      intentId: "b",
+      kind: "refused",
+      message: expect.stringMatching(/failed at op 2/),
+      index: 2,
+    });
+    expect(useCicada.getState().notices.at(-1)?.level).toBe("error");
+    expect(lastErrorOf({ kind: "stale_base", message: "stale", current_text_hash: "ff" })).toEqual({
+      kind: "stale_base",
+      message: "stale",
+      currentTextHash: "ff",
+    });
+    const diagnostics = [{ kind: "parse", span: { line: 1, col_start: 0, col_end: 1 }, message: "bad" }];
+    expect(lastErrorOf({ kind: "parse_error", message: "p", diagnostics })).toEqual({
+      kind: "parse_error",
+      message: "p",
+      diagnostics,
+    });
+  });
 });
