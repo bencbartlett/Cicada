@@ -1650,6 +1650,13 @@ fn a_node_can_poll_its_own_cancel_handle() {
         5,
         "the loop stopped at its next safe point"
     );
+    // Bailing out with an error under a cancelled token is the
+    // cancellation surfacing, not a red node.
+    assert!(
+        matches!(report.outcome(NodeId(0)), NodeOutcome::Cancelled),
+        "{:?}",
+        report.outcome(NodeId(0))
+    );
 }
 
 // ------------------------------------------------------- volatile (v0.1) --

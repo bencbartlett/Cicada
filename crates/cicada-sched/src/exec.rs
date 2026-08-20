@@ -608,6 +608,12 @@ impl Ctx<'_> {
         let commit_started = std::time::Instant::now();
         let outcome = match computed {
             Computed::Cancelled => NodeOutcome::Cancelled,
+            // A failure under a cancelled token is the cancellation
+            // surfacing — a killed worker's "cancelled" error, a long loop
+            // bailing at its safe point — not a red node: the generation
+            // was cancelled, and the next one re-runs it either way
+            // (failures are never memoized).
+            Computed::Failed(_) if self.token.is_cancelled() => NodeOutcome::Cancelled,
             Computed::Failed(failure) => NodeOutcome::Failed(failure),
             Computed::Done {
                 outputs,
