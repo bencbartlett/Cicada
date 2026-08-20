@@ -251,10 +251,27 @@ prediction is, precisely:
   sample or a count contributes 0 and marks the estimate **rough** (a
   floor, shown with `~` like the ETA); a cone with no evidence at all
   previews live — the first drag measures it, the next one knows.
-- **Decided once per drag.** A drag is the run of preview ticks on one
-  param between writes (the release's `set_param`, any edit, a reload)
-  or an Esc; the first tick decides, the rest reuse the verdict — no
-  mid-drag flip-flop by construction; the next drag re-predicts.
+- **Decided per tick, monotone within a drag.** Every tick predicts
+  its own cone; a tick predicted at or above the bar is withheld,
+  always — a drag that began on a warm value (the load's, a prior
+  release's) and moves onto cold ones never solves a slow preview
+  live. `preview_policy` goes out once per drag, on the first withheld
+  tick. Once a drag has switched, only a tick that is a pure cache
+  read (no node predicted to compute) previews live — scrub caching's
+  upgrade path; a tick that would compute stays withheld whatever its
+  estimate (the hysteresis: a drag never flips back to solving). A
+  drag is the run of ticks on one param closer together than
+  `DRAG_GAP_MS` (300 ms); a write attempt (landed or refused), an Esc,
+  a reload or a longer pause ends it, and the next tick starts a fresh
+  one — re-predicted, re-announced if withheld (doc 13 §Slider drags
+  has the client-side reading).
+- **No second model.** A cone with no evidence at all previews live
+  once; that generation records every node's sample and element count,
+  and the next tick is predicted from them. There is no separate
+  "last measured time of this param's cone" fallback: the per-node
+  sum is complete after one generation of evidence (or after a warm
+  reopen, from memo-recorded costs), so a second model would never be
+  consulted.
 
 Measured on the wall's `deboss` (22 threads): predicted 3.9 s, the
 release took 3.7 s; after a warm reopen the prediction was 4.1 s from

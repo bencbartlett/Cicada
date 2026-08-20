@@ -404,14 +404,16 @@ pub enum ServerMessage {
     },
     /// The server's drag policy for one param (DECISIONS.md interactive
     /// param row; docs/13 §Slider drags; v0.1 item 3b, additive): sent ONCE
-    /// per drag — on the first `param_preview` of a drag whose dirty cone
-    /// the cost model predicts at or above the compute-on-release threshold
-    /// — and never for a cheap cone (those preview live, no message). While
-    /// it stands, the session solves NO preview for that param: the client
-    /// shows the pending value and the estimate, and the one real
-    /// `set_param` on release solves as usual. The decision holds for the
-    /// whole drag (no mid-drag flip-flop); a new drag re-predicts with
-    /// fresher samples.
+    /// per drag — on the first `param_preview` tick whose dirty cone the
+    /// cost model predicts at or above the compute-on-release threshold —
+    /// and never for a cheap cone (those preview live, no message). From
+    /// then on the session solves no preview for that param that would
+    /// compute (a pure cache read still paints): the client shows the
+    /// pending value and the estimate, and the one real `set_param` on
+    /// release solves as usual. A drag is the run of ticks on one param
+    /// closer together than `DRAG_GAP_MS`; a write attempt, an Esc or a
+    /// longer pause ends it, and the next drag is announced again — the
+    /// client replaces its pending state on every arrival, never stacks it.
     PreviewPolicy {
         /// The param's binding.
         node: String,
@@ -427,7 +429,7 @@ pub enum ServerMessage {
         /// its op, or no element count) and contributed nothing — the
         /// estimate is a floor, shown with a `~` like the ETA.
         rough: bool,
-        /// The first tick's literal — the value the slider will land on
+        /// The withheld tick's literal — the value the slider will land on
         /// unless the drag moves on; the client tracks later ticks itself.
         pending_value: String,
     },

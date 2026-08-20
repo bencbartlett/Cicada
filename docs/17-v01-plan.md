@@ -215,12 +215,18 @@ Design: DECISIONS.md rows 16 and 42 (revised 2026-08-19), doc 03, doc 08
   `"volatile"` in catalog.json; (3) `SolveLoop::run_idle` +
   `Session::solve_hypothetical` — idle class, pre-empted by any real
   submission or Esc, invisible to `wait_idle`, paints nothing, one
-  `hypothetical` timing row; (4) compute-on-release — decided once per
-  drag from a hash-only dry run of the tick's keys against the memo
-  (warm values stay live), the additive `preview_policy` message (doc
-  13 §Slider drags has the frozen shape), `COMPUTE_ON_RELEASE_MS` =
-  1 s; memo entries record their computation's cost so the model is
-  complete after a warm reopen. Measured: 02-solids `size` warm p50/p95
+  `hypothetical` timing row; (4) compute-on-release — decided PER TICK
+  from a hash-only dry run of the tick's keys against the memo (warm
+  values stay live; a cold tick is withheld whatever the drag's first
+  tick was), monotone within a drag, announced once per drag by the
+  additive `preview_policy` message (doc 13 §Slider drags has the
+  frozen shape and the drag-gap rule: a drag ends on a write attempt,
+  an Esc, or a 300 ms pause, and the next one is announced again),
+  `COMPUTE_ON_RELEASE_MS` = 1 s; memo entries record their
+  computation's cost so the model is complete after a warm reopen.
+  Review fixes 2026-08-20: the warm-first-tick and no-write-drag holes
+  closed (both reproduced on the wall), the Python bridge wiring pinned
+  by an end-to-end Esc test. Measured: 02-solids `size` warm p50/p95
   0.22/0.82 → 0.23/0.84 ms server, 0.42/1.4 → 0.43/1.42 ms client
   (within noise); wall `deboss` 301 ticks → 0 preview generations, 1
   policy message (estimate 3.9 s), 1 generation on release (3.7 s);

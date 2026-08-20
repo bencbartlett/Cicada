@@ -76,12 +76,15 @@ Scrub caching (doc 12) upgrades expensive sliders back into the
 smooth tier by warming their range during idle time.
 
 *(Live, v0.1 item 3b — the engine half.)* The decision is the
-server's and is made **once per drag**: the first `param_preview` on a
-param predicts its dirty cone (doc 12 §Cost prediction — a hash-only
-dry run against the memo, so warmed values stay live); at or above
-`COMPUTE_ON_RELEASE_MS` (1 s) the session broadcasts ONE additive
-message and withholds every tick of the drag until a write or an Esc
-ends it:
+server's and is made **per tick, monotone within a drag**: every
+`param_preview` predicts its own dirty cone (doc 12 §Cost prediction —
+a hash-only dry run of that tick's keys against the memo, so warmed
+values predict as the cache reads they are); a tick predicted at or
+above `COMPUTE_ON_RELEASE_MS` (1 s) is **withheld** — always, whatever
+earlier ticks of the drag did, so a drag that starts on a warm value
+and moves onto cold ones never solves a multi-second preview live.
+The session broadcasts ONE additive message per drag, on its first
+withheld tick:
 
 ```json
 {"v":1,"seq":N,"type":"preview_policy","payload":{
@@ -94,14 +97,34 @@ mode ever announced (a cheap cone gets no message and previews
 latest-wins as before); `estimate_ms` is the predicted wall time of a
 live preview, a floor when `rough` (some node in the cone has no cost
 evidence yet — render with `~`, like the ETA); `pending_value` is the
-first tick's literal — the client tracks later ticks itself and clears
-the pending state on the delta its release `set_param` produces. The
-release is the one real op and the one generation, exactly as before.
-`/debug/state` → `solve.previews_deferred` counts withheld ticks and
-`solve.drag` shows the standing verdict `{node, port, live}`. The web
-client's half — the pending value and estimate on the slider, the
-observer's view — is the next package; the current client ignores the
-message. `PROTOCOL_VERSION` is unchanged (additive).
+withheld tick's literal — the client tracks later ticks itself and
+clears the pending state on the delta its release `set_param`
+produces (or when the pointer is released without a write). Once a
+drag has switched it never switches back: a later tick that is a pure
+cache read (a value visited before, or warmed by scrub caching)
+previews live — that is scrub caching's upgrade path — but any tick
+that would compute stays withheld whatever its estimate, so nothing
+flip-flops. The release is the one real op and the one generation,
+exactly as before.
+
+**What a drag is, server-side**: the run of ticks on one param closer
+together than `DRAG_GAP_MS` (300 ms of op-clock time). A drag ends on
+any write attempt (the release's `set_param`, any edit, a reload —
+landed or refused), on Esc, and on a pause longer than the gap; the
+next tick starts a fresh drag, predicted again and **announced again**
+if withheld, with its own `pending_value`. The gap rule exists because
+both sliders skip `set_param` when the pointer is released on the
+committed value — a drag can end with no write at all, and the next
+one must still hear its policy. For the client this means:
+`preview_policy` may arrive more than once for the same param (after a
+pause, a release, an Esc); each one is the current verdict — replace
+the pending state, never stack it. `/debug/state` →
+`solve.previews_deferred` counts withheld ticks in total and
+`solve.drag` shows the standing drag `{node, port, mode: "live" |
+"compute_on_release", deferred, last_tick_ms}`. The web client's half —
+the pending value and estimate on the slider, the observer's view — is
+the next package; the current client ignores the message.
+`PROTOCOL_VERSION` is unchanged (additive).
 
 ## Binary frame format
 

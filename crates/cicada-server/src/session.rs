@@ -78,13 +78,24 @@ pub const UNIT_PX: u32 = 24;
 
 /// Compute-on-release threshold (DECISIONS.md interactive param row: "the
 /// cost model degrades expensive cones (≥ ~1 s) to compute-on-release
-/// automatically"): a drag whose dirty cone is PREDICTED to cost at least
-/// this many wall milliseconds solves no previews — the client shows the
-/// pending value and the estimate, and the release's `set_param` solves
-/// once. Below it, previews run latest-wins as always. A constant, not a
-/// `ProjectConfig` field: it is a feel threshold of the app, not a property
-/// of the model, and `ProjectConfig` hashes into cache keys.
+/// automatically"): a `param_preview` tick whose dirty cone is PREDICTED to
+/// cost at least this many wall milliseconds is not solved — the client
+/// shows the pending value and the estimate, and the release's `set_param`
+/// solves once. Below it, previews run latest-wins as always. A constant,
+/// not a `ProjectConfig` field: it is a feel threshold of the app, not a
+/// property of the model, and `ProjectConfig` hashes into cache keys.
 pub const COMPUTE_ON_RELEASE_MS: f64 = 1000.0;
+
+/// What ends a drag when no write does (docs/13 §Slider drags): a
+/// `param_preview` arriving more than this many op-clock milliseconds after
+/// the previous tick on the same param starts a NEW drag — re-predicted,
+/// and re-announced with `preview_policy` if it is withheld. Both sliders
+/// skip `set_param` when the release lands on the committed value, so
+/// without this rule a withheld drag's announcement would never repeat and
+/// the next drag would be withheld silently. Ticks stream at ≥ 30 Hz while
+/// the pointer moves; a pause this long is the user holding still or a
+/// new grab — a repeated announcement is idempotent for the client.
+pub const DRAG_GAP_MS: u64 = 300;
 
 /// Session construction options.
 #[derive(Clone)]
@@ -561,25 +572,34 @@ struct Inner {
     /// watcher's echo guard for script writes (`apply_text`): a rescan
     /// whose files hash to exactly these is our own write, not a barrier.
     scripts_fingerprint: BTreeMap<String, [u8; 32]>,
-    /// The drag in progress and its preview decision (compute-on-release,
-    /// DECISIONS.md row 39). A drag is the run of `param_preview`s on one
-    /// param between writes: any write (the release's `set_param`, an
-    /// edit, a reload) or an Esc ends it, so the decision is made once per
-    /// drag and never flips mid-drag. Protected by the `Inner` lock like
-    /// every write site that clears it.
+    /// The drag in progress (compute-on-release, DECISIONS.md row 39). A
+    /// drag is a run of `param_preview`s on one param closer together than
+    /// [`DRAG_GAP_MS`]; any write attempt (the release's `set_param`, an
+    /// edit, a reload — landed or refused), an Esc, or a longer pause ends
+    /// it. Every tick is predicted on its own; the drag remembers whether
+    /// `preview_policy` has gone out (once per drag) and that, once
+    /// withheld, it never goes back to solving cold previews. Protected by
+    /// the `Inner` lock like every write site that clears it.
     drag: Option<Drag>,
     /// Preview ticks withheld under compute-on-release, total (the
     /// measurement harness reads it from `/debug/state`).
     previews_deferred: u64,
 }
 
-/// One drag's decision ([`Inner::drag`]).
+/// One drag's standing state ([`Inner::drag`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Drag {
     node: String,
     port: Option<String>,
-    /// Previews solve live (latest-wins); false = compute-on-release.
-    live: bool,
+    /// `preview_policy` went out for this drag: it has switched to
+    /// compute-on-release. Monotone — from here on only a tick that is a
+    /// pure cache read previews live; anything that would compute is
+    /// withheld, whatever its estimate.
+    announced: bool,
+    /// Op-clock milliseconds of the last tick (the [`DRAG_GAP_MS`] rule).
+    last_tick_ms: u64,
+    /// Ticks withheld in this drag.
+    deferred: u64,
 }
 
 /// The cost model's verdict on one param's dirty cone
@@ -595,6 +615,9 @@ struct ConeCost {
     rough: bool,
     /// Nodes in the cone (hits and misses, exporters excluded).
     nodes: usize,
+    /// Nodes predicted to compute (memo misses, nodes fed by a miss,
+    /// volatile nodes). Zero = a pure cache read.
+    misses: usize,
 }
 
 /// The per-node status board — written by observer events on worker
@@ -1146,7 +1169,7 @@ impl Session {
             // persists, records the op, and broadcasts the delta.
             gesture if is_gesture(&gesture) => {
                 let mut inner = self.core.lock_inner();
-                write_or_roll_back(&mut inner, |inner| {
+                let result = write_or_roll_back(&mut inner, |inner| {
                     let before = state_snapshot(inner);
                     let applied = Self::apply_gesture(inner, gesture)?;
                     let source = source(applied.label.clone());
@@ -1159,7 +1182,12 @@ impl Session {
                             actor: Actor::Human,
                         },
                     )
-                })
+                });
+                // A refused gesture (a release the writer could not apply)
+                // ends the drag too — `commit` clears it on the paths that
+                // reach it; this covers the ones that never do.
+                inner.drag = None;
+                result
             }
             ClientMessage::Hello { .. } => Ok(()),
             ClientMessage::ParamPreview { node, port, value } => {
@@ -1604,6 +1632,11 @@ impl Session {
         before: StateSnapshot,
         effect: OpEffect,
     ) -> Result<(), IntentError> {
+        // A write attempt ends the drag (docs/13 §Slider drags) — landed
+        // or refused: the next tick re-predicts and re-announces, so a
+        // release whose persist failed never leaves a silent verdict
+        // standing.
+        inner.drag = None;
         let text = inner.loaded.document.emit();
         self.persist(inner, &text, applied.text_changed, &before)?;
         if applied.text_changed {
@@ -1611,7 +1644,6 @@ impl Session {
         }
         self.core.rebuild(inner);
         inner.seq += 1;
-        inner.drag = None;
         if let OpEffect::Push { actor } = effect {
             let after = StateSnapshot {
                 text: text.clone(),
@@ -2103,7 +2135,8 @@ impl Session {
     /// solve is dropped; the summary says so and the next edit resubmits.
     pub fn cancel(&self) {
         let dropped_pending = self.solve.cancel();
-        // Esc ends the drag's decision too: the next tick re-predicts.
+        // Esc ends the drag too: the next tick starts a fresh one
+        // (re-predicted, re-announced if withheld).
         self.core.lock_inner().drag = None;
         if dropped_pending {
             let inner = self.core.lock_inner();
@@ -2455,7 +2488,9 @@ impl Session {
                 "last_complete_generation": inner.last_complete.as_ref().map(|k| k.generation),
                 "previews_deferred": inner.previews_deferred,
                 "drag": inner.drag.as_ref().map(|d| serde_json::json!({
-                    "node": d.node, "port": d.port, "live": d.live,
+                    "node": d.node, "port": d.port,
+                    "mode": if d.announced { "compute_on_release" } else { "live" },
+                    "deferred": d.deferred, "last_tick_ms": d.last_tick_ms,
                 })),
             },
             "display": display,
@@ -3190,13 +3225,31 @@ impl Core {
 
     /// The compute-on-release decision for one `param_preview` tick
     /// (DECISIONS.md row 39, docs/13 §Slider drags): true = solve it live.
-    /// Decided ONCE per drag — the first tick on a param predicts its dirty
-    /// cone's cost and, at or above [`COMPUTE_ON_RELEASE_MS`], broadcasts
-    /// `preview_policy` once and withholds every tick until a write or Esc
-    /// ends the drag. Later ticks of the same drag reuse the decision, so
-    /// it never flips mid-drag; a different param starts a new drag.
-    /// `scratch` is the tick's lowered graph (the one the preview would
-    /// solve) — the prediction dry-runs its keys against the memo.
+    /// Decided PER TICK, monotone within a drag:
+    ///
+    /// - every tick predicts its own dirty cone ([`Self::predict_cone`] —
+    ///   a hash-only dry run of `scratch`, the graph the preview would
+    ///   solve, against the memo); a tick predicted at or above
+    ///   [`COMPUTE_ON_RELEASE_MS`] is withheld, always — a drag that began
+    ///   on a warm value (a memo hit) and moves onto cold ones never solves
+    ///   a multi-second preview live;
+    /// - `preview_policy` is broadcast ONCE per drag, on the first withheld
+    ///   tick;
+    /// - once a drag has switched, only a tick that is a pure cache read
+    ///   (no node predicted to compute — a value visited before or warmed
+    ///   by scrub caching) previews live; a tick that would compute stays
+    ///   withheld whatever its estimate, so the drag never flips back to
+    ///   solving previews (the hysteresis the ledger row asks for);
+    /// - before it has switched, ticks under the bar preview live exactly
+    ///   as they always did.
+    ///
+    /// A drag is the run of ticks on one param closer together than
+    /// [`DRAG_GAP_MS`]; a write attempt, an Esc, a reload or a longer pause
+    /// ends it, and the next tick starts a fresh one — re-predicted and
+    /// re-announced if withheld. No cone, or a cone the model cannot see at
+    /// all (no node with any evidence): live — the generation measures it,
+    /// the next tick knows. A cone predicted slow from PARTIAL evidence is
+    /// withheld: the floor already clears the bar.
     fn preview_is_live(
         &self,
         inner: &mut Inner,
@@ -3205,24 +3258,40 @@ impl Core {
         port: Option<&str>,
         value: &str,
     ) -> bool {
-        if let Some(drag) = &inner.drag
-            && drag.node == node
-            && drag.port.as_deref() == port
-        {
-            return drag.live;
+        let now = self.now_ms();
+        let continuing = inner.drag.as_ref().is_some_and(|drag| {
+            drag.node == node
+                && drag.port.as_deref() == port
+                && now.saturating_sub(drag.last_tick_ms) <= DRAG_GAP_MS
+        });
+        if !continuing {
+            inner.drag = None;
         }
         let cost = self.predict_cone(inner, scratch, node, port);
-        // No cone, or a cone the model cannot see at all (no node with any
-        // evidence): preview live — the first drag measures it, the next
-        // one knows. A cone predicted slow from PARTIAL evidence still
-        // switches: the floor already clears the bar.
-        let live = cost.is_none_or(|cost| cost.ms < COMPUTE_ON_RELEASE_MS);
-        inner.drag = Some(Drag {
+        let drag = inner.drag.get_or_insert_with(|| Drag {
             node: node.to_owned(),
             port: port.map(str::to_owned),
-            live,
+            announced: false,
+            last_tick_ms: now,
+            deferred: 0,
         });
-        if !live && let Some(cost) = cost {
+        drag.last_tick_ms = now;
+        let live = match cost {
+            // At or over the bar: withheld, whatever the drag did so far.
+            Some(cost) if cost.ms >= COMPUTE_ON_RELEASE_MS => false,
+            // A switched drag paints pure cache reads only.
+            Some(cost) if drag.announced => cost.misses == 0,
+            // Under the bar in a live drag; or no cone / no evidence.
+            None | Some(_) => true,
+        };
+        if live {
+            return true;
+        }
+        drag.deferred += 1;
+        let announce = !drag.announced;
+        drag.announced = true;
+        // `cost` is Some here: the only `None` arm is live.
+        if announce && let Some(cost) = cost {
             broadcast(
                 inner,
                 &ServerMessage::PreviewPolicy {
@@ -3235,7 +3304,7 @@ impl Core {
                 },
             );
         }
-        live
+        false
     }
 
     /// Predict what a live preview of `node`/`port` would cost, as a
@@ -3371,6 +3440,7 @@ impl Core {
             ms: total_nanos / 1_000_000.0,
             rough,
             nodes,
+            misses,
         })
     }
 
@@ -5398,8 +5468,9 @@ size = slider(value=4.0, min=0.5, max=5.0)
     fn a_cone_predicted_slow_switches_to_compute_on_release_once_per_drag() {
         // DECISIONS.md row 39 / docs/13 §Slider drags: a drag whose dirty
         // cone the cost model predicts at ≥ 1 s solves NO previews — one
-        // `preview_policy` per drag, the release solves once.
-        let (_dir, config) = project(
+        // `preview_policy` per drag, the release solves once. Virtual op
+        // clock: every tick is inside the drag gap unless the test says so.
+        let (_dir, config, _clock) = project_with_clock(
             "# cicada 1\n\
              size = slider(value=2.0, min=0.5, max=5.0)\n\
              span = construct_domain(start=0.0, end=size)\n\
@@ -5428,6 +5499,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
                 .expect("the cone is predictable")
         };
         assert_eq!(predicted.nodes, 3, "size → span → block: {predicted:?}");
+        assert_eq!(predicted.misses, 3, "a cold value: every node computes");
         assert!(!predicted.rough, "every node in the cone has evidence");
         // The estimator is the per-op MEAN: the load's sub-ms box sample
         // and the 5 s one average to ≈ 2.5 s — well past the bar.
@@ -5471,7 +5543,8 @@ size = slider(value=4.0, min=0.5, max=5.0)
         );
         let state = session.debug_state(false);
         assert_eq!(state["solve"]["previews_deferred"], 10);
-        assert_eq!(state["solve"]["drag"]["live"], false);
+        assert_eq!(state["solve"]["drag"]["mode"], "compute_on_release");
+        assert_eq!(state["solve"]["drag"]["deferred"], 10);
 
         // The release: one real op, one structural generation, drag over.
         let baseline_structural = structural_generations(&session);
@@ -5530,7 +5603,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         // solve — scrub caching's move) predicts as the cache read it is,
         // so the slider stays live there; a cold value on the same cone
         // still switches.
-        let (_dir, config) = project(
+        let (_dir, config, _clock) = project_with_clock(
             "# cicada 1
              size = slider(value=2.0, min=0.5, max=5.0)
              span = construct_domain(start=0.0, end=size)
@@ -5557,6 +5630,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
                 .predict_cone(&inner, &warm, "size", Some("value"))
                 .expect("a cone of hits is a prediction");
             assert!(cost.ms.abs() < f64::EPSILON, "every key hits: {cost:?}");
+            assert_eq!(cost.misses, 0);
             assert!(!cost.rough);
             let cold = scratch_lowered(&inner, "size", Some("value"), "4.1");
             let cost = session
@@ -5605,6 +5679,191 @@ size = slider(value=4.0, min=0.5, max=5.0)
     }
 
     #[test]
+    fn a_warm_first_tick_never_locks_a_drag_live() {
+        // Review finding (2026-08-20): the first tick of a drag landing on
+        // a memo-warm value (the load's value, a prior release) must not
+        // decide the whole drag — a cold tick in the SAME drag is
+        // predicted on its own and withheld, with the policy announced
+        // there; a later warm tick in the now-switched drag is a pure
+        // cache read and previews live; a cold one after it stays withheld
+        // without a second announcement.
+        let (_dir, config, _clock) = project_with_clock(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        session
+            .core
+            .scheduler
+            .store()
+            .record_sample("box", 1, 5_000_000_000)
+            .unwrap();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let _ = drain(&mut rx);
+        let baseline = preview_generations(&session);
+
+        // Tick 1: the load's value — warm, previews live (computed 0).
+        preview(&session, id, "2.0");
+        session.wait_idle();
+        assert_eq!(preview_generations(&session), baseline + 1);
+        assert_eq!(session.debug_state(false)["solve"]["drag"]["mode"], "live");
+        assert!(
+            !texts(&drain(&mut rx))
+                .iter()
+                .any(|m| m["type"] == "preview_policy")
+        );
+
+        // Tick 2, same drag: cold — withheld, announced.
+        preview(&session, id, "2.3");
+        session.wait_idle();
+        assert_eq!(
+            preview_generations(&session),
+            baseline + 1,
+            "the cold tick solved nothing"
+        );
+        let msgs = texts(&drain(&mut rx));
+        let policies: Vec<_> = msgs
+            .iter()
+            .filter(|m| m["type"] == "preview_policy")
+            .collect();
+        assert_eq!(policies.len(), 1, "{msgs:?}");
+        assert_eq!(policies[0]["payload"]["pending_value"], "2.3");
+        let state = session.debug_state(false);
+        assert_eq!(state["solve"]["drag"]["mode"], "compute_on_release");
+        assert_eq!(state["solve"]["previews_deferred"], 1);
+
+        // Tick 3, same drag: back on the warm value — a pure cache read
+        // previews live (scrub caching's upgrade path), no new message.
+        preview(&session, id, "2.0");
+        session.wait_idle();
+        assert_eq!(preview_generations(&session), baseline + 2);
+        let last = session.debug_state(false)["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rfind(|t| t["kind"] == "preview")
+            .cloned()
+            .unwrap();
+        assert_eq!(last["computed"], 0, "{last}");
+        assert!(
+            !texts(&drain(&mut rx))
+                .iter()
+                .any(|m| m["type"] == "preview_policy")
+        );
+
+        // Tick 4, same drag: cold again — withheld, still one announcement.
+        preview(&session, id, "2.4");
+        session.wait_idle();
+        assert_eq!(preview_generations(&session), baseline + 2);
+        assert!(
+            !texts(&drain(&mut rx))
+                .iter()
+                .any(|m| m["type"] == "preview_policy")
+        );
+        let state = session.debug_state(false);
+        assert_eq!(state["solve"]["previews_deferred"], 2);
+        assert_eq!(state["solve"]["drag"]["deferred"], 2);
+        assert_eq!(state["solve"]["drag"]["mode"], "compute_on_release");
+
+        // Every preview generation this test caused was a cache read: no
+        // multi-second preview ever solved live.
+        let computed: Vec<u64> = session.debug_state(false)["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|t| t["kind"] == "preview")
+            .map(|t| t["computed"].as_u64().unwrap())
+            .collect();
+        assert!(computed.iter().all(|&c| c == 0), "{computed:?}");
+    }
+
+    #[test]
+    fn a_drag_that_ends_without_a_write_is_re_announced_after_the_gap() {
+        // Review finding (2026-08-20): both sliders skip `set_param` when
+        // the release lands on the committed value, so a drag can end with
+        // no write at all. The server-side rule: a tick more than
+        // DRAG_GAP_MS after the previous one starts a new drag — predicted
+        // again, announced again. Ticks inside the gap continue the drag
+        // (one announcement). A refused release ends the drag as well.
+        let (_dir, config, clock) = project_with_clock(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        session
+            .core
+            .scheduler
+            .store()
+            .record_sample("box", 1, 5_000_000_000)
+            .unwrap();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let _ = drain(&mut rx);
+        let baseline = preview_generations(&session);
+        let policies = |rx: &mut tokio::sync::mpsc::UnboundedReceiver<Outgoing>| {
+            texts(&drain(rx))
+                .into_iter()
+                .filter(|m| m["type"] == "preview_policy")
+                .map(|m| m["payload"]["pending_value"].clone())
+                .collect::<Vec<_>>()
+        };
+
+        // Drag 1: announced on its first tick; the pointer is released on
+        // the committed value — no set_param follows.
+        preview(&session, id, "1.5");
+        session.wait_idle();
+        assert_eq!(policies(&mut rx), vec!["1.5"]);
+
+        // Inside the gap: the same drag, no second announcement.
+        clock.advance(DRAG_GAP_MS * 1_000_000);
+        preview(&session, id, "1.6");
+        session.wait_idle();
+        assert!(policies(&mut rx).is_empty(), "still drag 1");
+        assert_eq!(session.debug_state(false)["solve"]["drag"]["deferred"], 2);
+
+        // Past the gap: drag 2 — announced again, with ITS pending value.
+        clock.advance((DRAG_GAP_MS + 1) * 1_000_000);
+        preview(&session, id, "1.7");
+        preview(&session, id, "1.8");
+        session.wait_idle();
+        assert_eq!(policies(&mut rx), vec!["1.7"]);
+        let state = session.debug_state(false);
+        assert_eq!(state["solve"]["drag"]["deferred"], 2, "drag 2's own count");
+        assert_eq!(state["solve"]["previews_deferred"], 4);
+        assert_eq!(preview_generations(&session), baseline, "nothing solved");
+
+        // A refused release (a non-literal) ends the drag: the next tick
+        // announces drag 3 even inside the gap.
+        session.handle(
+            id,
+            Some("bad".into()),
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "size + 1".into(),
+            },
+        );
+        let msgs = texts(&drain(&mut rx));
+        assert!(
+            msgs.iter()
+                .any(|m| m["type"] == "error" && m["payload"]["intent_id"] == "bad"),
+            "{msgs:?}"
+        );
+        assert!(session.debug_state(false)["solve"]["drag"].is_null());
+        preview(&session, id, "1.9");
+        session.wait_idle();
+        assert_eq!(policies(&mut rx), vec!["1.9"]);
+        assert_eq!(preview_generations(&session), baseline);
+    }
+
+    #[test]
     fn a_cheap_cone_still_previews_every_tick() {
         // The 02-solids shape: sub-millisecond cone, latest-wins previews
         // exactly as before — no policy message, nothing deferred.
@@ -5643,7 +5902,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         );
         let state = session.debug_state(false);
         assert_eq!(state["solve"]["previews_deferred"], 0);
-        assert_eq!(state["solve"]["drag"]["live"], true);
+        assert_eq!(state["solve"]["drag"]["mode"], "live");
         assert!(
             frames(&drain(&mut rx)).is_empty(),
             "(frames were drained with the texts above — sanity)"
