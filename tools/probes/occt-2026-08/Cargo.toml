@@ -24,15 +24,28 @@ opencascade = { git = "https://github.com/bschwind/opencascade-rs", rev = "d1142
 glam = "0.24"
 sha2 = "0.10"
 
+# The STEP-linking twin (src/bin/step.rs): same code base, but its link set
+# includes TKDESTEP, so its DLL closure is the STEP-capable shipping answer
+# while `occt-probe` gives the modeling-only one (memo §Q1).
+[[bin]]
+name = "occt-probe-step"
+path = "src/bin/step.rs"
+
 [profile.release]
 debug = false
 
-# MSVC needs one patch on the binding (see the memo §Q1 and patches/): the
-# source-only part of upstream PR #230. Apply it to a scratch clone of the
-# binding at the pinned rev and point this at it:
+# The binding needs patches (see the memo §Q1/§Q2 and patches/). Apply ALL
+# of 0001 (MSVC handle aliases — without it nothing compiles on MSVC), 0002
+# (BinTools symbol collision — without it `dump` exercises the TEXT writer
+# twice and panics on its header check) and 0003 (static-only link libs,
+# harmless here) to a scratch clone at the pinned rev and point this at it:
 #   git clone https://github.com/bschwind/opencascade-rs <dir>
 #   git -C <dir> checkout d114250a464d50cde1901743d3bf523a099d6887
 #   git -C <dir> apply patches/0001-msvc-handle-aliases.diff
+#   git -C <dir> apply patches/0002-bin-tools-symbol-collision.diff
+#   git -C <dir> apply patches/0003-windows-static-system-libs.diff
+# (0004 is for the `builtin` source path only and is routed through
+# [patch.crates-io] when that path is taken — see the memo.)
 # Cargo has no env expansion in paths, so the path below is the one this
 # machine used (the probe's download cache dir, allowed by the work order).
 [patch."https://github.com/bschwind/opencascade-rs"]

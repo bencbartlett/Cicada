@@ -9,13 +9,21 @@
 //! - `smoke` — build the four probe shapes once, tessellate them, print
 //!   counts. Proves compile + link + run.
 //! - `dump <out_dir>` — write every probe shape with `BinTools::Write` and
-//!   `BRepTools::Write` (both WITHOUT triangulation — the binding passes
-//!   only the path, so OCCT's defaults apply), tessellate, and print the
-//!   sha256 of each file and of each triangle buffer. Run it twice in two
-//!   processes and compare the lines (question 2).
+//!   `BRepTools::Write` BEFORE any tessellation (the binding passes only
+//!   the path; OCCT 7.8's path overloads default to `theWithTriangles =
+//!   TRUE`, so the bytes are triangulation-free only because the shape is
+//!   still unmeshed — see the after-mesh hazard check), tessellate, and
+//!   print the sha256 of each file and of each triangle buffer. Run it
+//!   twice in two processes and compare the lines (question 2). Panics if
+//!   the "binary" file is not BinTools output — the unpatched binding
+//!   silently writes the text format under that name (memo §Q2 defect 1).
 //! - `bench <parts>` — time box / extrude / difference / tessellate over
 //!   `<parts>` independent parts, report wall-clock per op and per part
 //!   (question 3).
+//! - `throw` — drive OCCT into a `Standard_DomainError` (a degenerate box)
+//!   through the binding. Shows what a kernel failure does to the process
+//!   when the cxx boundary declares no `Result`: expected to ABORT, not
+//!   return (memo §Risks, 2). Exit 0 would mean the exception was caught.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -29,6 +37,12 @@ use sha2::{Digest, Sha256};
 /// The binding's `Shape::mesh()` default; recorded in the memo as "the
 /// default deflection" we timed with.
 const LINEAR_DEFLECTION: f64 = 0.01;
+
+/// First bytes of a `BinTools::Write` file (format version 4, OCCT 7.8).
+const BINTOOLS_HEADER: &[u8] = b"
+Open CASCADE Topology V4";
+/// First bytes of a `BRepTools::Write` (ASCII) file.
+const BREPTOOLS_HEADER: &[u8] = b"DBRep_DrawableShape";
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -46,8 +60,9 @@ fn main() {
                 .expect("<parts> must be an integer");
             bench(parts);
         }
+        Some("throw") => throw(),
         _ => {
-            eprintln!("usage: occt-probe smoke | dump <out_dir> | bench <parts>");
+            eprintln!("usage: occt-probe smoke | dump <out_dir> | bench <parts> | throw");
             std::process::exit(2);
         }
     }
@@ -200,6 +215,25 @@ fn dump(out_dir: &Path) {
             .expect("BRepTools::Write");
         let bin = std::fs::read(&bin_path).expect("read .bin");
         let txt = std::fs::read(&txt_path).expect("read .brep");
+        // Loud format check. With only patch 0001 applied, the binding's
+        // `write_brep_bin` IS `BRepTools::Write` (cxx symbol collision,
+        // patch 0002): both files then start with the text header and the
+        // "bin == text" hashes below would pass silently as a determinism
+        // result for a format that was never exercised.
+        assert!(
+            bin.starts_with(BINTOOLS_HEADER),
+            "{}: BinTools file does not start with {:?} — got {:?}; is patch 0002 applied?",
+            bin_path.display(),
+            String::from_utf8_lossy(BINTOOLS_HEADER),
+            String::from_utf8_lossy(&bin[..bin.len().min(40)])
+        );
+        assert!(
+            txt.starts_with(BREPTOOLS_HEADER),
+            "{}: BRepTools file does not start with {:?} — got {:?}",
+            txt_path.display(),
+            String::from_utf8_lossy(BREPTOOLS_HEADER),
+            String::from_utf8_lossy(&txt[..txt.len().min(40)])
+        );
         println!(
             "{:<11} bintools  bytes={:<8} sha256={}",
             probe.name,
@@ -261,6 +295,27 @@ fn dump(out_dir: &Path) {
             rt == bin
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// throw (what an OCCT exception does at the cxx boundary)
+// ---------------------------------------------------------------------------
+
+/// A degenerate box: `BRepPrimAPI_MakeBox::Shape()` → `Build()` →
+/// `BRepPrim_GWedge::Shell()` → `throw Standard_DomainError()` (OCCT
+/// 7.8.1 `BRepPrim_GWedge.cxx`, `IsDegeneratedShape`). conda-forge builds
+/// OCCT with `BUILD_RELEASE_DISABLE_EXCEPTIONS=OFF`, so the throw is real
+/// in Release; the binding's bridge declares `Shape()` without `Result`,
+/// so cxx generates no try/catch and the exception meets a `noexcept`
+/// shim: `std::terminate`. The line after the call must never print.
+fn throw() {
+    println!("throw: building a 0x0x0 box (BRepPrim_GWedge::Shell throws Standard_DomainError)");
+    let degenerate = Shape::box_from_corners(DVec3::ZERO, DVec3::ZERO);
+    println!(
+        "throw: UNEXPECTED — the call returned (shape_type={:?}); the exception was swallowed",
+        degenerate.shape_type()
+    );
+    std::process::exit(1);
 }
 
 // ---------------------------------------------------------------------------
