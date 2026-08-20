@@ -63466,5 +63466,5 @@
   "part": "per part: height = zmax - zmin; lean_length = |cap centroid - base centroid| (XY); yaw_applied_deg = rotation that maps the DXF cell onto the mesh base (fit residual reported); yaw_minus_lean_yaw_deg = how far the production orientation is from 'lean -> +Y'",
   "pristine_writer_output": "files with no Metadata/plate_*.png thumbnails and no Bambu 'source_file' object metadata are byte-for-byte writer output (plate_packer.py / coil_groups.py); the others were re-saved by Bambu Studio (float32-rounded vertices, thumbnails, re-ordered objects) -- object-level comparison only"
  },
- "source": "per-object summaries of the production 3MFs (export 1.4.1 plates, the coil groups from export/, and the 1.4 objects used as fallbacks); extracted 2026-08-19 by corpus/tools/extract_layout.py"
+ "source": "per-object summaries of the production 3MFs (export 1.4.1 plates, the coil groups from export/, and the 1.4 objects used as fallbacks); extracted 2026-08-20 by examples/wall/tools/extract_layout.py"
 }

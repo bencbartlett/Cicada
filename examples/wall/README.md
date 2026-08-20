@@ -9,8 +9,11 @@ against the files that were actually fabricated from.
 This directory is ONE copy with three jobs (DECISIONS.md, corpus row
 revised 2026-08-19: the regression corpus = every example with committed
 golden outputs; the wall is the first): the full-size example, the app
-playground — open it, edit freely, `git checkout -- examples/wall`
-reverts — and the pipeline the nightly job measures against production.
+playground — open it, edit freely; `git checkout -- examples/wall`
+reverts the tracked files, and `git clean -f examples/wall` drops the
+layout sidecar the canvas creates once you move a node
+(`wall.cic.layout.json`, a new untracked file; docs/10 §The layout sidecar) — and
+the pipeline the nightly job measures against production.
 Engine-wide tooling (the normalizer, the measurement harness, the offline
 tests) lives in the repo's `tools/`; only the wall-specific layout tools
 live here under `tools/`.
@@ -64,6 +67,9 @@ the run's job summary (plus a best-effort artifact). First real run,
 **overall NOISE** — every difference the normalizer found on the Linux
 build was declared noise, the same verdict the Windows dev machine gives;
 that is the cross-platform evidence the golden-hash discipline rests on.
+The first run from THIS layout (`examples/wall/` + `tools/`) is pending
+the push that carries the move; every step of the job passes locally
+from the new paths (add the run URL here when it lands).
 
 ## What the pipeline does, honestly
 
@@ -122,7 +128,12 @@ python tools/normalize.py summarize <prod>.3mf -o examples/wall/golden/productio
 
 The wall repo is read-only for these tools (path baked in; `--wall-repo`
 overrides). Nothing here is hand-edited: the tools are deterministic and
-idempotent — the committed `layout.json` and reports still carry the
-provenance stamps of the 2026-08-19 extraction, naming the tools' old
-pre-move directory, which is where they lived when they ran; the next
-regeneration stamps the new path.
+idempotent, and every generated file carries a provenance stamp naming
+the tool that wrote it (the offline suite checks those stamps point at
+files in the repo). One subtlety of the two-pass protocol: the
+`scale_vs_height_linear_fit` diagnostic in `seed_recovery_report.json`
+is fitted against the heights `recover_seeds.py` finds in `layout.json`,
+and the trimmed coil parts' fallback heights are evaluated at the
+centroids on pass 1 and at the seeds on pass 2 — so a fresh two-pass run
+and a re-run over an already-seeded layout differ in those four numbers
+only; the seeds and `cell_scales` are byte-identical either way.

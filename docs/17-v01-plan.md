@@ -14,7 +14,7 @@ runs in parallel from day 1:
 
 | # | Item | Track | Size | Status |
 |---|---|---|---|---|
-| 0 | Fold `corpus/` into `examples/wall/` + `tools/`; this plan | foreground | hours | **done** 2026-08-20 |
+| 0 | Fold `corpus/` into `examples/wall/` + `tools/`; this plan | foreground | hours | **done** 2026-08-20 (every nightly step passes locally from the new paths; the first Nightly run itself is pending the push) |
 | 1 | Undo/redo — snapshot op log + atomic `batch` path; riders `#off`, Backspace-no-delete | foreground (server/web) | days | pending |
 | 2 | Git panel slice 1 — status strip, per-node change markers, commit, revert-to-HEAD | foreground (server/web) | ~1 week | pending |
 | P | OCCT probe — prebuilt 7.8.x build/link on win/mac/linux, determinism, timings, license, CI shape | parallel worktree | hours, cap 1 day | pending |
@@ -51,11 +51,23 @@ layer (the `batch` path is its landing pad), the 2D sketcher.
 `corpus/` becomes `examples/wall/` (pipeline, scripts, inputs, golden
 production references, README, the wall-only layout tools) and `tools/`
 (the measurement harness, `normalize.py` and its tests — engine-wide).
-Nightly, docs, AGENTS.md and `.gitignore` paths follow in the same
-commit. **Done when**: `git mv` history preserved; the nightly corpus
-job runs from the new paths and passes; `python -m unittest discover -s
-tools -p "test_*.py"` passes; `examples/wall` opens in the app; no
-reference to `corpus/` remains outside history.
+Nightly, CI's per-PR `corpus-offline` job, docs, AGENTS.md, the skills
+and `.gitignore` paths follow in the same commit. **Done when**: `git mv`
+history preserved; the nightly corpus job runs from the new paths and
+passes; `python -m unittest discover -s tools -p "test_*.py"` passes;
+`examples/wall` opens in the app; no reference to `corpus/` remains
+outside history.
+
+Landed in 60656b5 + the review follow-up. The generated data's
+provenance stamps (`layout.json`, the extraction / seed-recovery reports,
+`plates_summary.json`) were regenerated through the blessed
+extract → recover → extract path so they name the tools where they now
+live — the offline suite asserts every stamp points at a file in the
+repo, and that the frozen inputs are present and are the 1,200-part
+production wall. The nightly job's every step passes locally from the new
+paths (offline tests with and without the wall repo, the exporters,
+`normalize.py all` → NOISE); the first Nightly run from the new layout
+happens after the push — record its URL in `examples/wall/README.md`.
 
 ## Item 1 — undo/redo (days)
 

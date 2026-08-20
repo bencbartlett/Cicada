@@ -251,7 +251,7 @@
   "pin_holes_in_dxf": 2296,
   "wires": 2
  },
- "extracted": "2026-08-19",
+ "extracted": "2026-08-20",
  "sources": {
   "coil_manifest": "export/coil_manifest.csv",
   "dxf": "export/solenoid_art_export_1.4.1/board_postprocessed.dxf",
@@ -640,5 +640,5 @@
    "p99": 0.0039
   }
  },
- "tool": "corpus/tools/extract_layout.py"
+ "tool": "examples/wall/tools/extract_layout.py"
 }

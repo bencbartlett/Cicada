@@ -3,9 +3,12 @@
 # wall's hardest stretch (docs/15 stage 6) on the Cicada engine, measured
 # against the shipped fabrication files (README.md beside this file). This
 # ONE file is both the example — open it in the app and edit freely;
-# `git checkout -- examples/wall` reverts — and the nightly regression
-# corpus (.github/workflows/nightly.yml runs the exporters over it and
-# compares with golden/production/ through tools/normalize.py).
+# `git checkout -- examples/wall` reverts the tracked files, and
+# `git clean -f examples/wall` drops the layout sidecar the canvas creates
+# once you move a node (`wall.cic.layout.json`, a new untracked file) — and
+# the nightly regression corpus (.github/workflows/nightly.yml runs the
+# exporters over it and compares with golden/production/ through
+# tools/normalize.py).
 #
 #   frozen production layout (seeds, per-cell shrink, heights, lean lengths)
 #   → Voronoi → area centroids → per-cell shrink → field solve (Python)

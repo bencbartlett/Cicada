@@ -1011,5 +1011,75 @@ class ExportDxfTest(unittest.TestCase):
         self.assertEqual(len(out[0][2][1]), 4)
 
 
+# ============================================================
+# the committed project: frozen inputs, golden provenance, test hygiene
+# ============================================================
+
+class FrozenInputsTest(unittest.TestCase):
+    """The wall project's committed data, not its code. The synthetic tests
+    above pass with examples/wall/inputs/ missing entirely (only the nightly
+    engine run would notice); these make the per-PR offline job guard the
+    frozen inputs and the golden references' provenance too."""
+
+    # the production numbers the frozen layout must carry (README: 1,200
+    # parts, 1,137 exported in 1.4.1, 58 coil-captured)
+    PARTS, EXPORTED, COIL_CAPTURED = 1200, 1137, 58
+
+    def test_committed_layout_is_the_production_wall(self):
+        self.assertIsNotNone(ts.layout_path(), "examples/wall/inputs/layout.json is missing")
+        out = ts.load_script("wall_layout").wall_layout(ts.layout_path())
+        self.assertEqual(len(out["cells_production"]), self.PARTS)
+        self.assertEqual(len(out["seeds"]), self.PARTS)
+        self.assertEqual(len(out["cell_scales"]), self.PARTS)
+        self.assertEqual(sum(out["exported"]), self.EXPORTED)
+        self.assertEqual(sum(out["coil_captured"]), self.COIL_CAPTURED)
+        self.assertEqual(len(set(out["ids_production"])), self.PARTS)
+
+    def test_bambu_reference_projects_are_committed(self):
+        # the packer/writer harvest these; the committed copies must win over
+        # the (dev-machine-only) wall repo fallback
+        self.assertEqual(ts.settings_dir(), os.path.join(ts.INPUTS_DIR, "bambu"))
+
+    def test_provenance_stamps_name_tools_that_exist(self):
+        # Every generated file says which tool wrote it. The stamp is only
+        # worth anything if it points at a file in the repo: moving the tools
+        # without regenerating (as the 2026-08-19 corpus/ -> examples/wall/
+        # move first did) must fail here, not go stale silently.
+        import re
+        tool_ref = re.compile(r"[\w./-]+/tools/\w+\.py")
+        stamps = []
+        with open(ts.layout_path(), "r", encoding="utf-8") as f:
+            layout = json.load(f)
+        stamps.append(("layout.json source", layout["source"]))
+        stamps.append(("layout.json notes.seeds", layout["notes"]["seeds"]))
+        for name in ("extraction_report.json", "seed_recovery_report.json"):
+            with open(os.path.join(ts.GOLDEN_DIR, name), "r", encoding="utf-8") as f:
+                stamps.append((name + " tool", json.load(f)["tool"]))
+        with open(os.path.join(ts.GOLDEN_DIR, "plates_summary.json"), "r", encoding="utf-8") as f:
+            stamps.append(("plates_summary.json source", json.load(f)["source"]))
+        for where, text in stamps:
+            refs = tool_ref.findall(text)
+            self.assertTrue(refs, "%s carries no tool path: %r" % (where, text))
+            for ref in refs:
+                self.assertTrue(os.path.isfile(os.path.join(ts.REPO_DIR, ref)),
+                                "%s names %s, which is not in the repo" % (where, ref))
+
+    def test_loading_a_script_writes_no_bytecode_beside_it(self):
+        # The scripts live in a served project directory inside a synced
+        # tree; loading them for tests must not litter it with __pycache__/
+        # (the engine's worker never does: it execs the source text).
+        d = tmpdir()
+        try:
+            src = os.path.join(d, "probe_script.py")
+            with open(src, "w", encoding="utf-8") as f:
+                f.write("import os\nVALUE = 41 + 1\nHERE = os.path.dirname(__file__)\n")
+            module = ts.load_module_from_source("wall_script_probe", src)
+            self.assertEqual(module.VALUE, 42)
+            self.assertEqual(module.HERE, d)
+            self.assertEqual(sorted(os.listdir(d)), ["probe_script.py"])
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

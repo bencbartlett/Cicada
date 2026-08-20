@@ -27,8 +27,10 @@ touching the committed examples — the app writes what you do.
 - **wall/** — the full 1,200-part production wall (`wall/wall.cic` + its
   Python script nodes, frozen layout, and the golden production
   references; `wall/README.md`). ONE copy with three jobs: the
-  full-size example, the app playground — open it and edit freely,
-  `git checkout -- examples/wall` reverts — and the pipeline the nightly
+  full-size example, the app playground — open it and edit freely;
+  `git checkout -- examples/wall` reverts the tracked files, plus
+  `git clean -f examples/wall` if you moved nodes (the canvas then writes
+  an untracked `wall.cic.layout.json` sidecar) — and the pipeline the nightly
   regression job measures against production (DECISIONS.md corpus row:
   the corpus = every example with committed golden outputs). First solve
   is the ~6.5 s cold carve (release); the exporters (`--node bambu

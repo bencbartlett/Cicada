@@ -9,12 +9,14 @@ No engine, no network, no wall-clock: everything here is deterministic.
 import importlib.util
 import os
 import sys
+import types
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))      # <repo>/tools
 REPO_DIR = os.path.dirname(TOOLS_DIR)
 WALL_DIR = os.path.join(REPO_DIR, "examples", "wall")       # the wall project (pipeline dir)
 SCRIPTS_DIR = os.path.join(WALL_DIR, "scripts")
 INPUTS_DIR = os.path.join(WALL_DIR, "inputs")
+GOLDEN_DIR = os.path.join(WALL_DIR, "golden", "production")
 
 # The wall repo (READ ONLY) -- only used when present, for the optional
 # production cross-checks; the unit tests never require it.
@@ -37,15 +39,29 @@ def install_stub():
 _SCRIPTS = {}
 
 
+def load_module_from_source(module_name, path):
+    """Load a script file as a module the way the engine's worker does
+    (crates/cicada-script/src/worker.py `_load`): exec the compiled source
+    into a bare module, never the import machinery. Two reasons: the tests
+    then exercise exactly the loading path the engine uses, and no
+    `__pycache__/` is ever written beside the served project's scripts
+    (examples/wall/scripts/ is a project directory inside a synced tree, and
+    test by-products do not belong there)."""
+    with open(path, "r", encoding="utf-8") as f:
+        source = f.read()
+    module = types.ModuleType(module_name)
+    module.__file__ = path
+    exec(compile(source, path, "exec"), module.__dict__)
+    return module
+
+
 def load_script(name):
     """Import examples/wall/scripts/<name>.py as a module (cached)."""
     install_stub()
     if name in _SCRIPTS:
         return _SCRIPTS[name]
     path = os.path.join(SCRIPTS_DIR, name + ".py")
-    spec = importlib.util.spec_from_file_location("wall_script_" + name, path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = load_module_from_source("wall_script_" + name, path)
     _SCRIPTS[name] = module
     return module
 

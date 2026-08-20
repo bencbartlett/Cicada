@@ -11,10 +11,10 @@
    "scale_median": 0.893228633698217,
    "scale_min": 0.8181607414219444,
    "scale_vs_height_linear_fit": {
-    "a": 0.0008883839452342963,
-    "abs_residual_max": 0.004490384300422479,
-    "abs_residual_median": 0.00019786046911746125,
-    "b": 0.8109853026070787
+    "a": 0.000888262489274582,
+    "abs_residual_max": 0.0038504072769867115,
+    "abs_residual_median": 0.0001956219572621376,
+    "b": 0.8109998027506388
    }
   },
   "2_unscale": {
@@ -122,5 +122,5 @@
   }
  },
  "tolerance_mm": 0.002,
- "tool": "corpus/tools/recover_seeds.py"
+ "tool": "examples/wall/tools/recover_seeds.py"
 }
