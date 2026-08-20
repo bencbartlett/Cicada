@@ -41,7 +41,7 @@ use cicada_lang::diag::{Diagnostic, DiagnosticKind};
 use cicada_lang::{Catalog, Document, Line, resolve, writer};
 use cicada_sched::{
     CancelToken, Clock, DiskStore, Event, LogRecovery, MonotonicClock, NodeId, NodeOutcome,
-    Observer, Scheduler, SchedulerConfig, SolveError, SolveReport, project_cache_dir,
+    NoopObserver, Observer, Scheduler, SchedulerConfig, SolveError, SolveReport, project_cache_dir,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -56,7 +56,7 @@ use crate::protocol::{
 };
 use crate::scripts::ScriptCancel;
 use crate::sidecar::Sidecar;
-use crate::solve::{Job, JobKind, SolveLoop, SolveSink};
+use crate::solve::{IdleError, Job, JobKind, SolveLoop, SolveSink};
 use crate::viewmodel::{self, GraphView, NodeRefs, WireEnd};
 
 /// A path for humans: Windows' `\\?\` verbatim prefix stripped, forward
@@ -625,6 +625,35 @@ pub struct GenerationTiming {
     pub cached: usize,
     /// Frame bytes broadcast for it.
     pub frame_bytes: usize,
+}
+
+/// What an idle-class hypothetical solve did ([`Session::solve_hypothetical`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HypotheticalReport {
+    /// The generation number it ran under (unique per session).
+    pub generation: u64,
+    /// Pre-empted by a real generation (or Esc) before it finished.
+    pub cancelled: bool,
+    /// Nodes computed.
+    pub computed: usize,
+    /// Nodes answered by the memo.
+    pub cached: usize,
+    /// Nodes that went red.
+    pub failed: usize,
+    /// Wall time of the solve (waiting for the loop to go idle included).
+    pub elapsed: Duration,
+}
+
+/// Why [`Session::solve_hypothetical`] returned no report.
+#[derive(Debug, thiserror::Error)]
+pub enum HypotheticalError {
+    /// The override itself was refused — unknown node or port, a value that
+    /// is not one literal token — the `param_preview` refusals.
+    #[error("hypothetical override refused: {0}")]
+    Override(#[from] IntentError),
+    /// The loop shut down first, or the engine failed.
+    #[error(transparent)]
+    Idle(#[from] IdleError),
 }
 
 /// How many timing records to keep: a 5 s slider stream at 60 Hz is 300
@@ -2155,6 +2184,87 @@ impl Session {
         } else {
             Err(message)
         }
+    }
+
+    // ----------------------------------------------- hypothetical solves --
+
+    /// Solve the pipeline with ONE param overridden — `node`/`port`/`value`
+    /// exactly as `param_preview` spells them — at **idle priority**,
+    /// writing nothing and painting nothing (docs/12 §Speculative warming;
+    /// the substrate of scrub caching and `cycle` warming). The solve waits
+    /// until the interactive loop is idle, runs on the calling thread under
+    /// its own cancel handle, and is pre-empted by any real generation or
+    /// Esc (the report then says `cancelled`; whatever completed is in the
+    /// memo, so a retry resumes from there). No frames, no statuses, no
+    /// solve-bar traffic, invisible to `wait_idle` and `/debug/state?wait`;
+    /// its results land in the ordinary memo, so a later real solve of the
+    /// same value is a cache hit — which is the whole point. The only trace
+    /// is a `hypothetical` timing row in `/debug/state` (the agent's
+    /// oracle, not a client's).
+    ///
+    /// # Errors
+    ///
+    /// [`HypotheticalError::Override`] when the override is refused (the
+    /// same refusals as `param_preview`: unknown node/port, a non-literal
+    /// value); [`HypotheticalError::Idle`] when the loop shut down first or
+    /// the engine failed.
+    pub fn solve_hypothetical(
+        &self,
+        node: &str,
+        port: Option<&str>,
+        value: &str,
+    ) -> Result<HypotheticalReport, HypotheticalError> {
+        let (lowered, targets) = {
+            let inner = self.core.lock_inner();
+            let mut scratch = inner.loaded.document.clone();
+            apply_param(&mut scratch, node, port, value)?;
+            let resolution = resolve(&scratch, &Catalog::new(&inner.loaded.specs));
+            let lowered = lower_partial(
+                &scratch,
+                &resolution,
+                &inner.loaded.specs,
+                &self.core.config.project,
+                &inner.loaded.scripts,
+            )
+            .map_err(|e| IntentError::Protocol(e.to_string()))?;
+            let targets = all_targets(&lowered);
+            (lowered, targets)
+        };
+        let started = Instant::now();
+        let run = self.solve.run_idle(&lowered, &targets, &NoopObserver)?;
+        let elapsed = started.elapsed();
+        let computed = run
+            .report
+            .outcomes
+            .iter()
+            .filter(|o| matches!(o, NodeOutcome::Computed { .. }))
+            .count();
+        let cached = run
+            .report
+            .outcomes
+            .iter()
+            .filter(|o| matches!(o, NodeOutcome::CacheHit { .. }))
+            .count();
+        self.core.record_timing(GenerationTiming {
+            generation: run.generation,
+            kind: "hypothetical",
+            started_ms: (started - self.core.epoch).as_secs_f64() * 1000.0,
+            queued_ms: 0.0,
+            elapsed_ms: Some(elapsed.as_secs_f64() * 1000.0),
+            cancelled: run.report.cancelled,
+            cancel_to_idle_ms: None,
+            computed,
+            cached,
+            frame_bytes: 0,
+        });
+        Ok(HypotheticalReport {
+            generation: run.generation,
+            cancelled: run.report.cancelled,
+            computed,
+            cached,
+            failed: run.report.failures().len(),
+            elapsed,
+        })
     }
 
     // ------------------------------------------------------ screenshots --
@@ -4857,6 +4967,116 @@ size = slider(value=4.0, min=0.5, max=5.0)
         assert!(!msgs.iter().any(|m| m["type"] == "delta"));
         // The text never moved: nothing to undo, and the file is the source.
         assert_eq!(std::fs::read_to_string(&pipeline).unwrap(), source);
+    }
+
+    // ------------------------------------------------ hypothetical solves --
+
+    #[test]
+    fn a_hypothetical_solve_warms_the_memo_and_paints_nothing() {
+        // docs/12 §Speculative warming's substrate (v0.1 item 3b): solve with
+        // an override at idle priority — no write, no op, no frames, no
+        // statuses, not even a `wait_idle` blip — and the later REAL
+        // set_param to that value is fully cached.
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let pipeline = config.pipeline.clone();
+        let source = std::fs::read_to_string(&pipeline).unwrap();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        // Quiet the channel: the join's snapshot, display reset and frames.
+        let _ = drain(&mut rx);
+        let before = session.debug_state(false);
+
+        let report = session
+            .solve_hypothetical("size", Some("value"), "3.5")
+            .expect("the override is a plain literal on a real port");
+        assert!(!report.cancelled, "{report:?}");
+        assert!(
+            report.computed >= 2,
+            "the cone (span, block) computed for the hypothetical value: {report:?}"
+        );
+        assert_eq!(report.failed, 0);
+
+        // Painted nothing, wrote nothing, changed nothing a client can see.
+        assert!(
+            drain(&mut rx).is_empty(),
+            "no frames, no statuses, no notices for a hypothetical solve"
+        );
+        assert_eq!(std::fs::read_to_string(&pipeline).unwrap(), source);
+        let after = session.debug_state(false);
+        assert_eq!(after["text"], before["text"]);
+        assert_eq!(after["statuses"], before["statuses"]);
+        assert_eq!(after["summary"], before["summary"]);
+        assert_eq!(after["display"], before["display"]);
+        assert_eq!(
+            after["solve"]["last_complete_generation"],
+            before["solve"]["last_complete_generation"]
+        );
+        assert_eq!(history_of(&session)["depth"], 0, "not an op");
+        // The only trace: the agent oracle's timing row.
+        let hypothetical: Vec<&serde_json::Value> = after["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|t| t["kind"] == "hypothetical")
+            .collect();
+        assert_eq!(hypothetical.len(), 1);
+        assert_eq!(hypothetical[0]["generation"], report.generation);
+        assert_eq!(hypothetical[0]["computed"], report.computed);
+
+        // The real thing: the release to that value is a pure cache read.
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "3.5".into(),
+            },
+        );
+        session.wait_idle();
+        let state = session.debug_state(false);
+        let structural = state["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rfind(|t| t["kind"] == "structural")
+            .expect("the set_param's generation");
+        assert_eq!(
+            structural["computed"], 0,
+            "everything the hypothetical solve did is in the memo: {structural}"
+        );
+        assert!(structural["cached"].as_u64().unwrap() >= 2, "{structural}");
+        for node in ["span", "block"] {
+            assert_eq!(
+                state["statuses"][node]["state"], "cached",
+                "{node}: {}",
+                state["statuses"][node]
+            );
+        }
+        assert!(
+            state["text"].as_str().unwrap().contains("value=3.5"),
+            "the release wrote the text"
+        );
+
+        // Refusals are the preview's refusals, typed.
+        let error = session
+            .solve_hypothetical("size", Some("value"), "size + 1")
+            .expect_err("a non-literal override is refused");
+        assert!(
+            matches!(error, HypotheticalError::Override(IntentError::Refused(_))),
+            "{error:?}"
+        );
+        let error = session
+            .solve_hypothetical("nope", Some("value"), "1.0")
+            .expect_err("an unknown node is refused");
+        assert!(matches!(error, HypotheticalError::Override(_)), "{error:?}");
     }
 
     #[test]
