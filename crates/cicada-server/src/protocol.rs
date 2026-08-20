@@ -155,6 +155,63 @@ pub struct LeaseView {
     pub clients: Vec<(u32, Role)>,
 }
 
+/// Who made an edit (docs/13 §Undo/redo: `human | agent(prompt)`).
+/// Serialized as `{"kind":"human"}` / `{"kind":"agent","prompt":…}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Actor {
+    /// A person at the canvas.
+    Human,
+    /// An agent (MCP / the AI layer) — with the prompt that produced the
+    /// edit, when it has one.
+    Agent {
+        /// The prompt, for the history view.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt: Option<String>,
+    },
+}
+
+/// The undo/redo state carried on every `delta` and `snapshot` (additive —
+/// v0.1 op log, docs/13 §Undo/redo).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryView {
+    /// An op can be undone.
+    pub can_undo: bool,
+    /// An undone op can be redone.
+    pub can_redo: bool,
+    /// The label of the op `undo` would revert.
+    pub undo_label: Option<String>,
+    /// The label of the op `redo` would re-apply.
+    pub redo_label: Option<String>,
+    /// Undoable steps (the cursor's position in the log).
+    pub depth: usize,
+}
+
+/// One file of an `apply_text` edit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileText {
+    /// Project-relative path (`/`-separated): this pipeline's `.cic`, its
+    /// `.cic.layout.json` sidecar, or `<pipeline dir>/scripts/<name>.py`.
+    pub path: String,
+    /// The whole new content.
+    pub text: String,
+}
+
+/// The atomic whole-text edit (agents / MCP; docs/13 §Undo/redo): the
+/// files, a label, the actor, and the base text hash the caller read
+/// (`GET /api/edit/text` → `text_hash`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApplyTextRequest {
+    /// blake3 hex of the pipeline text the caller based its edit on.
+    pub base_text_hash: String,
+    /// The files to replace — every one written temp + rename, or none.
+    pub files: Vec<FileText>,
+    /// Human label of the op (`undo: <label>` later).
+    pub label: String,
+    /// Who made the edit.
+    pub actor: Actor,
+}
+
 /// Where a delta came from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeltaSource {
@@ -225,12 +282,14 @@ pub enum ServerMessage {
         summary: SolveSummary,
         /// Lease state.
         lease: LeaseView,
-        /// True when this snapshot follows an external file change (undo
-        /// barrier — docs/13; the spike has no undo, the flag is honest
-        /// anyway).
+        /// True when this snapshot follows an external file change (the
+        /// reload barrier — docs/13: the op log was cleared).
         barrier: bool,
-        /// Why (external change / initial / resync).
+        /// Why (external change / initial / resync / an `apply_text` that
+        /// changed scripts).
         reason: String,
+        /// Undo/redo state (additive, v0.1).
+        history: HistoryView,
     },
     /// After an applied op: the new graph + text (the spike sends the whole
     /// view-model — hundreds of KB worst case at wall scale — plus the
@@ -244,6 +303,8 @@ pub enum ServerMessage {
         text: String,
         /// Bindings whose text changed (the dirty set the solve pulls).
         dirty: Vec<String>,
+        /// Undo/redo state after this op (additive, v0.1).
+        history: HistoryView,
     },
     /// Coalesced status (≤ 10 Hz) — only changed nodes are listed.
     Status {
@@ -266,10 +327,17 @@ pub enum ServerMessage {
         /// The intent's id, when it had one.
         #[serde(skip_serializing_if = "Option::is_none")]
         intent_id: Option<String>,
-        /// Machine kind (`writer`, `lease`, `protocol`, `unknown_node`, …).
+        /// Machine kind (`writer`, `lease`, `protocol`, `unknown`,
+        /// `refused`, `persist`, `nothing_to_undo`, `nothing_to_redo`,
+        /// `stale_base`, `parse_error`, `path_not_allowed`, `io_error`).
         kind: String,
         /// Human message.
         message: String,
+        /// Kind-specific facts, flattened into the payload (additive):
+        /// `current_text_hash` (`stale_base`), `diagnostics` (`parse_error`),
+        /// `index` (the failing op of a batch).
+        #[serde(flatten)]
+        details: serde_json::Map<String, serde_json::Value>,
     },
     /// Wire-drag compatibility verdicts (docs/09 blocked-wires contract).
     WireProbe {
@@ -451,6 +519,28 @@ pub enum ClientMessage {
     },
     /// Cancel the running generation (Esc).
     Cancel {},
+    /// Undo the last op (restore its `before` snapshot; docs/13
+    /// §Undo/redo). A write intent; the delta's label is `undo: <label>`.
+    Undo {},
+    /// Redo the last undone op (restore its `after` snapshot).
+    Redo {},
+    /// Several canvas gestures as ONE op (multi-move, multi-delete,
+    /// reconnect): applied in order under the session lock, all or
+    /// nothing — any failure rolls back to the pre-batch state and the
+    /// error names the failing `index`; one persist, one op, one delta.
+    Batch {
+        /// The gestures — every one a write gesture (`place_node`,
+        /// `connect`, `disconnect`, `accept_lift`, `set_param`, `rename`,
+        /// `delete_node`, `move_node`, `set_preview`).
+        ops: Vec<ClientMessage>,
+        /// The op's label.
+        label: String,
+    },
+    /// Replace whole files atomically (agents / MCP) — the `batch`
+    /// operation of the ledger row: refused on a stale base or a text that
+    /// does not parse; else one persist (temp + rename per file), one op,
+    /// one delta (a snapshot when scripts changed).
+    ApplyText(ApplyTextRequest),
     /// Ask for a node's output values.
     Inspect {
         /// Node.
@@ -512,7 +602,40 @@ pub fn is_write(message: &ClientMessage) -> bool {
             | ClientMessage::MoveNode { .. }
             | ClientMessage::SetPreview { .. }
             | ClientMessage::Cancel {}
+            | ClientMessage::Undo {}
+            | ClientMessage::Redo {}
+            | ClientMessage::Batch { .. }
+            | ClientMessage::ApplyText(_)
     )
+}
+
+/// Is this intent a canvas write gesture — one that edits the text or
+/// sidecar in place and may be an element of a `batch`? (Previews, cancel,
+/// undo/redo, batch itself and `apply_text` are writes but not gestures.)
+#[must_use]
+pub fn is_gesture(message: &ClientMessage) -> bool {
+    matches!(
+        message,
+        ClientMessage::PlaceNode { .. }
+            | ClientMessage::Connect { .. }
+            | ClientMessage::Disconnect { .. }
+            | ClientMessage::AcceptLift { .. }
+            | ClientMessage::SetParam { .. }
+            | ClientMessage::Rename { .. }
+            | ClientMessage::DeleteNode { .. }
+            | ClientMessage::MoveNode { .. }
+            | ClientMessage::SetPreview { .. }
+    )
+}
+
+/// The wire `type` tag of an intent (`set_param`, `batch`, …) — for
+/// messages that name a message.
+#[must_use]
+pub fn type_tag(message: &ClientMessage) -> String {
+    serde_json::to_value(message)
+        .ok()
+        .and_then(|v| v["type"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| "?".to_owned())
 }
 
 /// Serialize a server message with its envelope.
@@ -561,6 +684,93 @@ mod tests {
         let read: IntentEnvelope =
             serde_json::from_str(r#"{"v":1,"type":"inspect","payload":{"node":"a"}}"#).unwrap();
         assert!(!is_write(&read.message));
+    }
+
+    #[test]
+    fn undo_redo_batch_and_apply_text_are_writes_with_the_documented_shapes() {
+        let undo: IntentEnvelope =
+            serde_json::from_str(r#"{"v":1,"id":"u","type":"undo","payload":{}}"#).unwrap();
+        assert_eq!(undo.message, ClientMessage::Undo {});
+        assert!(is_write(&undo.message));
+        assert!(!is_gesture(&undo.message), "undo is not a batch element");
+        let redo: IntentEnvelope =
+            serde_json::from_str(r#"{"v":1,"type":"redo","payload":{}}"#).unwrap();
+        assert!(is_write(&redo.message));
+
+        let batch: IntentEnvelope = serde_json::from_str(
+            r#"{"v":1,"id":"b","type":"batch","payload":{"label":"move 2 nodes","ops":[
+                {"type":"move_node","payload":{"node":"a","cell":[1,2]}},
+                {"type":"move_node","payload":{"node":"b","cell":null}}]}}"#,
+        )
+        .unwrap();
+        let ClientMessage::Batch { ops, label } = &batch.message else {
+            panic!("{:?}", batch.message);
+        };
+        assert_eq!(label, "move 2 nodes");
+        assert_eq!(ops.len(), 2);
+        assert!(ops.iter().all(is_gesture));
+        assert!(is_write(&batch.message));
+        assert_eq!(type_tag(&ops[0]), "move_node");
+        assert_eq!(type_tag(&batch.message), "batch");
+
+        let apply: IntentEnvelope = serde_json::from_str(
+            r##"{"v":1,"type":"apply_text","payload":{"base_text_hash":"ab","label":"agent edit",
+                "actor":{"kind":"agent","prompt":"add a sphere"},
+                "files":[{"path":"p.cic","text":"# cicada 1\n"}]}}"##,
+        )
+        .unwrap();
+        let ClientMessage::ApplyText(request) = &apply.message else {
+            panic!("{:?}", apply.message);
+        };
+        assert_eq!(
+            request.actor,
+            Actor::Agent {
+                prompt: Some("add a sphere".into())
+            }
+        );
+        assert_eq!(request.files[0].path, "p.cic");
+        assert!(is_write(&apply.message));
+        assert_eq!(
+            serde_json::to_value(Actor::Human).unwrap(),
+            serde_json::json!({"kind": "human"})
+        );
+        assert_eq!(
+            serde_json::to_value(Actor::Agent { prompt: None }).unwrap(),
+            serde_json::json!({"kind": "agent"})
+        );
+    }
+
+    #[test]
+    fn error_details_flatten_into_the_payload() {
+        let mut details = serde_json::Map::new();
+        details.insert("current_text_hash".into(), "ff".into());
+        let text = encode(
+            1,
+            &ServerMessage::Error {
+                intent_id: Some("x".into()),
+                kind: "stale_base".into(),
+                message: "stale".into(),
+                details,
+            },
+        );
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["payload"]["kind"], "stale_base");
+        assert_eq!(value["payload"]["current_text_hash"], "ff");
+        let plain = encode(
+            1,
+            &ServerMessage::Error {
+                intent_id: None,
+                kind: "lease".into(),
+                message: "m".into(),
+                details: serde_json::Map::new(),
+            },
+        );
+        let value: serde_json::Value = serde_json::from_str(&plain).unwrap();
+        assert_eq!(
+            value["payload"].as_object().unwrap().len(),
+            2,
+            "no details → just kind + message: {value}"
+        );
     }
 
     #[test]

@@ -11,13 +11,21 @@
 //! Frames go out only for outputs whose value hash changed since the last
 //! broadcast; a joining client gets the whole display set re-streamed.
 //!
+//! Undo/redo (docs/13 §Undo/redo, DECISIONS.md undo row revised
+//! 2026-08-19): every successful write pushes one [`Op`] holding a **state
+//! snapshot** (text + sidecar) before and after it onto the session's
+//! [`OpLog`]; `undo`/`redo` restore a snapshot through the same persist +
+//! delta path as any edit; `batch` applies several gestures as one op;
+//! `apply_text` replaces whole files atomically against a base hash; an
+//! external change (the watcher) is the reload barrier that clears the log.
+//!
 //! Locking discipline: `inner` (document/graph/clients) and `status` (the
 //! per-node board, written from rayon worker threads) are separate mutexes;
 //! neither is held while calling into the solve loop, and the solve loop
 //! holds none of its own while calling back in — so no lock order exists
 //! to violate.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -29,11 +37,11 @@ use cicada_core::hash::ValueHash;
 use cicada_core::spec::NodeSpec;
 use cicada_lang::ast::Rhs;
 use cicada_lang::check::BindingType;
-use cicada_lang::diag::DiagnosticKind;
-use cicada_lang::{Catalog, Document, resolve, writer};
+use cicada_lang::diag::{Diagnostic, DiagnosticKind};
+use cicada_lang::{Catalog, Document, Line, resolve, writer};
 use cicada_sched::{
-    CancelToken, DiskStore, Event, LogRecovery, MonotonicClock, NodeId, NodeOutcome, Observer,
-    Scheduler, SchedulerConfig, SolveError, SolveReport, project_cache_dir,
+    CancelToken, Clock, DiskStore, Event, LogRecovery, MonotonicClock, NodeId, NodeOutcome,
+    Observer, Scheduler, SchedulerConfig, SolveError, SolveReport, project_cache_dir,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -41,8 +49,9 @@ use crate::compile::{self, Loaded};
 use crate::display::{self, DisplayStats, PickTable};
 use crate::lower::{Lowered, LoweredBinding, lower, lower_partial};
 use crate::protocol::{
-    ClientMessage, DeltaSource, LeaseView, NodeState, NodeStatus, ProbeCatalogEntry, ProbeVerdict,
-    Role, ServerMessage, SolveSummary, ValueSummary, encode, is_write,
+    Actor, ApplyTextRequest, ClientMessage, DeltaSource, HistoryView, LeaseView, NodeState,
+    NodeStatus, ProbeCatalogEntry, ProbeVerdict, Role, ServerMessage, SolveSummary, ValueSummary,
+    encode, is_gesture, is_write, type_tag,
 };
 use crate::scripts::ScriptCancel;
 use crate::sidecar::Sidecar;
@@ -66,7 +75,7 @@ pub const STATUS_PERIOD: Duration = Duration::from_millis(100);
 pub const UNIT_PX: u32 = 24;
 
 /// Session construction options.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SessionConfig {
     /// The project directory (display + relative paths).
     pub project_dir: PathBuf,
@@ -78,7 +87,31 @@ pub struct SessionConfig {
     pub threads: usize,
     /// Project configuration (units, tolerance).
     pub project: ProjectConfig,
+    /// The clock stamping op-log entries (`Op::at`, monotonic ms since the
+    /// clock's epoch — never wall time). `None` = a monotonic clock anchored
+    /// at open; tests inject a [`cicada_sched::VirtualClock`].
+    pub op_clock: Option<Arc<dyn Clock>>,
 }
+
+impl std::fmt::Debug for SessionConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionConfig")
+            .field("project_dir", &self.project_dir)
+            .field("pipeline", &self.pipeline)
+            .field("cache_dir", &self.cache_dir)
+            .field("threads", &self.threads)
+            .field("project", &self.project)
+            .field(
+                "op_clock",
+                &self.op_clock.as_ref().map_or("monotonic", |_| "injected"),
+            )
+            .finish()
+    }
+}
+
+/// How many ops the log keeps (the oldest drop off; git is the durable
+/// history — docs/13).
+pub const OP_LOG_CAP: usize = 200;
 
 /// Session failures.
 #[derive(Debug, thiserror::Error)]
@@ -149,10 +182,59 @@ pub enum IntentError {
     /// port) — the text is never edited.
     #[error("{0}")]
     Refused(String),
+    /// `undo` with nothing to undo (empty log, or cleared by the barrier).
+    #[error("nothing to undo — {0}")]
+    NothingToUndo(String),
+    /// `redo` with nothing to redo.
+    #[error("nothing to redo — {0}")]
+    NothingToRedo(String),
+    /// `apply_text`: the caller's base is not the current text.
+    #[error(
+        "stale base: the pipeline text changed since it was read (current text hash \
+         {current_text_hash}) — re-read and rebase the edit"
+    )]
+    StaleBase {
+        /// The hash the caller must base its next attempt on.
+        current_text_hash: String,
+    },
+    /// `apply_text`: a submitted file does not parse (check diagnostics are
+    /// allowed — red is a valid state; parse failures are not).
+    #[error("{message}")]
+    ParseError {
+        /// What failed to parse.
+        message: String,
+        /// The parse-level diagnostics (doc-11 shape), when the `.cic` is
+        /// the culprit.
+        diagnostics: Vec<Diagnostic>,
+    },
+    /// `apply_text`: a path outside the allowed set (this pipeline, its
+    /// sidecar, `scripts/*.py` next to it).
+    #[error("{0}")]
+    PathNotAllowed(String),
+    /// `apply_text`: a file write failed; earlier files were restored.
+    #[error("{0}")]
+    Io(String),
+    /// A `batch` element failed; the whole batch was rolled back.
+    #[error("batch `{label}` failed at op {index} ({op}): {source}")]
+    Batch {
+        /// The batch label.
+        label: String,
+        /// The 0-based index of the failing op.
+        index: usize,
+        /// Its `type` tag.
+        op: String,
+        /// Why it failed.
+        #[source]
+        source: Box<IntentError>,
+    },
 }
 
 impl IntentError {
-    fn kind(&self) -> &'static str {
+    /// The machine `kind` of the `error` message. A batch failure carries
+    /// the failing op's kind (the client reacts to that; `index` says
+    /// where).
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
         match self {
             Self::Lease => "lease",
             Self::Writer(_) => "writer",
@@ -160,8 +242,218 @@ impl IntentError {
             Self::Protocol(_) => "protocol",
             Self::Persist(_) => "persist",
             Self::Refused(_) => "refused",
+            Self::NothingToUndo(_) => "nothing_to_undo",
+            Self::NothingToRedo(_) => "nothing_to_redo",
+            Self::StaleBase { .. } => "stale_base",
+            Self::ParseError { .. } => "parse_error",
+            Self::PathNotAllowed(_) => "path_not_allowed",
+            Self::Io(_) => "io_error",
+            Self::Batch { source, .. } => source.kind(),
         }
     }
+
+    /// Kind-specific facts for the error payload (flattened).
+    #[must_use]
+    pub fn details(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut map = serde_json::Map::new();
+        match self {
+            Self::StaleBase { current_text_hash } => {
+                map.insert(
+                    "current_text_hash".to_owned(),
+                    serde_json::Value::String(current_text_hash.clone()),
+                );
+            }
+            Self::ParseError { diagnostics, .. } => {
+                map.insert(
+                    "diagnostics".to_owned(),
+                    serde_json::to_value(diagnostics).unwrap_or_default(),
+                );
+            }
+            Self::Batch { index, source, .. } => {
+                map = source.details();
+                map.insert("index".to_owned(), serde_json::Value::from(*index));
+            }
+            _ => {}
+        }
+        map
+    }
+}
+
+/// The `{kind, message, …details}` JSON body of a refused intent (the WS
+/// `error` payload minus the envelope; the HTTP routes' error body).
+#[must_use]
+pub fn error_body(error: &IntentError) -> serde_json::Value {
+    let mut body = error.details();
+    body.insert(
+        "kind".to_owned(),
+        serde_json::Value::String(error.kind().to_owned()),
+    );
+    body.insert(
+        "message".to_owned(),
+        serde_json::Value::String(error.to_string()),
+    );
+    serde_json::Value::Object(body)
+}
+
+/// A point in the undo/redo history: the pipeline text (the exact bytes
+/// the writer emits) and the sidecar. Node refs are NOT part of it — they
+/// are stable per name for the session's life (pick ids), whichever state
+/// is current.
+#[derive(Debug, Clone, PartialEq)]
+struct StateSnapshot {
+    text: String,
+    sidecar: Sidecar,
+}
+
+/// One entry of the op log (docs/13 §Undo/redo).
+#[derive(Debug, Clone)]
+pub struct Op {
+    /// Monotonic id (1-based, per session).
+    pub id: u64,
+    /// Human label (the delta's `source.label`).
+    pub label: String,
+    /// Who made it.
+    pub actor: Actor,
+    /// Server monotonic milliseconds (the session's op clock).
+    pub at: u64,
+    before: StateSnapshot,
+    after: StateSnapshot,
+}
+
+/// The linear op log: `ops[..cursor]` are applied, `ops[cursor..]` is the
+/// redo tail. Capped at [`OP_LOG_CAP`] (oldest dropped); a push truncates
+/// the redo tail; the reload barrier clears everything.
+#[derive(Debug, Default)]
+struct OpLog {
+    ops: VecDeque<Op>,
+    cursor: usize,
+    next_id: u64,
+    /// The last clear was the reload barrier — `nothing_to_undo` says so.
+    cleared_by_barrier: bool,
+}
+
+impl OpLog {
+    fn push(
+        &mut self,
+        label: String,
+        actor: Actor,
+        before: StateSnapshot,
+        after: StateSnapshot,
+        at: u64,
+    ) {
+        self.ops.truncate(self.cursor);
+        self.next_id += 1;
+        self.ops.push_back(Op {
+            id: self.next_id,
+            label,
+            actor,
+            at,
+            before,
+            after,
+        });
+        while self.ops.len() > OP_LOG_CAP {
+            self.ops.pop_front();
+        }
+        self.cursor = self.ops.len();
+        self.cleared_by_barrier = false;
+    }
+
+    fn undo_target(&self) -> Option<&Op> {
+        self.cursor.checked_sub(1).and_then(|i| self.ops.get(i))
+    }
+
+    fn redo_target(&self) -> Option<&Op> {
+        self.ops.get(self.cursor)
+    }
+
+    /// Why there is nothing to undo/redo.
+    fn empty_reason(&self, undo: bool) -> String {
+        if self.cleared_by_barrier && self.ops.is_empty() {
+            "the op log was cleared by a reload barrier (an external file change — git, an editor)"
+                .to_owned()
+        } else if undo {
+            if self.ops.is_empty() {
+                "no edits in this session yet".to_owned()
+            } else {
+                "every op is already undone".to_owned()
+            }
+        } else {
+            "no undone op to redo".to_owned()
+        }
+    }
+
+    fn clear_by_barrier(&mut self) {
+        self.ops.clear();
+        self.cursor = 0;
+        self.cleared_by_barrier = true;
+    }
+
+    fn view(&self) -> HistoryView {
+        HistoryView {
+            can_undo: self.undo_target().is_some(),
+            can_redo: self.redo_target().is_some(),
+            undo_label: self.undo_target().map(|op| op.label.clone()),
+            redo_label: self.redo_target().map(|op| op.label.clone()),
+            depth: self.cursor,
+        }
+    }
+
+    /// `/debug/state` → `ops`.
+    fn debug_ops(&self) -> Vec<serde_json::Value> {
+        self.ops
+            .iter()
+            .map(|op| {
+                serde_json::json!({
+                    "id": op.id,
+                    "label": op.label,
+                    "actor": op.actor,
+                    "at": op.at,
+                })
+            })
+            .collect()
+    }
+}
+
+/// What a write gesture (or a batch of them) did to the in-memory state,
+/// before the commit persists and broadcasts it.
+#[derive(Debug, Default)]
+struct Applied {
+    /// The op's label.
+    label: String,
+    /// Bindings whose text changed (the delta's dirty set).
+    dirty: Vec<String>,
+    /// The `.cic` text was edited (else sidecar only: no solve).
+    text_changed: bool,
+    /// The display set may have changed (preview toggles): re-emit frames
+    /// from the last complete generation after the commit.
+    refresh_display: bool,
+}
+
+impl Applied {
+    /// Fold a batch element into the batch's summary.
+    fn absorb(&mut self, other: Applied) {
+        for name in other.dirty {
+            if !self.dirty.contains(&name) {
+                self.dirty.push(name);
+            }
+        }
+        self.text_changed |= other.text_changed;
+        self.refresh_display |= other.refresh_display;
+    }
+}
+
+/// How a commit touches the op log.
+enum OpEffect {
+    /// Push a new op (`before` → the committed state); truncates the redo
+    /// tail.
+    Push {
+        /// The state before the gesture.
+        before: StateSnapshot,
+        /// Who made it.
+        actor: Actor,
+    },
+    /// The caller already moved the cursor (undo/redo) — record nothing.
+    Cursor,
 }
 
 /// A message to one client's socket.
@@ -215,6 +507,12 @@ struct Inner {
     screenshots: HashMap<u64, tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>>,
     next_screenshot: u64,
     text_hash: [u8; 32],
+    /// The undo/redo log.
+    oplog: OpLog,
+    /// blake3 of every `scripts/*.py` as loaded (file name → hash) — the
+    /// watcher's echo guard for script writes (`apply_text`): a rescan
+    /// whose files hash to exactly these is our own write, not a barrier.
+    scripts_fingerprint: BTreeMap<String, [u8; 32]>,
 }
 
 /// The per-node status board — written by observer events on worker
@@ -248,6 +546,8 @@ struct Core {
     solve: Mutex<Option<std::sync::Weak<SolveLoop>>>,
     threads: usize,
     notices: Mutex<Vec<String>>,
+    /// Stamps `Op::at` (monotonic ms; injectable).
+    op_clock: Arc<dyn Clock>,
     /// Session start (timings are relative to it).
     epoch: Instant,
     /// The last generations' timings (docs/15 measurement protocol: the
@@ -393,6 +693,11 @@ impl Session {
             .to_string_lossy()
             .replace('\\', "/");
         let text_hash = *blake3::hash(text.as_bytes()).as_bytes();
+        let scripts_fingerprint = scripts_fingerprint(&config.pipeline)?;
+        let op_clock: Arc<dyn Clock> = match config.op_clock.clone() {
+            Some(clock) => clock,
+            None => Arc::new(MonotonicClock::new()),
+        };
         let core = Arc::new(Core {
             relative,
             inner: Mutex::new(Inner {
@@ -413,6 +718,8 @@ impl Session {
                 screenshots: HashMap::new(),
                 next_screenshot: 0,
                 text_hash,
+                oplog: OpLog::default(),
+                scripts_fingerprint,
             }),
             status: Mutex::new(StatusBoard {
                 nodes: BTreeMap::new(),
@@ -431,6 +738,7 @@ impl Session {
             solve: Mutex::new(None),
             threads,
             notices: Mutex::new(notices),
+            op_clock,
             epoch: Instant::now(),
             timings: Mutex::new(std::collections::VecDeque::with_capacity(TIMINGS_KEPT)),
             config,
@@ -595,19 +903,25 @@ impl Session {
     #[must_use]
     pub fn snapshot(&self, barrier: bool, reason: &str) -> String {
         let inner = self.core.lock_inner();
-        let status = self.core.lock_status();
-        encode(
-            inner.seq,
-            &ServerMessage::Snapshot {
-                graph: inner.graph.clone(),
-                text: inner.loaded.document.emit(),
-                statuses: status.nodes.clone(),
-                summary: status.summary.clone(),
-                lease: lease_view(&inner),
-                barrier,
-                reason: reason.to_owned(),
-            },
-        )
+        self.core.snapshot_locked(&inner, barrier, reason)
+    }
+
+    /// The current pipeline text and its hash — `GET /api/edit/text`, the
+    /// base an agent reads before an `apply_text`.
+    #[must_use]
+    pub fn edit_text(&self) -> serde_json::Value {
+        let inner = self.core.lock_inner();
+        serde_json::json!({
+            "path": self.core.relative,
+            "text": inner.loaded.document.emit(),
+            "text_hash": hex(&inner.text_hash),
+        })
+    }
+
+    /// The undo/redo state (tests, `/debug/state`).
+    #[must_use]
+    pub fn history(&self) -> HistoryView {
+        self.core.lock_inner().oplog.view()
     }
 
     /// Re-stream every displayed output's frames to ONE client (join /
@@ -680,7 +994,8 @@ impl Session {
         // Write gestures mutate the document/sidecar in place before the
         // persist; if anything fails on the way, the in-memory state must
         // roll back to what is on disk — a refused edit that lingered would
-        // be broadcast and written by the next unrelated op.
+        // be broadcast and written by the next unrelated op. (The op-log
+        // cursor rides along: undo/redo move it before their commit.)
         let snapshot = if is_write(&message) {
             let inner = self.core.lock_inner();
             Some((
@@ -688,19 +1003,21 @@ impl Session {
                 inner.loaded.document.clone(),
                 inner.sidecar.clone(),
                 inner.refs.clone(),
+                inner.oplog.cursor,
             ))
         } else {
             None
         };
         let result = self.dispatch(client, intent_id.clone(), message);
         if result.is_err()
-            && let Some((seq, document, sidecar, refs)) = snapshot
+            && let Some((seq, document, sidecar, refs, cursor)) = snapshot
         {
             let mut inner = self.core.lock_inner();
             if inner.seq == seq {
                 inner.loaded.document = document;
                 inner.sidecar = sidecar;
                 inner.refs = refs;
+                inner.oplog.cursor = cursor;
                 inner.loaded.recheck();
             }
         }
@@ -713,13 +1030,14 @@ impl Session {
                         intent_id,
                         kind: error.kind().to_owned(),
                         message: error.to_string(),
+                        details: error.details(),
                     },
                 )));
             }
         }
     }
 
-    #[allow(clippy::too_many_lines)] // the intent table, one arm per gesture
+    #[allow(clippy::too_many_lines)] // the intent table, one arm per message
     fn dispatch(
         &self,
         client: u32,
@@ -738,66 +1056,24 @@ impl Session {
             label,
         };
         match message {
-            ClientMessage::Hello { .. } => Ok(()),
-            ClientMessage::PlaceNode {
-                func,
-                cell,
-                connect,
-            } => {
+            // A canvas write gesture: edit in place, then ONE commit that
+            // persists, records the op, and broadcasts the delta.
+            gesture if is_gesture(&gesture) => {
                 let mut inner = self.core.lock_inner();
-                if !inner.loaded.specs.iter().any(|spec| spec.name == func) {
-                    return Err(IntentError::Unknown(format!(
-                        "no node named `{func}` in the catalog"
-                    )));
-                }
-                let deps: Vec<&str> = connect
-                    .as_ref()
-                    .map(|c| vec![c.from.node.as_str()])
-                    .unwrap_or_default();
-                let name = writer::place(&mut inner.loaded.document, &func, &deps)?;
-                if let Some(cell) = cell {
-                    inner.sidecar.set_cell(&name, Some(cell));
-                }
-                if let Some(spec) = connect {
-                    connect_checked(&mut inner, &spec.from, &name, &spec.to_port, spec.lift)?;
-                }
-                self.commit(&mut inner, source(format!("place {func}")), vec![name])?;
-                Ok(())
-            }
-            ClientMessage::Connect { from, to, lift } => {
-                let mut inner = self.core.lock_inner();
-                connect_checked(&mut inner, &from, &to.node, &to.port, lift)?;
-                let label = format!("wire {}.{} → {}.{}", from.node, from.port, to.node, to.port);
-                self.commit(&mut inner, source(label), vec![to.node])?;
-                Ok(())
-            }
-            ClientMessage::Disconnect { to } => {
-                let mut inner = self.core.lock_inner();
-                writer::remove_kwarg(&mut inner.loaded.document, &to.node, &to.port)?;
-                let label = format!("unwire {}.{}", to.node, to.port);
-                self.commit(&mut inner, source(label), vec![to.node])?;
-                Ok(())
-            }
-            ClientMessage::AcceptLift { node, port } => {
-                let mut inner = self.core.lock_inner();
-                writer::wrap_each(&mut inner.loaded.document, &node, &port)?;
+                let before = state_snapshot(&inner);
+                let applied = Self::apply_gesture(&mut inner, gesture)?;
+                let source = source(applied.label.clone());
                 self.commit(
                     &mut inner,
-                    source(format!("lift {node}.{port}")),
-                    vec![node],
-                )?;
-                Ok(())
+                    source,
+                    applied,
+                    OpEffect::Push {
+                        before,
+                        actor: Actor::Human,
+                    },
+                )
             }
-            ClientMessage::SetParam { node, port, value } => {
-                let mut inner = self.core.lock_inner();
-                apply_param(&mut inner.loaded.document, &node, port.as_deref(), &value)?;
-                let label = match &port {
-                    Some(port) => format!("set {node}.{port} = {value}"),
-                    None => format!("set {node} = {value}"),
-                };
-                self.commit(&mut inner, source(label), vec![node])?;
-                Ok(())
-            }
+            ClientMessage::Hello { .. } => Ok(()),
             ClientMessage::ParamPreview { node, port, value } => {
                 // The queue clock starts HERE — the lowering below is part
                 // of what the user waits for after moving the slider.
@@ -826,71 +1102,103 @@ impl Session {
                 self.solve.submit(job);
                 Ok(())
             }
-            ClientMessage::Rename { node, new } => {
+            ClientMessage::Undo {} => {
                 let mut inner = self.core.lock_inner();
-                if inner.loaded.specs.iter().any(|spec| spec.name == new) {
-                    // docs/10 §5: a binding named like a callable would
-                    // shadow the node for later calls.
-                    return Err(IntentError::Refused(format!(
-                        "`{new}` is a node name in the catalog — a binding cannot take it"
-                    )));
+                let Some(op) = inner.oplog.undo_target() else {
+                    return Err(IntentError::NothingToUndo(inner.oplog.empty_reason(true)));
+                };
+                let label = format!("undo: {}", op.label);
+                let target = op.before.clone();
+                let applied = restore_state(&mut inner, &target, label);
+                inner.oplog.cursor -= 1;
+                let source = source(applied.label.clone());
+                self.commit(&mut inner, source, applied, OpEffect::Cursor)
+            }
+            ClientMessage::Redo {} => {
+                let mut inner = self.core.lock_inner();
+                let Some(op) = inner.oplog.redo_target() else {
+                    return Err(IntentError::NothingToRedo(inner.oplog.empty_reason(false)));
+                };
+                let label = format!("redo: {}", op.label);
+                let target = op.after.clone();
+                let applied = restore_state(&mut inner, &target, label);
+                inner.oplog.cursor += 1;
+                let source = source(applied.label.clone());
+                self.commit(&mut inner, source, applied, OpEffect::Cursor)
+            }
+            ClientMessage::Batch { ops, label } => {
+                if ops.is_empty() {
+                    return Err(IntentError::Protocol(format!("batch `{label}` has no ops")));
                 }
-                writer::rename(&mut inner.loaded.document, &node, &new)?;
-                inner.sidecar.rename(&node, &new);
-                inner.refs.rename(&node, &new);
+                // Validate the whole list BEFORE touching anything: a batch
+                // is gestures only (no previews, cancels, nested batches,
+                // undo/redo, apply_text).
+                if let Some((index, bad)) = ops.iter().enumerate().find(|(_, op)| !is_gesture(op)) {
+                    return Err(IntentError::Batch {
+                        label,
+                        index,
+                        op: type_tag(bad),
+                        source: Box::new(IntentError::Protocol(
+                            "not a canvas write gesture — a batch holds place_node / connect / \
+                             disconnect / accept_lift / set_param / rename / delete_node / \
+                             move_node / set_preview only"
+                                .to_owned(),
+                        )),
+                    });
+                }
+                let mut inner = self.core.lock_inner();
+                let before = state_snapshot(&inner);
+                let rollback = (
+                    inner.loaded.document.clone(),
+                    inner.sidecar.clone(),
+                    inner.refs.clone(),
+                );
+                let mut summary = Applied {
+                    label: label.clone(),
+                    ..Applied::default()
+                };
+                for (index, op) in ops.into_iter().enumerate() {
+                    let tag = type_tag(&op);
+                    match Self::apply_gesture(&mut inner, op) {
+                        Ok(applied) => {
+                            if applied.text_changed {
+                                // Later elements see the earlier ones
+                                // (a connect after a place needs the new
+                                // binding resolved).
+                                inner.loaded.recheck();
+                            }
+                            summary.absorb(applied);
+                        }
+                        Err(source) => {
+                            // All or nothing: back to the pre-batch state
+                            // (memory only — nothing was persisted yet).
+                            inner.loaded.document = rollback.0;
+                            inner.sidecar = rollback.1;
+                            inner.refs = rollback.2;
+                            inner.loaded.recheck();
+                            return Err(IntentError::Batch {
+                                label,
+                                index,
+                                op: tag,
+                                source: Box::new(source),
+                            });
+                        }
+                    }
+                }
+                let source = source(label);
                 self.commit(
                     &mut inner,
-                    source(format!("rename {node} → {new}")),
-                    vec![new],
-                )?;
-                Ok(())
+                    source,
+                    summary,
+                    OpEffect::Push {
+                        before,
+                        actor: Actor::Human,
+                    },
+                )
             }
-            ClientMessage::DeleteNode { node } => {
-                let mut inner = self.core.lock_inner();
-                // Downstream references become red — the dirty set names
-                // them so the client can flash the reds.
-                let dependents: Vec<String> = inner
-                    .loaded
-                    .document
-                    .statements()
-                    .filter(|(_, statement, _)| {
-                        statement.references().iter().any(|r| r.name == node)
-                    })
-                    .map(|(_, statement, _)| statement.name().to_owned())
-                    .collect();
-                writer::delete(&mut inner.loaded.document, &node)?;
-                inner.sidecar.remove(&node);
-                inner.sidecar.remove_from_groups(&node);
-                self.commit(&mut inner, source(format!("delete {node}")), dependents)?;
-                Ok(())
-            }
-            ClientMessage::MoveNode { node, cell } => {
-                let mut inner = self.core.lock_inner();
-                if inner.graph.node(&node).is_none() {
-                    return Err(IntentError::Unknown(format!("no node named `{node}`")));
-                }
-                inner.sidecar.set_cell(&node, cell);
-                self.commit_sidecar_only(&mut inner, source(format!("move {node}")))?;
-                Ok(())
-            }
-            ClientMessage::SetPreview { node, on } => {
-                let mut inner = self.core.lock_inner();
-                if inner.graph.node(&node).is_none() {
-                    return Err(IntentError::Unknown(format!("no node named `{node}`")));
-                }
-                // An override equal to the default is no override (the
-                // sidecar stays near-empty by construction).
-                let default_on = inner
-                    .graph
-                    .node(&node)
-                    .is_some_and(|n| n.outputs.iter().any(|o| o.displayable));
-                let on = on.filter(|&flag| flag != default_on);
-                inner.sidecar.set_preview(&node, on);
-                self.commit_sidecar_only(&mut inner, source(format!("preview {node}")))?;
-                // The display set changed: send frames (from the last
-                // complete generation) or clears for this node.
-                self.core.refresh_display(&mut inner, None);
-                Ok(())
+            ClientMessage::ApplyText(request) => {
+                let source = source(request.label.clone());
+                self.apply_text(&request, source).map(|_| ())
             }
             ClientMessage::Cancel {} => {
                 self.cancel();
@@ -995,76 +1303,503 @@ impl Session {
                 }
                 Ok(())
             }
+            // Every gesture is caught by the guard arm above; this arm
+            // exists for the exhaustiveness check only.
+            other => Err(IntentError::Protocol(format!(
+                "`{}` is not a handled intent — bug",
+                type_tag(&other)
+            ))),
         }
     }
 
-    /// Persist text + sidecar after writer gestures, recheck, relower,
-    /// rebuild the view, bump `seq`, broadcast the delta, and schedule the
-    /// structural solve.
+    /// Apply ONE canvas write gesture to the in-memory document/sidecar
+    /// (docs/10 round-trip table) — nothing persisted, nothing broadcast;
+    /// the caller commits. Shared by the single-gesture path and `batch`.
+    #[allow(clippy::too_many_lines)] // the gesture table, one arm per gesture
+    fn apply_gesture(inner: &mut Inner, message: ClientMessage) -> Result<Applied, IntentError> {
+        match message {
+            ClientMessage::PlaceNode {
+                func,
+                cell,
+                connect,
+            } => {
+                if !inner.loaded.specs.iter().any(|spec| spec.name == func) {
+                    return Err(IntentError::Unknown(format!(
+                        "no node named `{func}` in the catalog"
+                    )));
+                }
+                let deps: Vec<&str> = connect
+                    .as_ref()
+                    .map(|c| vec![c.from.node.as_str()])
+                    .unwrap_or_default();
+                let name = writer::place(&mut inner.loaded.document, &func, &deps)?;
+                if let Some(cell) = cell {
+                    inner.sidecar.set_cell(&name, Some(cell));
+                }
+                if let Some(spec) = connect {
+                    connect_checked(inner, &spec.from, &name, &spec.to_port, spec.lift)?;
+                }
+                Ok(Applied {
+                    label: format!("place {func}"),
+                    dirty: vec![name],
+                    text_changed: true,
+                    refresh_display: false,
+                })
+            }
+            ClientMessage::Connect { from, to, lift } => {
+                connect_checked(inner, &from, &to.node, &to.port, lift)?;
+                Ok(Applied {
+                    label: format!("wire {}.{} → {}.{}", from.node, from.port, to.node, to.port),
+                    dirty: vec![to.node],
+                    text_changed: true,
+                    refresh_display: false,
+                })
+            }
+            ClientMessage::Disconnect { to } => {
+                writer::remove_kwarg(&mut inner.loaded.document, &to.node, &to.port)?;
+                Ok(Applied {
+                    label: format!("unwire {}.{}", to.node, to.port),
+                    dirty: vec![to.node],
+                    text_changed: true,
+                    refresh_display: false,
+                })
+            }
+            ClientMessage::AcceptLift { node, port } => {
+                writer::wrap_each(&mut inner.loaded.document, &node, &port)?;
+                Ok(Applied {
+                    label: format!("lift {node}.{port}"),
+                    dirty: vec![node],
+                    text_changed: true,
+                    refresh_display: false,
+                })
+            }
+            ClientMessage::SetParam { node, port, value } => {
+                apply_param(&mut inner.loaded.document, &node, port.as_deref(), &value)?;
+                let label = match &port {
+                    Some(port) => format!("set {node}.{port} = {value}"),
+                    None => format!("set {node} = {value}"),
+                };
+                Ok(Applied {
+                    label,
+                    dirty: vec![node],
+                    text_changed: true,
+                    refresh_display: false,
+                })
+            }
+            ClientMessage::Rename { node, new } => {
+                if inner.loaded.specs.iter().any(|spec| spec.name == new) {
+                    // docs/10 §5: a binding named like a callable would
+                    // shadow the node for later calls.
+                    return Err(IntentError::Refused(format!(
+                        "`{new}` is a node name in the catalog — a binding cannot take it"
+                    )));
+                }
+                writer::rename(&mut inner.loaded.document, &node, &new)?;
+                inner.sidecar.rename(&node, &new);
+                inner.refs.rename(&node, &new);
+                Ok(Applied {
+                    label: format!("rename {node} → {new}"),
+                    dirty: vec![new],
+                    text_changed: true,
+                    refresh_display: false,
+                })
+            }
+            ClientMessage::DeleteNode { node } => {
+                // Downstream references become red — the dirty set names
+                // them so the client can flash the reds.
+                let dependents: Vec<String> = inner
+                    .loaded
+                    .document
+                    .statements()
+                    .filter(|(_, statement, _)| {
+                        statement.references().iter().any(|r| r.name == node)
+                    })
+                    .map(|(_, statement, _)| statement.name().to_owned())
+                    .collect();
+                writer::delete(&mut inner.loaded.document, &node)?;
+                inner.sidecar.remove(&node);
+                inner.sidecar.remove_from_groups(&node);
+                Ok(Applied {
+                    label: format!("delete {node}"),
+                    dirty: dependents,
+                    text_changed: true,
+                    refresh_display: false,
+                })
+            }
+            ClientMessage::MoveNode { node, cell } => {
+                // The graph view lags the document inside a batch (a node
+                // placed two ops ago is not rebuilt yet): the document is
+                // the authority, the view covers `#off`/broken lines.
+                if inner.graph.node(&node).is_none()
+                    && inner.loaded.document.find_binding(&node).is_none()
+                {
+                    return Err(IntentError::Unknown(format!("no node named `{node}`")));
+                }
+                inner.sidecar.set_cell(&node, cell);
+                Ok(Applied {
+                    label: format!("move {node}"),
+                    dirty: Vec::new(),
+                    text_changed: false,
+                    refresh_display: false,
+                })
+            }
+            ClientMessage::SetPreview { node, on } => {
+                let view = inner.graph.node(&node);
+                if view.is_none() && inner.loaded.document.find_binding(&node).is_none() {
+                    return Err(IntentError::Unknown(format!("no node named `{node}`")));
+                }
+                // An override equal to the default is no override (the
+                // sidecar stays near-empty by construction). A node the
+                // view does not know yet (placed earlier in this batch)
+                // keeps the override as given.
+                let on = match view {
+                    Some(view) => {
+                        let default_on = view.outputs.iter().any(|o| o.displayable);
+                        on.filter(|&flag| flag != default_on)
+                    }
+                    None => on,
+                };
+                inner.sidecar.set_preview(&node, on);
+                Ok(Applied {
+                    label: format!("preview {node}"),
+                    dirty: Vec::new(),
+                    text_changed: false,
+                    refresh_display: true,
+                })
+            }
+            other => Err(IntentError::Protocol(format!(
+                "`{}` is not a canvas write gesture",
+                type_tag(&other)
+            ))),
+        }
+    }
+
+    /// Persist text (when it changed) + sidecar after a write, recheck,
+    /// relower, rebuild the view, bump `seq`, record the op, broadcast the
+    /// delta, and schedule the structural solve (text changes) or re-emit
+    /// frames (preview toggles). THE one path every edit — gesture, batch,
+    /// undo, redo — takes to disk and to the clients.
     fn commit(
         &self,
         inner: &mut Inner,
         source: DeltaSource,
-        dirty: Vec<String>,
+        applied: Applied,
+        effect: OpEffect,
     ) -> Result<(), IntentError> {
         let text = inner.loaded.document.emit();
-        // Atomic: temp file in the same directory, then rename over the
-        // live file — a crash or a concurrent reader (git, the watcher, an
-        // editor) never sees a truncated source of truth.
-        write_atomic(&self.core.config.pipeline, text.as_bytes()).map_err(|e| {
-            IntentError::Persist(format!(
-                "writing {}: {e}",
-                self.core.config.pipeline.display()
-            ))
-        })?;
-        let hash = *blake3::hash(text.as_bytes()).as_bytes();
-        inner.last_written = Some(hash);
-        inner.text_hash = hash;
+        if applied.text_changed {
+            // Atomic: temp file in the same directory, then rename over the
+            // live file — a crash or a concurrent reader (git, the watcher,
+            // an editor) never sees a truncated source of truth.
+            write_atomic(&self.core.config.pipeline, text.as_bytes()).map_err(|e| {
+                IntentError::Persist(format!(
+                    "writing {}: {e}",
+                    self.core.config.pipeline.display()
+                ))
+            })?;
+            let hash = *blake3::hash(text.as_bytes()).as_bytes();
+            inner.last_written = Some(hash);
+            inner.text_hash = hash;
+        }
         inner
             .sidecar
             .save(&Sidecar::path_for(&self.core.config.pipeline))
             .map_err(|e| IntentError::Persist(e.to_string()))?;
-        inner.loaded.recheck();
+        if applied.text_changed {
+            inner.loaded.recheck();
+        }
         self.core.rebuild(inner);
         inner.seq += 1;
+        if let OpEffect::Push { before, actor } = effect {
+            let after = StateSnapshot {
+                text: text.clone(),
+                sidecar: inner.sidecar.clone(),
+            };
+            let at = self.core.now_ms();
+            inner
+                .oplog
+                .push(source.label.clone(), actor, before, after, at);
+        }
         let message = ServerMessage::Delta {
             source,
             graph: inner.graph.clone(),
             text,
-            dirty,
+            dirty: applied.dirty,
+            history: inner.oplog.view(),
         };
         broadcast(inner, &message);
-        self.core.seed_statuses_locked(inner);
-        self.schedule_structural();
+        if applied.text_changed {
+            self.core.seed_statuses_locked(inner);
+            self.schedule_structural();
+        }
+        if applied.refresh_display {
+            // The display set changed: send frames (from the last complete
+            // generation) or clears for the toggled nodes.
+            self.core.refresh_display(inner, None);
+        }
         Ok(())
     }
 
-    /// Sidecar-only ops (move / preview): persist, rebuild layout, delta;
-    /// no solve.
-    fn commit_sidecar_only(
+    // -------------------------------------------------------- apply_text --
+
+    /// The atomic whole-file edit (docs/13 §Undo/redo; the ledger's `batch`
+    /// operation for agents): refuse a stale base, a disallowed path, or a
+    /// file that does not parse; else write every file temp + rename, swap
+    /// the in-memory state, record ONE op, broadcast ONE delta (a snapshot
+    /// when scripts changed and the catalog reloaded). Callable without a
+    /// client (HTTP: the agent acts for the user, lease or no lease).
+    /// Returns `{ok, seq, text_hash, history}`.
+    ///
+    /// # Errors
+    ///
+    /// [`IntentError::StaleBase`], [`IntentError::PathNotAllowed`],
+    /// [`IntentError::ParseError`], [`IntentError::Io`] (every earlier file
+    /// restored), [`IntentError::Protocol`] (empty / duplicate file list).
+    #[allow(clippy::too_many_lines)] // validate → write → swap → record → broadcast, in order
+    pub fn apply_text(
         &self,
-        inner: &mut Inner,
+        request: &ApplyTextRequest,
         source: DeltaSource,
-    ) -> Result<(), IntentError> {
-        inner
-            .sidecar
-            .save(&Sidecar::path_for(&self.core.config.pipeline))
-            .map_err(|e| IntentError::Persist(e.to_string()))?;
-        self.core.rebuild(inner);
+    ) -> Result<serde_json::Value, IntentError> {
+        if request.files.is_empty() {
+            return Err(IntentError::Protocol(
+                "apply_text with no files — nothing to apply".to_owned(),
+            ));
+        }
+        // Classify every path first: a refusal must come before any write.
+        let mut targets: Vec<(EditTarget, PathBuf, &str)> = Vec::new();
+        for file in &request.files {
+            let (target, absolute) = self.classify_edit_path(&file.path)?;
+            if targets.iter().any(|(_, existing, _)| *existing == absolute) {
+                return Err(IntentError::Protocol(format!(
+                    "`{}` appears twice in the file list",
+                    file.path
+                )));
+            }
+            targets.push((target, absolute, file.text.as_str()));
+        }
+        let new_text = targets
+            .iter()
+            .find(|(t, _, _)| *t == EditTarget::Pipeline)
+            .map(|(_, _, text)| (*text).to_owned());
+        let new_sidecar = targets
+            .iter()
+            .find(|(t, _, _)| *t == EditTarget::Sidecar)
+            .map(|(_, _, text)| {
+                Sidecar::parse(text).map_err(|message| IntentError::ParseError {
+                    message: format!("the sidecar does not parse: {message}"),
+                    diagnostics: Vec::new(),
+                })
+            })
+            .transpose()?;
+        let scripts_changed = targets
+            .iter()
+            .any(|(t, _, _)| matches!(t, EditTarget::Script(_)));
+        let new_document = new_text.as_deref().map(Document::parse);
+        if let Some(document) = &new_document {
+            let diagnostics = document.parse_diagnostics();
+            if !diagnostics.is_empty() {
+                return Err(IntentError::ParseError {
+                    message: format!(
+                        "the pipeline text does not parse ({} problem{}): {}",
+                        diagnostics.len(),
+                        if diagnostics.len() == 1 { "" } else { "s" },
+                        diagnostics
+                            .iter()
+                            .map(|d| format!("line {}: {}", d.span.line, d.message))
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    ),
+                    diagnostics,
+                });
+            }
+        }
+
+        let mut inner = self.core.lock_inner();
+        let current_hash = hex(&inner.text_hash);
+        if request.base_text_hash != current_hash {
+            return Err(IntentError::StaleBase {
+                current_text_hash: current_hash,
+            });
+        }
+        let before = state_snapshot(&inner);
+
+        // What is on disk now, for the rollback of a half-applied write.
+        let mut before_files: Vec<(PathBuf, Option<Vec<u8>>)> = Vec::new();
+        for (_, absolute, _) in &targets {
+            let existing = match std::fs::read(absolute) {
+                Ok(bytes) => Some(bytes),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => {
+                    return Err(IntentError::Io(format!(
+                        "reading {} before replacing it: {error}",
+                        display_path(absolute)
+                    )));
+                }
+            };
+            before_files.push((absolute.clone(), existing));
+        }
+        // Write every file temp + rename, in order; a failure restores the
+        // ones already replaced — the disk never keeps a partial edit.
+        for (index, (_, absolute, text)) in targets.iter().enumerate() {
+            if let Err(error) = write_atomic(absolute, text.as_bytes()) {
+                use std::fmt::Write as _;
+                let mut message = format!("writing {}: {error}", display_path(absolute));
+                let restored = restore_files(&before_files[..index]);
+                if let Err(detail) = restored {
+                    let _ = write!(
+                        message,
+                        "; restoring the earlier files failed too: {detail}"
+                    );
+                } else if index > 0 {
+                    let _ = write!(
+                        message,
+                        "; the {index} file(s) written before it were restored"
+                    );
+                }
+                return Err(IntentError::Io(message));
+            }
+        }
+
+        // Swap the in-memory state. Scripts changed → the catalog reloads
+        // (Python discovery); a script that fails to describe is a parse
+        // failure of the submitted edit: the files go back, the state
+        // stays.
+        let text_for_load = new_text
+            .clone()
+            .unwrap_or_else(|| inner.loaded.document.emit());
+        if scripts_changed {
+            match compile::load(
+                &self.core.config.pipeline,
+                &text_for_load,
+                &self.core.scripts,
+            ) {
+                Ok(loaded) => inner.loaded = loaded,
+                Err(error) => {
+                    use std::fmt::Write as _;
+                    let mut message = format!("a script does not load: {error}");
+                    if let Err(detail) = restore_files(&before_files) {
+                        let _ = write!(message, "; restoring the files failed too: {detail}");
+                    }
+                    return Err(IntentError::ParseError {
+                        message,
+                        diagnostics: Vec::new(),
+                    });
+                }
+            }
+            inner.scripts_fingerprint = scripts_fingerprint(&self.core.config.pipeline)
+                .map_err(|e| IntentError::Io(e.to_string()))?;
+        } else if let Some(text) = &new_text {
+            inner.loaded.reload_text(text);
+        }
+        let mut dirty = Vec::new();
+        if let Some(text) = &new_text {
+            let old = Document::parse(&before.text);
+            dirty = changed_bindings(&old, &inner.loaded.document);
+            let hash = *blake3::hash(text.as_bytes()).as_bytes();
+            inner.last_written = Some(hash);
+            inner.text_hash = hash;
+        }
+        if let Some(sidecar) = new_sidecar {
+            inner.sidecar = sidecar;
+        }
+        self.core.rebuild(&mut inner);
         inner.seq += 1;
-        let message = ServerMessage::Delta {
-            source,
-            graph: inner.graph.clone(),
-            text: inner.loaded.document.emit(),
-            dirty: Vec::new(),
+        let after = state_snapshot(&inner);
+        let at = self.core.now_ms();
+        inner.oplog.push(
+            request.label.clone(),
+            request.actor.clone(),
+            before,
+            after,
+            at,
+        );
+        if scripts_changed {
+            // The catalog changed under the clients: one hydration path.
+            let snapshot =
+                self.core
+                    .snapshot_locked(&inner, false, &format!("apply_text: {}", request.label));
+            for client in inner.clients.values() {
+                let _ = client.tx.send(Outgoing::Text(snapshot.clone()));
+            }
+        } else {
+            let message = ServerMessage::Delta {
+                source,
+                graph: inner.graph.clone(),
+                text: inner.loaded.document.emit(),
+                dirty,
+                history: inner.oplog.view(),
+            };
+            broadcast(&inner, &message);
+        }
+        if new_text.is_some() || scripts_changed {
+            self.core.seed_statuses_locked(&inner);
+            self.schedule_structural();
+        } else {
+            self.core.refresh_display(&mut inner, None);
+        }
+        Ok(serde_json::json!({
+            "ok": true,
+            "seq": inner.seq,
+            "text_hash": hex(&inner.text_hash),
+            "history": inner.oplog.view(),
+        }))
+    }
+
+    /// Which file of the project an `apply_text` path names — this
+    /// pipeline, its sidecar, or a script next to it — and its absolute
+    /// path. Anything else is refused: plain project-relative paths only
+    /// (no absolute/rooted/drive forms, no `.`/`..`, no backslashes).
+    fn classify_edit_path(&self, path: &str) -> Result<(EditTarget, PathBuf), IntentError> {
+        use std::path::Component;
+        let refuse = |why: &str| IntentError::PathNotAllowed(format!("`{path}`: {why}"));
+        let candidate = Path::new(path);
+        if path.is_empty()
+            || candidate.is_absolute()
+            || candidate.has_root()
+            || path.contains('\\')
+            || path.contains(':')
+            || !candidate
+                .components()
+                .all(|c| matches!(c, Component::Normal(_)))
+        {
+            return Err(refuse(
+                "not a plain project-relative path (no absolute, rooted or drive forms, no \
+                 `.`/`..` segments, forward slashes only)",
+            ));
+        }
+        let pipeline = self.core.relative.as_str();
+        let sidecar = format!("{pipeline}.layout.json");
+        let scripts_dir = match pipeline.rsplit_once('/') {
+            Some((dir, _)) => format!("{dir}/scripts"),
+            None => "scripts".to_owned(),
         };
-        broadcast(inner, &message);
-        Ok(())
+        let target = if path == pipeline {
+            EditTarget::Pipeline
+        } else if path == sidecar {
+            EditTarget::Sidecar
+        } else if let Some((dir, name)) = path.rsplit_once('/')
+            && dir == scripts_dir
+            // Exactly what discovery picks up (`scripts.rs`: `ext == "py"`).
+            && Path::new(name).extension().is_some_and(|ext| ext == "py")
+            && name.len() > 3
+        {
+            EditTarget::Script(name.to_owned())
+        } else {
+            return Err(refuse(&format!(
+                "an apply_text may replace this pipeline (`{pipeline}`), its sidecar \
+                 (`{sidecar}`), or a script beside it (`{scripts_dir}/<name>.py`) — nothing else"
+            )));
+        };
+        Ok((target, self.core.config.project_dir.join(path)))
     }
 
     /// Reload from disk after an external change (git checkout, editor):
     /// re-read text (+ scripts when `rescan_scripts`), sidecar, relower,
-    /// broadcast a barrier snapshot, resolve.
+    /// clear the op log (the reload barrier, docs/13), broadcast a barrier
+    /// snapshot, resolve. The session's own writes echo back through the
+    /// watcher and are recognised — text by hash, sidecar by equality,
+    /// scripts by the loaded fingerprint — and return `Ok(false)`.
     ///
     /// # Errors
     ///
@@ -1075,33 +1810,49 @@ impl Session {
         reason: &str,
         rescan_scripts: bool,
     ) -> Result<bool, SessionError> {
-        let text = std::fs::read_to_string(&self.core.config.pipeline).map_err(|source| {
-            SessionError::Read {
-                path: self.core.config.pipeline.clone(),
-                source,
-            }
-        })?;
-        let hash = *blake3::hash(text.as_bytes()).as_bytes();
-        let sidecar = Sidecar::load(&Sidecar::path_for(&self.core.config.pipeline))?;
         {
+            // Read UNDER the lock: a read racing a commit (two quick writes,
+            // the watcher's read between them) would otherwise compare a
+            // stale text against the newer hash and reload the old text
+            // over the new one.
             let mut inner = self.core.lock_inner();
+            let text = std::fs::read_to_string(&self.core.config.pipeline).map_err(|source| {
+                SessionError::Read {
+                    path: self.core.config.pipeline.clone(),
+                    source,
+                }
+            })?;
+            let hash = *blake3::hash(text.as_bytes()).as_bytes();
+            let sidecar = Sidecar::load(&Sidecar::path_for(&self.core.config.pipeline))?;
+            let fingerprint = rescan_scripts
+                .then(|| scripts_fingerprint(&self.core.config.pipeline))
+                .transpose()?;
             let text_same = inner.text_hash == hash;
             let sidecar_same = inner.sidecar == sidecar;
-            if text_same && sidecar_same && !rescan_scripts {
+            let scripts_same = fingerprint
+                .as_ref()
+                .is_none_or(|fresh| *fresh == inner.scripts_fingerprint);
+            if text_same && sidecar_same && scripts_same {
                 return Ok(false);
             }
-            if inner.last_written == Some(hash) && sidecar_same && !rescan_scripts {
+            if inner.last_written == Some(hash) && sidecar_same && scripts_same {
                 // Our own write echoing back through the watcher.
                 return Ok(false);
             }
             if rescan_scripts {
                 let loaded = compile::load(&self.core.config.pipeline, &text, &self.core.scripts)?;
                 inner.loaded = loaded;
+                if let Some(fresh) = fingerprint {
+                    inner.scripts_fingerprint = fresh;
+                }
             } else if !text_same {
                 inner.loaded.reload_text(&text);
             }
             inner.text_hash = hash;
             inner.sidecar = sidecar;
+            // The barrier: an external change invalidates every snapshot
+            // in the log — the stack is cleared, and says so when asked.
+            inner.oplog.clear_by_barrier();
             self.core.rebuild(&mut inner);
             inner.seq += 1;
         }
@@ -1427,7 +2178,9 @@ impl Session {
             "threads": self.core.threads,
             "seq": inner.seq,
             "text": inner.loaded.document.emit(),
-            "text_hash": blake3::Hash::from_bytes(inner.text_hash).to_hex().to_string(),
+            "text_hash": hex(&inner.text_hash),
+            "history": inner.oplog.view(),
+            "ops": inner.oplog.debug_ops(),
             "graph": inner.graph,
             "statuses": status.nodes,
             "summary": status.summary,
@@ -1592,6 +2345,157 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         return Err(error);
     }
     Ok(())
+}
+
+/// blake3 bytes → lowercase hex (the protocol's hash spelling).
+fn hex(hash: &[u8; 32]) -> String {
+    blake3::Hash::from_bytes(*hash).to_hex().to_string()
+}
+
+/// Which project file an `apply_text` path names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EditTarget {
+    /// This pipeline's `.cic`.
+    Pipeline,
+    /// Its `.cic.layout.json`.
+    Sidecar,
+    /// `scripts/<name>.py` beside it.
+    Script(String),
+}
+
+/// The current state as an op-log snapshot.
+fn state_snapshot(inner: &Inner) -> StateSnapshot {
+    StateSnapshot {
+        text: inner.loaded.document.emit(),
+        sidecar: inner.sidecar.clone(),
+    }
+}
+
+/// Put a snapshot back into memory (undo/redo) — the commit persists it.
+/// Text unchanged → a sidecar-only commit (no solve; undo never recomputes
+/// anyway — the restored state's node keys are warm).
+fn restore_state(inner: &mut Inner, target: &StateSnapshot, label: String) -> Applied {
+    let text_changed = inner.loaded.document.emit() != target.text;
+    let sidecar_changed = inner.sidecar != target.sidecar;
+    let mut dirty = Vec::new();
+    if text_changed {
+        let restored = Document::parse(&target.text);
+        dirty = changed_bindings(&inner.loaded.document, &restored);
+        inner.loaded.reload_text(&target.text);
+    }
+    inner.sidecar = target.sidecar.clone();
+    Applied {
+        label,
+        dirty,
+        text_changed,
+        // A text change repaints through the structural solve; a
+        // sidecar-only restore (preview toggles) re-emits from the last
+        // complete generation.
+        refresh_display: sidecar_changed && !text_changed,
+    }
+}
+
+/// The names bound on lines whose raw text differs between two documents
+/// (either side) — the dirty set of a whole-text change.
+fn changed_bindings(old: &Document, new: &Document) -> Vec<String> {
+    fn index(document: &Document) -> BTreeMap<String, &str> {
+        let mut map = BTreeMap::new();
+        for line in document.lines() {
+            match line {
+                Line::Statement { statement, raw } => {
+                    for target in &statement.targets {
+                        map.insert(target.name.clone(), raw.as_str());
+                    }
+                }
+                Line::Disabled {
+                    raw,
+                    name: Some(name),
+                }
+                | Line::Broken {
+                    raw,
+                    node: Some(name),
+                    ..
+                } => {
+                    map.insert(name.clone(), raw.as_str());
+                }
+                _ => {}
+            }
+        }
+        map
+    }
+    let before = index(old);
+    let after = index(new);
+    let mut dirty: Vec<String> = Vec::new();
+    for (name, raw) in &after {
+        if before.get(name) != Some(raw) {
+            dirty.push(name.clone());
+        }
+    }
+    for name in before.keys() {
+        if !after.contains_key(name) {
+            dirty.push(name.clone());
+        }
+    }
+    dirty
+}
+
+/// blake3 of every `scripts/*.py` beside `pipeline`, by file name (empty
+/// when there is no scripts dir).
+fn scripts_fingerprint(pipeline: &Path) -> Result<BTreeMap<String, [u8; 32]>, SessionError> {
+    let dir = pipeline.parent().unwrap_or(Path::new(".")).join("scripts");
+    let mut out = BTreeMap::new();
+    if !dir.is_dir() {
+        return Ok(out);
+    }
+    let entries = std::fs::read_dir(&dir).map_err(|source| SessionError::Read {
+        path: dir.clone(),
+        source,
+    })?;
+    for entry in entries {
+        let path = entry
+            .map_err(|source| SessionError::Read {
+                path: dir.clone(),
+                source,
+            })?
+            .path();
+        if path.extension().is_none_or(|ext| ext != "py") {
+            continue;
+        }
+        let bytes = std::fs::read(&path).map_err(|source| SessionError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        out.insert(name, *blake3::hash(&bytes).as_bytes());
+    }
+    Ok(out)
+}
+
+/// Put files back as they were before a half-applied `apply_text`
+/// (`None` = the file did not exist). Every file is attempted; the
+/// failures are reported together.
+fn restore_files(files: &[(PathBuf, Option<Vec<u8>>)]) -> Result<(), String> {
+    let mut failed = Vec::new();
+    for (path, before) in files {
+        let result = match before {
+            Some(bytes) => write_atomic(path, bytes),
+            None => match std::fs::remove_file(path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+                _ => Ok(()),
+            },
+        };
+        if let Err(error) = result {
+            failed.push(format!("{}: {error}", display_path(path)));
+        }
+    }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(failed.join("; "))
+    }
 }
 
 /// The checker's verdict on wiring `text` into `node.port` of `document`
@@ -1926,6 +2830,31 @@ impl Core {
                 .notices
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
+    /// Op-log timestamp: monotonic milliseconds from the op clock.
+    fn now_ms(&self) -> u64 {
+        self.op_clock.now_nanos() / 1_000_000
+    }
+
+    /// The `snapshot` message for the current state (`inner` held; the
+    /// status board is locked inside — the inner → status order every
+    /// holder of both follows).
+    fn snapshot_locked(&self, inner: &Inner, barrier: bool, reason: &str) -> String {
+        let status = self.lock_status();
+        encode(
+            inner.seq,
+            &ServerMessage::Snapshot {
+                graph: inner.graph.clone(),
+                text: inner.loaded.document.emit(),
+                statuses: status.nodes.clone(),
+                summary: status.summary.clone(),
+                lease: lease_view(inner),
+                barrier,
+                reason: reason.to_owned(),
+                history: inner.oplog.view(),
+            },
         )
     }
 
@@ -2703,6 +3632,7 @@ mod tests {
             cache_dir: Some(dir.path().join("cache")),
             threads: 2,
             project: ProjectConfig::default(),
+            op_clock: None,
         };
         (dir, config)
     }
