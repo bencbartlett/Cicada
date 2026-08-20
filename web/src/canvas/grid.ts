@@ -128,11 +128,15 @@ export function filterCatalog(
  * The Grasshopper name to show beside a search hit: the node's `gh` when it
  * tells the migrant something the title does not (case-insensitively
  * different — `Natural logarithm` under `Natural Logarithm` is noise),
- * `null` otherwise (Cicada-only nodes included).
+ * `null` otherwise (Cicada-only nodes included). Tolerates an ABSENT `gh`
+ * the same way `searchRank` does: the server always writes the key, but a
+ * hint helper that throws inside the search-box render on a catalog it did
+ * not expect would take the whole canvas down with it.
  */
 export function ghHint(node: CatalogNode): string | null {
-  if (node.gh === null) return null;
-  return node.gh.toLowerCase() === node.title.toLowerCase() ? null : node.gh;
+  const gh = node.gh ?? null;
+  if (gh === null) return null;
+  return gh.toLowerCase() === node.title.toLowerCase() ? null : gh;
 }
 
 // One index per catalog object (the store replaces the whole catalog, never

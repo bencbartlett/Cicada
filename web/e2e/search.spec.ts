@@ -5,7 +5,9 @@
  * `Addition`, `Pick'n'Choose` — and the node that replaces it is the FIRST
  * result, with the GH name as a hint on the row when it differs from the
  * title; Enter places it. Port hovers carry `name: type — doc`, the output
- * doc coming from the catalog (the view-model has none for outputs).
+ * doc coming from the catalog (the view-model has none for outputs). Both
+ * entry points are driven: the double-click box and the box a wire dropped
+ * on empty canvas opens (probe-filtered, placing also wires).
  *
  * Runs against the REAL `cicada serve` from `playwright.config.ts` over a
  * SCRATCH copy of `examples/`, on its own pipeline file (placing writes it).
@@ -120,6 +122,28 @@ test("a Grasshopper name finds the node that replaces it first, the row says whi
     "title",
     "count: Integer — Number of values.",
   );
+
+  // ---- The other entry point: dropping a wire on empty canvas opens the
+  // SAME search, filtered by the server's probe to funcs with a port that
+  // accepts the wire — and the GH name still finds the node. `series_1.out`
+  // is `[Number]`; `Merge` names only concat's GH component, whose `a` and
+  // `b` take the list as is (no `· map` chip). Enter places AND wires it.
+  await seriesNode.locator(".react-flow__handle.source").hover();
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.85, box.y + box.height * 0.3, { steps: 12 });
+  await page.mouse.up();
+  const wireSearch = page.getByTestId("search-input");
+  await expect(wireSearch).toBeVisible();
+  await expect(wireSearch).toHaveAttribute("placeholder", "nodes accepting series_1.out…");
+  await wireSearch.fill("Merge");
+  await expect.poll(() => resultFuncs(page)).toEqual(["concat"]);
+  const wireRow = page.getByTestId("search-item").first();
+  await expect(wireRow.getByTestId("search-gh")).toHaveText("GH Merge");
+  await expect(wireRow.locator(".cv-search-port")).toHaveText(["a", "b"]);
+  await wireSearch.press("Enter");
+  await expect(page.getByTestId("search-box")).toHaveCount(0);
+  await expect(page.locator(".react-flow__node[data-id='concat_1']")).toBeVisible();
+  await expect.poll(async () => (await debugState(page)).text).toContain("concat_1 = concat(a=series_1)");
 
   expect(errors, errors.join("\n")).toEqual([]);
 });

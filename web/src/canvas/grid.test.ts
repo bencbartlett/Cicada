@@ -204,6 +204,16 @@ describe("ghHint", () => {
     expect(ghHint(node("ln", "Natural Logarithm", "Natural logarithm"))).toBeNull();
     expect(ghHint(node("as_closed", "As Closed", null))).toBeNull();
   });
+  it("degrades like searchRank on a node whose gh key is absent instead of throwing in the render", () => {
+    // The server always writes `gh` (catalog.test.ts pins it); a foreign
+    // catalog without the key must not take the search box down.
+    const absent = node("concat", "Concat", "Merge");
+    delete (absent as Partial<CatalogNode>).gh;
+    expect("gh" in absent).toBe(false);
+    expect(ghHint(absent)).toBeNull();
+    expect(searchRank(absent, "concat")).toBe(0);
+    expect(searchRank(absent, "merge")).toBeNull();
+  });
 });
 
 describe("port docs from the catalog", () => {
