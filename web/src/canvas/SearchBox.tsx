@@ -2,7 +2,11 @@
  * Search-to-place (docs/16): opened by double-click, Ctrl+F (keyboard map),
  * the canvas menu, or by dropping a wire on empty canvas — in which case the
  * list is filtered to funcs with a port that accepts the probed wire and
- * placing also connects (`place_node {connect}`). Plain substring match (v1).
+ * placing also connects (`place_node {connect}`). Prefix/substring match
+ * (v1) over the dialect name, the title and the Grasshopper name the node
+ * replaces (`filterCatalog`); a row shows that GH name as a hint when it
+ * differs from the title, so a migrant typing `Merge` sees why `concat` came
+ * first.
  */
 import { useReactFlow } from "@xyflow/react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -10,7 +14,7 @@ import { isCommitChord } from "../keyboard";
 import { categoryLabel } from "../kinds";
 import { useCicada } from "../state/store";
 import { sendWrite } from "./flow";
-import { filterCatalog, pxToCell, type SearchHit } from "./grid";
+import { filterCatalog, ghHint, pxToCell, type SearchHit } from "./grid";
 
 interface Props {
   /** Pane-relative anchor. */
@@ -139,44 +143,54 @@ export function SearchBox({ left, top }: Props) {
             {from !== null ? "no catalog node accepts this wire" : `no node matches "${query}"`}
           </li>
         )}
-        {hits.map((hit, index) => (
-          <li
-            key={hit.node.name}
-            role="option"
-            aria-selected={index === cursor}
-            className={`cv-search-item${index === cursor ? " active" : ""}`}
-            onMouseEnter={() => setCursor(index)}
-            onClick={() => place(hit)}
-            title={hit.node.description}
-          >
-            <span className="cv-search-name">{hit.node.name}</span>
-            <span className="cv-search-title dim">{hit.node.title}</span>
-            <span className="cv-search-cat faint">{categoryLabel(hit.node.category)}</span>
-            {hit.ports.length > 0 && (
-              <span className="cv-search-ports">
-                {hit.ports.map(([port, verdict]) => (
-                  <button
-                    type="button"
-                    key={port}
-                    className={`cv-search-port ${verdict}`}
-                    title={
-                      verdict === "lift"
-                        ? `→ ${port} with each() (mapped)`
-                        : `→ ${port}`
-                    }
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      place(hit, port);
-                    }}
-                  >
-                    {port}
-                    {verdict === "lift" ? " · map" : ""}
-                  </button>
-                ))}
-              </span>
-            )}
-          </li>
-        ))}
+        {hits.map((hit, index) => {
+          const gh = ghHint(hit.node);
+          return (
+            <li
+              key={hit.node.name}
+              role="option"
+              aria-selected={index === cursor}
+              className={`cv-search-item${index === cursor ? " active" : ""}`}
+              onMouseEnter={() => setCursor(index)}
+              onClick={() => place(hit)}
+              title={hit.node.description}
+              data-testid="search-item"
+              data-func={hit.node.name}
+            >
+              <span className="cv-search-name">{hit.node.name}</span>
+              <span className="cv-search-title dim">{hit.node.title}</span>
+              {gh !== null && (
+                <span className="cv-search-gh faint" title={`replaces Grasshopper's ${gh}`} data-testid="search-gh">
+                  GH {gh}
+                </span>
+              )}
+              <span className="cv-search-cat faint">{categoryLabel(hit.node.category)}</span>
+              {hit.ports.length > 0 && (
+                <span className="cv-search-ports">
+                  {hit.ports.map(([port, verdict]) => (
+                    <button
+                      type="button"
+                      key={port}
+                      className={`cv-search-port ${verdict}`}
+                      title={
+                        verdict === "lift"
+                          ? `→ ${port} with each() (mapped)`
+                          : `→ ${port}`
+                      }
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        place(hit, port);
+                      }}
+                    >
+                      {port}
+                      {verdict === "lift" ? " · map" : ""}
+                    </button>
+                  ))}
+                </span>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

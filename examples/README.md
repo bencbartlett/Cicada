@@ -40,6 +40,12 @@ touching the committed examples — the app writes what you do.
   (`scripts/pyramids.py`): Python returns watertight meshes through a
   multi-output node (`pyr.meshes`, `pyr.volumes`), and an effectful
   `-> None` node exports a CSV (`--node table`).
+- **06-lists.cic** — lists 101 (docs/09): `range` → `sort` / `reverse`
+  / `dispatch` / `group_by` with their index maps, the reducers
+  (`mass_addition`, `average`), maths lifted with `each()` (`larger`,
+  `floor`), and the strict-zip adapters made visible (`repeat`,
+  `pad_last`) feeding `cull` and a sphere per kept column. Pure
+  throughout — the second `--time` run is fully cached.
 
 Notes that save a first-timer some head-scratching:
 

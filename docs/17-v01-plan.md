@@ -23,7 +23,7 @@ runs in parallel from day 1:
 | 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | pending |
 | 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | pending |
 | 6 | WASM script host — load precompiled guests, epoch cancellation, `cicada-guest` SDK | last | weeks | pending |
-| C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); C1+ pending |
+| C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); **C1 done** (2026-08-20: 48 nodes — lists, maths tail, sequences; the diagnostics name real nodes and a test keeps it so; `compact` satisfiable at check time; `examples/06-lists.cic`); **`cicada mcp` done** (2026-08-20: the four doc-11 read tools over stdio on `rmcp`); C2+ pending |
 
 Out of v0.1 (unchanged from doc 05): fillets/chamfers and B-rep
 maturity, the Blender bridge, fidget, the .gh importer, Tauri, the AI
@@ -410,15 +410,52 @@ format, doc 08.
   theirs; sphere gained a transcendental-free topology golden) and the
   conformance test reads the source to enforce the layout
   (`src/<category>/<node>.rs`, one `#[node]` per file) and the three
-  tests. **Pending (web lane)**: `gh` and `examples` are served by
-  `/api/catalog` but the client's `CatalogNode` mirror and
-  search-to-place do not read them yet; output-port docs likewise stop
-  at the catalog (the view-model's `OutputView` carries no `doc`).
+  tests. **Web lane (2026-08-20)**: the client's `CatalogNode` mirror
+  reads format 2 (`gh`, `examples`, per-port `doc`; a vitest pins it to
+  the committed `catalog.json`); search-to-place — the double-click box
+  and the wire-to-empty-canvas box — matches name, title AND `gh`,
+  ranked name exact > gh exact > title exact > prefix > substring
+  (`Addition` → `add` above `mass_addition`), and shows `GH <name>` on a
+  row whose GH name differs from its title; port hovers on the canvas
+  and in the inspector read `name: type — doc`, output docs looked up
+  in the catalog by func (the view-model's `OutputView` still carries
+  no `doc` — deliberately: the catalog is the source either way).
+  `web/e2e/search.spec.ts` drives it through the real app.
 - **C1**: the nodes our diagnostics already cite — `compact`,
-  `pad_last`/`cycle`/`truncate` policies — plus duplicate / reverse /
+  `pad_last`/`repeat`/`truncate` policies — plus duplicate / reverse /
   sort / dispatch / group_by and the maths tail (min/max/abs/round/
   floor/ceil/trig). A test asserts no diagnostic names an unregistered
-  node.
+  node. **Done 2026-08-20** (`wt/catalog`, five node commits plus the
+  review-fix commits, 48 nodes, all in the C0 format with the three
+  tests, goldens blessed through the run-once path, catalog regenerated
+  each commit): lists — `compact`, `duplicate`, `reverse`, `sort`,
+  `dispatch`, `group_by`, `shift_list`, `split_list`, `nest`,
+  `transpose`, `pad_last`, `truncate`, `weave`, `insert_items`; maths —
+  `negative`, `absolute`, `round`, `floor`, `ceiling`, `min`, `max`,
+  `sqrt`, `ln`, `log`, `exp`, `sin`, `cos`, `tan`, `asin`, `acos`,
+  `atan`, `atan2`, `radians`, `degrees`, `smaller`, `larger`, `equals`,
+  `and`, `or`, `not`, `xor`, `pick`, `mass_addition`, `average`,
+  `bounds`; sequences — `range`, `repeat`, `jitter` (one shared PRNG).
+  Decisions recorded: the cyclic zip policy is the node `repeat` (the §1
+  time param owns `cycle`; DECISIONS.md GH-tree row revised 2026-08-20,
+  docs/02/09/10 updated); `compact(list: [E?]) → (values: [E], map)` is
+  honored at check time — an `E?` port keeps the wired `?` on the port
+  (`bind_var`), so the "`compact` removes the holes" advice is
+  satisfiable (checker fixture + a `[Number?]` script-node CLI test);
+  `cross` (two type variables) and `squeeze`/`flatten_all`
+  (data-dependent depth) wait on checker work.
+  `crates/cicada-cli/tests/diagnostic_vocabulary.rs` scans the checker,
+  scheduler, server (lowering, compile, session) and every stdlib node's
+  string literals against the registry, with a PHANTOMS rule for the
+  words that are not nodes (`cycle`, `cross`, `squeeze`, `flatten_all`,
+  …) in any spelling. Port docs are whole paragraphs (the `Ports` macro
+  joins a field doc's first paragraph; the conformance test reads a doc
+  ending on a bare word as truncated).
+  `examples/02-solids`/`03-voronoi` use `duplicate(count=1)` as the
+  singleton (02 drops from 11 to 10 nodes; the Playwright smoke's count
+  assertion moved with it); `examples/06-lists.cic` is the
+  consumer (the orbit example planned as 06 moves to the next free
+  number).
 - **C2**: mesh-tier cylinder/cone/extrude_to_point/volume/bounding_box
   and the vector/plane nodes (ports pin_cutters / tip_caps math out of
   Python in the wall).
@@ -427,7 +464,65 @@ format, doc 08.
 - **C4+**: the rest of docs/08 S+1, category by category, Solid rows
   riding with item 3.
 - **`cicada mcp`**: catalog search, node docs, the checker — from the
-  same data as `/api/catalog`; lands with C1.
+  same data as `/api/catalog`; its own package after C1 (C1 shipped
+  without it). **Done 2026-08-20**
+  (`wt/catalog`, one commit): `cicada mcp [--project <dir-or-pipeline>]`
+  is a Model Context Protocol server over stdio on `rmcp` 3 (the
+  official Rust SDK, Apache-2.0; `server` + `transport-io` features
+  only — no macros, the tools are plain routed functions the workspace
+  lints see; 17 new crates in the native build graph — 32 lockfile
+  entries counting the platform-only ones (wasm-bindgen / js-sys,
+  windows-core, core-foundation, android, haiku) — every one MIT
+  and/or Apache-2.0, `cargo deny check` green, no new duplicate
+  versions). Tools: `catalog_search {query, category?,
+  limit?}` (per-word scoring over name / title / `gh` / ports /
+  description, exact > prefix > contains, prose at word starts only;
+  empty query lists), `node_doc {name}` (the `/api/catalog` node object
+  from the server's own renderer — `catalog::node_value`, an additive
+  accessor — plus `signature` and `effectful`; unknown names get the
+  checker's did-you-mean by checking a one-binding probe), `list_categories`,
+  `check {text | path}` (the doc-11 diagnostics from
+  `compile::check_source`, the new shared entry `load` and the session's
+  `reload_text` now call — one checker). `--project` discovers the
+  project's scripts through `compile::catalog_specs_in` /
+  `scripts::discover_in` (additive) and re-discovers when the bytes of
+  `scripts/*.py` change; a broken `scripts/` refuses at startup.
+  Refusals are structured tool errors, stdout is protocol-only, the
+  server exits on EOF. Tests: `crates/cicada-cli/tests/mcp.rs` drives the
+  built binary with JSON-RPC framing (handshake, `tools/list` shapes,
+  every tool, the `slider` doc's ports + GH name, the did-you-mean
+  diagnostic, `--project` script nodes + relative paths + live
+  re-discovery, the startup refusal) plus unit tests in `mcp.rs`.
+  `.mcp.json.example` registers it for Claude Code; docs 11 and 14 and
+  the AGENTS.md palette carry the surface. Deliberately NOT in this
+  slice: the live-graph tools (`what_feeds`, `wire_summary`, `profile`,
+  `diagnostics`) — they need a running solve and belong to the app's
+  server; a `volatile` flag in `node_doc` — `NodeSpec` has none until
+  item 3b adds it (only `pure` / `effectful` are reported; when 3b adds
+  the field to `catalog::node()`, the `node_doc_schema_matches_every_catalog_entry`
+  test demands it be described in `NodeDoc` in `mcp.rs` — the value
+  flows through the renderer on its own, the schema does not).
+  **Review fixes 2026-08-20** (adversarial review of the package):
+  `check` now runs the dry lowering (`lower_partial`, the session's
+  form) after the checker and reports `excluded` bindings with the
+  canvas's status + reason (`Exclusion::reason()`, one renderer shared
+  with the view-model) — `ok` was true for an integer literal at 2^53
+  that `cicada run` refused; `node_doc`'s `outputSchema` is the real
+  node shape (`NodeDoc` / `PortDoc`, held to `catalog::node_value` by a
+  test over every stdlib node) instead of an open object; the
+  project's script nodes are KEPT in the catalog cache (the dry lowering
+  needs their run functions to exist; nothing ever runs); tests now pin
+  GH-only search matches (`Pick'n'Choose` → `pick`, `addition` → `add`
+  above `mass_addition` — deleting the `gh` scoring branch once left
+  every test green), the out-of-project and scripted-subdirectory
+  `check {path}` branches (forcing the in-project branch once passed
+  every test), an exporter's `pure` / `effectful`, and the 2^53 literal.
+  `.mcp.json.example` registers the BUILT binary
+  (`${CARGO_TARGET_DIR:-target}/debug/cicada`, Claude Code's variable
+  expansion) — the `cargo run -p cicada-cli` form is a cold
+  feature-unification context that rebuilds the Manifold kernel with
+  cmake on PATH, which no MCP client's startup timeout survives; `.mcp.json`
+  is gitignored (the docs say to copy the example there).
 Every node: the three tests, the doc format, catalog regenerated in the
 same commit (skill `add-stdlib-node`).
 

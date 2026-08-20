@@ -97,6 +97,19 @@ impl Exclusion {
             Self::Diagnostics | Self::Disabled | Self::Lowering(_) => "red",
         }
     }
+
+    /// The honest reason as a user reads it — the text the canvas shows on
+    /// the node and `cicada mcp`'s `check` reports per excluded binding
+    /// (one rendering, so the two never disagree).
+    #[must_use]
+    pub fn reason(&self) -> String {
+        match self {
+            Self::Diagnostics => "has diagnostics".to_owned(),
+            Self::Disabled => "disabled (`#off`)".to_owned(),
+            Self::Lowering(message) => message.clone(),
+            Self::FedBy(upstream) => format!("fed by red `{upstream}`"),
+        }
+    }
 }
 
 /// Why lowering refused. Most cases are pre-empted by the checker gate;

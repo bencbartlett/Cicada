@@ -67,5 +67,22 @@ measurement harness in [`tools/`](tools/). Next is v0.1 (OCCT-backed Solid, the
 full catalog, WASM script host, undo, git panel — [docs/15](docs/15-spike-plan.md)
 §After the spike); the working status lives in [AGENTS.md](AGENTS.md).
 
+### Agents: the catalog and the checker over MCP
+
+`cicada mcp` serves the node catalog and the `.cic` checker to any Model
+Context Protocol client — the read tools of
+[docs/11](docs/11-ai-integration.md): `catalog_search`, `node_doc`,
+`list_categories`, `check` (typecheck + dry lowering, no geometry). Build
+the binary once (`cargo build -p cicada-cli`), then for Claude Code copy
+[`.mcp.json.example`](.mcp.json.example) to `.mcp.json` at the repo root
+(gitignored): it starts `${CARGO_TARGET_DIR:-target}/debug/cicada mcp
+--project examples` — Claude Code expands the variable, so it follows
+your target dir (other clients take the literal path instead); swap
+`--project` for your own project directory or `.cic` file so its
+`scripts/*.py` join the catalog. `cargo run -q -p cicada-cli -- mcp` also
+works as the command, but only with a warm target dir and cmake on PATH:
+a cold `-p cicada-cli` context rebuilds the Manifold kernel for minutes,
+longer than any MCP client waits for a server to start.
+
 License: all rights reserved while private; a public license will be
 chosen at first public release.

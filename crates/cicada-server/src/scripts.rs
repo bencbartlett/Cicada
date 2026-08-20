@@ -217,7 +217,22 @@ pub fn discover(
     stdlib: &[&'static NodeSpec],
     cancel: &Arc<ScriptCancel>,
 ) -> Result<HashMap<String, ScriptNode>, ScriptsError> {
-    let dir = pipeline.parent().unwrap_or(Path::new(".")).join("scripts");
+    discover_in(pipeline.parent().unwrap_or(Path::new(".")), stdlib, cancel)
+}
+
+/// [`discover`] for a PROJECT directory (`<project_dir>/scripts/*.py`) —
+/// the same scripts a pipeline in that directory sees, for callers that
+/// hold a project and no pipeline (`cicada mcp --project <dir>`).
+///
+/// # Errors
+///
+/// As [`discover`].
+pub fn discover_in(
+    project_dir: &Path,
+    stdlib: &[&'static NodeSpec],
+    cancel: &Arc<ScriptCancel>,
+) -> Result<HashMap<String, ScriptNode>, ScriptsError> {
+    let dir = project_dir.join("scripts");
     if !dir.is_dir() {
         return Ok(HashMap::new());
     }

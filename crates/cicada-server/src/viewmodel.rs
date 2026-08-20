@@ -384,8 +384,8 @@ pub fn build(
                     comment,
                     diagnostics: Vec::new(),
                     excluded: Some(ExcludedView {
-                        status: "red",
-                        reason: "disabled (`#off`)".to_owned(),
+                        status: Exclusion::Disabled.status(),
+                        reason: Exclusion::Disabled.reason(),
                     }),
                     effectful: false,
                     preview: false,
@@ -558,14 +558,9 @@ fn statement_node(
 ) -> NodeView {
     let name = statement.name().to_owned();
     let targets: Vec<String> = statement.targets.iter().map(|t| t.name.clone()).collect();
-    let excluded = lowered.excluded.get(&name).map(|reason| ExcludedView {
-        status: reason.status(),
-        reason: match reason {
-            Exclusion::Diagnostics => "has diagnostics".to_owned(),
-            Exclusion::Disabled => "disabled (`#off`)".to_owned(),
-            Exclusion::Lowering(message) => message.clone(),
-            Exclusion::FedBy(upstream) => format!("fed by red `{upstream}`"),
-        },
+    let excluded = lowered.excluded.get(&name).map(|exclusion| ExcludedView {
+        status: exclusion.status(),
+        reason: exclusion.reason(),
     });
     let mut node = NodeView {
         node_ref: 0,

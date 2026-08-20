@@ -14,7 +14,7 @@ use cicada_lang::diag::Diagnostic;
 use cicada_lang::{Catalog, Document, Resolution, resolve};
 
 use crate::lower::{reachable_bindings, split_diagnostics};
-use crate::scripts::{ScriptCancel, ScriptNode, ScriptsError, discover};
+use crate::scripts::{ScriptCancel, ScriptNode, ScriptsError, discover_in};
 
 /// A parsed + checked pipeline with its merged catalog: stdlib specs plus
 /// the project's script nodes (doc 10 §5 resolution order — collisions
@@ -40,8 +40,22 @@ pub fn catalog_specs(
     pipeline: &Path,
     cancel: &Arc<ScriptCancel>,
 ) -> Result<(Vec<&'static NodeSpec>, HashMap<String, ScriptNode>), ScriptsError> {
+    catalog_specs_in(pipeline.parent().unwrap_or(Path::new(".")), cancel)
+}
+
+/// The catalog specs for a PROJECT directory: stdlib + `<dir>/scripts/*.py`
+/// — exactly what `/api/catalog` serves for a pipeline in `project_dir`,
+/// for callers with a project and no pipeline (`cicada mcp`).
+///
+/// # Errors
+///
+/// [`ScriptsError`] from discovery.
+pub fn catalog_specs_in(
+    project_dir: &Path,
+    cancel: &Arc<ScriptCancel>,
+) -> Result<(Vec<&'static NodeSpec>, HashMap<String, ScriptNode>), ScriptsError> {
     let stdlib = cicada_stdlib::registry();
-    let scripts = discover(pipeline, stdlib, cancel)?;
+    let scripts = discover_in(project_dir, stdlib, cancel)?;
     let mut specs: Vec<&'static NodeSpec> = stdlib.to_vec();
     let mut script_specs: Vec<&'static NodeSpec> = scripts.values().map(|node| node.spec).collect();
     script_specs.sort_by_key(|spec| spec.name);
@@ -62,8 +76,7 @@ pub fn load(
     cancel: &Arc<ScriptCancel>,
 ) -> Result<Loaded, ScriptsError> {
     let (specs, scripts) = catalog_specs(pipeline, cancel)?;
-    let document = Document::parse(source);
-    let resolution = resolve(&document, &Catalog::new(&specs));
+    let (document, resolution) = check_source(source, &specs);
     Ok(Loaded {
         document,
         specs,
@@ -72,12 +85,22 @@ pub fn load(
     })
 }
 
+/// Parse `source` and run the checker against an already-discovered
+/// catalog — THE checker path (`load` is discovery plus this; the live
+/// session's per-edit recheck and `cicada mcp`'s `check` tool call it too,
+/// so there is exactly one checker). Never fails: problems are diagnostics.
+#[must_use]
+pub fn check_source(source: &str, specs: &[&'static NodeSpec]) -> (Document, Resolution) {
+    let document = Document::parse(source);
+    let resolution = resolve(&document, &Catalog::new(specs));
+    (document, resolution)
+}
+
 impl Loaded {
     /// Re-parse and re-check a new source text against the SAME catalog
     /// (script set unchanged) — the live session's per-edit path.
     pub fn reload_text(&mut self, source: &str) {
-        self.document = Document::parse(source);
-        self.resolution = resolve(&self.document, &Catalog::new(&self.specs));
+        (self.document, self.resolution) = check_source(source, &self.specs);
     }
 
     /// Re-check the current document (after an in-place writer gesture).

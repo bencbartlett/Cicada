@@ -187,12 +187,24 @@ static CULL: NodeSpec = node(
     &[port("kept", "E", 1), port("map", "IndexMap", 0)],
 );
 static HOLES: NodeSpec = node("holes", &[], &[opt_elem_port("out", "Point", 1)]);
+// v0.1 C1 shapes: a port declared `[E?]` takes the holes itself (docs/08
+// §4 `compact`), and a consumer that wants its elements present.
+static COMPACT: NodeSpec = node(
+    "compact",
+    &[opt_elem_port("list", "E", 1)],
+    &[port("values", "E", 1), port("map", "IndexMap", 0)],
+);
+static CENTROID: NodeSpec = node(
+    "centroid",
+    &[port("points", "Point", 1)],
+    &[port("out", "Point", 0)],
+);
 
 fn catalog_specs() -> Vec<&'static NodeSpec> {
     vec![
         &SLIDER, &CIRCLE, &SCATTER, &MOVE, &EXTRUDE, &DIVIDE, &ADD, &LOOP_A, &LOOP_B, &AS_CLOSED,
         &SUM, &NESTED, &TRANSLATE, &ARRAY, &ITEM, &PANEL, &PREVIEW, &FLATTEN, &CHUNK, &CONCAT,
-        &CULL, &HOLES,
+        &CULL, &HOLES, &COMPACT, &CENTROID,
     ]
 }
 
@@ -530,13 +542,53 @@ fn pragma_diagnostics() {
     insta::assert_json_snapshot!(check("# cicada 99\namps = slider(value=1.0)\n"));
 }
 
+// Optional elements into a port that wants them present is the
+// `compact`-advising red (docs/09: removal happens only through `compact`)
+// — and the advice must be SATISFIABLE: `compact`'s `list` port is `[E?]`,
+// so the wired `?` stays on the port and `values` comes out `[Point]`, not
+// `[Point?]` (C1 review: `E` once absorbed the hole through an `E?` port,
+// so the diagnostic fired again on compact's own output — circular advice).
 #[test]
-fn optional_elements_into_required_port_is_flagged() {
-    // No optional-producing fixture node yet — covered via a literal once
-    // compact/Optional-producing nodes exist (stage 4). The lattice path
-    // is unit-tested through WireType rendering in the meantime.
-    let diagnostics = check("# cicada 1\namps = slider(value=1.0)\n");
-    assert_eq!(diagnostics.as_array().unwrap().len(), 0);
+fn optional_elements_into_required_port_is_flagged_and_compact_satisfies_it() {
+    let source = "# cicada 1\n\
+         holey = holes()\n\
+         present, sources = compact(list=holey)\n\
+         centre = centroid(points=present)\n\
+         full = scatter(count=3, seed=1)\n\
+         kept, all_of_them = compact(list=full)\n\
+         bad = centroid(points=holey)\n";
+    let specs = catalog_specs();
+    let catalog = Catalog::new(&specs);
+    let document = Document::parse(source);
+    let resolution = cicada_lang::resolve(&document, &catalog);
+    let ty = |name: &str| match resolution.bindings.get(name) {
+        Some(BindingType::Value { ty, .. }) => ty.render(),
+        other => panic!("`{name}` resolved to {other:?}"),
+    };
+    assert_eq!(ty("holey"), "[Point?]");
+    assert_eq!(
+        ty("present"),
+        "[Point]",
+        "an `[E?]` port keeps the `?` on the port: compact's values are present"
+    );
+    assert_eq!(ty("sources"), "IndexMap");
+    assert_eq!(
+        ty("centre"),
+        "Point",
+        "the compacted list fits a `[Point]` port"
+    );
+    assert_eq!(ty("kept"), "[Point]", "no `?` appears from nowhere");
+    // The one red: the holed list wired straight into the present-wanting
+    // port, with the advice that the line above proves followable.
+    assert_eq!(
+        resolution.diagnostics.len(),
+        1,
+        "{:#?}",
+        resolution.diagnostics
+    );
+    insta::assert_json_snapshot!(
+        serde_json::to_value(&resolution.diagnostics).expect("diagnostics serialize")
+    );
 }
 
 // The doc-10 §Errors red-before-solve list, snapshot-pinned: positional

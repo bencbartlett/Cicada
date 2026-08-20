@@ -206,8 +206,8 @@ their own doc lines, so every port is documented either way),
 snippet CI solves — REQUIRED); the `#[node(category, tier, version,
 gh = "Move" | none)]` function (`gh` = the Grasshopper component it
 replaces, carried in the catalog and `/api/catalog` for the docs and
-for search-to-place — the client-side search wiring is a pending web
-follow-up, tracked in doc 17 Track C); and the
+for search-to-place, which matches it beside the name and title and
+shows it on the row — doc 17 Track C, web lane); and the
 three tests — table cases, a property test, a determinism test — IN
 THAT FILE (a test spanning two nodes, like a construct/deconstruct
 round-trip, may live with the primary node in addition, never
@@ -221,8 +221,12 @@ the build when any registered node lacks a piece — the doc pieces from
 the registry, the layout (`src/<category>/<node>.rs`, one `#[node]`
 per file) and the three tests from the source. One source renders
 every view: `CATALOG.md`, `catalog.json`,
-`/api/catalog`, `cicada mcp` (catalog search + node docs + the checker
-for agents, v0.1), and `cicada docs`. Node icons are generated assets in the
+`/api/catalog`, `cicada mcp` (shipped 2026-08-20: the MCP tools
+`catalog_search` / `node_doc` / `list_categories` / `check` for agents —
+`node_doc` IS the `/api/catalog` node object (its output schema is held
+to the renderer by a test over every node) and `check` IS
+`compile::check_source` followed by the session's `lower_partial` dry,
+doc 11 §Read tools), and `cicada docs`. Node icons are generated assets in the
 same spirit (doc 16): produced by the AI icon pipeline from
 NodeSpecs, committed, CI-warned when missing.
 

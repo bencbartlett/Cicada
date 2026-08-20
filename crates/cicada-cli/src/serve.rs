@@ -96,7 +96,7 @@ pub fn serve_command(args: &ServeArgs) -> anyhow::Result<()> {
 
 /// Strip Windows' `\\?\` verbatim prefix from a canonical path — it is
 /// correct for the OS and unreadable for humans in every message.
-fn plain(path: &Path) -> PathBuf {
+pub(crate) fn plain(path: &Path) -> PathBuf {
     let text = path.to_string_lossy();
     match text.strip_prefix(r"\\?\") {
         Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
@@ -105,7 +105,8 @@ fn plain(path: &Path) -> PathBuf {
 }
 
 /// A directory → `(dir, None)`; a `.cic` file → `(its dir, Some(relative))`.
-fn split_target(path: &Path) -> anyhow::Result<(PathBuf, Option<String>)> {
+/// Shared with `cicada mcp --project`, which takes the same argument.
+pub(crate) fn split_target(path: &Path) -> anyhow::Result<(PathBuf, Option<String>)> {
     if path.is_dir() {
         return Ok((path.to_owned(), None));
     }

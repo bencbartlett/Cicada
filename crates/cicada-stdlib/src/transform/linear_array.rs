@@ -5,6 +5,8 @@ use cicada_core::spatial::Vector;
 use cicada_geom::transform::Similarity;
 use cicada_macros::{Ports, node};
 
+use crate::slot_count;
+
 /// Inputs for [`linear_array`].
 #[derive(Ports, Clone, Debug)]
 pub struct LinearArrayIn {
@@ -25,7 +27,8 @@ pub struct LinearArrayIn {
 ///
 /// # Panics
 ///
-/// Panics when `count < 1`.
+/// Panics when `count < 1` or `count` is above the 2^24 slot ceiling
+/// (16,777,216 slots).
 ///
 /// # Examples
 ///
@@ -37,14 +40,10 @@ pub struct LinearArrayIn {
 #[node(category = "Transform", tier = "S", version = 1, gh = "Linear Array")]
 #[must_use]
 pub fn linear_array(input: LinearArrayIn) -> Vec<Transformable> {
-    assert!(
-        input.count >= 1,
-        "linear_array: count must be >= 1, got {}",
-        input.count
-    );
-    (0..input.count)
+    let count = slot_count("linear_array", "count", input.count, 1);
+    (0..count)
         .map(|i| {
-            #[allow(clippy::cast_precision_loss)] // counts far below 2^53
+            #[allow(clippy::cast_precision_loss)] // counts stay below 2^24
             let step = Vector(input.direction.0 * i as f64);
             Similarity::translation(step).apply(&input.geometry)
         })
@@ -87,6 +86,18 @@ mod tests {
             geometry: point(0.0, 0.0, 0.0),
             direction: Vector::new(1.0, 0.0, 0.0),
             count: 0,
+        });
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "linear_array: count is 16777217 — above the 16777216 (2^24) slot ceiling"
+    )]
+    fn linear_array_absurd_count_is_refused_not_allocated() {
+        let _ = linear_array(LinearArrayIn {
+            geometry: point(0.0, 0.0, 0.0),
+            direction: Vector::new(1.0, 0.0, 0.0),
+            count: crate::MAX_SLOTS + 1,
         });
     }
 

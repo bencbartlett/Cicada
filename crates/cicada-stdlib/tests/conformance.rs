@@ -143,6 +143,16 @@ fn every_node_has_a_title_line_and_description() {
     assert_no_failures("title line", &failures);
 }
 
+/// A port doc is a whole sentence or noun phrase: it ends with a full stop,
+/// a closing parenthesis or a closing backtick. A doc that ends on a bare
+/// word is the fingerprint of TRUNCATION — the macro once kept only the
+/// first source line of a wrapped field doc, cutting 28 port docs
+/// mid-sentence in catalog.json ("How far from the original order to stray,
+/// `0.0` (unchanged) to"; C1 review).
+fn ends_a_sentence(doc: &str) -> bool {
+    doc.trim_end().ends_with(['.', ')', '`'])
+}
+
 #[test]
 fn every_port_is_documented() {
     let failures = collect_failures(|spec| {
@@ -150,6 +160,11 @@ fn every_port_is_documented() {
         for port in spec.inputs {
             if port.doc.trim().is_empty() {
                 problems.push(format!("input port `{}` has no doc line", port.name));
+            } else if !ends_a_sentence(port.doc) {
+                problems.push(format!(
+                    "input port `{}` doc ends mid-sentence: \"{}\"",
+                    port.name, port.doc
+                ));
             }
         }
         // EVERY output too: a bare single `out` carries the node's
@@ -161,6 +176,11 @@ fn every_port_is_documented() {
         for port in spec.outputs {
             if port.doc.trim().is_empty() {
                 problems.push(format!("output port `{}` has no doc line", port.name));
+            } else if !ends_a_sentence(port.doc) {
+                problems.push(format!(
+                    "output port `{}` doc ends mid-sentence: \"{}\"",
+                    port.name, port.doc
+                ));
             }
         }
         problems

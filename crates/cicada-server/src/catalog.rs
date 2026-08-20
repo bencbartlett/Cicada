@@ -80,32 +80,33 @@ fn port(spec: &PortSpec) -> Port<'_> {
     }
 }
 
+fn node(spec: &NodeSpec) -> Node<'_> {
+    Node {
+        name: spec.name,
+        title: spec.title,
+        description: spec.description,
+        category: spec.category,
+        tier: match spec.tier {
+            Tier::S => "S",
+            Tier::V01 => "1",
+            Tier::V02 => "2",
+        },
+        version: spec.version,
+        pure: spec.pure,
+        volatile: spec.volatile,
+        uses_tolerance: spec.uses_tolerance,
+        panics: spec.panics,
+        gh: spec.gh,
+        examples: spec.examples.to_vec(),
+        inputs: spec.inputs.iter().map(port).collect(),
+        outputs: spec.outputs.iter().map(port).collect(),
+    }
+}
+
 fn build<'a>(specs: &[&'a NodeSpec]) -> Catalog<'a> {
     Catalog {
         format: CATALOG_FORMAT,
-        nodes: specs
-            .iter()
-            .map(|spec| Node {
-                name: spec.name,
-                title: spec.title,
-                description: spec.description,
-                category: spec.category,
-                tier: match spec.tier {
-                    Tier::S => "S",
-                    Tier::V01 => "1",
-                    Tier::V02 => "2",
-                },
-                version: spec.version,
-                pure: spec.pure,
-                volatile: spec.volatile,
-                uses_tolerance: spec.uses_tolerance,
-                panics: spec.panics,
-                gh: spec.gh,
-                examples: spec.examples.to_vec(),
-                inputs: spec.inputs.iter().map(port).collect(),
-                outputs: spec.outputs.iter().map(port).collect(),
-            })
-            .collect(),
+        nodes: specs.iter().map(|spec| node(spec)).collect(),
     }
 }
 
@@ -115,6 +116,16 @@ fn build<'a>(specs: &[&'a NodeSpec]) -> Catalog<'a> {
 pub fn catalog_value(specs: &[&NodeSpec]) -> serde_json::Value {
     // Serializing a struct of strings and bools cannot fail.
     serde_json::to_value(build(specs)).unwrap_or(serde_json::Value::Null)
+}
+
+/// One node's catalog entry as a `serde_json::Value` — the object that
+/// appears in `/api/catalog`'s `nodes` array, the same fields from the same
+/// renderer (`cicada mcp`'s `node_doc` serves it, so agents read one node
+/// shape everywhere).
+#[must_use]
+pub fn node_value(spec: &NodeSpec) -> serde_json::Value {
+    // A struct of strings and bools cannot fail to serialize.
+    serde_json::to_value(node(spec)).unwrap_or(serde_json::Value::Null)
 }
 
 /// The pretty JSON text `cicada catalog` writes to `docs/generated/`
@@ -160,5 +171,19 @@ mod tests {
         let as_closed = nodes.iter().find(|n| n["name"] == "as_closed").unwrap();
         assert!(as_closed["gh"].is_null() && as_closed.get("gh").is_some());
         assert!(render_json(specs).unwrap().ends_with('\n'));
+    }
+
+    #[test]
+    fn node_value_is_the_catalog_entry() {
+        let specs = cicada_stdlib::registry();
+        let catalog = catalog_value(specs);
+        let slider = specs.iter().find(|spec| spec.name == "slider").unwrap();
+        let entry = catalog["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["name"] == "slider")
+            .unwrap();
+        assert_eq!(&node_value(slider), entry);
     }
 }

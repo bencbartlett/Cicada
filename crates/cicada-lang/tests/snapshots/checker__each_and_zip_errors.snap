@@ -51,7 +51,7 @@ expression: "check(\"# cicada 1\\n\\\n         amps = slider(value=1.0)\\n\\\n  
   },
   {
     "kind": "zip_length_mismatch",
-    "message": "zip is strict: 3 vs 2 elements — pad_last / cycle / truncate are the opt-in policies",
+    "message": "zip is strict: 3 vs 2 elements — `pad_last` / `repeat` / `truncate` are the opt-in adapter nodes",
     "node": "zip_bad",
     "span": {
       "col_end": 60,

@@ -1,8 +1,8 @@
-//! The `cicada` binary (doc 14): `serve`, `run`, `fmt`, `docs`, `catalog`,
-//! `cache`. Subcommands appear as their stages land (doc 15): `catalog`
-//! (stage 1), `run` (stage 3), `serve` (stage 5) — inventing stubs for the
-//! rest would lie to `--help`. Logic lives in the library ([`cicada_cli`]);
-//! this file only parses arguments.
+//! The `cicada` binary (doc 14): `serve`, `run`, `mcp`, `fmt`, `docs`,
+//! `catalog`, `cache`. Subcommands appear as their stages land (doc 15):
+//! `catalog` (stage 1), `run` (stage 3), `serve` (stage 5), `mcp` (v0.1) —
+//! inventing stubs for the rest would lie to `--help`. Logic lives in the
+//! library ([`cicada_cli`]); this file only parses arguments.
 
 use std::net::IpAddr;
 use std::path::PathBuf;
@@ -86,6 +86,19 @@ enum Command {
         #[arg(long)]
         web_dir: Option<PathBuf>,
     },
+    /// Serve the node catalog and the checker to agents as a Model Context
+    /// Protocol server over stdio (docs/11 read tools; DECISIONS.md
+    /// documentation-pipeline row). Tools: `catalog_search`, `node_doc`,
+    /// `list_categories`, `check`. Register it in an MCP client (see
+    /// .mcp.json.example); stdout is the protocol, notes go to stderr.
+    Mcp {
+        /// A project directory, or a .cic file (its directory becomes the
+        /// project): the project's scripts/*.py join the catalog and
+        /// `check` resolves relative paths against it. Default: the stdlib
+        /// catalog alone.
+        #[arg(long)]
+        project: Option<PathBuf>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -123,5 +136,8 @@ fn main() -> anyhow::Result<()> {
             threads,
             web_dir,
         }),
+        Command::Mcp { project } => {
+            cicada_cli::mcp::mcp_command(&cicada_cli::mcp::McpArgs { project })
+        }
     }
 }

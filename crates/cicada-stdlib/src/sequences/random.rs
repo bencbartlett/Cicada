@@ -2,6 +2,9 @@
 
 use cicada_macros::{Ports, node};
 
+use super::support::{seed_state, unit_draw};
+use crate::slot_count;
+
 /// Inputs for [`random`].
 #[derive(Ports, Clone, Copy, Debug)]
 pub struct RandomIn {
@@ -17,8 +20,8 @@ pub struct RandomIn {
 ///
 /// The generator is `splitmix64` (a fixed, documented algorithm — the
 /// sequence is part of the node's contract and identical on every
-/// platform); each draw uses the high 53 bits, so results are exact
-/// dyadic fractions of the domain.
+/// platform; `jitter` draws from the same one); each draw uses the high 53
+/// bits, so results are exact dyadic fractions of the domain.
 ///
 /// # Returns
 ///
@@ -27,7 +30,8 @@ pub struct RandomIn {
 ///
 /// # Panics
 ///
-/// Panics when `count` is negative.
+/// Panics when `count` is negative or above the 2^24 slot ceiling
+/// (16,777,216 slots).
 ///
 /// # Examples
 ///
@@ -43,26 +47,11 @@ pub struct RandomIn {
 )]
 #[must_use]
 pub fn random(input: RandomIn) -> Vec<f64> {
-    assert!(
-        input.count >= 0,
-        "random: count must be >= 0, got {}",
-        input.count
-    );
-    #[allow(clippy::cast_sign_loss)] // seed bits, not magnitude
-    let mut state = input.seed as u64;
+    let count = slot_count("random", "count", input.count, 0);
+    let mut state = seed_state(input.seed);
     let span = input.domain.end - input.domain.start;
-    (0..input.count)
-        .map(|_| {
-            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-            let mut z = state;
-            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-            z ^= z >> 31;
-            // High 53 bits → [0, 1) with full f64 resolution.
-            #[allow(clippy::cast_precision_loss)]
-            let unit = (z >> 11) as f64 / 9_007_199_254_740_992.0;
-            span.mul_add(unit, input.domain.start)
-        })
+    (0..count)
+        .map(|_| span.mul_add(unit_draw(&mut state), input.domain.start))
         .collect()
 }
 
@@ -113,6 +102,16 @@ mod tests {
         let _ = random(RandomIn {
             domain: cicada_core::scalar::Domain::new(0.0, 1.0),
             count: -1,
+            seed: 0,
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "random: count is 16777217 — above the 16777216 (2^24) slot ceiling")]
+    fn random_absurd_count_is_refused_not_allocated() {
+        let _ = random(RandomIn {
+            domain: cicada_core::scalar::Domain::new(0.0, 1.0),
+            count: crate::MAX_SLOTS + 1,
             seed: 0,
         });
     }

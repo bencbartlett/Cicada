@@ -140,8 +140,8 @@ checker verifies lengths and axis names.
   the argument in the text; *no node is created*. It persists as the
   port's iteration badge; clicking it shows the pairing (depth, axis,
   counts).
-- An **adapter chip** is a real, single-use, unary adapter node
-  (`as_closed`, `pad_last`, `tessellate`, …) rendered compactly on the
+- An **adapter chip** is a real, single-use adapter node (`as_closed`,
+  `pad_last` with its `count`, `tessellate`, …) rendered compactly on the
   wire instead of as a box. Accepting it inserts a named binding in
   the text; it can be promoted to a full box, and it carries cost and
   status like any node.

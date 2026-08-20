@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cicada": {
+      "command": "${CARGO_TARGET_DIR:-target}/debug/cicada",
+      "args": ["mcp", "--project", "examples"]
+    }
+  }
+}
