@@ -1,0 +1,37 @@
+diff --git a/crates/opencascade-sys/src/bin_tools.rs b/crates/opencascade-sys/src/bin_tools.rs
+index 77fbc72..9a7e7df 100644
+--- a/crates/opencascade-sys/src/bin_tools.rs
++++ b/crates/opencascade-sys/src/bin_tools.rs
+@@ -8,8 +8,8 @@ mod inner {
+         type TopoDS_Shape = crate::topo_ds::TopoDS_Shape;
+ 
+         #[cxx_name = "write_brep_bin"]
+-        pub fn write(shape: &TopoDS_Shape, path: String) -> bool;
++        pub fn write_bin(shape: &TopoDS_Shape, path: String) -> bool;
+         #[cxx_name = "read_brep_bin"]
+-        pub fn read(path: String) -> UniquePtr<TopoDS_Shape>;
++        pub fn read_bin(path: String) -> UniquePtr<TopoDS_Shape>;
+     }
+ }
+diff --git a/crates/opencascade/src/primitives/shape.rs b/crates/opencascade/src/primitives/shape.rs
+index 158fdb9..d776e21 100644
+--- a/crates/opencascade/src/primitives/shape.rs
++++ b/crates/opencascade/src/primitives/shape.rs
+@@ -669,7 +669,7 @@ impl Shape {
+ 
+     pub fn write_brep_bin(&self, path: impl AsRef<Path>) -> Result<(), Error> {
+         let success =
+-            ffi::bin_tools::write(&self.inner, path.as_ref().to_string_lossy().to_string());
++            ffi::bin_tools::write_bin(&self.inner, path.as_ref().to_string_lossy().to_string());
+ 
+         if success {
+             Ok(())
+@@ -679,7 +679,7 @@ impl Shape {
+     }
+ 
+     pub fn read_brep_bin(path: impl AsRef<Path>) -> Result<Self, Error> {
+-        let inner = ffi::bin_tools::read(path.as_ref().to_string_lossy().to_string());
++        let inner = ffi::bin_tools::read_bin(path.as_ref().to_string_lossy().to_string());
+ 
+         if inner.is_null() {
+             Err(Error::BrepReadFailed)

@@ -193,6 +193,22 @@ fn dump(out_dir: &Path) {
             normals
         );
 
+        // Hazard check: OCCT 7.8's path-taking Write overloads default to
+        // theWithTriangles = TRUE, and the binding passes only the path. A
+        // shape that has been tessellated (above) may now serialize with its
+        // triangulation embedded — which would make "canonical bytes" depend
+        // on display history.
+        let after_path = out_dir.join(format!("{}.after_mesh.bin", probe.name));
+        probe.shape.write_brep_bin(&after_path).expect("BinTools::Write (after mesh)");
+        let after = std::fs::read(&after_path).expect("read after-mesh");
+        println!(
+            "{:<11} aftermesh bytes={:<8} sha256={} identical_to_premesh={}",
+            probe.name,
+            after.len(),
+            sha256_hex(&after),
+            after == bin
+        );
+
         // Round-trip: does the serialized form re-read to the same bytes?
         let reread = Shape::read_brep_bin(&bin_path).expect("BinTools::Read");
         let rt_path = out_dir.join(format!("{}.roundtrip.bin", probe.name));
