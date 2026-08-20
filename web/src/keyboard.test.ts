@@ -67,6 +67,30 @@ describe("handleHotkey", () => {
     expect(useCicada.getState().search).toBeNull();
   });
 
+  it("Ctrl+S opens the commit dialog (never the browser's save) for writer and observer alike; a key repeat does nothing more", () => {
+    useCicada.setState({ commitDialog: false });
+    expect(handleHotkey(key("s", { ctrlKey: true }))).toBe(true);
+    expect(useCicada.getState().commitDialog).toBe(true);
+    expect(sent).toEqual([]);
+    expect(useCicada.getState().notices).toEqual([]);
+    useCicada.setState({ commitDialog: false, role: "observer" });
+    expect(handleHotkey(key("S", { metaKey: true }))).toBe(true);
+    expect(useCicada.getState().commitDialog, "the dialog says why an observer cannot commit").toBe(true);
+    useCicada.setState({ commitDialog: false });
+    expect(handleHotkey(key("s", { ctrlKey: true, repeat: true }))).toBe(true);
+    expect(useCicada.getState().commitDialog).toBe(false);
+  });
+
+  it("Esc closes the commit dialog before it cancels a solve or clears the selection", () => {
+    useCicada.setState({ commitDialog: true, summary: { ...useCicada.getState().summary, running: true } });
+    useCicada.getState().selectNodes(["a"]);
+    expect(handleHotkey(key("Escape"))).toBe(true);
+    expect(useCicada.getState().commitDialog).toBe(false);
+    expect(sent, "the running solve was not cancelled").toEqual([]);
+    expect(useCicada.getState().selection.nodes).toEqual(["a"]);
+    useCicada.setState({ summary: { ...useCicada.getState().summary, running: false } });
+  });
+
   it("Delete removes ONE selected node as itself, several as one batch (one undo step)", () => {
     useCicada.getState().selectNodes(["a"]);
     expect(handleHotkey(key("Delete"))).toBe(true);
@@ -313,16 +337,15 @@ describe("handleHotkey", () => {
     expect(useCicada.getState().notices.at(-1)?.message).toMatch(/read-only observer — take the lease to toggle disable/);
   });
 
-  it("deferred features answer with a notice and consume the key", () => {
+  it("deferred features answer with a notice and consume the key (Ctrl+S is no longer one: it opens the commit dialog)", () => {
     for (const [k, mods] of [
       ["g", { ctrlKey: true }],
-      ["s", { ctrlKey: true }],
       [" ", {}],
     ] as [string, Partial<KeyboardEvent>][]) {
       expect(handleHotkey(key(k, mods))).toBe(true);
     }
     expect(sent).toEqual([]);
-    expect(useCicada.getState().notices.length).toBe(3);
+    expect(useCicada.getState().notices.length).toBe(2);
   });
 
   it("leaves unknown keys alone", () => {

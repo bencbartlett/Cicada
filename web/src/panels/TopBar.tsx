@@ -1,8 +1,9 @@
 /**
- * Top bar (docs/16 §Application layout): project · pipeline · engine ·
- * lease/role badge · undo/redo · solve state + ETA + Esc · connection ·
- * settings menu. Everything here reads the store mirror; the only intents
- * it sends are `undo`, `redo`, `cancel` and `take_lease`.
+ * Top bar (docs/16 §Application layout): project · pipeline · git chip
+ * (branch / detached / no repo · dirty count; click → the Git tab) ·
+ * engine · lease/role badge · undo/redo · solve state + ETA + Esc ·
+ * connection · settings menu. Everything here reads the store mirror; the
+ * only intents it sends are `undo`, `redo`, `cancel` and `take_lease`.
  */
 import { useEffect, useRef, useState } from "react";
 import {
@@ -13,8 +14,9 @@ import {
   type SplitPreset,
   type WireMode,
 } from "../state/store";
-import { useInspectorTab } from "./inspectorTab";
 import { basename, summaryText, withStatusCounts } from "./format";
+import { gitChip } from "./gitFormat";
+import { useInspectorTab } from "./inspectorTab";
 import "./panels.css";
 
 export function TopBar() {
@@ -61,6 +63,8 @@ export function TopBar() {
           {hello?.pipeline ?? pipeline}
         </span>
       </span>
+      <span className="tb-sep">·</span>
+      <GitChip />
       <span className="tb-sep">·</span>
       <span className="tb-item faint" title="engine">
         {hello?.engine ?? "engine…"}
@@ -127,6 +131,47 @@ export function TopBar() {
 
       <SettingsMenu />
     </header>
+  );
+}
+
+/**
+ * The git chip (doc 10 §Git integration's status strip, slice 1): the
+ * branch — or `detached @short`, `no repo`, `git not found` — with the
+ * dirty-file count of this pipeline's commit scope, plus the facts worth a
+ * glance (ahead/behind, locked, an operation in progress). The tooltip
+ * carries the rest; a click opens the Git tab. Wording: `gitFormat.ts`.
+ */
+function GitChip() {
+  const git = useCicada((s) => s.git);
+  const setTab = useInspectorTab((s) => s.setTab);
+  const chip = gitChip(git);
+  const dirtyText = chip.dirty === null ? null : chip.dirty === 0 ? "clean" : `${chip.dirty} dirty`;
+  return (
+    <button
+      className={`tb-git${chip.tone ? ` ${chip.tone}` : ""}${chip.dirty !== null && chip.dirty > 0 ? " dirty" : ""}`}
+      title={chip.title}
+      aria-label={`git: ${chip.label}${dirtyText ? `, ${dirtyText}` : ""} — open the Git tab`}
+      onClick={() => setTab("git")}
+      data-testid="tb-git"
+      data-kind={git.status?.state.kind ?? (git.error !== null ? "error" : "loading")}
+    >
+      <span className="tb-git-glyph" aria-hidden>
+        ⎇
+      </span>
+      <span className="mono" data-testid="tb-git-branch">
+        {chip.label}
+      </span>
+      {chip.notes.map((note) => (
+        <span className="tb-git-note" key={note}>
+          {note}
+        </span>
+      ))}
+      {dirtyText !== null && (
+        <span className="tb-git-dirty" data-testid="tb-git-dirty">
+          {dirtyText}
+        </span>
+      )}
+    </button>
   );
 }
 

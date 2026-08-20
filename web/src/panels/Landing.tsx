@@ -3,6 +3,8 @@
  * explain how to get a URL. `cicada serve <file.cic>` prints a URL with both.
  */
 import { useEffect, useState } from "react";
+import type { ProjectGit } from "../protocol/messages";
+import { projectGitLine } from "./gitFormat";
 
 interface ProjectInfo {
   project: string;
@@ -10,7 +12,10 @@ interface ProjectInfo {
   default: string | null;
   open: string[];
   engine: string;
+  /** The project's git summary (docs/13 `GET /api/project`; additive, so older servers may omit it). */
+  git?: ProjectGit;
 }
+
 
 export function Landing({ token }: { token?: string }) {
   const [info, setInfo] = useState<ProjectInfo | null>(null);
@@ -48,6 +53,14 @@ export function Landing({ token }: { token?: string }) {
         <>
           <p>
             Project <code>{info.project}</code> · {info.engine}
+            {projectGitLine(info.git) !== null && (
+              <>
+                {" · "}
+                <span className="dim" data-testid="landing-git">
+                  {projectGitLine(info.git)}
+                </span>
+              </>
+            )}
           </p>
           <p>Open a pipeline:</p>
           <ul>

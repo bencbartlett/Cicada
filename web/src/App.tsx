@@ -7,6 +7,7 @@
 import { useEffect, useRef } from "react";
 import { Canvas } from "./canvas/Canvas";
 import { useKeyboard } from "./keyboard";
+import { CommitDialog } from "./panels/CommitDialog";
 import { ConnBanner } from "./panels/ConnBanner";
 import { Inspector } from "./panels/Inspector";
 import { Notices } from "./panels/Notices";
@@ -93,6 +94,7 @@ export function App() {
       </div>
       <StatusBar />
       <Notices />
+      <CommitDialog />
     </div>
   );
 }

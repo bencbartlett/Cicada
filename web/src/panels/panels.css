@@ -122,6 +122,77 @@ header.topbar {
   background: var(--error);
 }
 
+
+/* the git chip: branch · notes · dirty count (click → the Git tab) */
+.tb-git {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  line-height: 18px;
+  font-size: 12px;
+  border-radius: 999px;
+  background: var(--bg-node-header);
+  border: 1px solid transparent;
+  color: var(--fg);
+  max-width: 28vw;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.tb-git:hover {
+  border-color: var(--border-strong);
+}
+
+.tb-git > .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tb-git-glyph {
+  color: var(--fg-faint);
+  font-size: 12px;
+}
+
+.tb-git.faint {
+  color: var(--fg-dim);
+}
+
+.tb-git.warn {
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+
+.tb-git.error {
+  color: var(--error);
+  background: var(--error-bg);
+}
+
+.tb-git-note {
+  font-size: 10px;
+  color: var(--fg-dim);
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--bg-elev);
+}
+
+.tb-git.warn .tb-git-note {
+  color: var(--warn);
+}
+
+.tb-git-dirty {
+  font-size: 10px;
+  color: var(--fg-faint);
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--bg-elev);
+}
+
+.tb-git.dirty .tb-git-dirty {
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+
 /* ------------------------------------------------- connection banner */
 
 /* Loud on purpose: a dead server must never leave the app looking live. */
@@ -382,6 +453,19 @@ aside.inspector {
   color: var(--fg);
   border-bottom-color: var(--accent);
   background: transparent;
+}
+
+
+.insp-tab-count {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--warn);
+  background: var(--warn-bg);
+  font-family: var(--mono);
 }
 
 .insp-body {
@@ -818,6 +902,205 @@ aside.inspector {
   font-family: var(--mono);
   color: var(--fg-dim);
   overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------ git tab */
+
+.warn-text {
+  color: var(--warn);
+}
+
+.git-group {
+  margin: 4px 0 8px;
+}
+
+.git-group-h {
+  font-size: 11px;
+  color: var(--fg-dim);
+  margin-bottom: 2px;
+}
+
+.git-node {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 1px 0 1px 4px;
+  min-width: 0;
+}
+
+.git-node .link.selected {
+  text-decoration: underline;
+}
+
+.git-node .link:disabled {
+  color: var(--fg-faint);
+  cursor: default;
+  text-decoration: line-through;
+}
+
+.git-node .removed-name {
+  color: var(--fg-dim);
+  text-decoration: line-through;
+}
+
+/* the marker glyphs — semantic tokens only (docs/16 §Theme) */
+.git-mark {
+  display: inline-block;
+  width: 14px;
+  text-align: center;
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 11px;
+  line-height: 14px;
+  border-radius: 3px;
+  flex: none;
+}
+
+.git-mark-added,
+.git-status-added,
+.git-status-untracked {
+  color: var(--ok);
+  background: rgba(122, 211, 138, 0.14);
+}
+
+.git-mark-modified,
+.git-status-modified {
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+
+.git-mark-renamed,
+.git-status-renamed {
+  color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.git-mark-removed,
+.git-status-deleted {
+  color: var(--error);
+  background: var(--error-bg);
+}
+
+.git-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.git-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.git-file .badge {
+  flex: none;
+  min-width: 62px;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.git-file .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-commit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.git-message {
+  width: 100%;
+  resize: vertical;
+  min-height: 56px;
+  background: var(--bg-node);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.git-message:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.git-revert-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--error);
+  border-radius: 4px;
+  background: var(--error-bg);
+}
+
+.actions button.danger.confirm {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+/* the Ctrl+S dialog */
+.git-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+}
+
+.git-dialog {
+  width: min(560px, 92vw);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.git-dialog-h {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.git-dialog-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.git-dialog-note {
+  flex: 1;
+}
+
+.git-dialog-h > .tb-esc {
+  margin-left: auto;
+}
+
+.git-dialog-scope .git-scope {
+  max-height: 28vh;
+  overflow: auto;
+}
+
+.git-dialog-blocked {
+  color: var(--fg-dim);
 }
 
 /* ----------------------------------------------------------- text tab */

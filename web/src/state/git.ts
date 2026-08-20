@@ -19,7 +19,7 @@ import {
 import type { GitSession } from "../protocol/git";
 import type { CommitResponse, RevertResponse } from "../protocol/messages";
 import { GitRefreshPolicy } from "./gitRefresh";
-import { canWrite, useCicada, writeBlockReason } from "./store";
+import { canWrite, useCicada, writeBlockReason, type CicadaState } from "./store";
 
 let policy: GitRefreshPolicy | null = null;
 let focusListener: (() => void) | null = null;
@@ -85,10 +85,12 @@ export function refreshGitNow(): void {
 /**
  * Why this client cannot commit or revert right now — null when it can.
  * Display + gating only: the server is the authority and refuses with a
- * typed kind that `describeGitError` turns into the same sentences.
+ * typed kind that `describeGitError` turns into the same sentences. Pure
+ * over the state so components subscribe to it (`useCicada(gitWriteBlockReason)`).
  */
-export function gitWriteBlockReason(): string | null {
-  const state = useCicada.getState();
+export function gitWriteBlockReason(
+  state: Pick<CicadaState, "role" | "connection" | "git"> = useCicada.getState(),
+): string | null {
   if (!canWrite(state)) return writeBlockReason(state) ?? "cannot write";
   if (state.git.busy !== null) return `a ${state.git.busy} is in progress`;
   const status = state.git.status;
@@ -108,6 +110,27 @@ export function gitWriteBlockReason(): string | null {
       }
       return null;
   }
+}
+
+/**
+ * Why the Commit button is disabled (null = it is enabled): the shared
+ * write gate, then this pipeline's own refusals, then the empty scope and
+ * the blank message — in the order the user can fix them.
+ */
+export function commitBlockReason(
+  state: Pick<CicadaState, "role" | "connection" | "git">,
+  message: string,
+): string | null {
+  const shared = gitWriteBlockReason(state);
+  if (shared !== null) return shared;
+  const status = state.git.status;
+  if (status === null) return "reading git status…";
+  if (status.pipeline.ignored) {
+    return `\`${status.pipeline.path}\` is ignored by a .gitignore rule — un-ignore it to commit from the app`;
+  }
+  if (status.scope.length === 0) return "nothing to commit — the scope matches HEAD";
+  if (message.trim() === "") return "write a commit message first";
+  return null;
 }
 
 /**

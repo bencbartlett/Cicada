@@ -15,7 +15,6 @@ import { viewportApi } from "./viewport/api";
 const NOT_YET = {
   group: "groups arrive later",
   transport: "transport arrives with time params",
-  commit: "commit dialog arrives with the git panel — every op is already saved",
 } as const;
 
 /**
@@ -96,6 +95,12 @@ export function handleHotkey(event: KeyboardEvent): boolean {
   };
 
   if (key === "Escape") {
+    // The commit dialog closes first (its own listener covers focus inside
+    // it; this covers a focus on the page behind it).
+    if (state.commitDialog) {
+      state.closeCommitDialog();
+      return true;
+    }
     if (state.summary.running) {
       if (needsLease("cancel the solve")) return true;
       state.send({ type: "cancel", payload: {} });
@@ -159,8 +164,13 @@ export function handleHotkey(event: KeyboardEvent): boolean {
     notice("info", NOT_YET.group);
     return true;
   }
+  // Ctrl+S is the commit dialog (docs/16 §Application layout: there is no
+  // save — every op is already on disk). Always consumed, so the browser's
+  // own save dialog never opens; the dialog itself says why when this
+  // client cannot commit (observer, no repo, no git, locked, an operation
+  // in progress) rather than a notice the user has to read before acting.
   if (ctrl && (key === "s" || key === "S")) {
-    notice("info", NOT_YET.commit);
+    if (!event.repeat) state.openCommitDialog();
     return true;
   }
   if (ctrl) return false;

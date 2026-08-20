@@ -1,0 +1,191 @@
+/**
+ * What the git chip and the Git tab SAY about a status answer (docs/16
+ * §Application layout: "branch/git status"; doc 10 §Git integration's
+ * status strip). Pure functions over the mirror shapes — the chip's label
+ * and tooltip, the marker groups, the revertable subset of the scope — so
+ * the wording is tested without a DOM.
+ */
+import type {
+  ChangeKind,
+  GitState,
+  GitStatusResponse,
+  NodeChange,
+  PipelineGitStatus,
+  ProjectGit,
+  RemovedNode,
+  ScopeFile,
+} from "../protocol/messages";
+import { gitRepoInfo } from "../protocol/messages";
+import type { GitSlice } from "../state/store";
+
+/** The chip's tone: plain · `warn` (locked, an operation, detached) · `error` (a refused read) · `faint` (no repo). */
+export type ChipTone = "" | "warn" | "error" | "faint";
+
+export interface GitChip {
+  /** The main label: `main`, `detached @abc1234`, `no repo`, `git not found`, `git…`. */
+  label: string;
+  /** Dirty files in this pipeline's commit scope; null when there is no repository to count against. */
+  dirty: number | null;
+  /** Extra facts after the label: `↑1 ↓2`, `locked`, `merge in progress`, `no commits yet`. */
+  notes: string[];
+  title: string;
+  tone: ChipTone;
+}
+
+/** The branch (or where HEAD is) for a repo-ish state. */
+export function describeHead(state: GitState): string {
+  const info = gitRepoInfo(state);
+  if (info === null) return state.kind === "not_a_repo" ? "no repo" : "git not found";
+  if (info.branch !== null) return info.branch;
+  return info.head_short !== null ? `detached @${info.head_short}` : "detached";
+}
+
+/** The dirty files of the pipeline's commit scope (what `commit` would stage). */
+export function dirtyCount(status: GitStatusResponse): number {
+  return status.scope.length;
+}
+
+/** The chip for the current slice (loading · refused · no repo · repo facts). */
+export function gitChip(slice: GitSlice): GitChip {
+  const { status, error } = slice;
+  if (status === null) {
+    if (error !== null) {
+      return {
+        label: `git: ${error.kind}`,
+        dirty: null,
+        notes: [],
+        title: `git status could not be read — ${error.message}`,
+        tone: "error",
+      };
+    }
+    return { label: "git…", dirty: null, notes: [], title: "reading git status…", tone: "faint" };
+  }
+  const info = gitRepoInfo(status.state);
+  if (info === null) {
+    const title =
+      status.state.kind === "not_a_repo"
+        ? "the project is not in a git repository — `git init` it to commit from the app"
+        : "no `git` on PATH — install git (or put it on PATH) to use the git panel";
+    return { label: describeHead(status.state), dirty: null, notes: [], title, tone: "faint" };
+  }
+  const notes: string[] = [];
+  let tone: ChipTone = info.branch === null ? "warn" : "";
+  if (info.unborn) notes.push("no commits yet");
+  if (info.upstream !== null) {
+    const parts: string[] = [];
+    if (info.upstream.ahead > 0) parts.push(`↑${info.upstream.ahead}`);
+    if (info.upstream.behind > 0) parts.push(`↓${info.upstream.behind}`);
+    if (parts.length > 0) notes.push(parts.join(" "));
+  }
+  if (info.operation !== undefined) {
+    notes.push(`${info.operation.replace("_", "-")} in progress`);
+    tone = "warn";
+  }
+  if (status.state.kind === "locked") {
+    notes.push("locked");
+    tone = "warn";
+  }
+  const dirty = dirtyCount(status);
+  const titleParts = [
+    info.branch !== null ? `branch ${info.branch}` : "detached HEAD",
+    info.head_short !== null ? `HEAD ${info.head_short}` : "no commits yet",
+    info.upstream !== null
+      ? `upstream ${info.upstream.name} (ahead ${info.upstream.ahead}, behind ${info.upstream.behind})`
+      : "no upstream",
+    dirty === 0
+      ? "nothing to commit in this pipeline's scope"
+      : `${dirty} dirty ${dirty === 1 ? "file" : "files"} in this pipeline's scope`,
+    info.operation !== undefined ? `a ${info.operation.replace("_", "-")} is in progress — finish it in your shell` : null,
+    status.state.kind === "locked" ? "index.lock is held — commit and revert wait" : null,
+    error !== null ? `last read refused: ${error.message}` : null,
+    "click for the Git tab",
+  ].filter((s): s is string => s !== null);
+  if (error !== null) tone = "error";
+  return { label: describeHead(status.state), dirty, notes, title: titleParts.join(" · "), tone };
+}
+
+/** The markers grouped the way the tab lists them; `removed` comes from HEAD. */
+export interface MarkerGroups {
+  added: NodeChange[];
+  modified: NodeChange[];
+  renamed: NodeChange[];
+  removed: RemovedNode[];
+}
+
+export function groupMarkers(pipeline: PipelineGitStatus): MarkerGroups {
+  const groups: MarkerGroups = { added: [], modified: [], renamed: [], removed: [...pipeline.removed] };
+  for (const change of pipeline.nodes) {
+    switch (change.change) {
+      case "added":
+        groups.added.push(change);
+        break;
+      case "modified":
+        groups.modified.push(change);
+        break;
+      case "renamed":
+        groups.renamed.push(change);
+        break;
+      case "removed":
+        // Never on a working-tree node (the server lists HEAD's removals
+        // separately); tolerated so an unexpected marker is still shown.
+        groups.removed.push({ name: change.name, line_in_head: 0 });
+        break;
+    }
+  }
+  return groups;
+}
+
+/** Total markers (the tab's count badge). */
+export function markerCount(pipeline: PipelineGitStatus): number {
+  return pipeline.nodes.length + pipeline.removed.length;
+}
+
+/**
+ * The scope files `revert` can put back: those with a HEAD version. An
+ * `untracked` or index-only `added` file has none — the server leaves them
+ * alone (it never deletes) and says so in `untracked`.
+ */
+export function revertable(scope: ScopeFile[]): ScopeFile[] {
+  return scope.filter((f) => f.status === "modified" || f.status === "deleted" || f.status === "renamed");
+}
+
+/** The canvas badge for a marker: glyph + tooltip (docs/16 canvas badges; removed nodes are never on the canvas). */
+export function markerBadge(change: NodeChange): { glyph: string; title: string; kind: ChangeKind } {
+  switch (change.change) {
+    case "added":
+      return { glyph: "+", title: "added since HEAD (not in the last commit)", kind: "added" };
+    case "modified":
+      return { glyph: "~", title: "modified since HEAD", kind: "modified" };
+    case "renamed":
+      return {
+        glyph: "→",
+        title: `renamed since HEAD${change.from !== undefined ? ` (was \`${change.from}\`)` : ""}`,
+        kind: "renamed",
+      };
+    case "removed":
+      return { glyph: "−", title: "removed since HEAD", kind: "removed" };
+  }
+}
+
+/**
+ * The landing page's line for `GET /api/project`'s git summary: the branch
+ * and the project-wide dirty count (every `git status` entry under the
+ * project dir — not one pipeline's scope), or why there is none.
+ */
+export function projectGitLine(git: ProjectGit | undefined): string | null {
+  if (git === undefined) return null;
+  switch (git.kind) {
+    case "repo":
+    case "locked": {
+      const where = git.branch ?? "detached HEAD";
+      const dirty = git.dirty_count === 0 ? "clean" : `${git.dirty_count} dirty`;
+      return `git: ${where} · ${dirty}${git.kind === "locked" ? " · index.lock held" : ""}`;
+    }
+    case "not_a_repo":
+      return "git: not a repository";
+    case "git_not_found":
+      return "git: no `git` on PATH";
+    default:
+      return `git: ${git.error ?? git.kind}`;
+  }
+}

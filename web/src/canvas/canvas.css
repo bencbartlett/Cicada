@@ -273,6 +273,35 @@
   font-family: var(--mono);
 }
 
+
+/* git change badge (docs/16 canvas badges; doc 10 status-strip markers):
+   `+` added · `~` modified · `→` renamed, semantic tokens only */
+.cn-git {
+  font-size: 10px;
+  line-height: 14px;
+  width: 14px;
+  text-align: center;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-weight: 700;
+}
+.cn-git-added {
+  color: var(--ok);
+  background: rgba(122, 211, 138, 0.16);
+}
+.cn-git-modified {
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+.cn-git-renamed {
+  color: var(--accent);
+  background: var(--accent-bg);
+}
+.cn-git-removed {
+  color: var(--error);
+  background: var(--error-bg);
+}
+
 /* comment note (above the header, outside the box) */
 .cn-note {
   position: absolute;
