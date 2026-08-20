@@ -101,6 +101,22 @@ Two levels:
    warm reopen; per-op samples ride beside the entries as their own
    records.)*
 
+**Log format and engine age** *(live, v0.1 item 3b)*: the memo log is
+an append-only record enum, so every older log replays under a newer
+engine. The other direction is guarded by a marker: the store root
+carries a `format` file naming the newest record kind the log may hold
+(`LOG_FORMAT`; 1 = the spike's records, 2 = entries with cost), and an
+engine that finds a higher number there refuses loudly ("written by a
+newer engine") instead of reading the records it cannot decode as
+corruption and truncating the log at the first of them. Adding a
+record variant bumps the constant in the same commit. One transitional
+truth, stated plainly: engines from BEFORE the marker (every binary up
+to main's 3899460) know nothing of it — pointing one of them at a store
+a v0.1 engine has written drops that store's memo table once, with a
+"corruption" notice; the blobs stay and recompute reuses them. While
+several worktree binaries share a project, open it with one age of
+engine, or pass each its own `--cache-dir`.
+
 **Location**: the store lives on the engine host in the user cache
 directory (e.g. `%LOCALAPPDATA%/cicada/cache/<project>`), keyed by
 project — **never inside the project folder by default**. Project

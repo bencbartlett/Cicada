@@ -43,6 +43,6 @@ pub use graph::{GraphError, Input, NodeDecl, NodeError, NodeFn, NodeId, SolveGra
 pub use key::{CACHE_EPOCH, KeyInputs, NodeKey, node_key};
 pub use preview::{PreviewJob, PreviewSession};
 pub use store::{
-    BlobLocation, DiskStore, LogRecovery, MemoEntry, OpenReport, PACK_MAX_BYTES, StoreError,
-    project_cache_dir,
+    BlobLocation, DiskStore, LOG_FORMAT, LogRecovery, MemoEntry, OpenReport, PACK_MAX_BYTES,
+    StoreError, project_cache_dir,
 };

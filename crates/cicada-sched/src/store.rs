@@ -107,6 +107,30 @@ pub enum StoreError {
         /// Why.
         message: String,
     },
+    /// The store was last written by a newer engine whose memo-log records
+    /// this one cannot decode ([`LOG_FORMAT`]). Refused instead of
+    /// mistaking the newer records for corruption and truncating the log
+    /// — a warm cache is minutes of work.
+    #[error(
+        "cache store {root} was written by a newer engine (memo-log format {found}; this          engine reads up to {supported}) — open it with that engine, or delete the store to          start cold"
+    )]
+    NewerFormat {
+        /// The store root.
+        root: PathBuf,
+        /// The format the marker names.
+        found: u32,
+        /// The newest format this engine reads.
+        supported: u32,
+    },
+    /// The format marker holds something other than a number — a damaged
+    /// or foreign store root.
+    #[error("cache store format marker {path} is unreadable: {text:?}")]
+    FormatMarker {
+        /// The marker file.
+        path: PathBuf,
+        /// Its contents.
+        text: String,
+    },
     /// No user cache directory exists on this host.
     #[error("no user cache directory on this host")]
     NoCacheDir,
@@ -157,6 +181,20 @@ pub struct OpenReport {
     /// semantics as the memo log; the dropped blobs recompute).
     pub pack_recovery: Option<LogRecovery>,
 }
+
+/// The memo log's format: the newest [`LogRecord`] variant an engine must
+/// know to replay the log. The enum is append-only, so every older log
+/// replays under a newer engine; this marker protects the OTHER direction.
+/// It is written to `<root>/format` when a store opens, and an engine that
+/// finds a higher number there refuses with [`StoreError::NewerFormat`]
+/// instead of mistaking the records it cannot decode for corruption and
+/// truncating the log at the first of them (which is what every engine
+/// before the marker existed does — switching such an engine onto a store
+/// written by a newer one drops the memo table once, loudly but with a
+/// misleading diagnosis). **Bump it in the same commit that adds a
+/// `LogRecord` variant.** History: 1 = `Memo`/`Sample`/`Unmemo` (the
+/// spike); 2 = `MemoCost` (v0.1 item 3b).
+pub const LOG_FORMAT: u32 = 2;
 
 /// Compressed blobs up to this size live in the append-only pack file
 /// (`values/pack.bin`) instead of one file each. A cold wall-scale solve
@@ -319,6 +357,37 @@ pub fn project_cache_dir(project: &Path) -> Result<PathBuf, StoreError> {
         });
     }
     Ok(dir)
+}
+
+/// The store's format marker (`<root>/format`, see [`LOG_FORMAT`]): `None`
+/// for a store from before the marker existed; the number it names
+/// otherwise — refused when a newer engine wrote it, or when it is not a
+/// number at all.
+fn read_format_marker(root: &Path, path: &Path) -> Result<Option<u32>, StoreError> {
+    match fs::read_to_string(path) {
+        Ok(text) => {
+            let found = text
+                .trim()
+                .parse::<u32>()
+                .map_err(|_| StoreError::FormatMarker {
+                    path: path.to_owned(),
+                    text: text.clone(),
+                })?;
+            if found > LOG_FORMAT {
+                return Err(StoreError::NewerFormat {
+                    root: root.to_owned(),
+                    found,
+                    supported: LOG_FORMAT,
+                });
+            }
+            Ok(Some(found))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(StoreError::Io {
+            path: path.to_owned(),
+            source,
+        }),
+    }
 }
 
 /// Move a bad blob aside (`.zst.corrupt`) so a future `store_value` can
@@ -843,6 +912,10 @@ impl DiskStore {
         };
         fs::create_dir_all(root.join("values")).map_err(io(root))?;
         let log_path = root.join("memo.log");
+        // The format marker first: a store a newer engine wrote is refused
+        // before a single record is read (or truncated).
+        let format_path = root.join("format");
+        let marker = read_format_marker(root, &format_path)?;
 
         let mut memo = HashMap::new();
         let mut samples: HashMap<String, CostStats> = HashMap::new();
@@ -902,6 +975,12 @@ impl DiskStore {
             .append(true)
             .open(&log_path)
             .map_err(io(&log_path))?;
+        // This engine may now append records of its own format: say so
+        // for the next engine that opens the store (absent on stores from
+        // before the marker; lower after an upgrade).
+        if marker != Some(LOG_FORMAT) {
+            fs::write(&format_path, format!("{LOG_FORMAT}\n")).map_err(io(&format_path))?;
+        }
 
         let (pack, pack_recovery) = Pack::open(&root.join("values").join("pack.bin"))?;
         let packed_values = pack.index.len();

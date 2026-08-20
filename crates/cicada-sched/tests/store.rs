@@ -12,7 +12,9 @@ use cicada_core::geometry::{Circle, Curve, Line, Mesh, Polyline, Rectangle};
 use cicada_core::scalar::{Color, Domain, IndexMap};
 use cicada_core::spatial::{Plane, Point, Vector, Xform};
 use cicada_core::value::{HashedValue, List, ValueData};
-use cicada_sched::{BlobLocation, DiskStore, PACK_MAX_BYTES, StoreError, project_cache_dir};
+use cicada_sched::{
+    BlobLocation, DiskStore, LOG_FORMAT, PACK_MAX_BYTES, StoreError, project_cache_dir,
+};
 use proptest::prelude::*;
 
 fn value(data: ValueData) -> Arc<HashedValue> {
@@ -351,4 +353,87 @@ fn default_cache_dir_is_never_inside_the_project() {
     let other = tempfile::tempdir().unwrap();
     let other_dir = project_cache_dir(other.path()).unwrap();
     assert_ne!(dir, other_dir, "stores are keyed per project");
+}
+
+// The memo-log format marker (adversarial review of item 3b, 2026-08-20):
+// an engine that finds a store written by a NEWER engine refuses loudly
+// instead of reading the records it cannot decode as corruption and
+// truncating the log — which every engine from before the marker does, and
+// which cost a warm wall cache when two binaries of different ages opened
+// one project. Stores from before the marker (no `format` file) open and
+// get one.
+#[test]
+fn a_store_written_by_a_newer_engine_is_refused_not_truncated() {
+    let dir = tempfile::tempdir().unwrap();
+    let format = dir.path().join("format");
+    // A fresh store stamps the current format.
+    {
+        let (store, _) = DiskStore::open(dir.path()).unwrap();
+        store
+            .record_sample("fake.op", 1, 1_000)
+            .expect("one record in the log");
+    }
+    assert_eq!(
+        std::fs::read_to_string(&format).unwrap().trim(),
+        LOG_FORMAT.to_string()
+    );
+    let log = dir.path().join("memo.log");
+    let bytes_before = std::fs::metadata(&log).unwrap().len();
+    assert!(bytes_before > 0);
+
+    // A newer engine came by and stamped a format this one does not know.
+    std::fs::write(&format, format!("{}\n", LOG_FORMAT + 1)).unwrap();
+    let Err(error) = DiskStore::open(dir.path()) else {
+        panic!("a store stamped by a newer engine must be refused")
+    };
+    match &error {
+        StoreError::NewerFormat {
+            root,
+            found,
+            supported,
+        } => {
+            assert_eq!(root, dir.path());
+            assert_eq!(*found, LOG_FORMAT + 1);
+            assert_eq!(*supported, LOG_FORMAT);
+        }
+        other => panic!("expected NewerFormat, got {other:?}"),
+    }
+    assert!(error.to_string().contains("newer engine"), "{error}");
+    assert_eq!(
+        std::fs::metadata(&log).unwrap().len(),
+        bytes_before,
+        "refusing touches nothing: the log is intact for the engine that wrote it"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&format).unwrap().trim(),
+        (LOG_FORMAT + 1).to_string(),
+        "the marker is left as found"
+    );
+
+    // Garbage in the marker is a typed refusal too, never a silent reset.
+    std::fs::write(&format, "not a number").unwrap();
+    assert!(matches!(
+        DiskStore::open(dir.path()),
+        Err(StoreError::FormatMarker { .. })
+    ));
+
+    // A store from before the marker existed (no `format` file) opens,
+    // replays, and is stamped for the next engine.
+    std::fs::remove_file(&format).unwrap();
+    let (store, report) = DiskStore::open(dir.path()).unwrap();
+    assert_eq!(report.sample_records, 1, "the old log replayed");
+    assert!(report.recovery.is_none());
+    assert_eq!(
+        std::fs::read_to_string(&format).unwrap().trim(),
+        LOG_FORMAT.to_string()
+    );
+    // And an older (lower) marker is raised, not refused.
+    drop(store);
+    std::fs::write(&format, "1\n").unwrap();
+    let (_store, report) = DiskStore::open(dir.path()).unwrap();
+    assert_eq!(report.sample_records, 1);
+    assert_eq!(
+        std::fs::read_to_string(&format).unwrap().trim(),
+        LOG_FORMAT.to_string()
+    );
 }
