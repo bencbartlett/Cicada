@@ -4,12 +4,20 @@
  * semantics — drag → `param_preview` (throttled to one per animation
  * frame), release/commit → `set_param`. The server writes the text; the
  * thumb keeps the dragged value only until the next delta overrides it.
+ *
+ * Compute-on-release (docs/13 §Slider drags): a slider whose drag the
+ * server answered with `preview_policy` shows its pending value (thumb and
+ * number, in the warn color) and a `pending · N s` hint under the name (a
+ * line in the name column, so the range track never changes width under a
+ * held pointer; `~` when the estimate is a floor); the viewport is not
+ * expected to move until release. Observers see the same from the
+ * broadcast. A cheap cone never hears of the policy and previews live.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CATEGORY_ORDER } from "../kinds";
 import type { NodeView, ParamView } from "../protocol/messages";
-import { canWrite, useCicada } from "../state/store";
-import { paramValueText, snapSlider } from "./format";
+import { canWrite, pendingFor, useCicada, type PendingParam } from "../state/store";
+import { paramValueText, pendingHint, pendingTitle, snapSlider } from "./format";
 
 export function ParamsPanel() {
   const graph = useCicada((s) => s.graph);
@@ -80,9 +88,10 @@ function ParamRow({
   // A `#off` ghost keeps its widget for the eye but takes no edits (the
   // writer refuses them by name): the row is dimmed and says so.
   const off = node.kind === "disabled";
+  const pending = useCicada((s) => pendingFor(s, node.name, param.port ?? null));
   return (
     <div
-      className={`param-row${selected ? " selected" : ""}${off ? " param-off" : ""}`}
+      className={`param-row${selected ? " selected" : ""}${off ? " param-off" : ""}${pending !== undefined ? " pending" : ""}`}
       data-testid={`param-${node.name}`}
     >
       <span
@@ -95,9 +104,19 @@ function ParamRow({
           {off ? "disabled (#off)" : (node.func ?? node.kind)}
           {!off && param.port !== undefined ? `.${param.port}` : ""}
         </small>
+        {pending !== undefined && (
+          <small
+            className="param-pending"
+            title={pendingTitle(pending)}
+            data-testid={`param-pending-${node.name}`}
+            role="status"
+          >
+            {pendingHint(pending)}
+          </small>
+        )}
       </span>
       <span className="param-widget">
-        <ParamWidget node={node} param={param} disabled={!writer || off} />
+        <ParamWidget node={node} param={param} disabled={!writer || off} pending={pending} />
       </span>
     </div>
   );
@@ -116,10 +135,21 @@ function commitValue(node: string, param: ParamView, value: number | boolean | s
   store.send({ type: "set_param", payload: { node, port: param.port ?? null, value: text } });
 }
 
-export function ParamWidget({ node, param, disabled }: { node: NodeView; param: ParamView; disabled: boolean }) {
+export function ParamWidget({
+  node,
+  param,
+  disabled,
+  pending,
+}: {
+  node: NodeView;
+  param: ParamView;
+  disabled: boolean;
+  /** This param's compute-on-release entry, when its drag is one (sliders only). */
+  pending?: PendingParam;
+}) {
   switch (param.kind) {
     case "slider":
-      return <SliderWidget node={node} param={param} disabled={disabled} />;
+      return <SliderWidget node={node} param={param} disabled={disabled} pending={pending} />;
     case "number":
     case "integer":
       return <NumberWidget node={node} param={param} disabled={disabled} />;
@@ -145,10 +175,21 @@ export function ParamWidget({ node, param, disabled }: { node: NodeView; param: 
   }
 }
 
-function SliderWidget({ node, param, disabled }: { node: NodeView; param: ParamView; disabled: boolean }) {
+function SliderWidget({
+  node,
+  param,
+  disabled,
+  pending,
+}: {
+  node: NodeView;
+  param: ParamView;
+  disabled: boolean;
+  pending?: PendingParam;
+}) {
   const min = param.min ?? 0;
   const max = param.max ?? 10;
   const step = param.step ?? 0;
+  const port = param.port ?? null;
   const committed = Number(param.value);
   const [draft, setDraft] = useState<number | null>(null);
   const rangeRef = useRef<HTMLInputElement>(null);
@@ -161,7 +202,11 @@ function SliderWidget({ node, param, disabled }: { node: NodeView; param: ParamV
     setDraft(null);
   }, [committed]);
 
-  const shown = draft ?? committed;
+  // My own draft as it happens; otherwise the pending value of a
+  // compute-on-release drag driven elsewhere (the canvas twin of this
+  // slider, or — as an observer — the writer's); else the committed value.
+  const pendingNumber = pending === undefined ? NaN : Number(pending.value);
+  const shown = draft ?? (Number.isFinite(pendingNumber) ? pendingNumber : committed);
 
   const preview = (value: number) => {
     pendingPreview.current = value;
@@ -171,10 +216,12 @@ function SliderWidget({ node, param, disabled }: { node: NodeView; param: ParamV
       const v = pendingPreview.current;
       pendingPreview.current = null;
       if (v === null) return;
-      useCicada.getState().send({
-        type: "param_preview",
-        payload: { node: node.name, port: param.port ?? null, value: paramValueText("slider", v) },
-      });
+      const literal = paramValueText("slider", v);
+      const store = useCicada.getState();
+      store.send({ type: "param_preview", payload: { node: node.name, port, value: literal } });
+      // Only the FIRST withheld tick's value is in the policy message — the
+      // pending entry follows the thumb from here (a no-op while live).
+      store.trackPendingValue(node.name, port, literal);
     });
   };
 
@@ -191,7 +238,14 @@ function SliderWidget({ node, param, disabled }: { node: NodeView; param: ParamV
     }
     const snapped = snapSlider(value, min, max, step);
     setDraft(snapped);
-    if (snapped === committed) return;
+    if (snapped === committed) {
+      // Released on the committed value: no write goes out, so nothing
+      // else would take the pending badge down — the server's drag ends
+      // by the gap rule, silently. (A release that writes leaves it to the
+      // delta, which ends the drag server-side.)
+      useCicada.getState().clearPending(node.name, port);
+      return;
+    }
     commitValue(node.name, param, snapped);
   };
 
@@ -218,11 +272,13 @@ function SliderWidget({ node, param, disabled }: { node: NodeView; param: ParamV
     [],
   );
 
+  const pendingClass = pending === undefined ? undefined : "pending";
   return (
     <>
       <input
         ref={rangeRef}
         type="range"
+        className={pendingClass}
         min={min}
         max={max}
         step={step > 0 ? step : "any"}
@@ -238,11 +294,13 @@ function SliderWidget({ node, param, disabled }: { node: NodeView; param: ParamV
       />
       <input
         type="number"
+        className={pendingClass}
         min={min}
         max={max}
         step={step > 0 ? step : "any"}
         value={shown}
         disabled={disabled}
+        title={pending === undefined ? undefined : pendingTitle(pending)}
         aria-label={`${node.name} value`}
         data-testid={`number-${node.name}`}
         onChange={(e) => setDraft(Number(e.target.value))}

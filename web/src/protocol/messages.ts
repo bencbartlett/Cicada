@@ -296,6 +296,37 @@ export interface ProbeCatalogEntry {
   ports: [string, "ok" | "lift"][];
 }
 
+/**
+ * How a drag's previews are handled (`protocol::PreviewMode`):
+ * `compute_on_release` is the only mode the server ever announces — a
+ * cheap cone gets no message at all and previews latest-wins as before.
+ */
+export type PreviewMode = "compute_on_release";
+
+/**
+ * The `preview_policy` payload (docs/13 §Slider drags, DECISIONS.md row
+ * 39): broadcast ONCE per server-side drag, on its first withheld
+ * `param_preview` tick — a cone the cost model predicts at or above
+ * `COMPUTE_ON_RELEASE_MS` (1 s) is not previewed; the slider shows the
+ * pending value and the estimate, and the value solves once, on release.
+ * A drag ends on any write attempt, an Esc, a reload or a 300 ms pause,
+ * and the next one is announced AGAIN — every arrival is the current
+ * verdict: replace the pending state, never stack it.
+ */
+export interface PreviewPolicyPayload {
+  /** The param's binding. */
+  node: string;
+  /** Its kwarg — ABSENT (never `null`) for a bare literal. */
+  port?: string;
+  mode: PreviewMode;
+  /** Predicted wall ms of a live preview (rounded to 0.1); a floor when `rough`. */
+  estimate_ms: number;
+  /** Some node in the cone has no cost evidence yet — render with `~`, like the ETA. */
+  rough: boolean;
+  /** The withheld tick's literal; the client tracks later ticks itself. */
+  pending_value: string;
+}
+
 export type ServerMessage =
   | {
       type: "hello";
@@ -360,7 +391,8 @@ export type ServerMessage =
   | { type: "screenshot_request"; payload: { id: number; target: string } }
   | { type: "notice"; payload: { level: "info" | "warning" | "error"; message: string } }
   | { type: "display_reset"; payload: { generation: number } }
-  | { type: "run_finished"; payload: { node: string; ok: boolean; message: string } };
+  | { type: "run_finished"; payload: { node: string; ok: boolean; message: string } }
+  | { type: "preview_policy"; payload: PreviewPolicyPayload };
 
 export type ServerEnvelope = { v: number; seq: number } & ServerMessage;
 

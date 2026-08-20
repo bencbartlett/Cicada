@@ -538,6 +538,38 @@
   border-color: var(--error);
 }
 
+/* compute-on-release (docs/13 §Slider drags): the value label turns warn
+   and a chip hangs under the row's right edge — absolutely positioned so
+   the range track keeps its width under a held pointer (a narrower track
+   would jump the thumb away from the pointer) */
+.cn-slider {
+  position: relative;
+}
+
+.cn .cn-slider.pending .cn-widget-value {
+  color: var(--warn);
+}
+
+.cn-slider.pending input[type="range"] {
+  accent-color: var(--warn);
+}
+
+.cn-pending {
+  position: absolute;
+  right: 6px;
+  top: calc(100% + 3px);
+  z-index: 2;
+  padding: 1px 6px;
+  border: 1px solid var(--warn);
+  border-radius: 999px;
+  background: var(--bg-elev);
+  color: var(--warn);
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .cn-widget-kind {
   font-size: 9px;
 }

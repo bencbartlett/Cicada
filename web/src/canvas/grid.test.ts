@@ -119,6 +119,11 @@ describe("statusBadge", () => {
     expect(statusBadge(undefined, 0).label).toBe("idle");
     expect(statusBadge({ state: "done", generation: 1, nanos: 1_237_600 }, 0).label).toBe("1.2ms");
     expect(statusBadge({ state: "done", generation: 1, nanos: 4_800 }, 0).label).toBe("5µs");
+    // A cached node's nanos are its LAST compute's (memo entry), said so in the title.
+    const cached = statusBadge({ state: "cached", generation: 2, nanos: 43_900_000_000 }, 0);
+    expect(cached.label).toBe("cached");
+    expect(cached.title).toBe("cached — result reused (last compute 43.9s)");
+    expect(statusBadge({ state: "cached", generation: 2 }, 0).title).toBe("cached — result reused");
     expect(statusBadge({ state: "running", generation: 1, elements_done: 3, elements: 12 }, 0).label).toBe(
       "25%",
     );

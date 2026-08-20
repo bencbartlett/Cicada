@@ -126,8 +126,12 @@ export function statusBadge(status: NodeStatus | undefined, diagnostics: number)
     return { label: "idle", className: "state-idle", title: "idle — not solved yet" };
   }
   switch (status.state) {
-    case "cached":
-      return { label: "cached", className: "state-cached", title: "cached — result reused" };
+    case "cached": {
+      // The memo entry's recorded cost: what the LAST compute of this key
+      // took, never this generation's cache read (docs/13 §Solve streaming).
+      const last = status.nanos !== undefined ? ` (last compute ${ms(status.nanos)})` : "";
+      return { label: "cached", className: "state-cached", title: `cached — result reused${last}` };
+    }
     case "queued":
       return { label: "queued", className: "state-queued", title: "queued" };
     case "running": {

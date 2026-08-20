@@ -35,6 +35,25 @@ export function formatMs(ms: number): string {
   return formatNanos(ms * 1e6);
 }
 
+// ---------------------------------------------------- compute-on-release --
+
+/**
+ * The slider's hint while its drag is compute-on-release (docs/13 §Slider
+ * drags): `pending · 3.94 s` — the predicted cost of the live preview the
+ * server withheld, `~`-prefixed when the estimate is a floor (some node in
+ * the cone has no cost evidence yet), the same spelling as the ETA
+ * (docs/12 §Cost prediction).
+ */
+export function pendingHint(pending: { estimateMs: number; rough: boolean }): string {
+  return `pending · ${pending.rough ? "~" : ""}${formatMs(pending.estimateMs)}`;
+}
+
+/** The tooltip behind the hint: what pending means and what happens on release. */
+export function pendingTitle(pending: { estimateMs: number; rough: boolean }): string {
+  const estimate = `${pending.rough ? "at least ~" : "about "}${formatMs(pending.estimateMs)}`;
+  return `compute-on-release: a live preview would take ${estimate}, so the viewport waits — the value solves once, when you release`;
+}
+
 // ------------------------------------------------------- solve summary --
 
 /** The top-bar solve-state text (docs/16 §Status and progress language). */
@@ -72,11 +91,19 @@ export function withStatusCounts(
   return { ...summary, red: Math.max(summary.red, red), blocked: Math.max(summary.blocked, blocked) };
 }
 
-/** The one-line status readout of a node (state word · time · elements · message). */
+/**
+ * The one-line status readout of a node (state word · time · elements ·
+ * message). A `cached` node's time (and element count) is its LAST
+ * compute's, recorded in its memo entry — never this generation's, which
+ * paid a cache read — so it reads `cached · last 43.9 s` (docs/13 §Solve
+ * streaming).
+ */
 export function statusText(status: NodeStatus | undefined): string {
   if (status === undefined) return "no status yet";
   const parts: string[] = [status.state];
-  if (status.nanos !== undefined) parts.push(formatNanos(status.nanos));
+  if (status.nanos !== undefined) {
+    parts.push(status.state === "cached" ? `last ${formatNanos(status.nanos)}` : formatNanos(status.nanos));
+  }
   if (status.elements !== undefined) {
     parts.push(
       status.elements_done !== undefined && status.state === "running"
