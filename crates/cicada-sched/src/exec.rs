@@ -608,12 +608,10 @@ impl Ctx<'_> {
         let commit_started = std::time::Instant::now();
         let outcome = match computed {
             Computed::Cancelled => NodeOutcome::Cancelled,
-            // A failure under a cancelled token is the cancellation
-            // surfacing — a killed worker's "cancelled" error, a long loop
-            // bailing at its safe point — not a red node: the generation
-            // was cancelled, and the next one re-runs it either way
-            // (failures are never memoized).
-            Computed::Failed(_) if self.token.is_cancelled() => NodeOutcome::Cancelled,
+            // Red stays red, Esc or not: only an error the node MARKED as
+            // cancellation (`NodeError::cancelled`, under a cancelled
+            // token) became `Computed::Cancelled` above — see
+            // `compute_scalar` / `run_element`.
             Computed::Failed(failure) => NodeOutcome::Failed(failure),
             Computed::Done {
                 outputs,
@@ -802,6 +800,14 @@ impl Ctx<'_> {
                     element_ids: Vec::new(),
                 });
             }
+            // The node bailed at its own safe point (or its worker was
+            // killed) because THIS generation was cancelled: cancelled,
+            // not red. A "cancelled" error under a live token is a node
+            // claiming a cancellation that never happened — red, with
+            // its message, like any other failure.
+            Ok(Err(error)) if error.cancelled && self.token.is_cancelled() => {
+                return Computed::Cancelled;
+            }
             Ok(Err(error)) => {
                 return Computed::Failed(NodeFailure {
                     node: decl.name.clone(),
@@ -981,14 +987,17 @@ impl Ctx<'_> {
                             break;
                         }
                         let index = start + offset;
-                        *slot = Some(self.run_element(
-                            decl,
-                            inputs,
-                            fanned,
-                            index,
-                            element_cache,
-                            executed,
-                        ));
+                        let Some(result) =
+                            self.run_element(decl, inputs, fanned, index, element_cache, executed)
+                        else {
+                            // The element's run reported THIS generation's
+                            // cancellation at its own safe point (a killed
+                            // worker, a polled loop): its slot stays
+                            // unfilled, exactly like one whose turn never
+                            // came, and the node lands cancelled.
+                            break;
+                        };
+                        *slot = Some(result);
                         done += 1;
                     }
                     let nanos = clock.now_nanos().saturating_sub(begin);
@@ -1008,7 +1017,10 @@ impl Ctx<'_> {
     }
 
     /// One element of a fan-out: element key → element memo → run.
-    /// Increments `executed` only when the run function actually runs.
+    /// Increments `executed` only when the run function actually ran to
+    /// a verdict (success or red) — a run that bailed because the
+    /// generation was cancelled is `None`: no result, no cost evidence,
+    /// its slot stays unfilled.
     fn run_element(
         &self,
         decl: &NodeDecl,
@@ -1017,7 +1029,7 @@ impl Ctx<'_> {
         index: usize,
         element_cache: bool,
         executed: &AtomicU64,
-    ) -> Result<Vec<Arc<HashedValue>>, (usize, String)> {
+    ) -> Option<ElementResult> {
         // Element inputs: fanned ports take slot `index` (holes were
         // refused above), broadcast ports pass through.
         let mut element_inputs: Vec<Option<Arc<HashedValue>>> = inputs.to_vec();
@@ -1049,48 +1061,58 @@ impl Ctx<'_> {
             // (docs/12), and recomputing re-stores good bytes.
             if entry.outputs.len() == decl.output_count {
                 match self.load_element_hit(decl, key, &entry, index) {
-                    Ok(Some(outputs)) => return Ok(outputs),
+                    Ok(Some(outputs)) => return Some(Ok(outputs)),
                     Ok(None) => {} // broken promise, tombstoned — compute
-                    Err(failure) => return Err(failure),
+                    Err(failure) => return Some(Err(failure)),
                 }
             } else if let Err(error) = self.scheduler.store.invalidate_memo(key) {
                 self.set_fatal(error);
-                return Err((index, "store failure".to_owned()));
+                return Some(Err((index, "store failure".to_owned())));
             }
         }
 
-        executed.fetch_add(1, Ordering::Relaxed);
         let ctx = NodeCtx { cancel: self.token };
         let run_result = catch_unwind(AssertUnwindSafe(|| (decl.run)(&ctx, &element_inputs)));
         let outputs = match run_result {
-            Err(payload) => return Err((index, panic_message(payload.as_ref()))),
-            Ok(Err(error)) => return Err((index, error.message)),
+            Err(payload) => {
+                executed.fetch_add(1, Ordering::Relaxed);
+                return Some(Err((index, panic_message(payload.as_ref()))));
+            }
+            // Bailed at a safe point because THIS generation was
+            // cancelled (`NodeError::cancelled` under a cancelled token):
+            // not a verdict on the element — no slot, no cost evidence.
+            Ok(Err(error)) if error.cancelled && self.token.is_cancelled() => return None,
+            Ok(Err(error)) => {
+                executed.fetch_add(1, Ordering::Relaxed);
+                return Some(Err((index, error.message)));
+            }
             Ok(Ok(outputs)) => outputs,
         };
+        executed.fetch_add(1, Ordering::Relaxed);
         if outputs.len() != decl.output_count {
-            return Err((
+            return Some(Err((
                 index,
                 format!(
                     "node returned {} outputs; its spec declares {}",
                     outputs.len(),
                     decl.output_count
                 ),
-            ));
+            )));
         }
         if let Some(key) = element_key {
             for value in &outputs {
                 if let Err(error) = self.scheduler.store.store_value(value) {
                     self.set_fatal(error);
-                    return Err((index, "store failure".to_owned()));
+                    return Some(Err((index, "store failure".to_owned())));
                 }
             }
             let hashes: Vec<ValueHash> = outputs.iter().map(|value| value.hash()).collect();
             if let Err(error) = self.scheduler.store.record_memo(key, &hashes) {
                 self.set_fatal(error);
-                return Err((index, "store failure".to_owned()));
+                return Some(Err((index, "store failure".to_owned())));
             }
         }
-        Ok(outputs)
+        Some(Ok(outputs))
     }
 
     /// Load an element-memo hit's outputs. `Ok(Some)` = served from cache;

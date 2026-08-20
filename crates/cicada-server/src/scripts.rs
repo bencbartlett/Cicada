@@ -422,7 +422,15 @@ fn build_node(
         let call = cancel.enter(ctx.cancel);
         let outs = pool
             .invoke(&file, &source, &fn_name, &inputs, call.switch())
-            .map_err(|error| NodeError::new(error.to_string()))?;
+            .map_err(|error| match error {
+                // The switch was killed — by the calling generation's
+                // token, the only thing hooked to it: the node lands
+                // `cancelled`, not red (docs/12 §Cancellation). Every
+                // other failure (a traceback, a dead worker) is red even
+                // when an Esc coincides with it.
+                ScriptError::Cancelled => NodeError::cancelled(error.to_string()),
+                other => NodeError::new(other.to_string()),
+            })?;
         drop(call);
         if outs.len() != out_ports.len() {
             return Err(NodeError::new(format!(

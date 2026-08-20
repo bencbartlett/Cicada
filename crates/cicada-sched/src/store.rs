@@ -123,8 +123,13 @@ pub enum StoreError {
         supported: u32,
     },
     /// The format marker holds something other than a number — a damaged
-    /// or foreign store root.
-    #[error("cache store format marker {path} is unreadable: {text:?}")]
+    /// or foreign store root. (An EMPTY marker is not this: it is the
+    /// signature of a write torn between create and fill, and opens as
+    /// "no marker" — see `read_format_marker`.)
+    #[error(
+        "cache store format marker {path} is unreadable: {text:?} — if this store is yours, \
+         delete that one file (only the marker) and reopen; the memo log is untouched"
+    )]
     FormatMarker {
         /// The marker file.
         path: PathBuf,
@@ -360,11 +365,17 @@ pub fn project_cache_dir(project: &Path) -> Result<PathBuf, StoreError> {
 }
 
 /// The store's format marker (`<root>/format`, see [`LOG_FORMAT`]): `None`
-/// for a store from before the marker existed; the number it names
-/// otherwise — refused when a newer engine wrote it, or when it is not a
-/// number at all.
+/// for a store from before the marker existed — and for an EMPTY marker,
+/// which is what a crash between creating the file and filling it leaves
+/// behind (the marker is written temp + rename since the review of item
+/// 3b, so only markers from before that can be torn; an empty file names
+/// no format, so it is treated as absent and re-stamped, never refused);
+/// the number it names otherwise — refused when a newer engine wrote it,
+/// or when it is not a number at all (a damaged or foreign root, with the
+/// remedy in the message).
 fn read_format_marker(root: &Path, path: &Path) -> Result<Option<u32>, StoreError> {
     match fs::read_to_string(path) {
+        Ok(text) if text.trim().is_empty() => Ok(None),
         Ok(text) => {
             let found = text
                 .trim()
@@ -977,9 +988,19 @@ impl DiskStore {
             .map_err(io(&log_path))?;
         // This engine may now append records of its own format: say so
         // for the next engine that opens the store (absent on stores from
-        // before the marker; lower after an upgrade).
+        // before the marker; lower after an upgrade). Temp + rename: a
+        // crash mid-write must never leave an empty or half-written
+        // marker standing where the number should be.
         if marker != Some(LOG_FORMAT) {
-            fs::write(&format_path, format!("{LOG_FORMAT}\n")).map_err(io(&format_path))?;
+            let temp = root.join(format!("format.tmp-{}", std::process::id()));
+            fs::write(&temp, format!("{LOG_FORMAT}\n")).map_err(io(&temp))?;
+            if let Err(source) = fs::rename(&temp, &format_path) {
+                let _ = fs::remove_file(&temp);
+                return Err(StoreError::Io {
+                    path: format_path,
+                    source,
+                });
+            }
         }
 
         let (pack, pack_recovery) = Pack::open(&root.join("values").join("pack.bin"))?;

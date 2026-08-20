@@ -198,7 +198,19 @@ latest-wins loop and an idle-class solve each own a token, and
 cancelling one never touches another — the Python bridge mints one
 kill switch per call, hooked to the calling generation's token, so
 whoever cancels a generation kills exactly its in-flight worker calls
-without a separate "kill the scripts" step to forget.)* Script nodes
+without a separate "kill the scripts" step to forget. **What lands
+`cancelled` is narrow**: a node that stops because its generation was
+cancelled says so — `NodeError::cancelled` from a long loop's safe
+point, and the bridge's verdict for a worker the token killed — and
+the executor lands that `cancelled` only under a cancelled token. Any
+other error stays red, Esc or not: a genuine failure that coincides
+with an Esc is never hidden behind "cancelled", and a node claiming a
+cancellation under a live token is red with its message. Element
+level: an element that bails this way leaves its slot unfilled and is
+not cost evidence — the fan lands `cancelled` like one whose later
+chunks never started, and a fan cancelled mid-way is `cancelled` even
+if some of its elements had already gone red, because its verdict is
+incomplete; the next generation re-runs it and shows the red.)* Script nodes
 are hard-cancellable **by construction**: WASM epoch preemption (hard
 interrupt, no cooperation needed) for Rust scripts, subprocess kill
 for Python (the pool respawns workers). Individual kernel calls (one

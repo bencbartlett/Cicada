@@ -410,12 +410,47 @@ fn a_store_written_by_a_newer_engine_is_refused_not_truncated() {
         "the marker is left as found"
     );
 
-    // Garbage in the marker is a typed refusal too, never a silent reset.
+    // Garbage in the marker is a typed refusal too, never a silent reset
+    // — and the message names the remedy (delete the one file).
     std::fs::write(&format, "not a number").unwrap();
-    assert!(matches!(
-        DiskStore::open(dir.path()),
-        Err(StoreError::FormatMarker { .. })
-    ));
+    let Err(error) = DiskStore::open(dir.path()) else {
+        panic!("garbage in the marker must be refused")
+    };
+    assert!(
+        matches!(error, StoreError::FormatMarker { .. }),
+        "{error:?}"
+    );
+    assert!(
+        error.to_string().contains("delete that one file"),
+        "the remedy is in the message: {error}"
+    );
+
+    // An EMPTY marker is the signature of a write torn between create and
+    // fill (review finding, 2026-08-20: before the marker was written temp
+    // + rename, a crash there left exactly this, and the only way back in
+    // was deleting it by hand): it names no format, so it opens as "no
+    // marker", replays the log intact, and is re-stamped.
+    std::fs::write(&format, "").unwrap();
+    let (store, report) = DiskStore::open(dir.path()).unwrap();
+    assert_eq!(
+        report.sample_records, 1,
+        "the log replayed through a torn marker"
+    );
+    assert!(report.recovery.is_none());
+    assert_eq!(
+        std::fs::read_to_string(&format).unwrap().trim(),
+        LOG_FORMAT.to_string(),
+        "re-stamped"
+    );
+    assert!(
+        std::fs::read_dir(dir.path()).unwrap().all(|e| !e
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".tmp-")),
+        "no temp marker left behind"
+    );
+    drop(store);
 
     // A store from before the marker existed (no `format` file) opens,
     // replays, and is stamped for the next engine.

@@ -29,14 +29,35 @@ pub struct NodeId(pub usize);
 pub struct NodeError {
     /// What went wrong, in domain terms.
     pub message: String,
+    /// The node stopped because its generation was cancelled — it polled
+    /// `ctx.cancel` at a safe point and bailed, or a host bridge killed
+    /// its worker (docs/12 §Cancellation). The executor lands such an
+    /// error `cancelled`, not red, when the generation's token is indeed
+    /// cancelled. Every OTHER error stays red even under a cancelled
+    /// token: a genuine failure that coincides with an Esc is never hidden
+    /// behind the word "cancelled".
+    pub cancelled: bool,
 }
 
 impl NodeError {
-    /// A new error from any message.
+    /// A new error from any message — a red node.
     #[must_use]
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            cancelled: false,
+        }
+    }
+
+    /// The sanctioned way out of a long node at a safe point once
+    /// `ctx.cancel` reports cancellation (and the bridge's verdict for a
+    /// worker killed by the generation's token): lands `cancelled`, never
+    /// red.
+    #[must_use]
+    pub fn cancelled(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            cancelled: true,
         }
     }
 }

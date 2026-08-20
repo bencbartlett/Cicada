@@ -95,6 +95,18 @@ impl Recorder {
             .collect()
     }
 
+    fn failed(&self) -> Vec<String> {
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|seen| match seen {
+                Seen::Failed(node) => Some(node.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn element_cache_hits(&self) -> usize {
         self.events
             .lock()
@@ -1627,7 +1639,7 @@ fn a_node_can_poll_its_own_cancel_handle() {
         Arc::new(move |ctx, _inputs| {
             for step in 0..100 {
                 if ctx.cancel.is_cancelled() {
-                    return Err(NodeError::new(format!("stopped at step {step}")));
+                    return Err(NodeError::cancelled(format!("stopped at step {step}")));
                 }
                 clock.advance(1_000_000);
                 steps.fetch_add(1, Ordering::SeqCst);
@@ -1650,13 +1662,160 @@ fn a_node_can_poll_its_own_cancel_handle() {
         5,
         "the loop stopped at its next safe point"
     );
-    // Bailing out with an error under a cancelled token is the
-    // cancellation surfacing, not a red node.
+    // Bailing out with `NodeError::cancelled` under a cancelled token is
+    // the cancellation surfacing, not a red node.
     assert!(
         matches!(report.outcome(NodeId(0)), NodeOutcome::Cancelled),
         "{:?}",
         report.outcome(NodeId(0))
     );
+}
+
+/// Review finding (2026-08-20): the first cut landed EVERY failure under a
+/// cancelled token as `cancelled`, so a node that genuinely failed while
+/// the user pressed Esc showed "cancelled" and its red was hidden until
+/// the next edit. The rule is narrow now: only an error the node marked
+/// as cancellation (`NodeError::cancelled`, the bridge's verdict for a
+/// killed worker) lands cancelled — and only under a cancelled token; a
+/// plain error stays red whatever the token says, and a node CLAIMING
+/// cancellation under a live token is red too (a cancellation that never
+/// happened is a bug to see, not a state to trust).
+#[test]
+fn an_unrelated_failure_under_a_cancelled_token_stays_red() {
+    let rig = rig(1, |_| {});
+
+    // A node whose failure has nothing to do with the Esc that lands
+    // mid-run: it cancels its own generation's token (the user's Esc) and
+    // then reports a genuine error.
+    let token = CancelToken::new();
+    let run: NodeFn = {
+        let clock = Arc::clone(&rig.clock);
+        let token_for_node = token.clone();
+        Arc::new(move |_ctx, _inputs| {
+            clock.advance(1_000_000);
+            token_for_node.cancel();
+            Err(NodeError::new("boom: the input mesh is not watertight"))
+        })
+    };
+    let graph = SolveGraph::new(vec![decl("red", "fake.red", vec![], vec![], run)]).unwrap();
+    let recorder = Recorder::default();
+    let report = rig
+        .scheduler
+        .solve(&graph, &[NodeId(0)], 0, &token, &recorder)
+        .unwrap();
+    assert!(report.cancelled, "the generation WAS cancelled");
+    match report.outcome(NodeId(0)) {
+        NodeOutcome::Failed(failure) => {
+            assert_eq!(failure.message, "boom: the input mesh is not watertight");
+        }
+        other => panic!("a genuine failure under Esc must stay red, got {other:?}"),
+    }
+    assert_eq!(recorder.failed(), vec!["red".to_owned()]);
+
+    // A node that says "cancelled" while its token is live is red with
+    // that message — the executor never takes a cancellation on trust.
+    let live = CancelToken::new();
+    let run: NodeFn = Arc::new(move |_ctx, _inputs| {
+        Err(NodeError::cancelled("cancelled: the worker was killed"))
+    });
+    let graph = SolveGraph::new(vec![decl("liar", "fake.liar", vec![], vec![], run)]).unwrap();
+    let report = rig
+        .scheduler
+        .solve(&graph, &[NodeId(0)], 0, &live, &Recorder::default())
+        .unwrap();
+    assert!(!report.cancelled);
+    assert!(
+        matches!(report.outcome(NodeId(0)), NodeOutcome::Failed(f) if f.message.contains("killed")),
+        "{:?}",
+        report.outcome(NodeId(0))
+    );
+}
+
+/// The element-level half of the same rule: an element that bails with
+/// `NodeError::cancelled` under a cancelled token leaves its slot unfilled
+/// (the node lands cancelled, like a fan whose later chunks never
+/// started) and is NOT cost evidence — the calibration sample counts the
+/// elements that ran to a verdict; an element's plain error stays a red
+/// verdict on that element.
+#[test]
+fn a_cancelled_element_is_neither_red_nor_cost_evidence() {
+    let rig = rig(1, |_| {});
+    let token = CancelToken::new();
+    let elements: Vec<f64> = (0..10).map(f64::from).collect();
+    let run: NodeFn = {
+        let clock = Arc::clone(&rig.clock);
+        let token_for_node = token.clone();
+        Arc::new(move |ctx, inputs| {
+            let x = as_number(inputs[0].as_ref().unwrap());
+            clock.advance(1_000_000);
+            if x == 3.0 {
+                // Esc arrives while element 3 runs; it notices at its
+                // safe point and bails the sanctioned way.
+                token_for_node.cancel();
+            }
+            if ctx.cancel.is_cancelled() {
+                return Err(NodeError::cancelled("stopped: generation cancelled"));
+            }
+            Ok(vec![number(x + 1.0)])
+        })
+    };
+    let graph = SolveGraph::new(vec![decl(
+        "mapped",
+        "fake.cancelled_map",
+        vec![Input::Value(number_list(&elements, None))],
+        vec![1],
+        run,
+    )])
+    .unwrap();
+    let recorder = Recorder::default();
+    let report = rig
+        .scheduler
+        .solve(&graph, &[NodeId(0)], 0, &token, &recorder)
+        .unwrap();
+    assert!(report.cancelled);
+    assert!(
+        matches!(report.outcome(NodeId(0)), NodeOutcome::Cancelled),
+        "{:?}",
+        report.outcome(NodeId(0))
+    );
+    assert_eq!(recorder.failed(), Vec::<String>::new(), "nothing went red");
+    // Elements 0, 1, 2 ran to a verdict; element 3 bailed; 4..9 never ran.
+    let stats = rig
+        .scheduler
+        .store()
+        .stats("fake.cancelled_map")
+        .expect("the partial fan still calibrates");
+    assert_eq!(stats.elements, 3, "the bailed element is not evidence");
+
+    // Control: an element's PLAIN error under a live token is a red
+    // verdict with its id, as always.
+    let run: NodeFn = {
+        let clock = Arc::clone(&rig.clock);
+        Arc::new(move |_ctx, inputs| {
+            let x = as_number(inputs[0].as_ref().unwrap());
+            clock.advance(1_000_000);
+            if x == 3.0 {
+                return Err(NodeError::new("boom"));
+            }
+            Ok(vec![number(x + 1.0)])
+        })
+    };
+    let graph = SolveGraph::new(vec![decl(
+        "mapped",
+        "fake.red_map",
+        vec![Input::Value(number_list(&elements, None))],
+        vec![1],
+        run,
+    )])
+    .unwrap();
+    let report = solve(&rig.scheduler, &graph, &[NodeId(0)], &Recorder::default());
+    match report.outcome(NodeId(0)) {
+        NodeOutcome::Failed(failure) => {
+            assert_eq!(failure.element_ids, vec![3]);
+            assert!(failure.message.contains("element 3: boom"), "{failure:?}");
+        }
+        other => panic!("expected red with ids, got {other:?}"),
+    }
 }
 
 // ------------------------------------------------------- volatile (v0.1) --
@@ -1759,6 +1918,70 @@ fn volatile_node_runs_every_generation_and_downstream_follows_its_value() {
         rig.scheduler.store().memo(&key).is_none(),
         "a volatile node's outputs are never recorded"
     );
+}
+
+/// The memo-READ gate on its own (review finding, 2026-08-20: the write
+/// gate masked it — a volatile key is never written, so no test could
+/// tell whether the executor would READ one). Seed the store with an
+/// entry under exactly the key a volatile node would build (a node made
+/// volatile without a version bump, a foreign store) and the node still
+/// computes: a volatile node never serves a stored value, whatever the
+/// memo holds.
+#[test]
+fn a_volatile_node_never_reads_a_memo_entry_under_its_key() {
+    let rig = rig(1, |_| {});
+    let runs = Arc::new(AtomicUsize::new(0));
+    let mut clock_decl = decl(
+        "clock",
+        "fake.clock",
+        vec![Input::Value(number(0.0))],
+        vec![0],
+        {
+            let clock = Arc::clone(&rig.clock);
+            let runs = Arc::clone(&runs);
+            Arc::new(move |_ctx, _inputs| {
+                clock.advance(1_000);
+                runs.fetch_add(1, Ordering::SeqCst);
+                Ok(vec![number(42.0)])
+            })
+        },
+    );
+    clock_decl.volatile = true;
+    let graph = SolveGraph::new(vec![clock_decl]).unwrap();
+
+    // The stale entry: exactly the key the executor builds for this node,
+    // promising a value the node would never produce now.
+    let key = cicada_sched::node_key(&cicada_sched::KeyInputs {
+        op: "fake.clock",
+        version: 1,
+        body_hash: None,
+        tolerance: None,
+        inputs: &[Some(number(0.0).hash())],
+        fan: &[0],
+    });
+    let stale = number(-1.0);
+    rig.scheduler.store().store_value(&stale).unwrap();
+    rig.scheduler
+        .store()
+        .record_memo(key, &[stale.hash()])
+        .unwrap();
+    assert!(rig.scheduler.store().memo(&key).is_some(), "seeded");
+
+    let recorder = Recorder::default();
+    let report = solve(&rig.scheduler, &graph, &[NodeId(0)], &recorder);
+    assert_eq!(runs.load(Ordering::SeqCst), 1, "the volatile node ran");
+    assert_eq!(recorder.cache_hits(), Vec::<String>::new(), "no memo read");
+    assert_eq!(recorder.computed(), vec!["clock".to_owned()]);
+    match report.outcome(NodeId(0)) {
+        NodeOutcome::Computed { outputs, .. } => {
+            assert_eq!(
+                outputs.as_slice(),
+                &[number(42.0).hash()],
+                "the fresh value, not the stale one"
+            );
+        }
+        other => panic!("expected Computed, got {other:?}"),
+    }
 }
 
 /// Element granularity: a volatile node inside an `each()` fan-out
