@@ -19,6 +19,7 @@
 //! transport, no git panel yet; the byte-exact frame format is documented
 //! in [`frames`] and docs/13.
 
+mod atomic;
 pub mod catalog;
 pub mod compile;
 pub mod display;

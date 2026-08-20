@@ -196,9 +196,19 @@ not rendered), per-element frame ranges, and an auto-layout beyond
   restore too; `actor` serializes as `{"kind":"human"}` /
   `{"kind":"agent","prompt":…}`; `at` is server-monotonic ms. Every
   `delta` and `snapshot` carries `history {can_undo, can_redo,
-  undo_label, redo_label, depth}`; `/debug/state` adds `history` and
-  `ops: [{id, label, actor, at}]`. `param_preview` and
-  `POST /api/run/{node}` never push an op.)*
+  undo_label, redo_label, depth}` (`depth` = the cursor: undoable
+  steps); `/debug/state` adds `history` and `ops: [{id, label, actor,
+  at}]`. `param_preview` and `POST /api/run/{node}` never push an op;
+  neither does a write that left text and sidecar identical (a move to
+  no cell on an un-moved node, a re-sent text) — it is answered with a
+  delta but is not an undo step. The `prompt` key is always present on
+  an agent actor (`null` when absent). **Persist discipline**: text then
+  sidecar, each temp + rename; a persist that fails half-way (the text
+  landed, the sidecar could not — a transient lock on a synced project
+  dir) takes the text off the disk again and rolls memory back under
+  the same lock hold, so a refused edit is never left anywhere, and
+  `text_hash` is by construction the hash of the text in memory — the
+  value `GET /api/edit/text` ships and `apply_text` checks against.)*
 - Continuous gestures coalesce: a slider drag or node drag is one op,
   created on release.
 - An agent inference's graph edits apply as **one atomic labeled op**
@@ -214,7 +224,9 @@ not rendered), per-element frame ranges, and an auto-layout beyond
   moved base is a later refinement — v0.1 refuses and the agent
   re-reads. *(Live, v0.1, as two intents: **`batch {ops, label}`** for
   the canvas — a list of write gestures applied in order under the
-  lock, all or nothing, the error naming the failing `index`; and
+  lock, all or nothing; its error carries the FAILING op's `kind`
+  (`refused` / `writer` / `unknown` / `protocol`, what the client reacts
+  to) plus a flattened `index` saying where; and
   **`apply_text {base_text_hash, files: [{path, text}], label, actor}`**
   for agents — paths are project-relative and limited to this
   pipeline's `.cic`, its `.cic.layout.json`, and `scripts/*.py` beside
@@ -250,7 +262,13 @@ a stray editor. The engine watches the project directory (debounced):
 an external change to a `.cic`, sidecar, or script triggers reload →
 re-check → **reload barrier** in the op log (undo stack cleared) →
 full snapshot broadcast to clients. Honest and simple; no
-three-way-merge machinery.
+three-way-merge machinery. The session's own writes echo back through
+the watcher too; they are recognised because after a successful persist
+disk == memory — text by hash, sidecar by equality, scripts by the
+loaded fingerprint — and that equality is the WHOLE echo guard: the
+server keeps no memory of "what I last wrote", which would mask a real
+external change back to a text it once wrote (git checkout there and
+back) and leave memory stale.
 
 ## Reconnect and resync
 

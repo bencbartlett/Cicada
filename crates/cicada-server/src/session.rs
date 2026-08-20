@@ -45,6 +45,7 @@ use cicada_sched::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::atomic::write_atomic;
 use crate::compile::{self, Loaded};
 use crate::display::{self, DisplayStats, PickTable};
 use crate::lower::{Lowered, LoweredBinding, lower, lower_partial};
@@ -444,16 +445,47 @@ impl Applied {
 
 /// How a commit touches the op log.
 enum OpEffect {
-    /// Push a new op (`before` → the committed state); truncates the redo
-    /// tail.
+    /// Push a new op (the `before` state → the committed state); truncates
+    /// the redo tail. A commit that changed nothing (text and sidecar
+    /// identical) pushes no op — there is nothing to undo.
     Push {
-        /// The state before the gesture.
-        before: StateSnapshot,
         /// Who made it.
         actor: Actor,
     },
     /// The caller already moved the cursor (undo/redo) — record nothing.
     Cursor,
+}
+
+/// Everything a write arm mutates in memory before its commit persists —
+/// taken under the lock at the start of the arm, put back under the SAME
+/// lock hold when anything fails (a gesture refused half-way, a persist
+/// that could not land), so a refused edit never lingers for the next op
+/// to broadcast and write. Graph, lowering and `text_hash` change only
+/// after a successful persist and need no rollback.
+struct RollbackPoint {
+    document: Document,
+    sidecar: Sidecar,
+    refs: NodeRefs,
+    cursor: usize,
+}
+
+impl RollbackPoint {
+    fn capture(inner: &Inner) -> Self {
+        Self {
+            document: inner.loaded.document.clone(),
+            sidecar: inner.sidecar.clone(),
+            refs: inner.refs.clone(),
+            cursor: inner.oplog.cursor,
+        }
+    }
+
+    fn restore(self, inner: &mut Inner) {
+        inner.loaded.document = self.document;
+        inner.sidecar = self.sidecar;
+        inner.refs = self.refs;
+        inner.oplog.cursor = self.cursor;
+        inner.loaded.recheck();
+    }
 }
 
 /// A message to one client's socket.
@@ -498,14 +530,19 @@ struct Inner {
     next_client: u32,
     join_counter: u64,
     writer: Option<u32>,
-    /// blake3 of the text we last wrote — the watcher ignores our own
-    /// writes by comparing.
-    last_written: Option<[u8; 32]>,
     display: HashMap<(u32, u32), Displayed>,
     last_complete: Option<Kept>,
     /// Pending screenshot requests: id → reply slot.
     screenshots: HashMap<u64, tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>>,
     next_screenshot: u64,
+    /// blake3 of the text in memory (`loaded.document.emit()`) — ALWAYS;
+    /// it is the base `apply_text` checks against and the hash
+    /// `GET /api/edit/text` ships beside the text. After every successful
+    /// persist memory == disk, so it is the file's hash too, and the
+    /// watcher's echo guard is simply "disk hashes to this" (plus sidecar
+    /// equality and the scripts fingerprint) — no separate memory of what
+    /// was last written, which would mask a genuine external change back
+    /// to a text this session once wrote.
     text_hash: [u8; 32],
     /// The undo/redo log.
     oplog: OpLog,
@@ -712,7 +749,6 @@ impl Session {
                 next_client: 0,
                 join_counter: 0,
                 writer: None,
-                last_written: None,
                 display: HashMap::new(),
                 last_complete: None,
                 screenshots: HashMap::new(),
@@ -989,38 +1025,12 @@ impl Session {
     // --------------------------------------------------------- intents --
 
     /// Handle one intent from `client`. Errors are sent back to that
-    /// client as `error` messages; nothing here panics on bad input.
+    /// client as `error` messages; nothing here panics on bad input. Every
+    /// write arm rolls its own mutations back under its own lock hold
+    /// ([`write_or_roll_back`]) — nothing is left for an outer pass to undo
+    /// after the lock was released.
     pub fn handle(&self, client: u32, intent_id: Option<String>, message: ClientMessage) {
-        // Write gestures mutate the document/sidecar in place before the
-        // persist; if anything fails on the way, the in-memory state must
-        // roll back to what is on disk — a refused edit that lingered would
-        // be broadcast and written by the next unrelated op. (The op-log
-        // cursor rides along: undo/redo move it before their commit.)
-        let snapshot = if is_write(&message) {
-            let inner = self.core.lock_inner();
-            Some((
-                inner.seq,
-                inner.loaded.document.clone(),
-                inner.sidecar.clone(),
-                inner.refs.clone(),
-                inner.oplog.cursor,
-            ))
-        } else {
-            None
-        };
         let result = self.dispatch(client, intent_id.clone(), message);
-        if result.is_err()
-            && let Some((seq, document, sidecar, refs, cursor)) = snapshot
-        {
-            let mut inner = self.core.lock_inner();
-            if inner.seq == seq {
-                inner.loaded.document = document;
-                inner.sidecar = sidecar;
-                inner.refs = refs;
-                inner.oplog.cursor = cursor;
-                inner.loaded.recheck();
-            }
-        }
         if let Err(error) = result {
             let inner = self.core.lock_inner();
             if let Some(c) = inner.clients.get(&client) {
@@ -1060,18 +1070,20 @@ impl Session {
             // persists, records the op, and broadcasts the delta.
             gesture if is_gesture(&gesture) => {
                 let mut inner = self.core.lock_inner();
-                let before = state_snapshot(&inner);
-                let applied = Self::apply_gesture(&mut inner, gesture)?;
-                let source = source(applied.label.clone());
-                self.commit(
-                    &mut inner,
-                    source,
-                    applied,
-                    OpEffect::Push {
+                write_or_roll_back(&mut inner, |inner| {
+                    let before = state_snapshot(inner);
+                    let applied = Self::apply_gesture(inner, gesture)?;
+                    let source = source(applied.label.clone());
+                    self.commit(
+                        inner,
+                        source,
+                        applied,
                         before,
-                        actor: Actor::Human,
-                    },
-                )
+                        OpEffect::Push {
+                            actor: Actor::Human,
+                        },
+                    )
+                })
             }
             ClientMessage::Hello { .. } => Ok(()),
             ClientMessage::ParamPreview { node, port, value } => {
@@ -1109,10 +1121,13 @@ impl Session {
                 };
                 let label = format!("undo: {}", op.label);
                 let target = op.before.clone();
-                let applied = restore_state(&mut inner, &target, label);
-                inner.oplog.cursor -= 1;
-                let source = source(applied.label.clone());
-                self.commit(&mut inner, source, applied, OpEffect::Cursor)
+                write_or_roll_back(&mut inner, |inner| {
+                    let before = state_snapshot(inner);
+                    let applied = restore_state(inner, &target, label);
+                    inner.oplog.cursor -= 1;
+                    let source = source(applied.label.clone());
+                    self.commit(inner, source, applied, before, OpEffect::Cursor)
+                })
             }
             ClientMessage::Redo {} => {
                 let mut inner = self.core.lock_inner();
@@ -1121,10 +1136,13 @@ impl Session {
                 };
                 let label = format!("redo: {}", op.label);
                 let target = op.after.clone();
-                let applied = restore_state(&mut inner, &target, label);
-                inner.oplog.cursor += 1;
-                let source = source(applied.label.clone());
-                self.commit(&mut inner, source, applied, OpEffect::Cursor)
+                write_or_roll_back(&mut inner, |inner| {
+                    let before = state_snapshot(inner);
+                    let applied = restore_state(inner, &target, label);
+                    inner.oplog.cursor += 1;
+                    let source = source(applied.label.clone());
+                    self.commit(inner, source, applied, before, OpEffect::Cursor)
+                })
             }
             ClientMessage::Batch { ops, label } => {
                 if ops.is_empty() {
@@ -1147,54 +1165,48 @@ impl Session {
                     });
                 }
                 let mut inner = self.core.lock_inner();
-                let before = state_snapshot(&inner);
-                let rollback = (
-                    inner.loaded.document.clone(),
-                    inner.sidecar.clone(),
-                    inner.refs.clone(),
-                );
-                let mut summary = Applied {
-                    label: label.clone(),
-                    ..Applied::default()
-                };
-                for (index, op) in ops.into_iter().enumerate() {
-                    let tag = type_tag(&op);
-                    match Self::apply_gesture(&mut inner, op) {
-                        Ok(applied) => {
-                            if applied.text_changed {
-                                // Later elements see the earlier ones
-                                // (a connect after a place needs the new
-                                // binding resolved).
-                                inner.loaded.recheck();
+                // All or nothing: an element that fails (or a persist that
+                // cannot land) puts the pre-batch state back — memory by
+                // the rollback, disk by the commit.
+                write_or_roll_back(&mut inner, |inner| {
+                    let before = state_snapshot(inner);
+                    let mut summary = Applied {
+                        label: label.clone(),
+                        ..Applied::default()
+                    };
+                    for (index, op) in ops.into_iter().enumerate() {
+                        let tag = type_tag(&op);
+                        match Self::apply_gesture(inner, op) {
+                            Ok(applied) => {
+                                if applied.text_changed {
+                                    // Later elements see the earlier ones
+                                    // (a connect after a place needs the
+                                    // new binding resolved).
+                                    inner.loaded.recheck();
+                                }
+                                summary.absorb(applied);
                             }
-                            summary.absorb(applied);
-                        }
-                        Err(source) => {
-                            // All or nothing: back to the pre-batch state
-                            // (memory only — nothing was persisted yet).
-                            inner.loaded.document = rollback.0;
-                            inner.sidecar = rollback.1;
-                            inner.refs = rollback.2;
-                            inner.loaded.recheck();
-                            return Err(IntentError::Batch {
-                                label,
-                                index,
-                                op: tag,
-                                source: Box::new(source),
-                            });
+                            Err(source) => {
+                                return Err(IntentError::Batch {
+                                    label,
+                                    index,
+                                    op: tag,
+                                    source: Box::new(source),
+                                });
+                            }
                         }
                     }
-                }
-                let source = source(label);
-                self.commit(
-                    &mut inner,
-                    source,
-                    summary,
-                    OpEffect::Push {
+                    let source = source(label);
+                    self.commit(
+                        inner,
+                        source,
+                        summary,
                         before,
-                        actor: Actor::Human,
-                    },
-                )
+                        OpEffect::Push {
+                            actor: Actor::Human,
+                        },
+                    )
+                })
             }
             ClientMessage::ApplyText(request) => {
                 let source = source(request.label.clone());
@@ -1479,46 +1491,40 @@ impl Session {
     /// delta, and schedule the structural solve (text changes) or re-emit
     /// frames (preview toggles). THE one path every edit — gesture, batch,
     /// undo, redo — takes to disk and to the clients.
+    ///
+    /// `before` is the state the disk holds as the call starts (memory ==
+    /// disk after every successful commit). A persist that fails half-way
+    /// — the text landed, the sidecar could not (a transient lock on a
+    /// synced project dir) — takes the text off the disk again, so the
+    /// disk never keeps a refused edit and `text_hash` stays the hash of
+    /// the text in memory (the caller rolls memory back). A commit that
+    /// changed nothing pushes no op.
     fn commit(
         &self,
         inner: &mut Inner,
         source: DeltaSource,
         applied: Applied,
+        before: StateSnapshot,
         effect: OpEffect,
     ) -> Result<(), IntentError> {
         let text = inner.loaded.document.emit();
-        if applied.text_changed {
-            // Atomic: temp file in the same directory, then rename over the
-            // live file — a crash or a concurrent reader (git, the watcher,
-            // an editor) never sees a truncated source of truth.
-            write_atomic(&self.core.config.pipeline, text.as_bytes()).map_err(|e| {
-                IntentError::Persist(format!(
-                    "writing {}: {e}",
-                    self.core.config.pipeline.display()
-                ))
-            })?;
-            let hash = *blake3::hash(text.as_bytes()).as_bytes();
-            inner.last_written = Some(hash);
-            inner.text_hash = hash;
-        }
-        inner
-            .sidecar
-            .save(&Sidecar::path_for(&self.core.config.pipeline))
-            .map_err(|e| IntentError::Persist(e.to_string()))?;
+        self.persist(inner, &text, applied.text_changed, &before)?;
         if applied.text_changed {
             inner.loaded.recheck();
         }
         self.core.rebuild(inner);
         inner.seq += 1;
-        if let OpEffect::Push { before, actor } = effect {
+        if let OpEffect::Push { actor } = effect {
             let after = StateSnapshot {
                 text: text.clone(),
                 sidecar: inner.sidecar.clone(),
             };
-            let at = self.core.now_ms();
-            inner
-                .oplog
-                .push(source.label.clone(), actor, before, after, at);
+            if after != before {
+                let at = self.core.now_ms();
+                inner
+                    .oplog
+                    .push(source.label.clone(), actor, before, after, at);
+            }
         }
         let message = ServerMessage::Delta {
             source,
@@ -1536,6 +1542,56 @@ impl Session {
             // The display set changed: send frames (from the last complete
             // generation) or clears for the toggled nodes.
             self.core.refresh_display(inner, None);
+        }
+        Ok(())
+    }
+
+    /// Write the text (when it changed) and the sidecar, each atomically,
+    /// and only then move `text_hash`. Text first — it is the source of
+    /// truth — so a sidecar failure is the one half-way case, and it is
+    /// undone here: the `before` text goes back over the one that landed.
+    /// Should even that fail, the error says so; memory (rolled back by
+    /// the caller) then differs from disk and the watcher's next pass
+    /// reloads the disk as an external change — loud, never silent.
+    fn persist(
+        &self,
+        inner: &mut Inner,
+        text: &str,
+        text_changed: bool,
+        before: &StateSnapshot,
+    ) -> Result<(), IntentError> {
+        let pipeline = &self.core.config.pipeline;
+        if text_changed {
+            write_atomic(pipeline, text.as_bytes()).map_err(|e| {
+                IntentError::Persist(format!("writing {}: {e}", display_path(pipeline)))
+            })?;
+        }
+        if let Err(error) = inner.sidecar.save(&Sidecar::path_for(pipeline)) {
+            use std::fmt::Write as _;
+            let mut message = error.to_string();
+            if text_changed {
+                match write_atomic(pipeline, before.text.as_bytes()) {
+                    Ok(()) => {
+                        let _ = write!(
+                            message,
+                            "; the text write before it was taken back ({} is as it was)",
+                            display_path(pipeline)
+                        );
+                    }
+                    Err(detail) => {
+                        let _ = write!(
+                            message,
+                            "; restoring {} failed too ({detail}) — the file holds the refused \
+                             edit until the project watcher reloads it",
+                            display_path(pipeline)
+                        );
+                    }
+                }
+            }
+            return Err(IntentError::Persist(message));
+        }
+        if text_changed {
+            inner.text_hash = *blake3::hash(text.as_bytes()).as_bytes();
         }
         Ok(())
     }
@@ -1668,33 +1724,49 @@ impl Session {
         }
 
         // Swap the in-memory state. Scripts changed → the catalog reloads
-        // (Python discovery); a script that fails to describe is a parse
-        // failure of the submitted edit: the files go back, the state
-        // stays.
-        let text_for_load = new_text
-            .clone()
-            .unwrap_or_else(|| inner.loaded.document.emit());
+        // (Python discovery) — everything fallible (the fingerprint of the
+        // written scripts, the load) runs BEFORE memory moves, so a
+        // failure has only the files to put back: a script that fails to
+        // describe is a parse failure of the submitted edit, an unreadable
+        // scripts dir an I/O one; the state stays as it was.
         if scripts_changed {
-            match compile::load(
-                &self.core.config.pipeline,
-                &text_for_load,
-                &self.core.scripts,
-            ) {
-                Ok(loaded) => inner.loaded = loaded,
+            let text_for_load = new_text
+                .clone()
+                .unwrap_or_else(|| inner.loaded.document.emit());
+            let reloaded = scripts_fingerprint(&self.core.config.pipeline)
+                .map_err(|e| IntentError::Io(e.to_string()))
+                .and_then(|fresh| {
+                    compile::load(
+                        &self.core.config.pipeline,
+                        &text_for_load,
+                        &self.core.scripts,
+                    )
+                    .map(|loaded| (fresh, loaded))
+                    .map_err(|error| IntentError::ParseError {
+                        message: format!("a script does not load: {error}"),
+                        diagnostics: Vec::new(),
+                    })
+                });
+            match reloaded {
+                Ok((fresh, loaded)) => {
+                    inner.loaded = loaded;
+                    inner.scripts_fingerprint = fresh;
+                }
                 Err(error) => {
                     use std::fmt::Write as _;
-                    let mut message = format!("a script does not load: {error}");
+                    let mut message = error.to_string();
                     if let Err(detail) = restore_files(&before_files) {
                         let _ = write!(message, "; restoring the files failed too: {detail}");
                     }
-                    return Err(IntentError::ParseError {
-                        message,
-                        diagnostics: Vec::new(),
+                    return Err(match error {
+                        IntentError::ParseError { diagnostics, .. } => IntentError::ParseError {
+                            message,
+                            diagnostics,
+                        },
+                        _ => IntentError::Io(message),
                     });
                 }
             }
-            inner.scripts_fingerprint = scripts_fingerprint(&self.core.config.pipeline)
-                .map_err(|e| IntentError::Io(e.to_string()))?;
         } else if let Some(text) = &new_text {
             inner.loaded.reload_text(text);
         }
@@ -1702,9 +1774,7 @@ impl Session {
         if let Some(text) = &new_text {
             let old = Document::parse(&before.text);
             dirty = changed_bindings(&old, &inner.loaded.document);
-            let hash = *blake3::hash(text.as_bytes()).as_bytes();
-            inner.last_written = Some(hash);
-            inner.text_hash = hash;
+            inner.text_hash = *blake3::hash(text.as_bytes()).as_bytes();
         }
         if let Some(sidecar) = new_sidecar {
             inner.sidecar = sidecar;
@@ -1712,14 +1782,19 @@ impl Session {
         self.core.rebuild(&mut inner);
         inner.seq += 1;
         let after = state_snapshot(&inner);
-        let at = self.core.now_ms();
-        inner.oplog.push(
-            request.label.clone(),
-            request.actor.clone(),
-            before,
-            after,
-            at,
-        );
+        if after != before {
+            // An apply that left text and sidecar as they were (a
+            // scripts-only change, a re-send of the current text) is not
+            // an undo step — a snapshot op would restore nothing.
+            let at = self.core.now_ms();
+            inner.oplog.push(
+                request.label.clone(),
+                request.actor.clone(),
+                before,
+                after,
+                at,
+            );
+        }
         if scripts_changed {
             // The catalog changed under the clients: one hydration path.
             let snapshot =
@@ -1804,8 +1879,12 @@ impl Session {
     /// re-read text (+ scripts when `rescan_scripts`), sidecar, relower,
     /// clear the op log (the reload barrier, docs/13), broadcast a barrier
     /// snapshot, resolve. The session's own writes echo back through the
-    /// watcher and are recognised — text by hash, sidecar by equality,
-    /// scripts by the loaded fingerprint — and return `Ok(false)`.
+    /// watcher and are recognised because after them disk == memory —
+    /// text by hash, sidecar by equality, scripts by the loaded
+    /// fingerprint — and return `Ok(false)`. That equality is the WHOLE
+    /// echo guard: anything on disk that differs from memory reloads,
+    /// including a text this session once wrote and an external edit
+    /// brought back.
     ///
     /// # Errors
     ///
@@ -1839,10 +1918,8 @@ impl Session {
                 .as_ref()
                 .is_none_or(|fresh| *fresh == inner.scripts_fingerprint);
             if text_same && sidecar_same && scripts_same {
-                return Ok(false);
-            }
-            if inner.last_written == Some(hash) && sidecar_same && scripts_same {
-                // Our own write echoing back through the watcher.
+                // Our own write echoing back through the watcher (or a
+                // touch that changed nothing).
                 return Ok(false);
             }
             if rescan_scripts {
@@ -2332,27 +2409,6 @@ fn apply_param(
     Ok(())
 }
 
-/// Write `bytes` to `path` atomically: a sibling temp file, `sync_all`,
-/// then rename over the target (a replace on every platform std supports).
-fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write as _;
-    let dir = path.parent().unwrap_or(Path::new("."));
-    let name = path
-        .file_name()
-        .map_or_else(|| "file".to_owned(), |n| n.to_string_lossy().into_owned());
-    let tmp = dir.join(format!(".{name}.cicada-tmp"));
-    {
-        let mut file = std::fs::File::create(&tmp)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-    }
-    if let Err(error) = std::fs::rename(&tmp, path) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(error);
-    }
-    Ok(())
-}
-
 /// blake3 bytes → lowercase hex (the protocol's hash spelling).
 fn hex(hash: &[u8; 32]) -> String {
     blake3::Hash::from_bytes(*hash).to_hex().to_string()
@@ -2367,6 +2423,21 @@ enum EditTarget {
     Sidecar,
     /// `scripts/<name>.py` beside it.
     Script(String),
+}
+
+/// Run a write arm's body with a [`RollbackPoint`] around it: whatever
+/// the body mutated in memory goes back under this same lock hold when it
+/// fails. The body's commit takes care of the disk.
+fn write_or_roll_back(
+    inner: &mut Inner,
+    body: impl FnOnce(&mut Inner) -> Result<(), IntentError>,
+) -> Result<(), IntentError> {
+    let point = RollbackPoint::capture(inner);
+    let result = body(inner);
+    if result.is_err() {
+        point.restore(inner);
+    }
+    result
 }
 
 /// The current state as an op-log snapshot.
@@ -5587,5 +5658,394 @@ size = slider(value=4.0, min=0.5, max=5.0)
             "the good one stays"
         );
         assert_eq!(history_of(&session)["depth"], 1);
+    }
+
+    // ------------------------------------------------ persist failures --
+
+    /// The text the session holds and the hash it vouches for, as an
+    /// agent sees them through `GET /api/edit/text`.
+    fn text_and_hash(session: &Session) -> (String, String) {
+        let value = session.edit_text();
+        (
+            value["text"].as_str().unwrap().to_owned(),
+            value["text_hash"].as_str().unwrap().to_owned(),
+        )
+    }
+
+    fn blake3_hex(text: &str) -> String {
+        blake3::hash(text.as_bytes()).to_hex().to_string()
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // a gesture, then an undo, each against a failing sidecar save
+    fn a_failed_persist_leaves_disk_memory_and_the_hash_as_they_were() {
+        // Review finding (2026-08-20): a commit whose `.cic` write landed
+        // but whose sidecar save failed (a transient lock — os error 5/32,
+        // exactly what Dropbox does to this project dir) left the REFUSED
+        // text on disk with memory rolled back and `text_hash` vouching
+        // for the disk bytes: `GET /api/edit/text` shipped a text whose
+        // hash was not the one beside it, the stale-base check accepted an
+        // edit based on a text never on disk, and the watcher saw nothing
+        // to reconcile. The contract now: a failed persist restores the
+        // disk, and `text_hash` is ALWAYS the hash of the text in memory.
+        let (_dir, config) = project("# cicada 1\na = 1.0\n");
+        let pipeline = config.pipeline.clone();
+        let sidecar_path = Sidecar::path_for(&pipeline);
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        // One good op first, so the undo path can be exercised too.
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetParam {
+                node: "a".into(),
+                port: None,
+                value: "2.0".into(),
+            },
+        );
+        session.wait_idle();
+        drain(&mut rx);
+        let before = on_disk(&pipeline);
+        assert_eq!(before.0, "# cicada 1\na = 2.0\n");
+        let (memory, hash) = text_and_hash(&session);
+        assert_eq!(memory, before.0);
+        assert_eq!(hash, blake3_hex(&memory));
+
+        // Fault injection: the sidecar path is a NON-EMPTY directory, so
+        // neither writing nor removing the sidecar can succeed — the text
+        // write before it does.
+        std::fs::create_dir(&sidecar_path).unwrap();
+        std::fs::write(sidecar_path.join("occupied"), b"x").unwrap();
+
+        // A text gesture: the .cic lands, the sidecar save fails.
+        session.handle(
+            id,
+            Some("g".into()),
+            ClientMessage::SetParam {
+                node: "a".into(),
+                port: None,
+                value: "3.0".into(),
+            },
+        );
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        let error = msgs.iter().find(|m| m["type"] == "error").unwrap();
+        assert_eq!(error["payload"]["kind"], "persist", "{error}");
+        assert_eq!(error["payload"]["intent_id"], "g");
+        assert!(
+            !msgs.iter().any(|m| m["type"] == "delta"),
+            "a failed persist broadcasts no delta: {msgs:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&pipeline).unwrap(),
+            before.0,
+            "the refused text was taken back off the disk"
+        );
+        let (memory, hash) = text_and_hash(&session);
+        assert_eq!(memory, before.0, "memory rolled back");
+        assert_eq!(
+            hash,
+            blake3_hex(&memory),
+            "text_hash is the hash of the text it ships with"
+        );
+        assert_eq!(hash, file_hash(&pipeline), "…which is the file's");
+        assert_eq!(history_of(&session)["depth"], 1, "no op recorded");
+
+        // An undo against the same fault: the restore lands, the sidecar
+        // save fails → everything (including the cursor) stays put.
+        session.handle(id, Some("u".into()), ClientMessage::Undo {});
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        let error = msgs.iter().find(|m| m["type"] == "error").unwrap();
+        assert_eq!(error["payload"]["kind"], "persist", "{error}");
+        assert!(!msgs.iter().any(|m| m["type"] == "delta"));
+        assert_eq!(std::fs::read_to_string(&pipeline).unwrap(), before.0);
+        let (memory, hash) = text_and_hash(&session);
+        assert_eq!(memory, before.0);
+        assert_eq!(hash, blake3_hex(&memory));
+        assert_eq!(
+            history_of(&session),
+            serde_json::json!({"can_undo": true, "can_redo": false, "undo_label": "set a = 2.0",
+                               "redo_label": null, "depth": 1}),
+            "the undo that failed to persist did not move the cursor"
+        );
+
+        // The stale-base check is honest: an apply_text based on the hash
+        // the session exposes applies — and only because that text IS on
+        // disk. The obstacle is gone (the transient lock released).
+        std::fs::remove_dir_all(&sidecar_path).unwrap();
+        assert!(
+            !session.reload_from_disk("watcher", false).unwrap(),
+            "disk and memory agree — nothing for the watcher to reconcile"
+        );
+        assert_eq!(history_of(&session)["depth"], 1, "no barrier, log intact");
+        let (_, hash) = text_and_hash(&session);
+        apply(
+            &session,
+            &hash,
+            vec![("p.cic", "# cicada 1\na = 4.0\n")],
+            "agent",
+        )
+        .unwrap();
+        session.wait_idle();
+        assert_eq!(
+            std::fs::read_to_string(&pipeline).unwrap(),
+            "# cicada 1\na = 4.0\n"
+        );
+        assert_eq!(history_of(&session)["depth"], 2);
+        // The session is healthy: the undo that was refused works now.
+        session.handle(id, None, ClientMessage::Undo {});
+        session.wait_idle();
+        assert_eq!(std::fs::read_to_string(&pipeline).unwrap(), before.0);
+    }
+
+    #[test]
+    fn a_failed_text_write_rolls_the_gesture_back_without_touching_the_sidecar_file() {
+        // The other order of failure: the .cic itself cannot be replaced
+        // (its temp path is a directory). Nothing lands — not the text,
+        // not the sidecar the same gesture would have written.
+        let (_dir, config) = project("# cicada 1\na = 1.0\n");
+        let pipeline = config.pipeline.clone();
+        let sidecar_path = Sidecar::path_for(&pipeline);
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let tmp = pipeline.parent().unwrap().join(".p.cic.cicada-tmp");
+        std::fs::create_dir(&tmp).unwrap();
+        let before = on_disk(&pipeline);
+        // place + cell: text AND sidecar change in one gesture.
+        session.handle(
+            id,
+            Some("p".into()),
+            ClientMessage::PlaceNode {
+                func: "sphere".into(),
+                cell: Some([3, 3]),
+                connect: None,
+            },
+        );
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        let error = msgs.iter().find(|m| m["type"] == "error").unwrap();
+        assert_eq!(error["payload"]["kind"], "persist", "{error}");
+        assert_eq!(on_disk(&pipeline), before, "nothing landed");
+        assert!(!sidecar_path.exists());
+        let (memory, hash) = text_and_hash(&session);
+        assert_eq!(memory, before.0);
+        assert_eq!(hash, blake3_hex(&memory));
+        assert!(
+            session.core.lock_inner().sidecar.overrides.is_empty(),
+            "the sidecar cell was rolled back in memory"
+        );
+        assert_eq!(history_of(&session)["depth"], 0);
+        std::fs::remove_dir(&tmp).unwrap();
+        // And the place works once the obstacle is gone, with the SAME
+        // name (the refused place left no trace in the document).
+        session.handle(
+            id,
+            None,
+            ClientMessage::PlaceNode {
+                func: "sphere".into(),
+                cell: Some([3, 3]),
+                connect: None,
+            },
+        );
+        session.wait_idle();
+        assert!(
+            std::fs::read_to_string(&pipeline)
+                .unwrap()
+                .contains("sphere_1 = sphere("),
+        );
+        assert_eq!(history_of(&session)["depth"], 1);
+    }
+
+    #[test]
+    fn a_gesture_that_fails_after_mutating_is_rolled_back_under_the_lock() {
+        // `dispatch` (not `handle`) is driven directly: the rollback of a
+        // gesture that mutated and then failed — place_node's text edit +
+        // sidecar cell landed, then its connect was refused — must happen
+        // inside the gesture's own lock hold. `handle`'s old outer rollback
+        // ran outside the lock and only when `seq` had not moved; a
+        // concurrent writer (HTTP apply_text, the watcher) bumping `seq`
+        // between the two lock holds left the half-state in memory for the
+        // next op to persist.
+        let (_dir, config) = project("# cicada 1\na = 1.0\n");
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, _rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let before = on_disk(&pipeline);
+        let (memory_before, hash_before) = text_and_hash(&session);
+        let error = session
+            .dispatch(
+                id,
+                Some("p".into()),
+                ClientMessage::PlaceNode {
+                    func: "sphere".into(),
+                    cell: Some([3, 3]),
+                    connect: Some(crate::protocol::ConnectSpec {
+                        from: WireEnd {
+                            node: "a".into(),
+                            port: "out".into(),
+                        },
+                        to_port: "nope".into(),
+                        lift: false,
+                    }),
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), "refused", "{error}");
+        let inner = session.core.lock_inner();
+        assert_eq!(inner.loaded.document.emit(), memory_before);
+        assert!(inner.sidecar.overrides.is_empty());
+        assert_eq!(hex(&inner.text_hash), hash_before);
+        drop(inner);
+        assert_eq!(on_disk(&pipeline), before);
+        // Undo / redo likewise: a restore whose persist fails puts the
+        // cursor back inside the same lock hold.
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetParam {
+                node: "a".into(),
+                port: None,
+                value: "2.0".into(),
+            },
+        );
+        session.wait_idle();
+        let sidecar_path = Sidecar::path_for(&pipeline);
+        std::fs::create_dir(&sidecar_path).unwrap();
+        std::fs::write(sidecar_path.join("occupied"), b"x").unwrap();
+        let error = session
+            .dispatch(id, None, ClientMessage::Undo {})
+            .unwrap_err();
+        assert_eq!(error.kind(), "persist", "{error}");
+        let inner = session.core.lock_inner();
+        assert_eq!(inner.oplog.cursor, 1);
+        assert_eq!(inner.loaded.document.emit(), "# cicada 1\na = 2.0\n");
+        assert_eq!(hex(&inner.text_hash), blake3_hex("# cicada 1\na = 2.0\n"));
+        drop(inner);
+        assert_eq!(
+            std::fs::read_to_string(&pipeline).unwrap(),
+            "# cicada 1\na = 2.0\n"
+        );
+        std::fs::remove_dir_all(&sidecar_path).unwrap();
+    }
+
+    #[test]
+    fn writes_that_change_nothing_are_answered_but_are_not_undo_steps() {
+        // A move to "no cell" on a node that has no override, a set_param
+        // to the value already there, an apply_text re-sending the current
+        // text: each is acknowledged with a delta (the client asked, the
+        // server answers with the authoritative state) but pushes no op —
+        // a snapshot op whose before equals its after would be an undo
+        // step that visibly does nothing.
+        let (_dir, config) = project("# cicada 1\na = 1.0\n");
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        for (intent, message) in [
+            (
+                "m",
+                ClientMessage::MoveNode {
+                    node: "a".into(),
+                    cell: None,
+                },
+            ),
+            (
+                "s",
+                ClientMessage::SetParam {
+                    node: "a".into(),
+                    port: None,
+                    value: "1.0".into(),
+                },
+            ),
+        ] {
+            session.handle(id, Some(intent.into()), message);
+            session.wait_idle();
+            let msgs = texts(&drain(&mut rx));
+            let deltas: Vec<_> = msgs.iter().filter(|m| m["type"] == "delta").collect();
+            assert_eq!(deltas.len(), 1, "{intent}: acknowledged: {msgs:?}");
+            assert_eq!(deltas[0]["payload"]["source"]["intent_id"], intent);
+            assert_eq!(
+                deltas[0]["payload"]["history"]["depth"], 0,
+                "{intent}: not an undo step"
+            );
+        }
+        let (text, hash) = text_and_hash(&session);
+        let result = apply(&session, &hash, vec![("p.cic", &text)], "same text").unwrap();
+        assert_eq!(result["history"]["depth"], 0);
+        assert_eq!(result["text_hash"], hash);
+        assert_eq!(history_of(&session)["can_undo"], false);
+        assert!(
+            session.debug_state(false)["ops"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        // A real change right after is op 1 — the no-ops consumed no ids.
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetParam {
+                node: "a".into(),
+                port: None,
+                value: "2.0".into(),
+            },
+        );
+        session.wait_idle();
+        let ops = session.debug_state(false)["ops"].clone();
+        assert_eq!(ops.as_array().unwrap().len(), 1, "{ops}");
+        assert_eq!(ops[0]["id"], 1);
+    }
+
+    #[test]
+    fn a_stale_self_write_hash_never_masks_a_genuine_external_change() {
+        // The echo guard is "disk == memory" (text hash, sidecar equality,
+        // scripts fingerprint) and nothing else. A remembered
+        // "last written" hash would suppress a REAL external change that
+        // happens to restore a text this session once wrote: write A,
+        // external edit to B (reloaded), external edit back to A — the
+        // second reload must happen too, or memory stays B while disk
+        // says A.
+        let (_dir, config) = project("# cicada 1\na = 1.0\n");
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, _rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetParam {
+                node: "a".into(),
+                port: None,
+                value: "2.0".into(),
+            },
+        );
+        session.wait_idle();
+        let text_a = std::fs::read_to_string(&pipeline).unwrap();
+        assert_eq!(text_a, "# cicada 1\na = 2.0\n");
+        assert!(
+            !session.reload_from_disk("echo", false).unwrap(),
+            "our own write is an echo"
+        );
+        std::fs::write(&pipeline, "# cicada 1\na = 5.0\n").unwrap();
+        assert!(session.reload_from_disk("to B", false).unwrap());
+        session.wait_idle();
+        assert_eq!(text_and_hash(&session).0, "# cicada 1\na = 5.0\n");
+        std::fs::write(&pipeline, &text_a).unwrap();
+        assert!(
+            session.reload_from_disk("back to A", false).unwrap(),
+            "a genuine external change back to a text we once wrote still reloads"
+        );
+        session.wait_idle();
+        let (memory, hash) = text_and_hash(&session);
+        assert_eq!(memory, text_a, "memory follows the disk");
+        assert_eq!(hash, blake3_hex(&memory));
     }
 }

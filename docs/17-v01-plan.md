@@ -66,12 +66,16 @@ Design: DECISIONS.md rows 37 (revised 2026-08-19) and doc 13 §Undo.
   clones for rollback; `undo`/`redo` intents restore and go through the
   normal persist + delta; `reload_from_disk` clears the log (barrier);
   effectful runs are not ops; lease-gated like every write.
-- **WP-B (batch)**: the `batch` intent and `POST /api/edit/batch`:
-  `{base_text_hash, files: {path: text}, label, actor}` → refuse on stale
-  base (`stale_base`, returns the current hash) or parse failure
+- **WP-B (batch)**: the atomic multi-file edit for agents — shipped as
+  the `apply_text` intent and `POST /api/edit/apply_text` (the name
+  `batch` went to the canvas's gesture list, below):
+  `{base_text_hash, files: [{path, text}], label, actor}` → refuse on
+  stale base (`stale_base`, returns the current hash) or parse failure
   (diagnostics); else apply under the lock: write every file temp +
-  rename, one op, one delta. Multi-node canvas gestures (multi-move,
-  multi-delete, reconnect) use it.
+  rename, one op, one delta. `GET /api/edit/text` is the base to read.
+  Multi-node canvas gestures (multi-move, multi-delete, reconnect) use
+  the `batch {ops, label}` intent — a list of write gestures applied in
+  order under the lock, all or nothing, one op, one delta.
 - **WP-P (protocol + web)**: additive `history {can_undo, can_redo,
   undo_label, redo_label}` on Delta/Snapshot/`/debug/state`;
   `Ctrl+Z`/`Ctrl+Shift+Z`; toolbar buttons; Backspace removed from the

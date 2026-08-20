@@ -156,7 +156,10 @@ pub struct LeaseView {
 }
 
 /// Who made an edit (docs/13 §Undo/redo: `human | agent(prompt)`).
-/// Serialized as `{"kind":"human"}` / `{"kind":"agent","prompt":…}`.
+/// Serialized as `{"kind":"human"}` / `{"kind":"agent","prompt":…}` — the
+/// `prompt` key is always present on an agent (`null` when it has none),
+/// so the client mirror reads `prompt: string | null`; on the way in it
+/// may be omitted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Actor {
@@ -166,7 +169,7 @@ pub enum Actor {
     /// edit, when it has one.
     Agent {
         /// The prompt, for the history view.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
         prompt: Option<String>,
     },
 }
@@ -736,7 +739,14 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(Actor::Agent { prompt: None }).unwrap(),
-            serde_json::json!({"kind": "agent"})
+            serde_json::json!({"kind": "agent", "prompt": null}),
+            "the prompt key is always present on the wire (the mirror reads string | null)"
+        );
+        let bare: Actor = serde_json::from_str(r#"{"kind":"agent"}"#).unwrap();
+        assert_eq!(
+            bare,
+            Actor::Agent { prompt: None },
+            "…but may be omitted on the way in"
         );
     }
 
