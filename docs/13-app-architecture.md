@@ -115,15 +115,33 @@ next tick starts a fresh drag, predicted again and **announced again**
 if withheld, with its own `pending_value`. The gap rule exists because
 both sliders skip `set_param` when the pointer is released on the
 committed value — a drag can end with no write at all, and the next
-one must still hear its policy. For the client this means:
-`preview_policy` may arrive more than once for the same param (after a
-pause, a release, an Esc); each one is the current verdict — replace
-the pending state, never stack it. `/debug/state` →
-`solve.previews_deferred` counts withheld ticks in total and
-`solve.drag` shows the standing drag `{node, port, mode: "live" |
-"compute_on_release", deferred, last_tick_ms}`. The web client's half —
-the pending value and estimate on the slider, the observer's view — is
-the next package; the current client ignores the message.
+one must still hear its policy. Server-side, every write intent but the
+preview tick ends the drag at the dispatcher's door (gestures, undo,
+redo, batch — landed or refused), and `apply_text`, a reload and Esc
+end it at their own entries.
+
+**The frozen contract for the client** (the web half is the next
+package; the committed client ignores the message):
+
+1. `preview_policy` may arrive more than once for the same param —
+   after a pause longer than the gap, after a release, after an Esc,
+   after an undo. Each one is the current verdict with its own
+   `pending_value` and `estimate_ms`: **replace** the pending state,
+   never stack it.
+2. Frames and statuses **can** arrive during a withheld drag: a tick
+   that is a pure cache read (a value visited before, or warmed by
+   scrub caching) previews live even after the drag has switched. A
+   frame or a status is therefore never "the drag ended" — only the
+   release's delta, the pointer release without a write, or a fresh
+   `preview_policy` changes the pending state.
+3. The server never sends a "back to live" message: a drag's policy
+   stands until the drag ends; the next drag is predicted afresh and
+   is live unless announced otherwise.
+4. `/debug/state` → `solve.previews_deferred` counts withheld ticks in
+   total and `solve.drag` shows the standing drag `{node, port, mode:
+   "live" | "compute_on_release", deferred, last_tick_ms}` (`null`
+   between drags).
+
 `PROTOCOL_VERSION` is unchanged (additive).
 
 ## Binary frame format
@@ -174,6 +192,17 @@ updates, and wire-summary payloads (counts, bounds, samples) for
 inspected wires. Diagnostics carry the doc 11 structure — kind, span,
 expected/actual, suggested fix — so the same payload drives canvas
 error chips, the text panel, and agent loops.
+
+*(Live, v0.1 item 3b.)* A `cached` node's status carries `elements`
+and `nanos` when its memo entry recorded the cost of its last compute
+(node-level entries do, since 3b): the count is what the ETA's
+per-node prediction multiplies by — it survives a warm reopen, where
+nothing computes — and the time is the **last compute's**, which doc
+12 §Progress asks the badge to show; it is never this generation's
+(that was a cache read). Clients render it as "last 43.9 s" beside
+`cached`, not as a bare time. Additive: both fields were already
+optional on the wire, and `done` nodes carry this generation's numbers
+as before.
 
 ## Animation transport
 

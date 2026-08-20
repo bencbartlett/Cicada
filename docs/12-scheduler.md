@@ -292,10 +292,13 @@ prediction is, precisely:
   upgrade path; a tick that would compute stays withheld whatever its
   estimate (the hysteresis: a drag never flips back to solving). A
   drag is the run of ticks on one param closer together than
-  `DRAG_GAP_MS` (300 ms); a write attempt (landed or refused), an Esc,
-  a reload or a longer pause ends it, and the next tick starts a fresh
-  one — re-predicted, re-announced if withheld (doc 13 §Slider drags
-  has the client-side reading).
+  `DRAG_GAP_MS` (300 ms); a write attempt (landed or refused — every
+  write intent but the tick, at the dispatcher's door: gestures, undo,
+  redo, batch; `apply_text` at its own entry), an Esc, a reload or a
+  longer pause ends it, and the next tick starts a fresh one —
+  re-predicted, re-announced if withheld (doc 13 §Slider drags has the
+  client-side reading). The bar is inclusive: a cone predicted at
+  exactly `COMPUTE_ON_RELEASE_MS` is withheld.
 - **No second model.** A cone with no evidence at all previews live
   once; that generation records every node's sample and element count,
   and the next tick is predicted from them. There is no separate

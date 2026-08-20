@@ -19,7 +19,7 @@ runs in parallel from day 1:
 | 2 | Git panel slice 1 — status strip, per-node change markers, commit, revert-to-HEAD | foreground (server/web) | ~1 week | pending |
 | P | OCCT probe — prebuilt 7.8.x build/link on win/mac/linux, determinism, timings, license, CI shape | parallel worktree | hours, cap 1 day | **done** 2026-08-20 — GREEN on win-64 with one rename patch, byte-deterministic, ~3 ms/boolean; Linux/macOS measured by item 3 WP-A's CI job; memo `docs/probes/occt-2026-08.md` |
 | 3 | OCCT-backed Solid — the `Solid` kind, primitives/extrude/loft/revolve/sweep, booleans, `tessellate`, STEP; `mesh_*` renames in the same commit | main geometry track from week 3 | weeks | **unblocked** (probe GREEN) — WP-A next: own fork with the recorded patches, `occt` feature, `tools/fetch_occt.py`, the per-OS CI job |
-| 3b | Scheduler foundations — per-solve cancel handle, `volatile`, idle-class hypothetical solve — plus compute-on-release | parallel (sched/server) | ~1 week | **engine half done** 2026-08-20 (`wt/sched`: four commits; web half — the slider's pending value + estimate from `preview_policy` — is the next package) |
+| 3b | Scheduler foundations — per-solve cancel handle, `volatile`, idle-class hypothetical solve — plus compute-on-release | parallel (sched/server) | ~1 week | **engine half done** 2026-08-20 (`wt/sched`, fourteen commits after two review rounds; web half — the slider's pending value + estimate from `preview_policy` — is the next package) |
 | 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | pending |
 | 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | pending |
 | 6 | WASM script host — load precompiled guests, epoch cancellation, `cicada-guest` SDK | last | weeks | pending |
@@ -237,10 +237,22 @@ Design: DECISIONS.md rows 16 and 42 (revised 2026-08-19), doc 03, doc 08
   warm 0.24/0.84 ms server, 0.45/1.47 ms client; wall `deboss` 301
   ticks → 301 withheld, 0 preview generations, exactly one policy for
   the stream (estimate 3.9 s), one 3.5 s generation on the step-snapped
-  release. Pending (web lane): the slider shows `pending_value` +
-  `estimate_ms` (`~` when `rough`), replaces it on every arrival, and
-  clears on its release delta or on a release without a write;
-  observers render the same.
+  release. Second review round (2026-08-20): the "failure under a
+  cancelled token is cancelled" rule narrowed to errors the node MARKS
+  as cancellation (`NodeError::cancelled`; the bridge's verdict for a
+  killed worker) so a genuine red coinciding with Esc stays red; the
+  drag is ended in one place (the dispatcher's door, for every write
+  intent but the tick) with undo / redo / a refused batch pinned as
+  drag-enders; the inclusive 1 s bar, the `÷ min(threads, elements)`
+  divisor and the volatile memo-READ gate each got the test whose
+  absence a mutation had exposed; a `cached` status carrying its last
+  compute's `elements`/`nanos` is a decision now (doc 13 §Solve
+  streaming), not an open question; the store's format marker is
+  written temp + rename and an empty (torn) one heals. Pending (web
+  lane): the slider shows `pending_value` + `estimate_ms` (`~` when
+  `rough`), replaces it on every arrival, and clears on its release
+  delta or on a release without a write; observers render the same;
+  doc 13 §Slider drags has the frozen four-point contract.
 
 ## Item 4 — time transport, Cycle thin slice (~1 week)
 

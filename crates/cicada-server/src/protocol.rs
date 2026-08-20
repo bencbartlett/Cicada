@@ -58,10 +58,17 @@ pub struct NodeStatus {
     /// Elements processed so far / total (fan-out nodes while running).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elements_done: Option<u64>,
-    /// Elements processed (done nodes).
+    /// Elements processed: this generation's count for a `done` node; for
+    /// a `cached` node whose memo entry recorded its cost (node-level
+    /// entries since v0.1 item 3b), the count of the LAST compute — the
+    /// ETA's per-node element counts survive a warm reopen through it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elements: Option<u64>,
-    /// Measured work nanoseconds (done nodes).
+    /// Measured work nanoseconds (CPU, summed across chunks): this
+    /// generation's for a `done` node; for a `cached` node, what the LAST
+    /// compute of that key cost (docs/12 §Progress: the badge shows the
+    /// "last compute time") — never this generation's, which paid a
+    /// cache read. Render it as "last" next to `cached`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nanos: Option<u64>,
     /// Failure message (red) or reason (blocked: "fed by red `x`").

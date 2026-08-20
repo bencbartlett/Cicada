@@ -602,6 +602,20 @@ struct Drag {
     deferred: u64,
 }
 
+/// Does this intent end a drag at the dispatcher's door (docs/13 §Slider
+/// drags: "a write attempt — landed or refused")? The canvas gestures
+/// (the release's `set_param` among them), undo, redo and batch. Not the
+/// preview tick (it IS the drag), and not the writes with entry points of
+/// their own — `apply_text` (also HTTP), `cancel` (also HTTP) — which
+/// clear the drag themselves, as `reload` (the watcher) does.
+fn ends_drag(message: &ClientMessage) -> bool {
+    is_gesture(message)
+        || matches!(
+            message,
+            ClientMessage::Undo {} | ClientMessage::Redo {} | ClientMessage::Batch { .. }
+        )
+}
+
 /// The cost model's verdict on one param's dirty cone
 /// ([`Core::predict_cone`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1154,9 +1168,19 @@ impl Session {
         message: ClientMessage,
     ) -> Result<(), IntentError> {
         {
-            let inner = self.core.lock_inner();
+            let mut inner = self.core.lock_inner();
             if is_write(&message) && inner.writer != Some(client) {
                 return Err(IntentError::Lease);
+            }
+            // A write attempt ends the drag (docs/13 §Slider drags) —
+            // landed or refused, decided HERE at the door rather than in
+            // every arm: a refused release, an undo mid-drag, a batch
+            // whose third element fails all leave no verdict standing,
+            // and the next tick re-predicts and re-announces. The other
+            // drag-enders clear at their own entry points, which are
+            // also HTTP/watcher entries: `apply_text`, `reload`, `cancel`.
+            if ends_drag(&message) {
+                inner.drag = None;
             }
         }
         let source = |label: String| DeltaSource {
@@ -1169,7 +1193,7 @@ impl Session {
             // persists, records the op, and broadcasts the delta.
             gesture if is_gesture(&gesture) => {
                 let mut inner = self.core.lock_inner();
-                let result = write_or_roll_back(&mut inner, |inner| {
+                write_or_roll_back(&mut inner, |inner| {
                     let before = state_snapshot(inner);
                     let applied = Self::apply_gesture(inner, gesture)?;
                     let source = source(applied.label.clone());
@@ -1182,12 +1206,7 @@ impl Session {
                             actor: Actor::Human,
                         },
                     )
-                });
-                // A refused gesture (a release the writer could not apply)
-                // ends the drag too — `commit` clears it on the paths that
-                // reach it; this covers the ones that never do.
-                inner.drag = None;
-                result
+                })
             }
             ClientMessage::Hello { .. } => Ok(()),
             ClientMessage::ParamPreview { node, port, value } => {
@@ -1632,11 +1651,6 @@ impl Session {
         before: StateSnapshot,
         effect: OpEffect,
     ) -> Result<(), IntentError> {
-        // A write attempt ends the drag (docs/13 §Slider drags) — landed
-        // or refused: the next tick re-predicts and re-announces, so a
-        // release whose persist failed never leaves a silent verdict
-        // standing.
-        inner.drag = None;
         let text = inner.loaded.document.emit();
         self.persist(inner, &text, applied.text_changed, &before)?;
         if applied.text_changed {
@@ -5313,6 +5327,10 @@ size = slider(value=4.0, min=0.5, max=5.0)
     /// runs before the panic: it releases whatever the test holds blocked,
     /// so the session can still drop (a generation stuck in Python would
     /// otherwise wedge the solve loop's join and hang the test binary).
+    /// This is the ONE polling wait in the server suite (doc 14: no
+    /// sleeps): the event it waits for happens in a real subprocess the
+    /// virtual clock cannot drive; a passing run never waits out the
+    /// deadline, a failing one pays it once.
     fn wait_until(
         what: &str,
         deadline: Duration,
@@ -6158,6 +6176,371 @@ size = slider(value=4.0, min=0.5, max=5.0)
                 .any(|m| m["type"] == "preview_policy")
         );
         assert_eq!(session.debug_state(false)["solve"]["previews_deferred"], 0);
+    }
+
+    /// Teach the store so that a live preview of `size` on the
+    /// size → span → block cone predicts EXACTLY `target_nanos`: every
+    /// node in the cone is scalar (÷ 1), so the prediction is the sum of
+    /// the cone ops' per-element means; one extra `box` sample of one
+    /// element, sized so the integer-division mean lands where it must,
+    /// makes the sum exact.
+    fn seed_cone_to(session: &Session, target_nanos: u64) {
+        let store = session.core.scheduler.store();
+        let ops: Vec<String> = {
+            let inner = session.core.lock_inner();
+            let graph = &inner.lowered.graph;
+            ["size", "span", "block"]
+                .iter()
+                .map(|name| graph.node(graph.find(name).unwrap()).op.clone())
+                .collect()
+        };
+        assert_eq!(ops[2], "box", "{ops:?}");
+        let others: u64 = ops[..2]
+            .iter()
+            .map(|op| store.stats(op).unwrap().per_element_nanos().unwrap())
+            .sum();
+        let box_stats = store.stats("box").unwrap();
+        let wanted_mean = target_nanos - others;
+        // (nanos + x) / (elements + 1) == wanted_mean, exactly.
+        let x = wanted_mean * (box_stats.elements + 1) - box_stats.nanos;
+        store.record_sample("box", 1, x).unwrap();
+        let reached: u64 = ops
+            .iter()
+            .map(|op| store.stats(op).unwrap().per_element_nanos().unwrap())
+            .sum();
+        assert_eq!(reached, target_nanos, "the seeding is exact");
+    }
+
+    #[test]
+    fn the_compute_on_release_bar_is_inclusive_at_exactly_one_second() {
+        // Review finding (2026-08-20, mutation S1 survived): no test put a
+        // cone at exactly `COMPUTE_ON_RELEASE_MS`, so `>=` and `>` were
+        // indistinguishable. One nanosecond under the bar previews live;
+        // exactly on it is withheld, with the estimate reported as 1000.0.
+        let (_dir, config, _clock) = project_with_clock(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let _ = drain(&mut rx);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let bar_nanos = (COMPUTE_ON_RELEASE_MS * 1_000_000.0) as u64;
+
+        // One nanosecond under: live.
+        seed_cone_to(&session, bar_nanos - 1);
+        {
+            let inner = session.core.lock_inner();
+            let scratch = scratch_lowered(&inner, "size", Some("value"), "2.05");
+            let cost = session
+                .core
+                .predict_cone(&inner, &scratch, "size", Some("value"))
+                .unwrap();
+            assert!(cost.ms < COMPUTE_ON_RELEASE_MS, "{cost:?}");
+            assert!(cost.ms > COMPUTE_ON_RELEASE_MS - 0.001, "{cost:?}");
+        }
+        let baseline = preview_generations(&session);
+        preview(&session, id, "2.05");
+        session.wait_idle();
+        assert_eq!(
+            preview_generations(&session),
+            baseline + 1,
+            "under the bar: live"
+        );
+        assert!(
+            !texts(&drain(&mut rx))
+                .iter()
+                .any(|m| m["type"] == "preview_policy")
+        );
+
+        // Exactly on the bar (the live generation above recorded fresh
+        // samples — seed again from what the store holds now): withheld.
+        session.cancel(); // end the drag so the next tick decides afresh
+        seed_cone_to(&session, bar_nanos);
+        {
+            let inner = session.core.lock_inner();
+            let scratch = scratch_lowered(&inner, "size", Some("value"), "2.06");
+            let cost = session
+                .core
+                .predict_cone(&inner, &scratch, "size", Some("value"))
+                .unwrap();
+            assert!(
+                (cost.ms - COMPUTE_ON_RELEASE_MS).abs() < f64::EPSILON,
+                "exactly on the bar: {cost:?}"
+            );
+        }
+        preview(&session, id, "2.06");
+        session.wait_idle();
+        assert_eq!(
+            preview_generations(&session),
+            baseline + 1,
+            "on the bar: withheld"
+        );
+        let msgs = texts(&drain(&mut rx));
+        let policies: Vec<_> = msgs
+            .iter()
+            .filter(|m| m["type"] == "preview_policy")
+            .collect();
+        assert_eq!(policies.len(), 1, "{msgs:?}");
+        assert!(
+            (policies[0]["payload"]["estimate_ms"].as_f64().unwrap() - COMPUTE_ON_RELEASE_MS).abs()
+                < f64::EPSILON,
+            "{}",
+            policies[0]
+        );
+        assert_eq!(session.debug_state(false)["solve"]["previews_deferred"], 1);
+    }
+
+    #[test]
+    fn cone_prediction_divides_a_fanned_node_by_its_parallelism() {
+        // Review finding (2026-08-20, mutation S10 survived): every test
+        // cone had one element, so `÷ min(threads, elements)` — the rule
+        // that makes the wall's estimate 4.5 s rather than 98 s — was
+        // exercised by the manual measurement only. A six-element fan on
+        // two threads costs per × 6 ÷ 2; the same store reopened on one
+        // thread predicts per × 6 (from memo-recorded counts — nothing
+        // computes on the warm reopen); the scalar nodes are ÷ 1 either
+        // way.
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             step = slider(value=1.0, min=0.5, max=5.0)\n\
+             xs = series(start=1.0, step=step, count=6)\n\
+             spans = construct_domain(start=0.0, end=each(xs))\n\
+             blocks = box(x=each(spans), y=each(spans), z=each(spans))\n",
+        );
+        assert_eq!(config.threads, 2);
+        let expected = |session: &Session, threads: u64| -> f64 {
+            let store = session.core.scheduler.store();
+            let inner = session.core.lock_inner();
+            let graph = &inner.lowered.graph;
+            let mut total = 0.0_f64;
+            for &id in graph.topo_order() {
+                let decl = graph.node(id);
+                let per = store.stats(&decl.op).unwrap().per_element_nanos().unwrap();
+                let elements: u64 = if decl.fan.iter().any(|&d| d > 0) {
+                    6
+                } else {
+                    1
+                };
+                #[allow(clippy::cast_precision_loss)]
+                let cpu = per as f64 * elements as f64;
+                #[allow(clippy::cast_precision_loss)]
+                let parallel = elements.min(threads) as f64;
+                total += cpu / parallel;
+            }
+            total / 1_000_000.0
+        };
+        let predict = |session: &Session| -> ConeCost {
+            let inner = session.core.lock_inner();
+            let scratch = scratch_lowered(&inner, "step", Some("value"), "1.5");
+            session
+                .core
+                .predict_cone(&inner, &scratch, "step", Some("value"))
+                .unwrap()
+        };
+
+        let session = Session::open(config.clone()).unwrap();
+        session.wait_idle();
+        // Make the fanned nodes matter: a box costs a second per element.
+        session
+            .core
+            .scheduler
+            .store()
+            .record_sample("box", 6, 6_000_000_000)
+            .unwrap();
+        let cost = predict(&session);
+        assert_eq!(cost.nodes, 4);
+        assert_eq!(cost.misses, 4, "a cold value: every node computes");
+        assert!(!cost.rough);
+        let want = expected(&session, 2);
+        assert!(
+            (cost.ms - want).abs() < 1e-9,
+            "two threads: {cost:?} vs Σ per × n ÷ min(2, n) = {want}"
+        );
+        // The fan IS divided: predicting it serially would be a second
+        // per box more.
+        let serial = expected(&session, 1);
+        assert!(serial - cost.ms > 1000.0, "{serial} vs {}", cost.ms);
+        drop(session);
+
+        // A warm reopen on one thread: nothing computes, the element
+        // counts come from the memo entries' recorded costs, and the
+        // divisor is 1.
+        let config = SessionConfig {
+            threads: 1,
+            ..config
+        };
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let state = session.debug_state(false);
+        let last = state["timings"].as_array().unwrap().last().unwrap().clone();
+        assert_eq!(last["computed"], 0, "warm reopen: {last}");
+        let cost = predict(&session);
+        assert_eq!(cost.misses, 4);
+        assert!(!cost.rough, "memo-recorded counts stand in for outcomes");
+        let want = expected(&session, 1);
+        assert!(
+            (cost.ms - want).abs() < 1e-9,
+            "one thread: {cost:?} vs {want}"
+        );
+    }
+
+    #[test]
+    fn a_cached_status_carries_its_last_computes_cost() {
+        // Decided at the review of item 3b (2026-08-20): a `cached` node's
+        // status carries `elements` and `nanos` from the memo entry's
+        // recorded cost — docs/12 §Progress asks the badge for the "last
+        // compute time", and the ETA's per-node element counts must
+        // survive a warm reopen where nothing computes. Additive on the
+        // wire; docs/13 §Solve streaming says what the numbers mean.
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config.clone()).unwrap();
+        session.wait_idle();
+        let done = session.debug_state(false)["statuses"]["block"].clone();
+        assert_eq!(done["state"], "done");
+        let nanos = done["nanos"]
+            .as_u64()
+            .expect("a done node measured its work");
+        assert_eq!(done["elements"], 1);
+        drop(session);
+
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let cached = session.debug_state(false)["statuses"]["block"].clone();
+        assert_eq!(cached["state"], "cached", "{cached}");
+        assert_eq!(cached["elements"], 1, "the count the memo entry recorded");
+        assert_eq!(
+            cached["nanos"].as_u64(),
+            Some(nanos),
+            "the LAST compute's time, not this generation's: {cached}"
+        );
+    }
+
+    #[test]
+    fn undo_redo_and_a_refused_batch_end_a_withheld_drag() {
+        // Review finding (2026-08-20, mutation S5 survived): the drag was
+        // cleared both in `commit` and in the gesture arm, and no test
+        // exercised the paths only `commit` covered — undo, redo, batch —
+        // nor a batch refused before it reaches `commit`. One clear now,
+        // at the dispatcher's door, for every write intent but the preview
+        // tick; this test drags, ends the drag each of those ways, and
+        // expects the next tick (inside the gap) to announce again.
+        let (_dir, config, _clock) = project_with_clock(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        session
+            .core
+            .scheduler
+            .store()
+            .record_sample("box", 1, 5_000_000_000)
+            .unwrap();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        // Something to undo: one release.
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "3.0".into(),
+            },
+        );
+        session.wait_idle();
+        let _ = drain(&mut rx);
+        let baseline = preview_generations(&session);
+        let policies = |rx: &mut tokio::sync::mpsc::UnboundedReceiver<Outgoing>| {
+            texts(&drain(rx))
+                .into_iter()
+                .filter(|m| m["type"] == "preview_policy")
+                .map(|m| m["payload"]["pending_value"].clone())
+                .collect::<Vec<_>>()
+        };
+
+        // Drag 1, withheld and announced.
+        preview(&session, id, "3.1");
+        session.wait_idle();
+        assert_eq!(policies(&mut rx), vec!["3.1"]);
+        assert_eq!(
+            session.debug_state(false)["solve"]["drag"]["mode"],
+            "compute_on_release"
+        );
+
+        // Undo mid-drag ends it: the next tick is drag 2, announced.
+        session.handle(id, None, ClientMessage::Undo {});
+        session.wait_idle();
+        assert!(
+            session.debug_state(false)["solve"]["drag"].is_null(),
+            "undo ended the drag"
+        );
+        let _ = drain(&mut rx);
+        preview(&session, id, "3.2");
+        session.wait_idle();
+        assert_eq!(policies(&mut rx), vec!["3.2"]);
+
+        // Redo ends drag 2.
+        session.handle(id, None, ClientMessage::Redo {});
+        session.wait_idle();
+        assert!(
+            session.debug_state(false)["solve"]["drag"].is_null(),
+            "redo ended the drag"
+        );
+        let _ = drain(&mut rx);
+        preview(&session, id, "3.3");
+        session.wait_idle();
+        assert_eq!(policies(&mut rx), vec!["3.3"]);
+
+        // A batch whose element is refused never reaches `commit` — it is
+        // a write attempt all the same and ends drag 3.
+        session.handle(
+            id,
+            Some("b".into()),
+            ClientMessage::Batch {
+                ops: vec![ClientMessage::SetParam {
+                    node: "size".into(),
+                    port: Some("value".into()),
+                    value: "size + 1".into(),
+                }],
+                label: "bad batch".into(),
+            },
+        );
+        let msgs = texts(&drain(&mut rx));
+        assert!(
+            msgs.iter()
+                .any(|m| m["type"] == "error" && m["payload"]["intent_id"] == "b"),
+            "{msgs:?}"
+        );
+        assert!(
+            session.debug_state(false)["solve"]["drag"].is_null(),
+            "a refused batch ended the drag"
+        );
+        preview(&session, id, "3.4");
+        session.wait_idle();
+        assert_eq!(policies(&mut rx), vec!["3.4"]);
+
+        // Throughout: nothing was solved as a preview; the two real ops
+        // (undo, redo) were the only generations.
+        assert_eq!(preview_generations(&session), baseline);
+        assert_eq!(session.debug_state(false)["solve"]["previews_deferred"], 4);
+        assert_eq!(
+            history_of(&session)["depth"],
+            1,
+            "set_param, undone, redone"
+        );
     }
 
     #[test]
