@@ -55,6 +55,30 @@ but produces bytes with the same hash (slider 12.0 → 12.5 → 12.0),
 every downstream key is unchanged and hits cache. No special
 same-value detection needed — content addressing *is* the detection.
 
+## Volatile nodes
+
+*(Live, v0.1 item 3b.)* A node declared `#[node(volatile)]` (catalog:
+`"volatile": true`, CATALOG.md tag `· volatile`) is **uncached by
+design** — the flag `Clock` wears (DECISIONS.md time row; item 4). The
+executor never reads or writes the memo for a volatile node's outputs,
+at node AND element granularity: it executes in every generation whose
+cone holds it, and inside an `each()` fan-out once per element, every
+generation, whatever the measured per-element cost says about element
+caching. Its cost samples still record (the estimator knows what a
+clock's cone costs).
+
+Downstream nodes are deliberately **ordinary**. Their keys include the
+volatile output's fresh value hash like any other input, so they
+recompute exactly when that value changed and hit the memo when it did
+not — a clock quantized to the same second recomputes nothing below
+it; a clock that moved dirties its cone by content addressing, no
+special "downstream of volatile" rule exists. The precise statement:
+*a volatile node is always a memo miss; everything else is keyed as
+usual.* `volatile` and `effectful` are exclusive (the macro refuses the
+pair): an effectful node already bypasses the memo and runs only on
+explicit action; a volatile node runs in every generation — both at
+once would be an exporter that fires every generation.
+
 ## The store
 
 Two levels:
@@ -67,7 +91,12 @@ Two levels:
    spent seconds creating one file per value (syscall-bound, NTFS);
    packed it is ~0.1 s. Same torn-tail recovery as the memo log.
 2. **Memo table** — `NodeKey → {output hashes, status, warnings with
-   element IDs, cost samples, display-cost samples}`.
+   element IDs, cost samples, display-cost samples}`. *(Live: output
+   hashes, and — since v0.1 — the producing computation's cost
+   `{elements, nanos}` on node-level entries, so a cache hit still
+   knows what it cost when it last ran and the cost model stays
+   complete across a warm reopen; per-op samples ride beside the
+   entries as their own records.)*
 
 **Location**: the store lives on the engine host in the user cache
 directory (e.g. `%LOCALAPPDATA%/cicada/cache/<project>`), keyed by
@@ -140,8 +169,18 @@ operations keyed like everything else (display is a first-class edge).
 ## Cancellation
 
 One token per generation, checked between nodes, between element
-chunks, and at safe points inside long stdlib loops. Script nodes are
-hard-cancellable **by construction**: WASM epoch preemption (hard
+chunks, and at safe points inside long stdlib loops. *(Live, v0.1 item
+3b: the token is owned by the `solve` call and handed to every node
+invocation as its `NodeCtx` — a long node polls `ctx.cancel`, a host
+bridge hooks it with `CancelToken::on_cancel`, which runs once when the
+token is cancelled, immediately if it already is. There is no
+session-global switch: an explicit effectful run, the interactive
+latest-wins loop and an idle-class solve each own a token, and
+cancelling one never touches another — the Python bridge mints one
+kill switch per call, hooked to the calling generation's token, so
+whoever cancels a generation kills exactly its in-flight worker calls
+without a separate "kill the scripts" step to forget.)* Script nodes
+are hard-cancellable **by construction**: WASM epoch preemption (hard
 interrupt, no cooperation needed) for Rust scripts, subprocess kill
 for Python (the pool respawns workers). Individual kernel calls (one
 boolean, one loft) are the atomic quantum — at per-element scale
@@ -184,10 +223,65 @@ Thresholds below are defaults to be tuned by measurement.
   estimate). Script nodes may report real progress through a throttled
   host API.
 
+## Cost prediction (compute-on-release)
+
+*(Live, v0.1 item 3b; DECISIONS.md row 39.)* The cost model's first
+consumer beyond the ETA is the drag policy (doc 13 §Slider drags): a
+`param_preview` whose dirty cone is predicted at ≥ 1 s
+(`COMPUTE_ON_RELEASE_MS`) solves no previews; the slider shows the
+pending value and the estimate, and the release solves once. What the
+prediction is, precisely:
+
+- **A hash-only dry run** of the tick's graph against the memo. The
+  param's dirty cone is the downstream cone of the node holding the
+  literal (for a bare literal, of every node referencing it),
+  exporters excluded. Walking it in topological order, a node whose
+  inputs are all known builds its `NodeKey` exactly as the executor
+  would; a memo hit costs 0 and its recorded outputs feed downstream
+  keys — so a value the slider has visited, or a hypothetical solve
+  has warmed, predicts as the cache read it is (the upgrade path scrub
+  caching rides). A miss — or a node fed by a miss, or a volatile node
+  — is predicted to compute.
+- **A predicted-to-compute node costs** `per-element nanos (the op's
+  persisted mean) × the node's last element count ÷ min(threads,
+  elements)`: the mean from the op's samples, the count from the
+  node's last outcome (computed this session, or the cost its memo
+  entry recorded — a warm reopen still knows), the divisor the
+  fan-out's parallelism (a scalar node is serial). A node without a
+  sample or a count contributes 0 and marks the estimate **rough** (a
+  floor, shown with `~` like the ETA); a cone with no evidence at all
+  previews live — the first drag measures it, the next one knows.
+- **Decided once per drag.** A drag is the run of preview ticks on one
+  param between writes (the release's `set_param`, any edit, a reload)
+  or an Esc; the first tick decides, the rest reuse the verdict — no
+  mid-drag flip-flop by construction; the next drag re-predicts.
+
+Measured on the wall's `deboss` (22 threads): predicted 3.9 s, the
+release took 3.7 s; after a warm reopen the prediction was 4.1 s from
+memo-recorded costs alone (not rough), and the just-released value
+previewed live at 0.2 ms. The regression estimator above replaces the
+per-op mean when it lands; the dry run and the decision are unchanged
+by it.
+
 ## Speculative warming (scrub caching)
 
 Idle compute is spent making future interactions instant — always at
 the lowest priority, preempted by any real work.
+
+*(Live substrate, v0.1 item 3b: the **idle class**. `SolveLoop::
+run_idle` waits until the interactive loop has nothing pending or in
+flight, registers its own cancel handle under the same lock hold that
+observed "idle", and solves on the caller's thread; every real
+submission and every Esc cancels all idle handles, so real work
+pre-empts it at the next chunk boundary. It is invisible to
+`wait_idle`/`is_busy` and reports through the caller's observer only.
+`Session::solve_hypothetical(node, port, value)` is the entry the
+warmers use: the pipeline with one param overridden — spelled as
+`param_preview` spells it — solved at idle class, writing nothing,
+painting nothing (no frames, no statuses, no op; one `hypothetical`
+row in `/debug/state` timings for the agent oracle), its results in the
+ordinary memo so the later real solve of that value is a cache hit.
+No UI rides it yet; items 4 and 5 are its consumers.)*
 
 - **Slider ranges**: a slider with scrub caching enabled (per-param
   toggle, off by default, offered only when the step-quantized range

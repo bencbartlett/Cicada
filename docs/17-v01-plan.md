@@ -19,7 +19,7 @@ runs in parallel from day 1:
 | 2 | Git panel slice 1 — status strip, per-node change markers, commit, revert-to-HEAD | foreground (server/web) | ~1 week | pending |
 | P | OCCT probe — prebuilt 7.8.x build/link on win/mac/linux, determinism, timings, license, CI shape | parallel worktree | hours, cap 1 day | **done** 2026-08-20 — GREEN on win-64 with one rename patch, byte-deterministic, ~3 ms/boolean; Linux/macOS measured by item 3 WP-A's CI job; memo `docs/probes/occt-2026-08.md` |
 | 3 | OCCT-backed Solid — the `Solid` kind, primitives/extrude/loft/revolve/sweep, booleans, `tessellate`, STEP; `mesh_*` renames in the same commit | main geometry track from week 3 | weeks | **unblocked** (probe GREEN) — WP-A next: own fork with the recorded patches, `occt` feature, `tools/fetch_occt.py`, the per-OS CI job |
-| 3b | Scheduler foundations — per-solve cancel handle, `volatile`, idle-class hypothetical solve — plus compute-on-release | parallel (sched/server) | ~1 week | pending |
+| 3b | Scheduler foundations — per-solve cancel handle, `volatile`, idle-class hypothetical solve — plus compute-on-release | parallel (sched/server) | ~1 week | **engine half done** 2026-08-20 (`wt/sched`: four commits; web half — the slider's pending value + estimate from `preview_policy` — is the next package) |
 | 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | pending |
 | 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | pending |
 | 6 | WASM script host — load precompiled guests, epoch cancellation, `cicada-guest` SDK | last | weeks | pending |
@@ -202,6 +202,33 @@ Design: DECISIONS.md rows 16 and 42 (revised 2026-08-19), doc 03, doc 08
 - **Done when**: virtual-time scheduler tests cover both gates; the
   deboss drag produces exactly one generation per release in
   `slider_loop.mjs`; the cheap-cone numbers (p50 0.5 ms) are unchanged.
+- **Shipped (engine half, 2026-08-20, `wt/sched`)**: (1) the cancel
+  handle — `NodeFn` takes the generation's `NodeCtx` (its
+  `CancelToken`, now with `on_cancel` hooks); the script bridge mints
+  one kill switch per call hooked to the calling token, so explicit
+  runs, the interactive loop and idle solves are isolated by
+  construction (the old session-global switch let an Esc kill an
+  export's Python call); (2) `#[node(volatile)]` → `NodeSpec`/`NodeDecl`
+  with node- and element-level memo gates, downstream keyed as usual on
+  the fresh hash (doc 12 §Volatile nodes), `volatile`+`effectful`
+  refused by the macro (trybuild), a cfg(test) fixture node,
+  `"volatile"` in catalog.json; (3) `SolveLoop::run_idle` +
+  `Session::solve_hypothetical` — idle class, pre-empted by any real
+  submission or Esc, invisible to `wait_idle`, paints nothing, one
+  `hypothetical` timing row; (4) compute-on-release — decided once per
+  drag from a hash-only dry run of the tick's keys against the memo
+  (warm values stay live), the additive `preview_policy` message (doc
+  13 §Slider drags has the frozen shape), `COMPUTE_ON_RELEASE_MS` =
+  1 s; memo entries record their computation's cost so the model is
+  complete after a warm reopen. Measured: 02-solids `size` warm p50/p95
+  0.22/0.82 → 0.23/0.84 ms server, 0.42/1.4 → 0.43/1.42 ms client
+  (within noise); wall `deboss` 301 ticks → 0 preview generations, 1
+  policy message (estimate 3.9 s), 1 generation on release (3.7 s);
+  after a warm reopen the estimate is 4.1 s from memo costs alone and
+  the released value previews live at 0.2 ms. `slider_loop.mjs` gained
+  the compute-on-release mode and `--expect`. Pending (web lane): the
+  slider shows `pending_value` + `estimate_ms` (`~` when `rough`) and
+  clears on its release delta; observers render the same.
 
 ## Item 4 — time transport, Cycle thin slice (~1 week)
 

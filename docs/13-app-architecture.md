@@ -75,6 +75,34 @@ the pending value and an honest estimate, and solves once on release.
 Scrub caching (doc 12) upgrades expensive sliders back into the
 smooth tier by warming their range during idle time.
 
+*(Live, v0.1 item 3b — the engine half.)* The decision is the
+server's and is made **once per drag**: the first `param_preview` on a
+param predicts its dirty cone (doc 12 §Cost prediction — a hash-only
+dry run against the memo, so warmed values stay live); at or above
+`COMPUTE_ON_RELEASE_MS` (1 s) the session broadcasts ONE additive
+message and withholds every tick of the drag until a write or an Esc
+ends it:
+
+```json
+{"v":1,"seq":N,"type":"preview_policy","payload":{
+  "node":"deboss","port":"value","mode":"compute_on_release",
+  "estimate_ms":3942.3,"rough":false,"pending_value":"0.875"}}
+```
+
+`port` is absent (not `null`) for a bare literal; `mode` is the only
+mode ever announced (a cheap cone gets no message and previews
+latest-wins as before); `estimate_ms` is the predicted wall time of a
+live preview, a floor when `rough` (some node in the cone has no cost
+evidence yet — render with `~`, like the ETA); `pending_value` is the
+first tick's literal — the client tracks later ticks itself and clears
+the pending state on the delta its release `set_param` produces. The
+release is the one real op and the one generation, exactly as before.
+`/debug/state` → `solve.previews_deferred` counts withheld ticks and
+`solve.drag` shows the standing verdict `{node, port, live}`. The web
+client's half — the pending value and estimate on the slider, the
+observer's view — is the next package; the current client ignores the
+message. `PROTOCOL_VERSION` is unchanged (additive).
+
 ## Binary frame format
 
 Frames are typed arrays ready for GPU upload — zero parsing on the
@@ -149,7 +177,7 @@ with near-zero server traffic. `clock` is the unbounded escape hatch
 | `GET /api/edit/text` | `{path, text, text_hash}` — the base an agent reads before editing (§Undo/redo) |
 | `POST /api/edit/apply_text` | The atomic whole-file edit for agents / MCP (JSON body = the `apply_text` intent payload; same error kinds as the socket: 409 `stale_base`, 422 `parse_error` / `path_not_allowed`, 500 `io_error`). Applies even while a human holds the writer lease — the agent acts for the user; the delta reaches every client |
 | `GET /api/git/…` | Status, node-level diff, commit, per-node history (doc 10 git integration) |
-| `GET /debug/state`, `GET /debug/screenshot` | The agent/dev verification loop (doc 14). `state` (`?pipeline=&values=&wait=`) is the authoritative JSON oracle — graph view-model, text, statuses, summary, per-output display stats with bounds/triangles, lease, and `timings` (the last 1,024 generations: kind, `queued_ms` intent-arrival → start, `elapsed_ms`, `cancelled`, computed/cached counts, frame bytes, and `cancel_to_idle_ms` on a generation Esc ended — measured server-side, poll-free; the doc-15 measurement currency); `screenshot` (`?target=viewport`) asks a connected client to render the WebGL viewport to PNG (503 when no client is connected — loud, never blank; whole-page shots are Playwright's job) |
+| `GET /debug/state`, `GET /debug/screenshot` | The agent/dev verification loop (doc 14). `state` (`?pipeline=&values=&wait=`) is the authoritative JSON oracle — graph view-model, text, statuses, summary, per-output display stats with bounds/triangles, lease, `solve` (`busy`, `last_complete_generation`, `previews_deferred`, the standing `drag` verdict), and `timings` (the last 1,024 generations: kind — `structural` / `preview` / `explicit` / `hypothetical` (idle-class, never painted; `wait=true` does not wait for it) — `queued_ms` intent-arrival → start, `elapsed_ms`, `cancelled`, computed/cached counts, frame bytes, and `cancel_to_idle_ms` on a generation Esc ended — measured server-side, poll-free; the doc-15 measurement currency); `screenshot` (`?target=viewport`) asks a connected client to render the WebGL viewport to PNG (503 when no client is connected — loud, never blank; whole-page shots are Playwright's job) |
 | `GET /health` | Readiness (no token) — Playwright's `webServer` waits on it |
 
 ## Stage-5 slice, stated honestly
@@ -178,15 +206,23 @@ below), the `batch` and `apply_text` paths, and `#off` node disable
 (`toggle_disable`: the view-model renders a parsed `#off` line as the
 node it is — ports, literals and wires intact — with `kind: disabled`
 and the `disabled (`#off`)` exclusion; its downstream is red with the
-disabled node NAMED). Still not in: transport, git routes, `/api/blob`
-beyond value summaries, reconnect replay (a reconnect is a fresh
-session join: one hydration path — the client retries with backoff and
-re-hydrates), the cost-model's compute-on-release degrade for expensive
-cones and scrub caching (every drag solves latest-wins; a slow cone
-simply shows progress), groups (their keyboard rows notice loudly), the
-sidecar's `port_order`/`color`/`collapsed` keys (carried, not rendered),
-per-element frame ranges, and an auto-layout beyond "layer by
-dependency depth, stack in definition order".
+disabled node NAMED). Shipped with v0.1 item 3b (engine half): every generation owns its
+cancel handle — an explicit effectful run, the interactive loop and an
+idle-class hypothetical solve (`Session::solve_hypothetical`, doc 12
+§Speculative warming) each have their own, and the script bridge's
+kill switches hang off the calling generation's token, so "a slider
+drag never cancels an export" is true by construction; and the
+compute-on-release degrade for expensive cones (§Slider drags above —
+the `preview_policy` message). Still not in: transport, git routes,
+`/api/blob` beyond value summaries, reconnect replay (a reconnect is a
+fresh session join: one hydration path — the client retries with
+backoff and re-hydrates), scrub caching (its substrate — the idle
+class — is in; the warmer and the buffer bar are item 5), the web
+client's rendering of `preview_policy` (next package), groups (their
+keyboard rows notice loudly), the sidecar's `port_order`/`color`/
+`collapsed` keys (carried, not rendered), per-element frame ranges,
+and an auto-layout beyond "layer by dependency depth, stack in
+definition order".
 
 ## Undo/redo (formalizing the ledger row)
 
