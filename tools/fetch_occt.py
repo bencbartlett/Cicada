@@ -924,7 +924,9 @@ def regenerate_manifest(subdirs: Iterable[str], listing_dir: Path | None, log, p
         "platforms": platforms,
     }
     validate_manifest(manifest)
-    path.write_text(json.dumps(manifest, indent=1) + "\n", encoding="utf-8")
+    # LF regardless of host: the manifest sha256 is the CI cache key and the
+    # prefix stamp, so its bytes must not depend on the checkout's line endings.
+    path.write_bytes((json.dumps(manifest, indent=1) + "\n").encode("utf-8"))
     log(f"wrote {path}")
     return manifest
 
