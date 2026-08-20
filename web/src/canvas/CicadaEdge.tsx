@@ -51,6 +51,7 @@ function CicadaEdgeImpl({
 
   const classes = ["cicada-edge", `depth-${Math.min(depth, 2)}`];
   if (red) classes.push("red");
+  if (data?.ghost) classes.push("ghost");
   if (selected) classes.push("selected");
 
   return (

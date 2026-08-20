@@ -1,11 +1,18 @@
 /**
  * Top bar (docs/16 §Application layout): project · pipeline · engine ·
- * lease/role badge · solve state + ETA + Esc · connection · settings menu.
- * Everything here reads the store mirror; the only intents it sends are
- * `cancel` and `take_lease`.
+ * lease/role badge · undo/redo · solve state + ETA + Esc · connection ·
+ * settings menu. Everything here reads the store mirror; the only intents
+ * it sends are `undo`, `redo`, `cancel` and `take_lease`.
  */
 import { useEffect, useRef, useState } from "react";
-import { useCicada, type DisplayMode, type Settings, type SplitPreset, type WireMode } from "../state/store";
+import {
+  canWrite,
+  useCicada,
+  type DisplayMode,
+  type Settings,
+  type SplitPreset,
+  type WireMode,
+} from "../state/store";
 import { useInspectorTab } from "./inspectorTab";
 import { basename, summaryText, withStatusCounts } from "./format";
 import "./panels.css";
@@ -87,6 +94,9 @@ export function TopBar() {
         )}
       </span>
 
+      <span className="tb-sep">·</span>
+      <HistoryButtons />
+
       <span className="tb-spacer" />
 
       <span className={`tb-solve ${solveClass}`} data-testid="tb-solve" title="solve state">
@@ -117,6 +127,50 @@ export function TopBar() {
 
       <SettingsMenu />
     </header>
+  );
+}
+
+/**
+ * Undo / redo (docs/13 §Undo/redo): the mirror's `history` says what each
+ * button would do (its tooltip is the op's label) and whether there is
+ * anything to do; both are writes, so they also need `canWrite`. The
+ * server stays the authority — a click sends the intent, the delta (or a
+ * `nothing_to_*` refusal) answers.
+ */
+function HistoryButtons() {
+  const history = useCicada((s) => s.history);
+  const writer = useCicada(canWrite);
+  const send = useCicada((s) => s.send);
+  const gate = writer ? "" : " — read-only";
+  const undoTitle = history.can_undo
+    ? `undo: ${history.undo_label ?? "last op"} (Ctrl+Z)${gate}`
+    : "nothing to undo (Ctrl+Z)";
+  const redoTitle = history.can_redo
+    ? `redo: ${history.redo_label ?? "last undone op"} (Ctrl+Shift+Z / Ctrl+Y)${gate}`
+    : "nothing to redo (Ctrl+Shift+Z / Ctrl+Y)";
+  return (
+    <span className="tb-item tb-history" data-testid="tb-history" title={`${history.depth} undoable`}>
+      <button
+        className="tb-esc"
+        title={undoTitle}
+        aria-label={undoTitle}
+        disabled={!writer || !history.can_undo}
+        onClick={() => send({ type: "undo", payload: {} })}
+        data-testid="tb-undo"
+      >
+        ↶ undo
+      </button>
+      <button
+        className="tb-esc"
+        title={redoTitle}
+        aria-label={redoTitle}
+        disabled={!writer || !history.can_redo}
+        onClick={() => send({ type: "redo", payload: {} })}
+        data-testid="tb-redo"
+      >
+        ↷ redo
+      </button>
+    </span>
   );
 }
 

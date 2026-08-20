@@ -57,6 +57,37 @@ fn http_get(addr: SocketAddr, path: &str, token: Option<&str>) -> (u16, String) 
     (status, body.to_owned())
 }
 
+/// Minimal HTTP/1.1 POST with a JSON body (loopback only): `(status, body)`.
+fn http_post(addr: SocketAddr, path: &str, body: &str) -> (u16, String) {
+    let mut stream = TcpStream::connect(addr).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(20)))
+        .unwrap();
+    write!(
+        stream,
+        "POST {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).unwrap();
+    let text = String::from_utf8_lossy(&raw).into_owned();
+    let (head, body) = text.split_once("\r\n\r\n").expect("http response");
+    let status: u16 = head
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .expect("status line");
+    assert!(
+        !head
+            .to_ascii_lowercase()
+            .contains("transfer-encoding: chunked"),
+        "unexpected chunked body:\n{head}"
+    );
+    (status, body.to_owned())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn serve_snapshot_frames_intents_and_debug_state() {
     let dir = tempfile::tempdir().unwrap();
@@ -236,6 +267,191 @@ async fn serve_snapshot_frames_intents_and_debug_state() {
     assert_eq!(state["display"]["block.out"]["stats"]["bounds"][1][0], 3.0);
     assert_eq!(state["lease"]["clients"].as_array().unwrap().len(), 1);
     assert!(state["cache_dir"].as_str().unwrap().contains("cache"));
+
+    // ---- v0.1 undo/redo + the agent edit route (docs/13 §Undo/redo).
+    // The base an agent reads: the text and its hash, as the file has it.
+    let (status, body) =
+        tokio::task::spawn_blocking(move || http_get(addr, "/api/edit/text?token=t", None))
+            .await
+            .unwrap();
+    assert_eq!(status, 200, "{body}");
+    let edit: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let file_text = std::fs::read_to_string(dir.path().join("p.cic")).unwrap();
+    assert_eq!(edit["path"], "p.cic");
+    assert_eq!(edit["text"], file_text);
+    let base_hash = blake3::hash(file_text.as_bytes()).to_hex().to_string();
+    assert_eq!(
+        edit["text_hash"], base_hash,
+        "the hash IS the on-disk bytes'"
+    );
+
+    // apply_text with the right base: it applies although the socket's
+    // client holds the writer lease (the agent acts for the user), and the
+    // resulting delta reaches that client.
+    let new_text = format!("{file_text}ball = sphere(radius=size)\n");
+    let request = serde_json::json!({
+        "base_text_hash": base_hash,
+        "files": [{"path": "p.cic", "text": new_text}],
+        "label": "agent: add a ball",
+        "actor": {"kind": "agent", "prompt": "add a ball"},
+    })
+    .to_string();
+    let first = request.clone();
+    let (status, body) = tokio::task::spawn_blocking(move || {
+        http_post(addr, "/api/edit/apply_text?token=t", &first)
+    })
+    .await
+    .unwrap();
+    assert_eq!(status, 200, "{body}");
+    let applied: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(applied["ok"], true);
+    assert_eq!(applied["history"]["depth"], 2, "set_param + the agent's op");
+    assert_eq!(applied["history"]["undo_label"], "agent: add a ball");
+    let applied_hash = applied["text_hash"].as_str().unwrap().to_owned();
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("p.cic")).unwrap(),
+        new_text,
+        "persisted"
+    );
+    let mut agent_delta = None;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while tokio::time::Instant::now() < deadline && agent_delta.is_none() {
+        let Ok(Some(Ok(Message::Text(text)))) =
+            tokio::time::timeout(Duration::from_secs(5), socket.next()).await
+        else {
+            continue;
+        };
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        if value["type"] == "delta" && value["payload"]["source"]["label"] == "agent: add a ball" {
+            agent_delta = Some(value);
+        }
+    }
+    let agent_delta = agent_delta.expect("the agent's delta reaches the lease holder");
+    assert_eq!(
+        agent_delta["payload"]["source"]["client"],
+        serde_json::Value::Null
+    );
+    assert_eq!(agent_delta["payload"]["text"], new_text);
+    assert_eq!(agent_delta["payload"]["history"]["depth"], 2);
+    assert_eq!(agent_delta["payload"]["history"]["can_undo"], true);
+
+    // The same request again is a stale base: 409, with the hash to rebase
+    // on, and the file untouched.
+    let again = request.clone();
+    let (status, body) = tokio::task::spawn_blocking(move || {
+        http_post(addr, "/api/edit/apply_text?token=t", &again)
+    })
+    .await
+    .unwrap();
+    assert_eq!(status, 409, "{body}");
+    let refused: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(refused["kind"], "stale_base");
+    assert_eq!(refused["current_text_hash"], applied_hash);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("p.cic")).unwrap(),
+        new_text
+    );
+    // A text that does not parse: 422 with diagnostics.
+    let broken = serde_json::json!({
+        "base_text_hash": applied_hash,
+        "files": [{"path": "p.cic", "text": "# cicada 1\nx = (\n"}],
+        "label": "broken",
+        "actor": {"kind": "human"},
+    })
+    .to_string();
+    let (status, body) = tokio::task::spawn_blocking(move || {
+        http_post(addr, "/api/edit/apply_text?token=t", &broken)
+    })
+    .await
+    .unwrap();
+    assert_eq!(status, 422, "{body}");
+    let refused: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(refused["kind"], "parse_error");
+    assert!(!refused["diagnostics"].as_array().unwrap().is_empty());
+    // A path outside the allowed set: 422.
+    let escape = serde_json::json!({
+        "base_text_hash": applied_hash,
+        "files": [{"path": "../p.cic", "text": "# cicada 1\n"}],
+        "label": "escape",
+        "actor": {"kind": "human"},
+    })
+    .to_string();
+    let (status, body) = tokio::task::spawn_blocking(move || {
+        http_post(addr, "/api/edit/apply_text?token=t", &escape)
+    })
+    .await
+    .unwrap();
+    assert_eq!(status, 422, "{body}");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()["kind"],
+        "path_not_allowed"
+    );
+    // Garbage: 400. No token: 401.
+    let (status, _) = tokio::task::spawn_blocking(move || {
+        http_post(addr, "/api/edit/apply_text?token=t", "{not json")
+    })
+    .await
+    .unwrap();
+    assert_eq!(status, 400);
+    let (status, _) =
+        tokio::task::spawn_blocking(move || http_post(addr, "/api/edit/apply_text", "{}"))
+            .await
+            .unwrap();
+    assert_eq!(status, 401);
+
+    // Undo over the socket: the agent's op is undone like any other, with
+    // the documented label; the text is the base again.
+    socket
+        .send(Message::Text(
+            format!(r#"{{"v":{PROTOCOL_VERSION},"id":"u1","type":"undo","payload":{{}}}}"#).into(),
+        ))
+        .await
+        .unwrap();
+    let mut undo_delta = None;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while tokio::time::Instant::now() < deadline && undo_delta.is_none() {
+        let Ok(Some(Ok(Message::Text(text)))) =
+            tokio::time::timeout(Duration::from_secs(5), socket.next()).await
+        else {
+            continue;
+        };
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        if value["type"] == "delta" && value["payload"]["source"]["intent_id"] == "u1" {
+            undo_delta = Some(value);
+        }
+    }
+    let undo_delta = undo_delta.expect("the undo's delta");
+    assert_eq!(
+        undo_delta["payload"]["source"]["label"],
+        "undo: agent: add a ball"
+    );
+    assert_eq!(undo_delta["payload"]["text"], file_text);
+    assert_eq!(undo_delta["payload"]["history"]["depth"], 1);
+    assert_eq!(undo_delta["payload"]["history"]["can_redo"], true);
+    assert_eq!(
+        undo_delta["payload"]["history"]["redo_label"],
+        "agent: add a ball"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("p.cic")).unwrap(),
+        file_text
+    );
+    // /debug/state carries the history and the op list.
+    let (_, body) =
+        tokio::task::spawn_blocking(move || http_get(addr, "/debug/state?token=t&wait=true", None))
+            .await
+            .unwrap();
+    let state: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(state["history"]["depth"], 1);
+    assert_eq!(state["history"]["can_redo"], true);
+    let ops = state["ops"].as_array().unwrap();
+    assert_eq!(ops.len(), 2, "{ops:?}");
+    assert_eq!(ops[0]["actor"], serde_json::json!({"kind": "human"}));
+    assert_eq!(ops[1]["label"], "agent: add a ball");
+    assert_eq!(
+        ops[1]["actor"],
+        serde_json::json!({"kind": "agent", "prompt": "add a ball"})
+    );
 
     socket.close(None).await.ok();
 

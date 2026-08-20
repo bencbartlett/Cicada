@@ -36,6 +36,12 @@ fn corpus_fixtures_parse_fully() {
         .filter(|l| matches!(l, cicada_lang::Line::Broken { .. }))
         .collect();
     assert_eq!(broken.len(), 1, "exactly the one intended broken line");
+    // The `#off` line: parsed behind the prefix (ports + wiring for the
+    // ghost), but not a statement — `statements()` and `find_binding`
+    // skip it.
+    assert_eq!(oddities.statements_including_disabled().count(), 7);
+    assert!(oddities.find_binding("ghost").is_none());
+    assert!(oddities.find_disabled("ghost").is_some());
 }
 
 #[test]
@@ -68,11 +74,34 @@ fn disabled_bindings_are_recognized_not_swallowed() {
     let source = "# cicada 1\n#off frusta = frustum(profile=c)\nf2 = g(profile=frusta)\n";
     let document = Document::parse(source);
     assert_eq!(document.emit(), source);
+    let disabled = document
+        .lines()
+        .iter()
+        .find_map(|l| match l {
+            cicada_lang::Line::Disabled {
+                name: Some(n),
+                statement,
+                raw,
+            } if n == "frusta" => Some((statement, raw)),
+            _ => None,
+        })
+        .expect("#off line must classify as Disabled with its name");
+    // The body parses in place: spans index the raw line, prefix included.
+    let (Some(statement), raw) = disabled else {
+        panic!("a parseable #off body keeps its parse");
+    };
+    assert_eq!(statement.targets[0].span.slice(raw), "frusta");
+    assert_eq!(statement.references()[0].span.slice(raw), "c");
+    // A body that does not parse still yields the name (first identifier)
+    // and no statement — the prefix hides the parse error until enabled.
+    let junk = Document::parse("# cicada 1\n#off bad = (((\n");
+    assert!(matches!(
+        &junk.lines()[1],
+        cicada_lang::Line::Disabled { name: Some(n), statement: None, .. } if n == "bad"
+    ));
     assert!(
-        document.lines().iter().any(
-            |l| matches!(l, cicada_lang::Line::Disabled { name: Some(n), .. } if n == "frusta")
-        ),
-        "#off line must classify as Disabled with its name"
+        junk.parse_diagnostics().is_empty(),
+        "disabled text is not a diagnostic"
     );
 }
 

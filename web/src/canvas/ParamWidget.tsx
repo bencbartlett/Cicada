@@ -51,6 +51,13 @@ function SliderWidget({ view, param, writer }: Props) {
       commit(text(local));
     }
   };
+  // A pointer drag is over: hand the focus back to the canvas, so Del /
+  // arrows / P work again at once (a focused range input would keep its
+  // plain keys — docs/16 keyboard map). Keyboard-driven steps keep focus.
+  const pointerRelease = (event: React.PointerEvent<HTMLInputElement>) => {
+    release();
+    event.currentTarget.blur();
+  };
 
   return (
     <div className="cn-widget cn-slider nodrag nopan nowheel" title={`slider ${min} … ${max}`}>
@@ -66,8 +73,8 @@ function SliderWidget({ view, param, writer }: Props) {
           dragging.current = true;
         }}
         onChange={onChange}
-        onPointerUp={release}
-        onPointerCancel={release}
+        onPointerUp={pointerRelease}
+        onPointerCancel={pointerRelease}
         onKeyUp={release}
         onBlur={release}
         aria-label={`${view.name} value`}

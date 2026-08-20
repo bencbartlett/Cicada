@@ -12,3 +12,4 @@ broken here because this is not a statement
 after = add(a=spaced, b=neg)
 
 x = (a + b) * -c / d ^ 2
+#off ghost = frustum(profile=each(after), height=spaced)  # disabled, parsed, not a definition

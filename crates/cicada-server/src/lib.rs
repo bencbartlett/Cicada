@@ -12,11 +12,14 @@
 //! (doc 14); nothing depends on it except `cicada-cli` (dependency-DAG
 //! test).
 //!
-//! Stage-5 slice, stated honestly (doc 15): one project directory, one
-//! session per pipeline, single writer + read-only observers, no undo/redo
-//! (op log is ephemeral and forward-only), no transport, no git panel; the
-//! byte-exact frame format is documented in [`frames`] and docs/13.
+//! Stage-5 slice plus the v0.1 undo/redo (doc 17 item 1): one project
+//! directory, one session per pipeline, single writer + read-only
+//! observers, a snapshot op log with `undo` / `redo` / `batch` /
+//! `apply_text` (+ `GET /api/edit/text`, `POST /api/edit/apply_text`); no
+//! transport, no git panel yet; the byte-exact frame format is documented
+//! in [`frames`] and docs/13.
 
+mod atomic;
 pub mod catalog;
 pub mod compile;
 pub mod display;

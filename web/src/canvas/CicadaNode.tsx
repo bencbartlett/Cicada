@@ -178,6 +178,11 @@ ${summaryText(value)}` : ""
   );
 }
 
+/**
+ * The port-less ghost: a broken line, or a `#off` line whose body does not
+ * parse. A `#off` line that parses renders as the node it is (ports,
+ * literals, wires intact) with the `disabled` styling — see `CicadaNodeImpl`.
+ */
 function GhostNode({ view, unit }: { view: NodeView; unit: number }) {
   const label = view.kind === "disabled" ? "disabled (#off)" : "broken line";
   const title = view.diagnostics.map((d) => d.message).join("\n") || label;
@@ -220,15 +225,22 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
     return () => clearTimeout(timer);
   }, [dirty, name]);
 
-  if (view.kind === "broken" || view.kind === "disabled") {
+  const disabled = view.kind === "disabled";
+  if (view.kind === "broken" || (disabled && view.inputs.length === 0 && view.outputs.length === 0)) {
     return <GhostNode view={view} unit={unit} />;
   }
+  // A `#off` ghost keeps its ports and wiring but takes no in-place edits
+  // (the writer refuses them by name — enable it first): no literal
+  // editors, no slider, no preview eye; its badge says `off`.
+  const editable = writer && !disabled;
 
-  const badge = statusBadge(status, view.diagnostics.length);
+  const badge = disabled
+    ? { label: "off", className: "state-off", title: "disabled (#off) — D or the menu enables it" }
+    : statusBadge(status, view.diagnostics.length);
   // Closest zoom: every output shows what is sitting on it (docs/16).
   const outputValues =
     tier === "closest" && values !== undefined ? new Map(values.outputs) : null;
-  const displayable = view.outputs.some((o) => o.displayable);
+  const displayable = !disabled && view.outputs.some((o) => o.displayable);
   // A drag is heading somewhere: `probing` once the verdicts for ITS source
   // are in, `awaiting` while they are not (the gate fails closed meanwhile).
   const probeMatchesDrag =
@@ -244,13 +256,19 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
   if (picked) classes.push("picked");
   if (hovered) classes.push("hover-pick");
   if (flash) classes.push("flash");
-  if (view.excluded) classes.push(view.excluded.status === "red" ? "excluded-red" : "excluded-amber");
+  if (disabled) classes.push("cn-disabled");
+  else if (view.excluded) classes.push(view.excluded.status === "red" ? "excluded-red" : "excluded-amber");
   if (view.effectful) classes.push("effectful");
   if (view.preview) classes.push("preview-on");
   if (probe !== null && probe.from.node === name) classes.push("probe-source");
 
-  const subtitle =
-    view.kind === "literal" ? "Constant" : view.kind === "expression" ? "Expression" : (view.func ?? view.title);
+  const subtitle = disabled
+    ? "disabled (#off)"
+    : view.kind === "literal"
+      ? "Constant"
+      : view.kind === "expression"
+        ? "Expression"
+        : (view.func ?? view.title);
   const headerTitle = [
     `${name} — ${view.title}`,
     view.kind === "expression" && view.description ? view.description : null,
@@ -272,7 +290,7 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
       style={{ width, height, ["--unit" as string]: `${unit}px` }}
       title={view.excluded ? `${view.excluded.status}: ${view.excluded.reason}` : undefined}
       data-node={name}
-      data-state={status?.state ?? "idle"}
+      data-state={disabled ? "off" : (status?.state ?? "idle")}
     >
       {view.comment && (
         <div className="cn-note" title={view.comment}>
@@ -322,7 +340,7 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
                   verdict={probing ? probe?.targets[`${name}.${input.name}`] : undefined}
                   probing={probing}
                   awaiting={awaiting}
-                  writer={writer}
+                  writer={editable}
                 />
               ) : (
                 <span className="cn-port cn-in cn-empty" />
@@ -339,7 +357,7 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
           );
         })}
       </div>
-      {view.param && <ParamWidget view={view} param={view.param} writer={writer} />}
+      {view.param && <ParamWidget view={view} param={view.param} writer={editable} />}
       {status?.state === "running" && status.elements !== undefined && status.elements > 0 && (
         <div className="cn-progress">
           <div

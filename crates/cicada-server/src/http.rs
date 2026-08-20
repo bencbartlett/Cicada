@@ -28,8 +28,10 @@ use cicada_core::config::ProjectConfig;
 use futures_util::{SinkExt as _, StreamExt as _};
 use tokio::sync::mpsc::unbounded_channel;
 
-use crate::protocol::{IntentEnvelope, PROTOCOL_VERSION, Role, ServerMessage, encode};
-use crate::session::{Outgoing, Session, SessionConfig};
+use crate::protocol::{
+    ApplyTextRequest, DeltaSource, IntentEnvelope, PROTOCOL_VERSION, Role, ServerMessage, encode,
+};
+use crate::session::{IntentError, Outgoing, Session, SessionConfig};
 
 /// The lease hand-off grace after a writer disconnects (docs/13: 5 s).
 pub const LEASE_GRACE: Duration = Duration::from_secs(5);
@@ -324,6 +326,7 @@ fn open_session(state: &AppState, relative: &str) -> Result<Arc<Session>, ServeE
         cache_dir: state.config.cache_dir.clone(),
         threads: state.config.threads,
         project: state.config.project,
+        op_clock: None,
     })?;
     // Two clients racing to open the same pipeline: the second finds the
     // first's session already inserted and drops its own.
@@ -438,6 +441,8 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/project", get(api_project))
         .route("/api/blob/{hash}", get(api_blob))
         .route("/api/run/{node}", post(api_run))
+        .route("/api/edit/text", get(api_edit_text))
+        .route("/api/edit/apply_text", post(api_edit_apply_text))
         .route("/ws", get(ws_upgrade))
         .route("/debug/state", get(debug_state))
         .route("/debug/screenshot", get(debug_screenshot))
@@ -620,6 +625,85 @@ async fn api_blob(
     }
 }
 
+/// `GET /api/edit/text` → `{path, text, text_hash}`: the base an agent
+/// reads before an `apply_text` (docs/13 §Undo/redo).
+async fn api_edit_text(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<PipelineQuery>,
+) -> Response {
+    let session = match session_for(&state, &query) {
+        Ok(session) => session,
+        Err(response) => return *response,
+    };
+    axum::Json(session.edit_text()).into_response()
+}
+
+/// `POST /api/edit/apply_text` (JSON body = the `apply_text` payload): the
+/// atomic whole-file edit for agents / MCP. It applies even while a human
+/// holds the writer lease — the agent acts FOR the user (docs/13), and the
+/// resulting delta reaches every connected client. Errors come back as
+/// `{kind, message, …details}` with the WS error kinds: 409 `stale_base`
+/// (with `current_text_hash`), 422 `parse_error` (with `diagnostics`) /
+/// `path_not_allowed`, 500 `io_error`, 400 for a malformed request.
+async fn api_edit_apply_text(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<PipelineQuery>,
+    body: axum::body::Bytes,
+) -> Response {
+    let session = match session_for(&state, &query) {
+        Ok(session) => session,
+        Err(response) => return *response,
+    };
+    let request: ApplyTextRequest = match serde_json::from_slice(&body) {
+        Ok(request) => request,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({
+                    "kind": "protocol",
+                    "message": format!(
+                        "unreadable apply_text body (expected {{base_text_hash, files: [{{path, text}}], label, actor}}): {error}"
+                    ),
+                })),
+            )
+                .into_response();
+        }
+    };
+    let source = DeltaSource {
+        client: None,
+        intent_id: None,
+        label: request.label.clone(),
+    };
+    match tokio::task::spawn_blocking(move || session.apply_text(&request, source)).await {
+        Ok(Ok(value)) => axum::Json(value).into_response(),
+        Ok(Err(error)) => (
+            intent_status(&error),
+            axum::Json(crate::session::error_body(&error)),
+        )
+            .into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+/// The HTTP status for a refused edit — the same kinds the WS `error`
+/// message carries.
+fn intent_status(error: &IntentError) -> StatusCode {
+    match error {
+        IntentError::StaleBase { .. } => StatusCode::CONFLICT,
+        IntentError::ParseError { .. }
+        | IntentError::PathNotAllowed(_)
+        | IntentError::Refused(_)
+        | IntentError::Writer(_)
+        | IntentError::Unknown(_)
+        | IntentError::NothingToUndo(_)
+        | IntentError::NothingToRedo(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        IntentError::Io(_) | IntentError::Persist(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        IntentError::Protocol(_) => StatusCode::BAD_REQUEST,
+        IntentError::Lease => StatusCode::FORBIDDEN,
+        IntentError::Batch { source, .. } => intent_status(source),
+    }
+}
+
 async fn api_run(
     State(state): State<Arc<AppState>>,
     AxumPath(node): AxumPath<String>,
@@ -773,6 +857,7 @@ async fn client_loop(socket: WebSocket, session: Arc<Session>) {
                 intent_id: None,
                 kind: "protocol".to_owned(),
                 message,
+                details: serde_json::Map::new(),
             },
         );
         let _ = sink.send(Message::Text(refusal.into())).await;
@@ -821,6 +906,7 @@ async fn client_loop(socket: WebSocket, session: Arc<Session>) {
                                 "protocol version {} — this server speaks {PROTOCOL_VERSION}; reload the app",
                                 envelope.v
                             ),
+                            details: serde_json::Map::new(),
                         },
                     )));
                 }
@@ -839,6 +925,7 @@ async fn client_loop(socket: WebSocket, session: Arc<Session>) {
                                 intent_id: None,
                                 kind: "lease".to_owned(),
                                 message: "read-only observer — take the lease to cancel".to_owned(),
+                                details: serde_json::Map::new(),
                             },
                         )));
                     }
@@ -855,6 +942,7 @@ async fn client_loop(socket: WebSocket, session: Arc<Session>) {
                             intent_id: None,
                             kind: "protocol".to_owned(),
                             message: format!("unreadable intent: {error}"),
+                            details: serde_json::Map::new(),
                         },
                     )));
                 }
@@ -868,6 +956,7 @@ async fn client_loop(socket: WebSocket, session: Arc<Session>) {
                         message:
                             "clients send JSON intents only; binary frames flow server → client"
                                 .to_owned(),
+                        details: serde_json::Map::new(),
                     },
                 )));
             }

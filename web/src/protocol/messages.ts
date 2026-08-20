@@ -65,6 +65,79 @@ export interface DeltaSource {
   label: string;
 }
 
+/**
+ * Who made an edit (docs/13 §Undo/redo; `protocol::Actor`). The server
+ * always writes the `prompt` key on an agent (`null` when it has none).
+ */
+export type Actor = { kind: "human" } | { kind: "agent"; prompt: string | null };
+
+/**
+ * The undo/redo state carried on every `delta` and `snapshot`
+ * (`protocol::HistoryView`): `depth` is the op cursor (undoable steps); the
+ * labels are those of the op `undo` / `redo` would apply next.
+ */
+export interface HistoryView {
+  can_undo: boolean;
+  can_redo: boolean;
+  undo_label: string | null;
+  redo_label: string | null;
+  depth: number;
+}
+
+/** One file of an `apply_text` edit (`protocol::FileText`). */
+export interface FileText {
+  /** Project-relative, `/`-separated: this pipeline, its sidecar, or `scripts/*.py` beside it. */
+  path: string;
+  text: string;
+}
+
+/**
+ * The atomic whole-text edit (`protocol::ApplyTextRequest`): refused on a
+ * stale `base_text_hash` (`GET /api/edit/text` → `text_hash`) or a text that
+ * does not parse; else one persist, one op, one delta.
+ */
+export interface ApplyTextRequest {
+  base_text_hash: string;
+  files: FileText[];
+  label: string;
+  actor: Actor;
+}
+
+/**
+ * The machine `kind` of an `error` message (`IntentError::kind`) — a string
+ * on the wire; these are the documented values (docs/13). A failed `batch`
+ * carries the FAILING op's kind plus `index`.
+ */
+export type ErrorKind =
+  | "writer"
+  | "lease"
+  | "protocol"
+  | "unknown"
+  | "refused"
+  | "persist"
+  | "nothing_to_undo"
+  | "nothing_to_redo"
+  | "stale_base"
+  | "parse_error"
+  | "path_not_allowed"
+  | "io_error"
+  | "encode"
+  | (string & {});
+
+/**
+ * The `error` payload: `kind` + `message`, plus the kind-specific facts the
+ * server flattens in (`current_text_hash` on `stale_base`, `diagnostics` on
+ * `parse_error`, `index` = the failing op of a `batch`).
+ */
+export interface ErrorPayload {
+  intent_id?: string;
+  kind: ErrorKind;
+  message: string;
+  current_text_hash?: string;
+  diagnostics?: Diagnostic[];
+  index?: number;
+}
+
 /** doc-11 diagnostic (cicada-lang `Diagnostic`). `span.line` is 1-based. */
 export interface Diagnostic {
   kind: string;
@@ -78,6 +151,12 @@ export interface Diagnostic {
 
 // ------------------------------------------------------------ view-model --
 
+/**
+ * What a node renders as. `disabled` = a `#off` ghost: when its body parses
+ * the view keeps `func`, `inputs`, `outputs`, `param` and its wires — only
+ * the kind (and the `excluded` reason) says it is off; a body that does not
+ * parse is a port-less ghost showing its text.
+ */
 export type NodeKind = "call" | "literal" | "expression" | "broken" | "disabled";
 
 export interface WireEnd {
@@ -238,20 +317,29 @@ export type ServerMessage =
         statuses: Record<string, NodeStatus>;
         summary: SolveSummary;
         lease: LeaseView;
+        /** This snapshot follows an external file change — the reload barrier: the op log was cleared. */
         barrier: boolean;
         reason: string;
+        history: HistoryView;
       };
     }
   | {
       type: "delta";
-      payload: { source: DeltaSource; graph: GraphView; text: string; dirty: string[] };
+      payload: {
+        source: DeltaSource;
+        graph: GraphView;
+        text: string;
+        dirty: string[];
+        /** The undo/redo state AFTER this op. */
+        history: HistoryView;
+      };
     }
   | {
       type: "status";
       payload: { generation: number; nodes: Record<string, NodeStatus>; summary: SolveSummary };
     }
   | { type: "lease"; payload: { lease: LeaseView; role: Role } }
-  | { type: "error"; payload: { intent_id?: string; kind: string; message: string } }
+  | { type: "error"; payload: ErrorPayload }
   | {
       type: "wire_probe";
       payload: {
@@ -284,8 +372,14 @@ export interface ConnectSpec {
   lift?: boolean;
 }
 
-export type ClientMessage =
-  | { type: "hello"; payload: { v: number } }
+/**
+ * A canvas write gesture — one that edits the text or sidecar in place and
+ * may be an element of a `batch` (mirrors `protocol::is_gesture`). The
+ * server validates this at runtime; the type narrows it at compile time so
+ * a preview, cancel, undo/redo, nested batch or `apply_text` can never be
+ * built into one.
+ */
+export type GestureMessage =
   | {
       type: "place_node";
       payload: { func: string; cell?: [number, number] | null; connect?: ConnectSpec | null };
@@ -294,12 +388,36 @@ export type ClientMessage =
   | { type: "disconnect"; payload: { to: WireEnd } }
   | { type: "accept_lift"; payload: { node: string; port: string } }
   | { type: "set_param"; payload: { node: string; port?: string | null; value: string } }
-  | { type: "param_preview"; payload: { node: string; port?: string | null; value: string } }
   | { type: "rename"; payload: { node: string; new: string } }
   | { type: "delete_node"; payload: { node: string } }
+  /**
+   * Toggle `#off` on a node (docs/10 gesture table): a live statement
+   * becomes a ghost — ports and wiring intact, skipped in solves, downstream
+   * red as "disabled" — and a ghost becomes live again (usually a cache
+   * hit). The server labels the delta `disable x` / `enable x`.
+   */
+  | { type: "toggle_disable"; payload: { node: string } }
   | { type: "move_node"; payload: { node: string; cell?: [number, number] | null } }
-  | { type: "set_preview"; payload: { node: string; on?: boolean | null } }
+  | { type: "set_preview"; payload: { node: string; on?: boolean | null } };
+
+export type ClientMessage =
+  | { type: "hello"; payload: { v: number } }
+  | GestureMessage
+  | { type: "param_preview"; payload: { node: string; port?: string | null; value: string } }
   | { type: "cancel"; payload: Record<string, never> }
+  /** Restore the last op's `before` snapshot (a write; the delta is labelled `undo: <label>`). */
+  | { type: "undo"; payload: Record<string, never> }
+  /** Re-apply the last undone op's `after` snapshot. */
+  | { type: "redo"; payload: Record<string, never> }
+  /**
+   * Several gestures as ONE op: applied in order under the session lock,
+   * all or nothing (the error names the failing `index`); one persist, one
+   * op, one delta — so one Ctrl+Z undoes a multi-move / multi-delete /
+   * reconnect.
+   */
+  | { type: "batch"; payload: { ops: GestureMessage[]; label: string } }
+  /** Whole files atomically (agents / MCP) — same atomicity as `batch`. */
+  | { type: "apply_text"; payload: ApplyTextRequest }
   | { type: "inspect"; payload: { node: string } }
   | { type: "inspect_wire"; payload: { to: WireEnd } }
   | { type: "probe_wire"; payload: { from: WireEnd } }
@@ -314,20 +432,53 @@ export type ClientEnvelope = { v: number; id?: string } & ClientMessage;
 
 /** Intents that need the write lease (mirrors `protocol::is_write`). */
 export function isWrite(message: ClientMessage): boolean {
+  if (isGesture(message)) return true;
+  switch (message.type) {
+    case "param_preview":
+    case "cancel":
+    case "undo":
+    case "redo":
+    case "batch":
+    case "apply_text":
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Is this intent a canvas write gesture — one that may be an element of a
+ * `batch`? (Mirrors `protocol::is_gesture`: previews, cancel, undo/redo,
+ * batch itself and `apply_text` are writes but not gestures.)
+ */
+export function isGesture(message: ClientMessage): message is GestureMessage {
   switch (message.type) {
     case "place_node":
     case "connect":
     case "disconnect":
     case "accept_lift":
     case "set_param":
-    case "param_preview":
     case "rename":
     case "delete_node":
+    case "toggle_disable":
     case "move_node":
     case "set_preview":
-    case "cancel":
       return true;
     default:
       return false;
   }
+}
+
+/**
+ * N gestures as the ONE intent that makes them one undo step: a single
+ * gesture goes as itself (the server labels it — `delete x`, `move x`);
+ * two or more go as a `batch` under `label`. An empty list is a programming
+ * error and throws — the server would refuse it anyway, and a gesture site
+ * with nothing to send must not send.
+ */
+export function asOneOp(ops: readonly GestureMessage[], label: string): ClientMessage {
+  const first = ops[0];
+  if (first === undefined) throw new Error(`asOneOp(${JSON.stringify(label)}): no gestures`);
+  if (ops.length === 1) return first;
+  return { type: "batch", payload: { ops: [...ops], label } };
 }

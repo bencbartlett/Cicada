@@ -757,6 +757,15 @@ aside.inspector {
   color: var(--accent);
 }
 
+.param-row.param-off {
+  opacity: 0.55;
+}
+
+.param-row.param-off .param-name {
+  text-decoration: line-through;
+  text-decoration-color: var(--fg-dim);
+}
+
 .param-name {
   font-family: var(--mono);
   font-size: 12px;

@@ -15,7 +15,7 @@ runs in parallel from day 1:
 | # | Item | Track | Size | Status |
 |---|---|---|---|---|
 | 0 | Fold `corpus/` into `examples/wall/` + `tools/`; this plan | foreground | hours | **done** 2026-08-20 (every nightly step passes locally from the new paths; the first Nightly run itself is pending the push) |
-| 1 | Undo/redo — snapshot op log + atomic `batch` path; riders `#off`, Backspace-no-delete | foreground (server/web) | days | pending |
+| 1 | Undo/redo — snapshot op log + atomic `batch`/`apply_text` path; riders `#off`, Backspace-no-delete | foreground (server/web) | days | **done** 2026-08-20 (merged) |
 | 2 | Git panel slice 1 — status strip, per-node change markers, commit, revert-to-HEAD | foreground (server/web) | ~1 week | pending |
 | P | OCCT probe — prebuilt 7.8.x build/link on win/mac/linux, determinism, timings, license, CI shape | parallel worktree | hours, cap 1 day | pending |
 | 3 | OCCT-backed Solid — the `Solid` kind, primitives/extrude/loft/revolve/sweep, booleans, `tessellate`, STEP; `mesh_*` renames in the same commit | main geometry track from week 3 | weeks | pending (gated on P) |
@@ -78,12 +78,16 @@ Design: DECISIONS.md rows 37 (revised 2026-08-19) and doc 13 §Undo.
   clones for rollback; `undo`/`redo` intents restore and go through the
   normal persist + delta; `reload_from_disk` clears the log (barrier);
   effectful runs are not ops; lease-gated like every write.
-- **WP-B (batch)**: the `batch` intent and `POST /api/edit/batch`:
-  `{base_text_hash, files: {path: text}, label, actor}` → refuse on stale
-  base (`stale_base`, returns the current hash) or parse failure
+- **WP-B (batch)**: the atomic multi-file edit for agents — shipped as
+  the `apply_text` intent and `POST /api/edit/apply_text` (the name
+  `batch` went to the canvas's gesture list, below):
+  `{base_text_hash, files: [{path, text}], label, actor}` → refuse on
+  stale base (`stale_base`, returns the current hash) or parse failure
   (diagnostics); else apply under the lock: write every file temp +
-  rename, one op, one delta. Multi-node canvas gestures (multi-move,
-  multi-delete, reconnect) use it.
+  rename, one op, one delta. `GET /api/edit/text` is the base to read.
+  Multi-node canvas gestures (multi-move, multi-delete, reconnect) use
+  the `batch {ops, label}` intent — a list of write gestures applied in
+  order under the lock, all or nothing, one op, one delta.
 - **WP-P (protocol + web)**: additive `history {can_undo, can_redo,
   undo_label, redo_label}` on Delta/Snapshot/`/debug/state`;
   `Ctrl+Z`/`Ctrl+Shift+Z`; toolbar buttons; Backspace removed from the
@@ -97,6 +101,14 @@ Design: DECISIONS.md rows 37 (revised 2026-08-19) and doc 13 §Undo.
   barrier is refused with the documented reason; Playwright: delete a
   node, `Ctrl+Z`, the node and its wires are back and the solved state
   is a cache hit (`/debug/state` shows `cached` for its outputs).
+- **Shipped** (2026-08-20, `wt/undo`): all of the above plus the review
+  riders — `Ctrl+Z` reaches the map from a focused slider (a range input
+  is a control, not text entry), the one-op canvas gestures
+  (multi-drag, target-anchor rewire) have Playwright coverage, a held
+  `Ctrl+Z` past an empty side does not flood the notices — and `#off`:
+  `writer::toggle_disable`, the `toggle_disable` intent, the ports-intact
+  ghost (a `Line::Disabled` carries its parse), `D` / the node menu / the
+  inspector action, `web/e2e/disable.spec.ts`.
 
 ## Item 2 — git panel slice 1 (~1 week)
 

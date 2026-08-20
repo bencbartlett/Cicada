@@ -4,8 +4,9 @@
 //!
 //! Every node carries **line-local byte spans** into the statement's raw
 //! text — the minimal-edit writer splices at spans and never reformats, so
-//! spans are the round-trip contract's currency. Axis annotations and
-//! `#off` disabled bindings arrive with later stages (doc 15 scope).
+//! spans are the round-trip contract's currency (a `#off`-disabled line's
+//! parse indexes its raw text the same way, prefix included). Axis
+//! annotations arrive with a later stage (doc 15 scope).
 
 /// Byte range within one line's raw text (`end` exclusive).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

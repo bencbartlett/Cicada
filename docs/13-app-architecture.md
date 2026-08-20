@@ -44,9 +44,12 @@ Two planes over one WebSocket:
 The edit flow is **intent → authoritative delta**:
 
 1. The client sends a gesture-level intent matching doc 10's
-   round-trip table: `place_node`, `connect`, `accept_lift`,
-   `set_param`, `rename`, `delete_node`, `move_node` (layout),
-   `undo`, `redo`, …
+   round-trip table: `place_node`, `connect`, `disconnect`,
+   `accept_lift`, `set_param`, `rename`, `delete_node`,
+   `toggle_disable` (the `#off` prefix; the delta says `disable x` /
+   `enable x`), `move_node` (layout), `set_preview`, `undo`, `redo`,
+   `batch` (several gestures as one op), `apply_text` (whole files,
+   agents) — see §Undo/redo for the last four.
 2. The engine validates against the checker, applies the edit to the
    text/sidecar (doc 10 writer discipline), assigns it a sequence
    number, and broadcasts the **delta**: graph view-model changes +
@@ -143,6 +146,8 @@ with near-zero server traffic. `clock` is the unbounded escape hatch
 | `GET /api/project` | Pipelines, scripts, dirty/git status summary |
 | `GET /api/blob/{hash}` | Large payloads on demand (full inspector data, export previews) |
 | `POST /api/run/{node}` | Effectful nodes — requires the explicit-run confirmation, streams progress over the session socket |
+| `GET /api/edit/text` | `{path, text, text_hash}` — the base an agent reads before editing (§Undo/redo) |
+| `POST /api/edit/apply_text` | The atomic whole-file edit for agents / MCP (JSON body = the `apply_text` intent payload; same error kinds as the socket: 409 `stale_base`, 422 `parse_error` / `path_not_allowed`, 500 `io_error`). Applies even while a human holds the writer lease — the agent acts for the user; the delta reaches every client |
 | `GET /api/git/…` | Status, node-level diff, commit, per-node history (doc 10 git integration) |
 | `GET /debug/state`, `GET /debug/screenshot` | The agent/dev verification loop (doc 14). `state` (`?pipeline=&values=&wait=`) is the authoritative JSON oracle — graph view-model, text, statuses, summary, per-output display stats with bounds/triangles, lease, and `timings` (the last 1,024 generations: kind, `queued_ms` intent-arrival → start, `elapsed_ms`, `cancelled`, computed/cached counts, frame bytes, and `cancel_to_idle_ms` on a generation Esc ended — measured server-side, poll-free; the doc-15 measurement currency); `screenshot` (`?target=viewport`) asks a connected client to render the WebGL viewport to PNG (503 when no client is connected — loud, never blank; whole-page shots are Playwright's job) |
 | `GET /health` | Readiness (no token) — Playwright's `webServer` waits on it |
@@ -167,17 +172,21 @@ hypothetical wire on a scratch copy — no second copy of the type lattice
 in TypeScript; cost is one re-check per candidate port — fine at the
 wall's ~10-node scale, an incremental checker's job beyond). Persisted
 writes are atomic (temp file + rename) and a refused or failed gesture
-rolls the in-memory document back to what is on disk. Not in the spike:
-undo/redo (no op log yet — the ledger row stands, the log arrives with
-v0.1), transport, git routes, `/api/blob` beyond value summaries,
-reconnect replay (a reconnect is a fresh session join: one hydration
-path — the client retries with backoff and re-hydrates), the
-cost-model's compute-on-release degrade for expensive cones and scrub
-caching (every drag solves latest-wins; a slow cone simply shows
-progress), `#off` node disable and groups (their keyboard rows notice
-loudly), the sidecar's `port_order`/`color`/`collapsed` keys (carried,
-not rendered), per-element frame ranges, and an auto-layout beyond
-"layer by dependency depth, stack in definition order".
+rolls the in-memory document back to what is on disk. Shipped with
+v0.1 item 1 (2026-08-20): undo/redo over the snapshot op log (§Undo/redo
+below), the `batch` and `apply_text` paths, and `#off` node disable
+(`toggle_disable`: the view-model renders a parsed `#off` line as the
+node it is — ports, literals and wires intact — with `kind: disabled`
+and the `disabled (`#off`)` exclusion; its downstream is red with the
+disabled node NAMED). Still not in: transport, git routes, `/api/blob`
+beyond value summaries, reconnect replay (a reconnect is a fresh
+session join: one hydration path — the client retries with backoff and
+re-hydrates), the cost-model's compute-on-release degrade for expensive
+cones and scrub caching (every drag solves latest-wins; a slow cone
+simply shows progress), groups (their keyboard rows notice loudly), the
+sidecar's `port_order`/`color`/`collapsed` keys (carried, not rendered),
+per-element frame ranges, and an auto-layout beyond "layer by
+dependency depth, stack in definition order".
 
 ## Undo/redo (formalizing the ledger row)
 
@@ -187,7 +196,25 @@ not rendered), per-element frame ranges, and an auto-layout beyond
   2026-08-19: snapshots, not per-gesture inverse edits; any change from
   any source is one op, so new gestures are undoable for free).
   Sidecar-only ops (node moves, preview toggles) are undo steps;
-  effectful runs are non-undoable and say so.
+  effectful runs are non-undoable and say so. *(Live, v0.1:
+  `session.rs` `OpLog` — `VecDeque<Op {id, label, actor, before, after,
+  at}>` with a cursor, cap 200, the `before`/`after` pair so redo is a
+  restore too; `actor` serializes as `{"kind":"human"}` /
+  `{"kind":"agent","prompt":…}`; `at` is server-monotonic ms. Every
+  `delta` and `snapshot` carries `history {can_undo, can_redo,
+  undo_label, redo_label, depth}` (`depth` = the cursor: undoable
+  steps); `/debug/state` adds `history` and `ops: [{id, label, actor,
+  at}]`. `param_preview` and `POST /api/run/{node}` never push an op;
+  neither does a write that left text and sidecar identical (a move to
+  no cell on an un-moved node, a re-sent text) — it is answered with a
+  delta but is not an undo step. The `prompt` key is always present on
+  an agent actor (`null` when absent). **Persist discipline**: text then
+  sidecar, each temp + rename; a persist that fails half-way (the text
+  landed, the sidecar could not — a transient lock on a synced project
+  dir) takes the text off the disk again and rolls memory back under
+  the same lock hold, so a refused edit is never left anywhere, and
+  `text_hash` is by construction the hash of the text in memory — the
+  value `GET /api/edit/text` ships and `apply_text` checks against.)*
 - Continuous gestures coalesce: a slider drag or node drag is one op,
   created on release.
 - An agent inference's graph edits apply as **one atomic labeled op**
@@ -201,9 +228,33 @@ not rendered), per-element frame ranges, and an auto-layout beyond
   external agent (MCP) MUST use this route; a direct disk write is the
   external-change path below (barrier, stack cleared). Rebase onto a
   moved base is a later refinement — v0.1 refuses and the agent
-  re-reads.
+  re-reads. *(Live, v0.1, as two intents: **`batch {ops, label}`** for
+  the canvas — a list of write gestures applied in order under the
+  lock, all or nothing; its error carries the FAILING op's `kind`
+  (`refused` / `writer` / `unknown` / `protocol`, what the client reacts
+  to) plus a flattened `index` saying where; and
+  **`apply_text {base_text_hash, files: [{path, text}], label, actor}`**
+  for agents — paths are project-relative and limited to this
+  pipeline's `.cic`, its `.cic.layout.json`, and `scripts/*.py` beside
+  it (`path_not_allowed` otherwise); refusals are `stale_base` (carries
+  `current_text_hash`), `parse_error` (carries `diagnostics`), and
+  `io_error` (a later file failed to land → the earlier ones were
+  restored). A scripts change reloads the catalog and hydrates clients
+  with a non-barrier `snapshot` instead of a delta — the log is NOT
+  cleared. The HTTP pair: **`GET /api/edit/text`** → `{path, text,
+  text_hash}` is the base to read, **`POST /api/edit/apply_text`**
+  (JSON body = the intent payload) applies it — and it applies even
+  while a human holds the writer lease, because the agent acts FOR the
+  user; the resulting delta reaches every connected client. Status
+  codes: 409 `stale_base`, 422 `parse_error` / `path_not_allowed`, 500
+  `io_error`, 400 for a malformed body.)*
 - `undo`/`redo` are ordinary intents; the engine applies the inverse
-  edit and broadcasts the delta like any other change.
+  edit and broadcasts the delta like any other change. *(Live:
+  `undo {}` / `redo {}` — lease-gated writes that restore the op's
+  `before` / `after` snapshot through the normal persist + delta path,
+  labelled `undo: <label>` / `redo: <label>`; an empty side refuses
+  with `nothing_to_undo` / `nothing_to_redo` and says why — no edits
+  yet, everything already undone, or cleared by the reload barrier.)*
 - **Undo never recomputes** — the restored state's node keys are warm
   in the content-addressed cache (doc 12).
 - The log is ephemeral (cleared on serve restart); git is the durable
@@ -217,7 +268,13 @@ a stray editor. The engine watches the project directory (debounced):
 an external change to a `.cic`, sidecar, or script triggers reload →
 re-check → **reload barrier** in the op log (undo stack cleared) →
 full snapshot broadcast to clients. Honest and simple; no
-three-way-merge machinery.
+three-way-merge machinery. The session's own writes echo back through
+the watcher too; they are recognised because after a successful persist
+disk == memory — text by hash, sidecar by equality, scripts by the
+loaded fingerprint — and that equality is the WHOLE echo guard: the
+server keeps no memory of "what I last wrote", which would mask a real
+external change back to a text it once wrote (git checkout there and
+back) and leave memory stale.
 
 ## Reconnect and resync
 

@@ -166,7 +166,9 @@ impl Sidecar {
         text
     }
 
-    /// Write the sidecar. When every override is empty and nothing else is
+    /// Write the sidecar atomically (temp + rename, like the `.cic`: a
+    /// reader never sees a torn sidecar, and a failed write leaves the
+    /// file as it was). When every override is empty and nothing else is
     /// set, the file is REMOVED instead (near-empty by construction: no
     /// state, no file).
     ///
@@ -185,7 +187,7 @@ impl Sidecar {
                 Err(source) => return Err(io(source)),
             }
         }
-        std::fs::write(path, self.render()).map_err(io)
+        crate::atomic::write_atomic(path, self.render().as_bytes()).map_err(io)
     }
 
     fn is_default_shape(&self) -> bool {
@@ -297,6 +299,15 @@ mod tests {
         sidecar.set_cell("a", Some([1, 2]));
         sidecar.save(&path).unwrap();
         assert!(path.exists());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            sidecar.render(),
+            "the file holds exactly the rendered bytes"
+        );
+        assert!(
+            !dir.path().join(".p.cic.layout.json.cicada-tmp").exists(),
+            "the atomic write leaves no temp file"
+        );
         sidecar.set_cell("a", None);
         assert!(sidecar.overrides.is_empty(), "empty entries are pruned");
         sidecar.save(&path).unwrap();

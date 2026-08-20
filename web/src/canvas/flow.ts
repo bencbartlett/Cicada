@@ -16,6 +16,8 @@ export type CanvasNode = Node<CanvasNodeData, "cicada">;
 
 export interface CanvasEdgeData extends Record<string, unknown> {
   wire: WireView;
+  /** One end is a `#off` ghost: drawn dimmed (the ghost keeps its wiring). */
+  ghost: boolean;
 }
 export type CanvasEdge = Edge<CanvasEdgeData, "cicada">;
 
@@ -29,7 +31,9 @@ export function sendWrite(message: ClientMessage): boolean {
   if (!canWrite(state)) {
     const why = writeBlockReason(state) ?? "cannot write";
     const hint = state.connection === "open" ? "take the lease to edit" : "waiting for the connection";
-    state.addNotice("warning", `${why} — ${message.type.replace(/_/g, " ")} ignored (${hint})`);
+    // A batch is named by its label (`move 3 nodes`), a gesture by its type.
+    const what = message.type === "batch" ? message.payload.label : message.type.replace(/_/g, " ");
+    state.addNotice("warning", `${why} — ${what} ignored (${hint})`);
     return false;
   }
   state.send(message);
@@ -73,6 +77,9 @@ export function buildNodes(
 
 /** Graph → React Flow edges (one per wire; ids are the server's wire ids). */
 export function buildEdges(graph: GraphView, selectedWire: string | null): CanvasEdge[] {
+  // A wire into a `#off` ghost is drawn ghosted too (the ghost keeps its
+  // wiring); a wire OUT of one is red already — the server says why.
+  const ghosts = new Set(graph.nodes.filter((n) => n.kind === "disabled").map((n) => n.name));
   return graph.wires.map((wire) => ({
     id: wire.id,
     type: "cicada",
@@ -80,7 +87,7 @@ export function buildEdges(graph: GraphView, selectedWire: string | null): Canva
     sourceHandle: wire.from.port,
     target: wire.to.node,
     targetHandle: wire.to.port,
-    data: { wire },
+    data: { wire, ghost: ghosts.has(wire.to.node) || ghosts.has(wire.from.node) },
     selected: wire.id === selectedWire,
     // A wire is deleted by dragging an end off any handle, never by a
     // local remove: the server owns the graph.

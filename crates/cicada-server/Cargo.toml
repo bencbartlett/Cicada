@@ -1,6 +1,6 @@
 [package]
 name = "cicada-server"
-description = "Cicada engine server: axum app, protocol, sessions, solve loop, binary frames, debug endpoints (op log, transport, git arrive with v0.1)"
+description = "Cicada engine server: axum app, protocol, sessions, undo/redo op log, solve loop, binary frames, debug endpoints (transport, git arrive with v0.1)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

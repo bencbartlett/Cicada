@@ -1,7 +1,7 @@
 /**
  * Status bar (docs/16 §Application layout): diagnostics count · red/blocked
- * node counts · generation + last delta · connection · frames received ·
- * Esc hint while running · notices count.
+ * node counts · generation + last op label + undo depth · connection ·
+ * frames received · Esc hint while running · notices count.
  */
 import { useEffect, useState } from "react";
 import { useCicada } from "../state/store";
@@ -14,6 +14,7 @@ export function StatusBar() {
   const statuses = useCicada((s) => s.statuses);
   const summary = useCicada((s) => s.summary);
   const lastDeltaLabel = useCicada((s) => s.lastDeltaLabel);
+  const history = useCicada((s) => s.history);
   const connection = useCicada((s) => s.connection);
   const notices = useCicada((s) => s.notices.length);
   const clearSelection = useCicada((s) => s.clearSelection);
@@ -51,9 +52,25 @@ export function StatusBar() {
         {running > 0 && <span className="badge accent">{running} running</span>}
         {red === 0 && blocked === 0 && running === 0 && <span className="faint">all nodes green</span>}
       </span>
-      <span className="sb-item" title="solve generation · last delta" data-testid="sb-generation">
+      <span className="sb-item" title="solve generation · last op" data-testid="sb-generation">
         gen {summary.generation}
         {lastDeltaLabel && <span className="faint">· {lastDeltaLabel}</span>}
+      </span>
+      <span
+        className="sb-item"
+        title={
+          history.can_undo
+            ? `${history.depth} undoable · Ctrl+Z undoes: ${history.undo_label ?? ""}`
+            : "nothing to undo"
+        }
+        data-testid="sb-history"
+      >
+        <span className={`faint${history.can_undo ? "" : " dim"}`}>↶ {history.depth}</span>
+        {history.can_redo && (
+          <span className="faint" title={`Ctrl+Shift+Z redoes: ${history.redo_label ?? ""}`}>
+            · ↷ {history.redo_label}
+          </span>
+        )}
       </span>
       <span className="sb-spacer" />
       {summary.running && (

@@ -4,9 +4,9 @@
 //! contract: a gesture that would corrupt the document errors and leaves
 //! it untouched.
 
-use cicada_lang::Document;
 use cicada_lang::diag::Span;
-use cicada_lang::writer::{self, WriterError};
+use cicada_lang::writer::{self, DisableState, WriterError};
+use cicada_lang::{Document, Line};
 
 fn apply(before: &str, ops: impl FnOnce(&mut Document)) -> String {
     let mut document = Document::parse(before);
@@ -260,4 +260,192 @@ fn gestures_error_loudly_on_unknown_bindings() {
     assert!(writer::set_kwarg(&mut document, "ghost", "x", "a", None).is_err());
     assert!(writer::delete(&mut document, "ghost").is_err());
     assert!(writer::wrap_each(&mut document, "ghost", "x").is_err());
+}
+
+// ------------------------------------------------------- toggle disable --
+
+#[test]
+fn toggle_disable_prefixes_and_unprefixes_exactly_off_space() {
+    let before = include_str!("fixtures/gestures/toggle_disable/before.cic");
+    let after = include_str!("fixtures/gestures/toggle_disable/after.cic");
+    let mut document = Document::parse(before);
+    assert_eq!(
+        writer::toggle_disable(&mut document, "cells").unwrap(),
+        DisableState::Disabled
+    );
+    // The prefix and nothing else: spacing and the trailing comment stay.
+    assert_eq!(document.emit(), after);
+    // The ghost keeps its parse — ports and wiring intact on the canvas —
+    // but is not a definition.
+    assert!(document.find_binding("cells").is_none());
+    assert_eq!(document.find_disabled("cells"), Some(2));
+    let Line::Disabled {
+        statement: Some(statement),
+        name: Some(name),
+        raw,
+    } = &document.lines()[2]
+    else {
+        panic!(
+            "line 3 must be a parsed Disabled line: {:?}",
+            document.lines()[2]
+        );
+    };
+    assert_eq!(name, "cells");
+    assert_eq!(statement.name(), "cells");
+    // Spans index the RAW line (prefix included), like a live statement's.
+    assert_eq!(statement.targets[0].span.slice(raw), "cells");
+    assert_eq!(
+        statement
+            .references()
+            .iter()
+            .map(|r| r.name.as_str())
+            .collect::<Vec<_>>(),
+        ["seeds"]
+    );
+    // The downstream `frusta` line is untouched — it goes red at check
+    // time ("disabled"), never unknown-name, never deleted.
+    // Enabling again is byte-identical to the start.
+    assert_eq!(
+        writer::toggle_disable(&mut document, "cells").unwrap(),
+        DisableState::Enabled
+    );
+    assert_eq!(document.emit(), before);
+    assert_eq!(document.find_binding("cells"), Some(2));
+}
+
+#[test]
+fn toggle_disable_survives_indentation_crlf_and_a_body_that_does_not_parse() {
+    // Indented statement + CRLF: the prefix goes at column 0, the `\r`
+    // stays part of the terminator, and the round trip is exact.
+    let source = "# cicada 1\r\n  a = 1\r\nb = a + 1\r\n";
+    let mut document = Document::parse(source);
+    writer::toggle_disable(&mut document, "a").unwrap();
+    assert_eq!(
+        document.emit(),
+        "# cicada 1\r\n#off   a = 1\r\nb = a + 1\r\n"
+    );
+    assert!(matches!(
+        &document.lines()[1],
+        Line::Disabled {
+            statement: Some(_),
+            ..
+        }
+    ));
+    writer::toggle_disable(&mut document, "a").unwrap();
+    assert_eq!(document.emit(), source);
+
+    // A disabled line whose body never parsed: the name is still known
+    // (first identifier), enabling yields a BROKEN line — the honest state
+    // the prefix was hiding — and disabling it again restores the text.
+    let hidden = "# cicada 1\n#off junk = f(((\n";
+    let mut document = Document::parse(hidden);
+    assert!(matches!(
+        &document.lines()[1],
+        Line::Disabled {
+            statement: None,
+            name: Some(name),
+            ..
+        } if name == "junk"
+    ));
+    assert_eq!(
+        writer::toggle_disable(&mut document, "junk").unwrap(),
+        DisableState::Enabled
+    );
+    assert_eq!(document.emit(), "# cicada 1\njunk = f(((\n");
+    assert!(matches!(&document.lines()[1], Line::Broken { .. }));
+    assert_eq!(
+        document.parse_diagnostics().len(),
+        1,
+        "the hidden parse error is now loud"
+    );
+}
+
+#[test]
+fn toggle_disable_errors_loudly_on_unknown_names_and_future_versions() {
+    let source = "# cicada 1\na = 1\n";
+    let mut document = Document::parse(source);
+    assert_eq!(
+        writer::toggle_disable(&mut document, "ghost").unwrap_err(),
+        WriterError::UnknownBinding("ghost".to_owned())
+    );
+    assert_eq!(document.emit(), source, "untouched");
+    let future = "# cicada 99\na = 1\n";
+    let mut document = Document::parse(future);
+    assert_eq!(
+        writer::toggle_disable(&mut document, "a").unwrap_err(),
+        WriterError::FutureVersion { found: 99 }
+    );
+    assert_eq!(document.emit(), future);
+}
+
+#[test]
+fn disabled_bindings_refuse_in_place_edits_by_name_but_delete_and_rename_see_them() {
+    let source = "# cicada 1\nseeds = scatter(count=100)\n#off cells = voronoi(seeds=seeds)\nf = frustum(profile=each(cells))\n";
+    let mut document = Document::parse(source);
+
+    // Wire / unwire / lift / set-param need a LIVE statement: refused with
+    // the reason ("disabled"), never as "no binding named".
+    assert_eq!(
+        writer::set_kwarg(&mut document, "cells", "seeds", "f", None).unwrap_err(),
+        WriterError::Disabled("cells".to_owned())
+    );
+    assert_eq!(
+        writer::remove_kwarg(&mut document, "cells", "seeds").unwrap_err(),
+        WriterError::Disabled("cells".to_owned())
+    );
+    assert_eq!(
+        writer::wrap_each(&mut document, "cells", "seeds").unwrap_err(),
+        WriterError::Disabled("cells".to_owned())
+    );
+    assert_eq!(
+        writer::set_param(&mut document, "cells", "seeds", "1").unwrap_err(),
+        WriterError::Disabled("cells".to_owned())
+    );
+    assert_eq!(
+        writer::set_literal(&mut document, "cells", "1").unwrap_err(),
+        WriterError::Disabled("cells".to_owned())
+    );
+    assert_eq!(
+        document.emit(),
+        source,
+        "every refusal left the file untouched"
+    );
+
+    // Rename rewrites the reference INSIDE the disabled line (re-enabling
+    // it must never meet a stale name) and can rename the ghost itself.
+    writer::rename(&mut document, "seeds", "sites").unwrap();
+    writer::rename(&mut document, "cells", "regions").unwrap();
+    assert_eq!(
+        document.emit(),
+        "# cicada 1\nsites = scatter(count=100)\n#off regions = voronoi(seeds=sites)\nf = frustum(profile=each(regions))\n"
+    );
+    // A name held by a disabled line is taken — the rename would plant a
+    // rebinding error the moment the ghost is re-enabled.
+    assert_eq!(
+        writer::rename(&mut document, "sites", "regions").unwrap_err(),
+        WriterError::NameTaken("regions".to_owned())
+    );
+    // Auto-naming skips it for the same reason.
+    assert_eq!(
+        writer::place(&mut document, "regions", &[]).unwrap(),
+        "regions_1"
+    );
+    // Placing downstream of a ghost lands after its line (the wire is red
+    // until it is re-enabled — a wiring decision the user already made).
+    assert_eq!(
+        writer::place(&mut document, "grow", &["regions"]).unwrap(),
+        "grow_1"
+    );
+    assert_eq!(
+        document.emit(),
+        "# cicada 1\nsites = scatter(count=100)\n#off regions = voronoi(seeds=sites)\ngrow_1 = grow()\nf = frustum(profile=each(regions))\nregions_1 = regions()\n"
+    );
+
+    // The ghost is the user's line: deletable.
+    writer::delete(&mut document, "regions").unwrap();
+    assert!(document.find_disabled("regions").is_none());
+    assert_eq!(
+        document.emit(),
+        "# cicada 1\nsites = scatter(count=100)\ngrow_1 = grow()\nf = frustum(profile=each(regions))\nregions_1 = regions()\n"
+    );
 }

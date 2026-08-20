@@ -9,8 +9,10 @@
 //! [`Document`](document::Document) stores raw text per line and the writer
 //! splices at spans, never reformatting.
 //!
-//! Later stages add: axis annotations, `#off` disabled bindings, `fmt`,
-//! adapters/`insert_between`, the tree-sitter grammar (docs/10, doc 15).
+//! `#off` disabled bindings are native (v0.1: parsed behind the prefix,
+//! toggled by `writer::toggle_disable`). Later stages add: axis
+//! annotations, `fmt`, adapters/`insert_between`, the tree-sitter grammar
+//! (docs/10, doc 15).
 
 pub mod ast;
 pub mod check;

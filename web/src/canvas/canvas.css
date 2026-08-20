@@ -593,10 +593,30 @@
   max-width: 100%;
 }
 
-/* ghost boxes: broken / disabled lines */
+/* ghost boxes: broken lines, and `#off` lines whose body does not parse */
 .cn-ghost {
   opacity: 0.6;
   border-style: dashed;
+}
+
+/* a `#off` ghost WITH its ports: the node it is, dimmed and dashed */
+.cn.cn-disabled {
+  opacity: 0.55;
+  border-style: dashed;
+  border-color: var(--fg-dim);
+}
+
+.cn.cn-disabled .cn-name {
+  text-decoration: line-through;
+  text-decoration-color: var(--fg-dim);
+}
+
+.cn-state.state-off {
+  color: var(--fg-dim);
+}
+
+.cicada-edge.ghost {
+  opacity: 0.45;
 }
 
 .cn-ghost.cn-kind-broken {
