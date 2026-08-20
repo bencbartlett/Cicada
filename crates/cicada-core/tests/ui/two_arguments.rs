@@ -7,7 +7,7 @@ pub struct In {
 }
 
 /// Bad — takes two arguments instead of one input struct.
-#[node(category = "Maths & logic", tier = "S", version = 1)]
+#[node(category = "Maths & logic", tier = "S", version = 1, gh = none)]
 pub fn bad(input: In, extra: f64) -> f64 {
     input.x + extra
 }

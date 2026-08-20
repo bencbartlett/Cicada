@@ -7,21 +7,26 @@
 //!
 //! Nodes register at compile time via `#[node]` + `#[derive(Ports)]`
 //! (cicada-macros); the registry is queried through [`registry`].
+//!
+//! Layout (DECISIONS.md stdlib row, revised 2026-08-19): one node per
+//! file, `src/<category>/<node>.rs`, where the categories are the ribbon
+//! tabs (docs/08 §Catalog); a category's `mod.rs` lists its nodes and a
+//! `support.rs` holds whatever several of them share. Catalog order never
+//! depends on this layout (name order within a category).
 
 use cicada_core::spec::NodeSpec;
 
 pub mod curves;
-pub mod display;
-pub mod export;
 pub mod intersect;
 pub mod lists;
 pub mod maths;
 pub mod meshes;
+pub mod output;
 pub mod params;
 pub mod points;
 pub mod sequences;
-pub mod text;
-pub mod transforms;
+pub mod solids;
+pub mod transform;
 
 /// Unwrap a geometry result, turning the error into a node panic — the
 /// scheduler catches panics into red nodes carrying this message
@@ -34,8 +39,8 @@ pub(crate) fn red<T>(result: Result<T, cicada_geom::GeomError>) -> T {
 }
 
 /// Every node registered in this binary, in canonical catalog order
-/// (docs/08 category order, then module path + source line within a
-/// category).
+/// (docs/08 category order, then dialect name within a category — the
+/// order never depends on the source layout).
 #[must_use]
 pub fn registry() -> &'static [&'static NodeSpec] {
     cicada_core::spec::registered()
@@ -59,16 +64,25 @@ mod naming_fixtures {
     }
 
     /// Loop Fixture — keyword-dodging fn name must register as `loop`.
-    #[node(category = "Maths & logic", tier = "S", version = 1)]
+    ///
+    /// # Returns
+    ///
+    /// The truthy value.
+    #[node(category = "Maths & logic", tier = "S", version = 1, gh = none)]
     pub fn loop_(input: FixtureIn) -> f64 {
         input.r#true
     }
 
     /// Renamed Fixture — the explicit name override must win.
+    ///
+    /// # Returns
+    ///
+    /// The truthy value.
     #[node(
         category = "Maths & logic",
         tier = "S",
         version = 1,
+        gh = none,
         name = "fixture_renamed"
     )]
     pub fn some_other_ident(input: FixtureIn) -> f64 {
@@ -129,6 +143,13 @@ mod tests {
         );
         assert_eq!(a.doc, "First addend.");
         assert_eq!(add.signature(), "add(a: Number, b: Number) → Number");
+        // The bare single output carries the `# Returns` line as its doc
+        // (one doc line per port — the output included).
+        let [out] = add.outputs else {
+            panic!("add has one output")
+        };
+        assert_eq!((out.name, out.ty.render().as_str()), ("out", "Number"));
+        assert_eq!(out.doc, "The sum `a + b`.");
     }
 
     #[test]
@@ -148,6 +169,46 @@ mod tests {
         assert_eq!(start.default, Some("0.0"));
         assert_eq!(start.doc, "First value.");
         assert_eq!(count.default, None);
+    }
+
+    // The node format's two newest pieces through the real macro: the
+    // `gh` attribute and the `# Examples` ```cic fence, extracted as the
+    // snippet text without the header (the runner adds `# cicada 1`).
+    #[test]
+    fn gh_and_examples_roundtrip_into_the_spec() {
+        let specs = registry();
+        let series = specs
+            .iter()
+            .find(|s| s.name == "series")
+            .expect("series registered");
+        assert_eq!(series.gh, Some("Series"));
+        assert_eq!(
+            series.examples,
+            &["xs = series(start=0.0, step=2.5, count=4)"]
+        );
+        // Multi-line fences keep their line structure, `\n`-joined, no
+        // trailing newline.
+        let remap = specs
+            .iter()
+            .find(|s| s.name == "remap")
+            .expect("remap registered");
+        assert_eq!(remap.gh, Some("Remap Numbers"));
+        assert_eq!(
+            remap.examples,
+            &["unit = construct_domain(start=0.0, end=1.0)\n\
+               percent = construct_domain(start=0.0, end=100.0)\n\
+               scaled = remap(value=0.25, source=unit, target=percent)"]
+        );
+        // `gh = none` is an explicit answer, carried as None.
+        let as_closed = specs
+            .iter()
+            .find(|s| s.name == "as_closed")
+            .expect("as_closed registered");
+        assert_eq!(as_closed.gh, None);
+        // The `# Panics` contract still ends where `# Examples` begins.
+        let panics = series.panics.expect("series has a contract");
+        assert!(!panics.contains("```"), "{panics}");
+        assert!(!panics.contains("Examples"), "{panics}");
     }
 
     #[test]
@@ -237,14 +298,30 @@ mod tests {
     }
 
     #[test]
-    fn registry_order_is_category_then_source_order() {
+    fn registry_order_is_category_then_name() {
         let specs = registry();
         let names: Vec<&str> = specs.iter().map(|s| s.name).collect();
-        let series_pos = names.iter().position(|n| *n == "series").expect("series");
-        let add_pos = names.iter().position(|n| *n == "add").expect("add");
+        let position = |name: &str| names.iter().position(|n| *n == name).expect(name);
         assert!(
-            series_pos < add_pos,
+            position("series") < position("add"),
             "Sequences & random (docs/08 §2) precedes Maths & logic (§3): {names:?}"
         );
+        // Within a category the tie-break is the dialect name, not the
+        // source position: `construct_plane` is defined LAST in its module
+        // but sorts first; `subtract` is defined before `divide` but sorts
+        // after it.
+        assert!(position("construct_plane") < position("construct_point"));
+        assert!(position("divide") < position("subtract"));
+        for pair in specs.windows(2) {
+            if pair[0].category == pair[1].category {
+                assert!(
+                    pair[0].name < pair[1].name,
+                    "`{}` must precede `{}` inside `{}`",
+                    pair[0].name,
+                    pair[1].name,
+                    pair[0].category
+                );
+            }
+        }
     }
 }

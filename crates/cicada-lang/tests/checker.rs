@@ -76,6 +76,8 @@ const fn node(
         pure: true,
         uses_tolerance: false,
         panics: None,
+        gh: None,
+        examples: &[],
         inputs,
         outputs,
         module: "fake",

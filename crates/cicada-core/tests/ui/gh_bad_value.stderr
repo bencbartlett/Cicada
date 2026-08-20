@@ -1,0 +1,5 @@
+error: gh takes a quoted Grasshopper component name (gh = "Move") or the bare word `none` for a Cicada-only node
+  --> tests/ui/gh_bad_value.rs:11:66
+   |
+11 | #[node(category = "Maths & logic", tier = "S", version = 1, gh = None)]
+   |                                                                  ^^^^

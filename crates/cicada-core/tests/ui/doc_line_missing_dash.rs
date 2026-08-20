@@ -7,7 +7,7 @@ pub struct In {
 }
 
 /// A doc line that forgot the em-dash split.
-#[node(category = "Maths & logic", tier = "S", version = 1)]
+#[node(category = "Maths & logic", tier = "S", version = 1, gh = none)]
 pub fn bad(input: In) -> f64 {
     input.x
 }

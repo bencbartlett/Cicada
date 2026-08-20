@@ -351,6 +351,11 @@ fn build_node(
         pure: !desc.effectful,
         uses_tolerance: false,
         panics: None,
+        // Project script nodes have no Grasshopper counterpart and no
+        // rustdoc to carry examples; the stdlib's conformance test does
+        // not apply to them.
+        gh: None,
+        examples: &[],
         inputs: Box::leak(inputs.into_boxed_slice()),
         outputs: Box::leak(outputs.into_boxed_slice()),
         module: "scripts",

@@ -2,6 +2,31 @@
   "format": 2,
   "nodes": [
     {
+      "name": "panel",
+      "title": "Panel",
+      "description": "display sink; shows counts and samples on the canvas.",
+      "category": "Params & input",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Panel",
+      "examples": [
+        "nums = series(start=0.0, step=2.5, count=4)\nreadout = panel(data=nums)"
+      ],
+      "inputs": [
+        {
+          "name": "data",
+          "type": "Any",
+          "base": "Any",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Anything — the panel shows whatever arrives."
+        }
+      ],
+      "outputs": []
+    },
+    {
       "name": "slider",
       "title": "Number Slider",
       "description": "a bounded numeric parameter.",
@@ -11,6 +36,10 @@
       "pure": true,
       "uses_tolerance": false,
       "panics": "`value` lies outside `min..=max` or the bounds are inverted — a drifted literal is a loud red, never a silent clamp.",
+      "gh": "Number Slider",
+      "examples": [
+        "amps = slider(value=12.0, min=0.0, max=30.0, step=0.5)"
+      ],
       "inputs": [
         {
           "name": "value",
@@ -54,7 +83,8 @@
           "type": "Number",
           "base": "Number",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The current value, within `min..=max`."
         }
       ]
     },
@@ -67,6 +97,10 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
+      "gh": "Boolean Toggle",
+      "examples": [
+        "show = toggle(value=True)"
+      ],
       "inputs": [
         {
           "name": "value",
@@ -83,30 +117,61 @@
           "type": "Boolean",
           "base": "Boolean",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The on/off state."
         }
       ]
     },
     {
-      "name": "panel",
-      "title": "Panel",
-      "description": "display sink; shows counts and samples on the canvas.",
-      "category": "Params & input",
+      "name": "random",
+      "title": "Random",
+      "description": "seeded uniform random numbers in a domain.",
+      "category": "Sequences & random",
       "tier": "S",
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
+      "panics": "`count` is negative.",
+      "gh": "Random",
+      "examples": [
+        "span = construct_domain(start=0.0, end=10.0)\ndraws = random(domain=span, count=5, seed=7)"
+      ],
       "inputs": [
         {
-          "name": "data",
-          "type": "Any",
-          "base": "Any",
+          "name": "domain",
+          "type": "Domain",
+          "base": "Domain",
           "list_depth": 0,
           "optional": false,
-          "doc": "Anything — the panel shows whatever arrives."
+          "doc": "The interval values are drawn from (uniform)."
+        },
+        {
+          "name": "count",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Number of values."
+        },
+        {
+          "name": "seed",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "PRNG seed — explicit, always (docs/08 rule 2)."
         }
       ],
-      "outputs": []
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[Number]",
+          "base": "Number",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "`count` uniform draws in `domain`, in draw order — identical for the same seed on every platform."
+        }
+      ]
     },
     {
       "name": "series",
@@ -118,6 +183,10 @@
       "pure": true,
       "uses_tolerance": false,
       "panics": "`count` is negative — loud refusal, never a silent empty list (the scheduler turns node panics into red nodes, stage 3).",
+      "gh": "Series",
+      "examples": [
+        "xs = series(start=0.0, step=2.5, count=4)"
+      ],
       "inputs": [
         {
           "name": "start",
@@ -152,53 +221,8 @@
           "type": "[Number]",
           "base": "Number",
           "list_depth": 1,
-          "optional": false
-        }
-      ]
-    },
-    {
-      "name": "random",
-      "title": "Random",
-      "description": "seeded uniform random numbers in a domain.",
-      "category": "Sequences & random",
-      "tier": "S",
-      "version": 1,
-      "pure": true,
-      "uses_tolerance": false,
-      "panics": "`count` is negative.",
-      "inputs": [
-        {
-          "name": "domain",
-          "type": "Domain",
-          "base": "Domain",
-          "list_depth": 0,
           "optional": false,
-          "doc": "The interval values are drawn from (uniform)."
-        },
-        {
-          "name": "count",
-          "type": "Integer",
-          "base": "Integer",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "Number of values."
-        },
-        {
-          "name": "seed",
-          "type": "Integer",
-          "base": "Integer",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "PRNG seed — explicit, always (docs/08 rule 2)."
-        }
-      ],
-      "outputs": [
-        {
-          "name": "out",
-          "type": "[Number]",
-          "base": "Number",
-          "list_depth": 1,
-          "optional": false
+          "doc": "`count` numbers, `start` first, each `step` after the previous."
         }
       ]
     },
@@ -211,6 +235,10 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
+      "gh": "Addition",
+      "examples": [
+        "total = add(a=1.5, b=2.25)"
+      ],
       "inputs": [
         {
           "name": "a",
@@ -235,7 +263,8 @@
           "type": "Number",
           "base": "Number",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The sum `a + b`."
         }
       ]
     },
@@ -248,6 +277,10 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
+      "gh": "Construct Domain",
+      "examples": [
+        "span = construct_domain(start=0.0, end=4.0)"
+      ],
       "inputs": [
         {
           "name": "start",
@@ -272,7 +305,8 @@
           "type": "Domain",
           "base": "Domain",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The interval from `start` to `end` (a decreasing interval is legal)."
         }
       ]
     },
@@ -285,6 +319,10 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
+      "gh": "Deconstruct Domain",
+      "examples": [
+        "span = construct_domain(start=2.0, end=5.0)\nlo, hi = deconstruct_domain(domain=span)"
+      ],
       "inputs": [
         {
           "name": "domain",
@@ -315,80 +353,6 @@
       ]
     },
     {
-      "name": "subtract",
-      "title": "Subtract",
-      "description": "difference of two numbers.",
-      "category": "Maths & logic",
-      "tier": "S",
-      "version": 1,
-      "pure": true,
-      "uses_tolerance": false,
-      "inputs": [
-        {
-          "name": "a",
-          "type": "Number",
-          "base": "Number",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "Left operand."
-        },
-        {
-          "name": "b",
-          "type": "Number",
-          "base": "Number",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "Right operand."
-        }
-      ],
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Number",
-          "base": "Number",
-          "list_depth": 0,
-          "optional": false
-        }
-      ]
-    },
-    {
-      "name": "multiply",
-      "title": "Multiply",
-      "description": "product of two numbers.",
-      "category": "Maths & logic",
-      "tier": "S",
-      "version": 1,
-      "pure": true,
-      "uses_tolerance": false,
-      "inputs": [
-        {
-          "name": "a",
-          "type": "Number",
-          "base": "Number",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "Left operand."
-        },
-        {
-          "name": "b",
-          "type": "Number",
-          "base": "Number",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "Right operand."
-        }
-      ],
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Number",
-          "base": "Number",
-          "list_depth": 0,
-          "optional": false
-        }
-      ]
-    },
-    {
       "name": "divide",
       "title": "Divide",
       "description": "quotient of two numbers (IEEE: dividing by zero yields ±∞).",
@@ -397,6 +361,10 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
+      "gh": "Division",
+      "examples": [
+        "ratio = divide(a=7.0, b=2.0)"
+      ],
       "inputs": [
         {
           "name": "a",
@@ -421,7 +389,8 @@
           "type": "Number",
           "base": "Number",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The quotient `a / b` (±∞ when `b` is zero)."
         }
       ]
     },
@@ -435,6 +404,10 @@
       "pure": true,
       "uses_tolerance": false,
       "panics": "`a % 0` is NaN, which value construction refuses — the node goes red.",
+      "gh": "Modulus",
+      "examples": [
+        "remainder = modulo(a=7.5, b=2.0)"
+      ],
       "inputs": [
         {
           "name": "a",
@@ -459,7 +432,50 @@
           "type": "Number",
           "base": "Number",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The remainder of `a / b`, with the sign of `a`."
+        }
+      ]
+    },
+    {
+      "name": "multiply",
+      "title": "Multiply",
+      "description": "product of two numbers.",
+      "category": "Maths & logic",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Multiplication",
+      "examples": [
+        "product = multiply(a=1.5, b=2.5)"
+      ],
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Left operand."
+        },
+        {
+          "name": "b",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Right operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The product `a * b`."
         }
       ]
     },
@@ -472,6 +488,10 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
+      "gh": "Power",
+      "examples": [
+        "kilo = power(a=2.0, b=10.0)"
+      ],
       "inputs": [
         {
           "name": "a",
@@ -496,7 +516,8 @@
           "type": "Number",
           "base": "Number",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "`a` raised to the power `b`."
         }
       ]
     },
@@ -510,6 +531,10 @@
       "pure": true,
       "uses_tolerance": false,
       "panics": "the source domain is empty (`start == end`) — the map is undefined there.",
+      "gh": "Remap Numbers",
+      "examples": [
+        "unit = construct_domain(start=0.0, end=1.0)\npercent = construct_domain(start=0.0, end=100.0)\nscaled = remap(value=0.25, source=unit, target=percent)"
+      ],
       "inputs": [
         {
           "name": "value",
@@ -542,151 +567,50 @@
           "type": "Number",
           "base": "Number",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The value mapped into the target domain (extrapolated outside the source)."
         }
       ]
     },
     {
-      "name": "item",
-      "title": "List Item",
-      "description": "one element of a list by index. Selecting an absent (`Optional`) slot yields an absent element — `E` carries the `?`, so the output is `Point?` exactly when the list is `[Point?]`.",
-      "category": "List & axis",
-      "tier": "S",
-      "version": 2,
-      "pure": true,
-      "uses_tolerance": false,
-      "panics": "the list is empty, or when `index` is out of range and `wrap` is off.",
-      "inputs": [
-        {
-          "name": "list",
-          "type": "[E]",
-          "base": "E",
-          "list_depth": 1,
-          "optional": false,
-          "doc": "The list."
-        },
-        {
-          "name": "index",
-          "type": "Integer",
-          "base": "Integer",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "Zero-based index."
-        },
-        {
-          "name": "wrap",
-          "type": "Boolean",
-          "base": "Boolean",
-          "list_depth": 0,
-          "optional": false,
-          "default": "false",
-          "doc": "Wrap out-of-range indices around the list (modular)."
-        }
-      ],
-      "outputs": [
-        {
-          "name": "out",
-          "type": "E",
-          "base": "E",
-          "list_depth": 0,
-          "optional": false
-        }
-      ]
-    },
-    {
-      "name": "length",
-      "title": "List Length",
-      "description": "the number of slots in a list (absent slots included — slot-preserving nulls keep their places, docs/08 rule 6).",
-      "category": "List & axis",
+      "name": "subtract",
+      "title": "Subtract",
+      "description": "difference of two numbers.",
+      "category": "Maths & logic",
       "tier": "S",
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
+      "gh": "Subtraction",
+      "examples": [
+        "gap = subtract(a=7.5, b=2.25)"
+      ],
       "inputs": [
         {
-          "name": "list",
-          "type": "[E]",
-          "base": "E",
-          "list_depth": 1,
-          "optional": false,
-          "doc": "The list — absent (`Optional`) slots count too."
-        }
-      ],
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Integer",
-          "base": "Integer",
+          "name": "a",
+          "type": "Number",
+          "base": "Number",
           "list_depth": 0,
-          "optional": false
-        }
-      ]
-    },
-    {
-      "name": "flatten",
-      "title": "Flatten",
-      "description": "one nesting level removed: the inner lists concatenated in order (`[[a, b], [c]]` → `[a, b, c]`). One level only, always (docs/09: `flatten_all` for every level, and says so); absent inner slots are preserved as absent slots of the output.",
-      "category": "List & axis",
-      "tier": "S",
-      "version": 1,
-      "pure": true,
-      "uses_tolerance": false,
-      "panics": "an OUTER slot is absent (a missing inner list — refused at marshalling with its index: optional lists have no representation, so there is nothing slot-preserving to do with one); the node itself has no other refusal.",
-      "inputs": [
-        {
-          "name": "list",
-          "type": "[[E]]",
-          "base": "E",
-          "list_depth": 2,
           "optional": false,
-          "doc": "The nested list."
-        }
-      ],
-      "outputs": [
-        {
-          "name": "out",
-          "type": "[E]",
-          "base": "E",
-          "list_depth": 1,
-          "optional": false
-        }
-      ]
-    },
-    {
-      "name": "partition",
-      "title": "Partition",
-      "description": "consecutive groups of the given sizes (`[a, b, c, d]` with sizes `[1, 3]` → `[[a], [b, c, d]]`). Slot-preserving: absent slots land in their group as absent slots.",
-      "category": "List & axis",
-      "tier": "S",
-      "version": 1,
-      "pure": true,
-      "uses_tolerance": false,
-      "panics": "a size is negative (the offending index and value in the message) or when the sizes do not sum to the list's slot count (both counts in the message) — never a silent short or padded last group.",
-      "inputs": [
-        {
-          "name": "list",
-          "type": "[E]",
-          "base": "E",
-          "list_depth": 1,
-          "optional": false,
-          "doc": "The list to split."
+          "doc": "Left operand."
         },
         {
-          "name": "sizes",
-          "type": "[Integer]",
-          "base": "Integer",
-          "list_depth": 1,
+          "name": "b",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
           "optional": false,
-          "doc": "Consecutive group sizes; they must sum to the list's slot count."
+          "doc": "Right operand."
         }
       ],
       "outputs": [
         {
           "name": "out",
-          "type": "[[E]]",
-          "base": "E",
-          "list_depth": 2,
-          "optional": false
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The difference `a - b`."
         }
       ]
     },
@@ -700,6 +624,10 @@
       "pure": true,
       "uses_tolerance": false,
       "panics": "`size < 1`.",
+      "gh": "Partition List",
+      "examples": [
+        "xs = [1.0, 2.0, 3.0, 4.0, 5.0]\npairs = chunk(list=xs, size=2)"
+      ],
       "inputs": [
         {
           "name": "list",
@@ -724,7 +652,8 @@
           "type": "[[E]]",
           "base": "E",
           "list_depth": 2,
-          "optional": false
+          "optional": false,
+          "doc": "The groups in order; every group but the last has exactly `size` slots."
         }
       ]
     },
@@ -737,6 +666,10 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
+      "gh": "Merge",
+      "examples": [
+        "head = [1.0, 2.0]\ntail = [3.0]\njoined = concat(a=head, b=tail)"
+      ],
       "inputs": [
         {
           "name": "a",
@@ -761,7 +694,8 @@
           "type": "[E]",
           "base": "E",
           "list_depth": 1,
-          "optional": false
+          "optional": false,
+          "doc": "One list: the slots of `a` followed by the slots of `b`."
         }
       ]
     },
@@ -775,6 +709,10 @@
       "pure": true,
       "uses_tolerance": false,
       "panics": "the pattern's length differs from the list's slot count — strict zip, both counts in the message (GH's repeating Cull Pattern is the silent-mismatch behavior docs/09 retires).",
+      "gh": "Cull Pattern",
+      "examples": [
+        "xs = [10.0, 20.0, 30.0, 40.0]\nkeep = [True, False, True, True]\nkept, sources = cull(list=xs, pattern=keep)"
+      ],
       "inputs": [
         {
           "name": "list",
@@ -813,6 +751,224 @@
       ]
     },
     {
+      "name": "flatten",
+      "title": "Flatten",
+      "description": "one nesting level removed: the inner lists concatenated in order (`[[a, b], [c]]` → `[a, b, c]`). One level only, always (docs/09: `flatten_all` for every level, and says so); absent inner slots are preserved as absent slots of the output.",
+      "category": "List & axis",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "an OUTER slot is absent (a missing inner list — refused at marshalling with its index: optional lists have no representation, so there is nothing slot-preserving to do with one); the node itself has no other refusal.",
+      "gh": "Flatten Tree",
+      "examples": [
+        "xs = [1.0, 2.0, 3.0, 4.0, 5.0]\npairs = chunk(list=xs, size=2)\nflat = flatten(list=pairs)"
+      ],
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[[E]]",
+          "base": "E",
+          "list_depth": 2,
+          "optional": false,
+          "doc": "The nested list."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The inner lists concatenated in order, one nesting level down."
+        }
+      ]
+    },
+    {
+      "name": "item",
+      "title": "List Item",
+      "description": "one element of a list by index. Selecting an absent (`Optional`) slot yields an absent element — `E` carries the `?`, so the output is `Point?` exactly when the list is `[Point?]`.",
+      "category": "List & axis",
+      "tier": "S",
+      "version": 2,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "the list is empty, or when `index` is out of range and `wrap` is off.",
+      "gh": "List Item",
+      "examples": [
+        "xs = [10.0, 20.0, 30.0]\nlast = item(list=xs, index=-1, wrap=True)"
+      ],
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The list."
+        },
+        {
+          "name": "index",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Zero-based index."
+        },
+        {
+          "name": "wrap",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "default": "false",
+          "doc": "Wrap out-of-range indices around the list (modular)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "E",
+          "base": "E",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The selected element — absent when the selected slot is absent."
+        }
+      ]
+    },
+    {
+      "name": "length",
+      "title": "List Length",
+      "description": "the number of slots in a list (absent slots included — slot-preserving nulls keep their places, docs/08 rule 6).",
+      "category": "List & axis",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "List Length",
+      "examples": [
+        "xs = [1.0, 2.0, 3.0]\ncount = length(list=xs)"
+      ],
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The list — absent (`Optional`) slots count too."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The slot count, absent slots included."
+        }
+      ]
+    },
+    {
+      "name": "partition",
+      "title": "Partition",
+      "description": "consecutive groups of the given sizes (`[a, b, c, d]` with sizes `[1, 3]` → `[[a], [b, c, d]]`). Slot-preserving: absent slots land in their group as absent slots.",
+      "category": "List & axis",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "a size is negative (the offending index and value in the message) or when the sizes do not sum to the list's slot count (both counts in the message) — never a silent short or padded last group.",
+      "gh": "Partition List",
+      "examples": [
+        "xs = [1.0, 2.0, 3.0, 4.0]\nsizes = [1, 3]\ngroups = partition(list=xs, sizes=sizes)"
+      ],
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The list to split."
+        },
+        {
+          "name": "sizes",
+          "type": "[Integer]",
+          "base": "Integer",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "Consecutive group sizes; they must sum to the list's slot count."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[[E]]",
+          "base": "E",
+          "list_depth": 2,
+          "optional": false,
+          "doc": "The groups in order, with the given sizes."
+        }
+      ]
+    },
+    {
+      "name": "construct_plane",
+      "title": "Construct Plane",
+      "description": "a frame from an origin and two axes: x unitized, y orthonormalized against x (Gram–Schmidt), so the stored plane is a right-handed orthonormal frame with normal x × y.",
+      "category": "Point · Vector · Plane",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": true,
+      "panics": "`x` has no length at tolerance, or `y` is parallel to `x` at tolerance (its component off the x line has no length) — red with the measured length, never a NaN frame.",
+      "gh": "Construct Plane",
+      "examples": [
+        "at = construct_point(x=1.0, y=2.0, z=3.0)\nalong = unit_x(factor=3.0)\nup = unit_z(factor=2.0)\nframe = construct_plane(origin=at, x=along, y=up)"
+      ],
+      "inputs": [
+        {
+          "name": "origin",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false,
+          "default": "origin",
+          "doc": "Plane origin."
+        },
+        {
+          "name": "x",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "default": "unit_x",
+          "doc": "The x axis (any length; unitized)."
+        },
+        {
+          "name": "y",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "default": "unit_y",
+          "doc": "The y direction (any length; its component along x is removed, then"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The right-handed orthonormal frame at `origin`."
+        }
+      ]
+    },
+    {
       "name": "construct_point",
       "title": "Construct Point",
       "description": "a point from x/y/z coordinates.",
@@ -821,6 +977,10 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
+      "gh": "Construct Point",
+      "examples": [
+        "corner = construct_point(x=1.0, y=2.0, z=0.5)"
+      ],
       "inputs": [
         {
           "name": "x",
@@ -859,7 +1019,8 @@
           "type": "Point",
           "base": "Point",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The point at (x, y, z)."
         }
       ]
     },
@@ -872,6 +1033,10 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
+      "gh": "Deconstruct",
+      "examples": [
+        "corner = construct_point(x=1.0, y=2.0, z=0.5)\nx, y, z = deconstruct_point(point=corner)"
+      ],
       "inputs": [
         {
           "name": "point",
@@ -918,6 +1083,10 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
+      "gh": "Unit X",
+      "examples": [
+        "step = unit_x(factor=2.0)"
+      ],
       "inputs": [
         {
           "name": "factor",
@@ -935,7 +1104,8 @@
           "type": "Vector",
           "base": "Vector",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The vector (factor, 0, 0)."
         }
       ]
     },
@@ -948,6 +1118,10 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
+      "gh": "Unit Y",
+      "examples": [
+        "step = unit_y(factor=2.0)"
+      ],
       "inputs": [
         {
           "name": "factor",
@@ -965,7 +1139,8 @@
           "type": "Vector",
           "base": "Vector",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The vector (0, factor, 0)."
         }
       ]
     },
@@ -978,6 +1153,10 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
+      "gh": "Unit Z",
+      "examples": [
+        "up = unit_z(factor=3.0)"
+      ],
       "inputs": [
         {
           "name": "factor",
@@ -995,7 +1174,8 @@
           "type": "Vector",
           "base": "Vector",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The vector (0, 0, factor)."
         }
       ]
     },
@@ -1009,6 +1189,10 @@
       "pure": true,
       "uses_tolerance": true,
       "panics": "`unitize` is on and the points coincide within tolerance — a zero vector has no direction.",
+      "gh": "Vector 2Pt",
+      "examples": [
+        "tail = construct_point(x=1.0, y=1.0, z=0.0)\nhead = construct_point(x=4.0, y=5.0, z=0.0)\ndirection = vector_2pt(a=tail, b=head, unitize=True)"
+      ],
       "inputs": [
         {
           "name": "a",
@@ -1042,7 +1226,8 @@
           "type": "Vector",
           "base": "Vector",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The vector from `a` to `b`, unit length when `unitize` is on."
         }
       ]
     },
@@ -1055,6 +1240,10 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
+      "gh": "XY Plane",
+      "examples": [
+        "at = construct_point(x=5.0, y=6.0, z=7.0)\nframe = xy_plane(origin=at)"
+      ],
       "inputs": [
         {
           "name": "origin",
@@ -1072,7 +1261,8 @@
           "type": "Plane",
           "base": "Plane",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The world-aligned XY frame with its origin at `origin`."
         }
       ]
     },
@@ -1085,6 +1275,10 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
+      "gh": "XZ Plane",
+      "examples": [
+        "at = construct_point(x=5.0, y=6.0, z=7.0)\nframe = xz_plane(origin=at)"
+      ],
       "inputs": [
         {
           "name": "origin",
@@ -1102,7 +1296,8 @@
           "type": "Plane",
           "base": "Plane",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The world-aligned XZ frame with its origin at `origin`."
         }
       ]
     },
@@ -1115,6 +1310,10 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
+      "gh": "YZ Plane",
+      "examples": [
+        "at = construct_point(x=5.0, y=6.0, z=7.0)\nframe = yz_plane(origin=at)"
+      ],
       "inputs": [
         {
           "name": "origin",
@@ -1132,131 +1331,43 @@
           "type": "Plane",
           "base": "Plane",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The world-aligned YZ frame with its origin at `origin`."
         }
       ]
     },
     {
-      "name": "construct_plane",
-      "title": "Construct Plane",
-      "description": "a frame from an origin and two axes: x unitized, y orthonormalized against x (Gram–Schmidt), so the stored plane is a right-handed orthonormal frame with normal x × y.",
-      "category": "Point · Vector · Plane",
+      "name": "as_closed",
+      "title": "As Closed",
+      "description": "the checked closed-curve refinement (docs/08 rule 5). Already-closed curves pass through unchanged; an open polyline whose endpoints coincide within tolerance closes (duplicate end vertex dropped).",
+      "category": "Curve",
       "tier": "S",
       "version": 1,
       "pure": true,
       "uses_tolerance": true,
-      "panics": "`x` has no length at tolerance, or `y` is parallel to `x` at tolerance (its component off the x line has no length) — red with the measured length, never a NaN frame.",
+      "panics": "the curve cannot close: a line, endpoints apart beyond tolerance, or fewer than 3 distinct vertices after closing — red with the distance that failed, never a silent pass (wall lesson 13).",
+      "gh": null,
+      "examples": [
+        "xs = [0.0, 4.0, 0.0, 0.0]\nys = [0.0, 0.0, 3.0, 0.0]\ncorners = construct_point(x=each(xs), y=each(ys))\nchain = polyline(vertices=corners)\nring = as_closed(curve=chain)"
+      ],
       "inputs": [
         {
-          "name": "origin",
-          "type": "Point",
-          "base": "Point",
-          "list_depth": 0,
-          "optional": false,
-          "default": "origin",
-          "doc": "Plane origin."
-        },
-        {
-          "name": "x",
-          "type": "Vector",
-          "base": "Vector",
-          "list_depth": 0,
-          "optional": false,
-          "default": "unit_x",
-          "doc": "The x axis (any length; unitized)."
-        },
-        {
-          "name": "y",
-          "type": "Vector",
-          "base": "Vector",
-          "list_depth": 0,
-          "optional": false,
-          "default": "unit_y",
-          "doc": "The y direction (any length; its component along x is removed, then"
-        }
-      ],
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Plane",
-          "base": "Plane",
-          "list_depth": 0,
-          "optional": false
-        }
-      ]
-    },
-    {
-      "name": "line",
-      "title": "Line",
-      "description": "a straight segment between two points.",
-      "category": "Curve",
-      "tier": "S",
-      "version": 1,
-      "pure": true,
-      "uses_tolerance": false,
-      "inputs": [
-        {
-          "name": "a",
-          "type": "Point",
-          "base": "Point",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "Start point."
-        },
-        {
-          "name": "b",
-          "type": "Point",
-          "base": "Point",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "End point."
-        }
-      ],
-      "outputs": [
-        {
-          "name": "out",
+          "name": "curve",
           "type": "Curve",
           "base": "Curve",
           "list_depth": 0,
-          "optional": false
-        }
-      ]
-    },
-    {
-      "name": "polyline",
-      "title": "Polyline",
-      "description": "a vertex chain, open or closed.",
-      "category": "Curve",
-      "tier": "S",
-      "version": 1,
-      "pure": true,
-      "uses_tolerance": false,
-      "inputs": [
-        {
-          "name": "vertices",
-          "type": "[Point]",
-          "base": "Point",
-          "list_depth": 1,
           "optional": false,
-          "doc": "The vertices, in order."
-        },
-        {
-          "name": "closed",
-          "type": "Boolean",
-          "base": "Boolean",
-          "list_depth": 0,
-          "optional": false,
-          "default": "false",
-          "doc": "Close the chain (implicit edge from the last vertex to the first)."
+          "doc": "The curve to refine."
         }
       ],
       "outputs": [
         {
           "name": "out",
-          "type": "Curve",
-          "base": "Curve",
+          "type": "Closed<Curve>",
+          "base": "Closed<Curve>",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The curve as a checked closed curve."
         }
       ]
     },
@@ -1270,6 +1381,10 @@
       "pure": true,
       "uses_tolerance": true,
       "panics": "the radius is not above tolerance or the plane's axes are degenerate (zero-length or parallel).",
+      "gh": "Circle",
+      "examples": [
+        "ring = circle(radius=2.5)"
+      ],
       "inputs": [
         {
           "name": "plane",
@@ -1296,54 +1411,8 @@
           "type": "Closed<Curve>",
           "base": "Closed<Curve>",
           "list_depth": 0,
-          "optional": false
-        }
-      ]
-    },
-    {
-      "name": "rectangle",
-      "title": "Rectangle",
-      "description": "an analytic rectangle in a plane, always closed. The frame is orthonormalized at construction. (The rounded-`corner` parameter arrives with compound curves, v0.1.)",
-      "category": "Curve",
-      "tier": "S",
-      "version": 1,
-      "pure": true,
-      "uses_tolerance": true,
-      "panics": "either extent is empty at tolerance or the plane is degenerate.",
-      "inputs": [
-        {
-          "name": "plane",
-          "type": "Plane",
-          "base": "Plane",
-          "list_depth": 0,
           "optional": false,
-          "default": "xy_plane",
-          "doc": "The rectangle's frame."
-        },
-        {
-          "name": "x",
-          "type": "Domain",
-          "base": "Domain",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "Extent along the plane's x axis."
-        },
-        {
-          "name": "y",
-          "type": "Domain",
-          "base": "Domain",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "Extent along the plane's y axis."
-        }
-      ],
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Closed<Curve>",
-          "base": "Closed<Curve>",
-          "list_depth": 0,
-          "optional": false
+          "doc": "The closed circle, centered at the plane's origin."
         }
       ]
     },
@@ -1357,6 +1426,10 @@
       "pure": true,
       "uses_tolerance": true,
       "panics": "`count < 1` or the curve is degenerate at tolerance (no usable length, zero radius, collapsed frame).",
+      "gh": "Divide Curve",
+      "examples": [
+        "ring = circle(radius=2.0)\npoints, tangents, params = divide_curve(curve=ring, count=12)"
+      ],
       "inputs": [
         {
           "name": "curve",
@@ -1404,23 +1477,129 @@
       ]
     },
     {
-      "name": "as_closed",
-      "title": "As Closed",
-      "description": "the checked closed-curve refinement (docs/08 rule 5). Already-closed curves pass through unchanged; an open polyline whose endpoints coincide within tolerance closes (duplicate end vertex dropped).",
+      "name": "line",
+      "title": "Line",
+      "description": "a straight segment between two points.",
+      "category": "Curve",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Line",
+      "examples": [
+        "start = construct_point(x=0.0, y=0.0, z=0.0)\nend = construct_point(x=4.0, y=3.0, z=0.0)\nsegment = line(a=start, b=end)"
+      ],
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Start point."
+        },
+        {
+          "name": "b",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "End point."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Curve",
+          "base": "Curve",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The segment from `a` to `b`."
+        }
+      ]
+    },
+    {
+      "name": "polyline",
+      "title": "Polyline",
+      "description": "a vertex chain, open or closed.",
+      "category": "Curve",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "PolyLine",
+      "examples": [
+        "xs = [0.0, 4.0, 4.0, 0.0]\nys = [0.0, 0.0, 3.0, 3.0]\ncorners = construct_point(x=each(xs), y=each(ys))\noutline = polyline(vertices=corners, closed=True)"
+      ],
+      "inputs": [
+        {
+          "name": "vertices",
+          "type": "[Point]",
+          "base": "Point",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The vertices, in order."
+        },
+        {
+          "name": "closed",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "default": "false",
+          "doc": "Close the chain (implicit edge from the last vertex to the first)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Curve",
+          "base": "Curve",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The polyline through the vertices in order, closed when `closed` is on."
+        }
+      ]
+    },
+    {
+      "name": "rectangle",
+      "title": "Rectangle",
+      "description": "an analytic rectangle in a plane, always closed. The frame is orthonormalized at construction. (The rounded-`corner` parameter arrives with compound curves, v0.1.)",
       "category": "Curve",
       "tier": "S",
       "version": 1,
       "pure": true,
       "uses_tolerance": true,
-      "panics": "the curve cannot close: a line, endpoints apart beyond tolerance, or fewer than 3 distinct vertices after closing — red with the distance that failed, never a silent pass (wall lesson 13).",
+      "panics": "either extent is empty at tolerance or the plane is degenerate.",
+      "gh": "Rectangle",
+      "examples": [
+        "width = construct_domain(start=0.0, end=4.0)\nheight = construct_domain(start=0.0, end=3.0)\nframe_rect = rectangle(x=width, y=height)"
+      ],
       "inputs": [
         {
-          "name": "curve",
-          "type": "Curve",
-          "base": "Curve",
+          "name": "plane",
+          "type": "Plane",
+          "base": "Plane",
           "list_depth": 0,
           "optional": false,
-          "doc": "The curve to refine."
+          "default": "xy_plane",
+          "doc": "The rectangle's frame."
+        },
+        {
+          "name": "x",
+          "type": "Domain",
+          "base": "Domain",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Extent along the plane's x axis."
+        },
+        {
+          "name": "y",
+          "type": "Domain",
+          "base": "Domain",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Extent along the plane's y axis."
         }
       ],
       "outputs": [
@@ -1429,7 +1608,8 @@
           "type": "Closed<Curve>",
           "base": "Closed<Curve>",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The closed rectangle spanning `x` and `y` in the plane."
         }
       ]
     },
@@ -1443,6 +1623,10 @@
       "pure": true,
       "uses_tolerance": true,
       "panics": "the curve is degenerate at tolerance (fewer than 3 distinct vertices, a zero radius or empty extent, or an enclosed area within tolerance² of zero — collinear vertices), non-planar within tolerance, or its frame is degenerate.",
+      "gh": "Area",
+      "examples": [
+        "ring = circle(radius=2.0)\nmeasure, centroid = area(curve=ring)"
+      ],
       "inputs": [
         {
           "name": "curve",
@@ -1473,100 +1657,6 @@
       ]
     },
     {
-      "name": "extrude",
-      "title": "Extrude",
-      "description": "extrude a closed planar profile into a watertight prism (mesh-backed under its v0.1 name, doc 15).",
-      "category": "Surface & solid",
-      "tier": "S",
-      "version": 1,
-      "pure": true,
-      "uses_tolerance": true,
-      "panics": "the profile is degenerate or non-planar at tolerance, the direction lies in the profile plane, `segments < 3`, or the profile polygon is self-intersecting.",
-      "inputs": [
-        {
-          "name": "profile",
-          "type": "Closed<Curve>",
-          "base": "Closed<Curve>",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "The closed, planar profile to extrude."
-        },
-        {
-          "name": "direction",
-          "type": "Vector",
-          "base": "Vector",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "Extrusion direction and length (need not be normal to the profile —"
-        },
-        {
-          "name": "segments",
-          "type": "Integer",
-          "base": "Integer",
-          "list_depth": 0,
-          "optional": false,
-          "default": "64",
-          "doc": "Tessellation density for curved profiles (circles)."
-        }
-      ],
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Watertight<Mesh>",
-          "base": "Watertight<Mesh>",
-          "list_depth": 0,
-          "optional": false
-        }
-      ]
-    },
-    {
-      "name": "loft",
-      "title": "Loft",
-      "description": "a ruled solid between two closed sections, capped at both ends (the wall's frusta: Voronoi cell → tip cap; cones and chamfers from circle → circle). Sections pair vertex `i` with vertex `i` (polylines vertex-to-vertex as given — no resampling, seam = vertex 0; analytic sections tessellated to `segments` vertices starting at the plane's x axis), walls are two triangles per quad, caps are ear-clipped (non-convex sections welcome), orientation is fixed by signed volume and the result is re-verified watertight. Lift with `each()` to loft per part (`loft(start=each(cells), end=each(caps))`).",
-      "category": "Surface & solid",
-      "tier": "S",
-      "version": 1,
-      "pure": true,
-      "uses_tolerance": true,
-      "panics": "the vertex counts differ (both counts in the message), a section is open, degenerate at tolerance, non-planar, or self-intersecting, the sections wind in opposite directions, the sections coincide or are coplanar (zero volume), `segments < 3` for an analytic section, or the result is not watertight.",
-      "inputs": [
-        {
-          "name": "start",
-          "type": "Closed<Curve>",
-          "base": "Closed<Curve>",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "The first closed section (the wall's base cell)."
-        },
-        {
-          "name": "end",
-          "type": "Closed<Curve>",
-          "base": "Closed<Curve>",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "The second closed section (the wall's tip cap) — same vertex count as"
-        },
-        {
-          "name": "segments",
-          "type": "Integer",
-          "base": "Integer",
-          "list_depth": 0,
-          "optional": false,
-          "default": "64",
-          "doc": "Tessellation density for analytic sections (circles, rectangles):"
-        }
-      ],
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Watertight<Mesh>",
-          "base": "Watertight<Mesh>",
-          "list_depth": 0,
-          "optional": false
-        }
-      ]
-    },
-    {
       "name": "box",
       "title": "Box",
       "description": "an axis-aligned box in a plane's frame (mesh-backed under its v0.1 name, doc 15). Decreasing domains are normalized.",
@@ -1576,6 +1666,10 @@
       "pure": true,
       "uses_tolerance": true,
       "panics": "any extent is empty at tolerance or the plane is degenerate.",
+      "gh": "Domain Box",
+      "examples": [
+        "span = construct_domain(start=0.0, end=2.0)\nblock = box(x=span, y=span, z=span)"
+      ],
       "inputs": [
         {
           "name": "plane",
@@ -1617,7 +1711,112 @@
           "type": "Watertight<Mesh>",
           "base": "Watertight<Mesh>",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The watertight box mesh."
+        }
+      ]
+    },
+    {
+      "name": "extrude",
+      "title": "Extrude",
+      "description": "extrude a closed planar profile into a watertight prism (mesh-backed under its v0.1 name, doc 15).",
+      "category": "Surface & solid",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": true,
+      "panics": "the profile is degenerate or non-planar at tolerance, the direction lies in the profile plane, `segments < 3`, or the profile polygon is self-intersecting.",
+      "gh": "Extrude",
+      "examples": [
+        "ring = circle(radius=2.0)\nup = unit_z(factor=5.0)\nprism = extrude(profile=ring, direction=up)"
+      ],
+      "inputs": [
+        {
+          "name": "profile",
+          "type": "Closed<Curve>",
+          "base": "Closed<Curve>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The closed, planar profile to extrude."
+        },
+        {
+          "name": "direction",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Extrusion direction and length (need not be normal to the profile —"
+        },
+        {
+          "name": "segments",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "default": "64",
+          "doc": "Tessellation density for curved profiles (circles)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Watertight<Mesh>",
+          "base": "Watertight<Mesh>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The watertight prism: the profile swept along `direction`."
+        }
+      ]
+    },
+    {
+      "name": "loft",
+      "title": "Loft",
+      "description": "a ruled solid between two closed sections, capped at both ends (the wall's frusta: Voronoi cell → tip cap; cones and chamfers from circle → circle). Sections pair vertex `i` with vertex `i` (polylines vertex-to-vertex as given — no resampling, seam = vertex 0; analytic sections tessellated to `segments` vertices starting at the plane's x axis), walls are two triangles per quad, caps are ear-clipped (non-convex sections welcome), orientation is fixed by signed volume and the result is re-verified watertight. Lift with `each()` to loft per part (`loft(start=each(cells), end=each(caps))`).",
+      "category": "Surface & solid",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": true,
+      "panics": "the vertex counts differ (both counts in the message), a section is open, degenerate at tolerance, non-planar, or self-intersecting, the sections wind in opposite directions, the sections coincide or are coplanar (zero volume), `segments < 3` for an analytic section, or the result is not watertight.",
+      "gh": "Loft",
+      "examples": [
+        "base = circle(radius=2.0)\ntop_at = construct_point(x=0.0, y=0.0, z=4.0)\ntop_frame = xy_plane(origin=top_at)\ntop = circle(plane=top_frame, radius=1.0)\ncone = loft(start=base, end=top, segments=32)"
+      ],
+      "inputs": [
+        {
+          "name": "start",
+          "type": "Closed<Curve>",
+          "base": "Closed<Curve>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The first closed section (the wall's base cell)."
+        },
+        {
+          "name": "end",
+          "type": "Closed<Curve>",
+          "base": "Closed<Curve>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The second closed section (the wall's tip cap) — same vertex count as"
+        },
+        {
+          "name": "segments",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "default": "64",
+          "doc": "Tessellation density for analytic sections (circles, rectangles):"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Watertight<Mesh>",
+          "base": "Watertight<Mesh>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The watertight solid between the two sections, capped at both ends."
         }
       ]
     },
@@ -1631,6 +1830,10 @@
       "pure": true,
       "uses_tolerance": true,
       "panics": "the radius is not above tolerance, `segments < 3`, or the plane is degenerate.",
+      "gh": "Sphere",
+      "examples": [
+        "ball = sphere(radius=1.5, segments=24)"
+      ],
       "inputs": [
         {
           "name": "plane",
@@ -1666,28 +1869,33 @@
           "type": "Watertight<Mesh>",
           "base": "Watertight<Mesh>",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The watertight UV-sphere mesh."
         }
       ]
     },
     {
-      "name": "mesh_union",
-      "title": "Mesh Union",
-      "description": "the union of watertight meshes via Manifold (docs/08: watertight, parallel, seconds).",
+      "name": "as_watertight",
+      "title": "As Watertight",
+      "description": "the checked watertight refinement (docs/08: the mesh-tier solid): every edge shared by exactly two consistently oriented triangles.",
       "category": "Mesh & field",
       "tier": "S",
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
-      "panics": "Manifold refuses an operand (named by index) — its ε-validity is stricter than structural watertightness in corner cases.",
+      "panics": "the mesh has open or inconsistently oriented edges — red with the count, never a silent pass (wall lesson 13).",
+      "gh": null,
+      "examples": [
+        "span = construct_domain(start=0.0, end=2.0)\nblock = box(x=span, y=span, z=span)\nsealed = as_watertight(mesh=block)"
+      ],
       "inputs": [
         {
-          "name": "meshes",
-          "type": "[Watertight<Mesh>]",
-          "base": "Watertight<Mesh>",
-          "list_depth": 1,
+          "name": "mesh",
+          "type": "Mesh",
+          "base": "Mesh",
+          "list_depth": 0,
           "optional": false,
-          "doc": "The solids to union (empty list → the empty solid)."
+          "doc": "The mesh to refine."
         }
       ],
       "outputs": [
@@ -1696,7 +1904,8 @@
           "type": "Watertight<Mesh>",
           "base": "Watertight<Mesh>",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The mesh as a checked watertight solid."
         }
       ]
     },
@@ -1710,6 +1919,10 @@
       "pure": true,
       "uses_tolerance": false,
       "panics": "Manifold refuses the mesh or a cutter (named by index).",
+      "gh": "Mesh Difference",
+      "examples": [
+        "span = construct_domain(start=0.0, end=2.0)\nblock = box(x=span, y=span, z=span)\ntop = construct_point(x=1.0, y=1.0, z=2.0)\ntop_frame = xy_plane(origin=top)\nball = sphere(plane=top_frame, radius=0.75, segments=24)\nstill = unit_x(factor=0.0)\ncutters = linear_array(geometry=ball, direction=still, count=1)\ncarved = mesh_difference(mesh=block, cutters=cutters)"
+      ],
       "inputs": [
         {
           "name": "mesh",
@@ -1734,7 +1947,8 @@
           "type": "Watertight<Mesh>",
           "base": "Watertight<Mesh>",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The carved solid — `mesh` minus every cutter (possibly empty)."
         }
       ]
     },
@@ -1748,6 +1962,10 @@
       "pure": true,
       "uses_tolerance": false,
       "panics": "Manifold refuses an operand.",
+      "gh": "Mesh Intersection",
+      "examples": [
+        "span = construct_domain(start=0.0, end=2.0)\nfirst = box(x=span, y=span, z=span)\nat = construct_point(x=1.0, y=1.0, z=1.0)\nframe = xy_plane(origin=at)\nsecond = box(plane=frame, x=span, y=span, z=span)\noverlap = mesh_intersection(a=first, b=second)"
+      ],
       "inputs": [
         {
           "name": "a",
@@ -1772,28 +1990,33 @@
           "type": "Watertight<Mesh>",
           "base": "Watertight<Mesh>",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The solid common to `a` and `b` (possibly empty)."
         }
       ]
     },
     {
-      "name": "as_watertight",
-      "title": "As Watertight",
-      "description": "the checked watertight refinement (docs/08: the mesh-tier solid): every edge shared by exactly two consistently oriented triangles.",
+      "name": "mesh_union",
+      "title": "Mesh Union",
+      "description": "the union of watertight meshes via Manifold (docs/08: watertight, parallel, seconds).",
       "category": "Mesh & field",
       "tier": "S",
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
-      "panics": "the mesh has open or inconsistently oriented edges — red with the count, never a silent pass (wall lesson 13).",
+      "panics": "Manifold refuses an operand (named by index) — its ε-validity is stricter than structural watertightness in corner cases.",
+      "gh": "Mesh Union",
+      "examples": [
+        "span = construct_domain(start=0.0, end=2.0)\nblock = box(x=span, y=span, z=span)\nshift = unit_x(factor=1.0)\nblocks = linear_array(geometry=block, direction=shift, count=2)\nfused = mesh_union(meshes=blocks)"
+      ],
       "inputs": [
         {
-          "name": "mesh",
-          "type": "Mesh",
-          "base": "Mesh",
-          "list_depth": 0,
+          "name": "meshes",
+          "type": "[Watertight<Mesh>]",
+          "base": "Watertight<Mesh>",
+          "list_depth": 1,
           "optional": false,
-          "doc": "The mesh to refine."
+          "doc": "The solids to union (empty list → the empty solid)."
         }
       ],
       "outputs": [
@@ -1802,7 +2025,8 @@
           "type": "Watertight<Mesh>",
           "base": "Watertight<Mesh>",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "One solid: the union of all the meshes."
         }
       ]
     },
@@ -1816,6 +2040,10 @@
       "pure": true,
       "uses_tolerance": true,
       "panics": "the boundary is open, non-convex, or degenerate; when a seed is off the boundary plane, coincides with another seed within tolerance, or owns no area inside the boundary; or when `seeds` is empty.",
+      "gh": "Voronoi",
+      "examples": [
+        "bx = construct_domain(start=0.0, end=10.0)\nby = construct_domain(start=0.0, end=10.0)\nboard = rectangle(x=bx, y=by)\nxs = [2.0, 8.0, 5.0]\nys = [5.0, 4.0, 8.0]\nseeds = construct_point(x=each(xs), y=each(ys))\ncells = voronoi(seeds=seeds, boundary=board)"
+      ],
       "inputs": [
         {
           "name": "seeds",
@@ -1855,6 +2083,57 @@
       ]
     },
     {
+      "name": "linear_array",
+      "title": "Linear Array",
+      "description": "`count` copies stepped along a direction, the first at the original position.",
+      "category": "Transform",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "`count < 1`.",
+      "gh": "Linear Array",
+      "examples": [
+        "ring = circle(radius=1.0)\nstep = unit_x(factor=3.0)\nrow = linear_array(geometry=ring, direction=step, count=4)"
+      ],
+      "inputs": [
+        {
+          "name": "geometry",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The geometry to repeat."
+        },
+        {
+          "name": "direction",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Step between consecutive copies."
+        },
+        {
+          "name": "count",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Number of copies (the first sits at the original position)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[T]",
+          "base": "T",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The `count` copies, the original first, each stepped by `direction`."
+        }
+      ]
+    },
+    {
       "name": "move",
       "title": "Move",
       "description": "translate geometry along a vector.",
@@ -1863,6 +2142,10 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
+      "gh": "Move",
+      "examples": [
+        "corner = construct_point(x=1.0, y=2.0, z=3.0)\nshift = unit_x(factor=10.0)\nmoved = move(geometry=corner, motion=shift)"
+      ],
       "inputs": [
         {
           "name": "geometry",
@@ -1887,7 +2170,59 @@
           "type": "T",
           "base": "T",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The geometry translated by `motion`."
+        }
+      ]
+    },
+    {
+      "name": "orient",
+      "title": "Orient",
+      "description": "the rigid motion carrying the source plane onto the target plane (the wall's part-to-plate workhorse).",
+      "category": "Transform",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": true,
+      "panics": "either plane is degenerate.",
+      "gh": "Orient",
+      "examples": [
+        "ring = circle(radius=2.0)\nsource = xy_plane()\nat = construct_point(x=10.0, y=0.0, z=5.0)\ntarget = xz_plane(origin=at)\nplaced = orient(geometry=ring, source=source, target=target)"
+      ],
+      "inputs": [
+        {
+          "name": "geometry",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The geometry to orient."
+        },
+        {
+          "name": "source",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The frame the geometry currently sits in."
+        },
+        {
+          "name": "target",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The frame to carry it onto."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The geometry carried from `source` onto `target`."
         }
       ]
     },
@@ -1901,6 +2236,10 @@
       "pure": true,
       "uses_tolerance": true,
       "panics": "the plane is degenerate (zero-length or parallel axes).",
+      "gh": "Rotate",
+      "examples": [
+        "ring = circle(radius=2.0)\nturned = rotate(geometry=ring, angle=1.5707963267948966)"
+      ],
       "inputs": [
         {
           "name": "geometry",
@@ -1935,7 +2274,8 @@
           "type": "T",
           "base": "T",
           "list_depth": 0,
-          "optional": false
+          "optional": false,
+          "doc": "The geometry rotated by `angle` about the plane's normal."
         }
       ]
     },
@@ -1949,6 +2289,10 @@
       "pure": true,
       "uses_tolerance": true,
       "panics": "`|factor|` is within tolerance of zero — geometry would collapse to a point.",
+      "gh": "Scale",
+      "examples": [
+        "ring = circle(radius=2.0)\nabout = construct_point(x=1.0, y=0.0, z=0.0)\nbigger = scale(geometry=ring, center=about, factor=3.0)"
+      ],
       "inputs": [
         {
           "name": "geometry",
@@ -1982,99 +2326,8 @@
           "type": "T",
           "base": "T",
           "list_depth": 0,
-          "optional": false
-        }
-      ]
-    },
-    {
-      "name": "orient",
-      "title": "Orient",
-      "description": "the rigid motion carrying the source plane onto the target plane (the wall's part-to-plate workhorse).",
-      "category": "Transform",
-      "tier": "S",
-      "version": 1,
-      "pure": true,
-      "uses_tolerance": true,
-      "panics": "either plane is degenerate.",
-      "inputs": [
-        {
-          "name": "geometry",
-          "type": "T",
-          "base": "T",
-          "list_depth": 0,
           "optional": false,
-          "doc": "The geometry to orient."
-        },
-        {
-          "name": "source",
-          "type": "Plane",
-          "base": "Plane",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "The frame the geometry currently sits in."
-        },
-        {
-          "name": "target",
-          "type": "Plane",
-          "base": "Plane",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "The frame to carry it onto."
-        }
-      ],
-      "outputs": [
-        {
-          "name": "out",
-          "type": "T",
-          "base": "T",
-          "list_depth": 0,
-          "optional": false
-        }
-      ]
-    },
-    {
-      "name": "linear_array",
-      "title": "Linear Array",
-      "description": "`count` copies stepped along a direction, the first at the original position.",
-      "category": "Transform",
-      "tier": "S",
-      "version": 1,
-      "pure": true,
-      "uses_tolerance": false,
-      "panics": "`count < 1`.",
-      "inputs": [
-        {
-          "name": "geometry",
-          "type": "T",
-          "base": "T",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "The geometry to repeat."
-        },
-        {
-          "name": "direction",
-          "type": "Vector",
-          "base": "Vector",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "Step between consecutive copies."
-        },
-        {
-          "name": "count",
-          "type": "Integer",
-          "base": "Integer",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "Number of copies (the first sits at the original position)."
-        }
-      ],
-      "outputs": [
-        {
-          "name": "out",
-          "type": "[T]",
-          "base": "T",
-          "list_depth": 1,
-          "optional": false
+          "doc": "The geometry scaled by `factor` about `center`."
         }
       ]
     },
@@ -2087,6 +2340,10 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
+      "gh": "Custom Preview",
+      "examples": [
+        "ring = circle(radius=2.0)\nshow = custom_preview(geometry=ring)"
+      ],
       "inputs": [
         {
           "name": "geometry",
@@ -2109,45 +2366,6 @@
       "outputs": []
     },
     {
-      "name": "text_tag",
-      "title": "Text Tag",
-      "description": "a display-only text label at a plane.",
-      "category": "Output, display & export",
-      "tier": "S",
-      "version": 1,
-      "pure": true,
-      "uses_tolerance": false,
-      "inputs": [
-        {
-          "name": "location",
-          "type": "Plane",
-          "base": "Plane",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "Where the tag sits (the plane orients it)."
-        },
-        {
-          "name": "text",
-          "type": "Text",
-          "base": "Text",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "The text to show."
-        },
-        {
-          "name": "size",
-          "type": "Number",
-          "base": "Number",
-          "list_depth": 0,
-          "optional": false,
-          "default": "1.0",
-          "doc": "Text height in document units.",
-          "dimension": "length"
-        }
-      ],
-      "outputs": []
-    },
-    {
       "name": "export_obj",
       "title": "Export OBJ",
       "description": "write meshes to a Wavefront OBJ file for external viewers (the stage-4 debug window into headless geometry; the real exporters — 3MF, DXF — arrive with the wall corpus).",
@@ -2157,6 +2375,10 @@
       "pure": false,
       "uses_tolerance": false,
       "panics": "the file cannot be written (missing directory, permissions) — an export that silently wrote nothing is the worst outcome (wall lesson 7).",
+      "gh": null,
+      "examples": [
+        "span = construct_domain(start=0.0, end=2.0)\nblock = box(x=span, y=span, z=span)\nstill = unit_x(factor=0.0)\nblocks = linear_array(geometry=block, direction=still, count=1)\ndump = export_obj(meshes=blocks, path=\"block.obj\")"
+      ],
       "inputs": [
         {
           "name": "meshes",
@@ -2187,6 +2409,10 @@
       "pure": true,
       "uses_tolerance": true,
       "panics": "the font is not bundled (the message lists the bundled names), `size` is not above tolerance, a glyph is missing from the font (names the character), `segments < 1`, or the plane is degenerate.",
+      "gh": null,
+      "examples": [
+        "glyphs = text_outlines(text=\"A12\", size=5.0)"
+      ],
       "inputs": [
         {
           "name": "text",
@@ -2248,7 +2474,8 @@
           "type": "[Closed<Curve>]",
           "base": "Closed<Curve>",
           "list_depth": 1,
-          "optional": false
+          "optional": false,
+          "doc": "One closed polyline per glyph contour, in text order."
         }
       ]
     },
@@ -2262,6 +2489,10 @@
       "pure": true,
       "uses_tolerance": true,
       "panics": "`text_outlines` would (the font is not bundled — the message lists the bundled names —, `size` is not above tolerance, a glyph is missing from the font — names the character —, `segments < 1`, the plane is degenerate), when `depth` is within tolerance of zero, or when a glyph's contours cannot be triangulated into a watertight prism (touching or self-intersecting outlines — a font defect, named by character).",
+      "gh": null,
+      "examples": [
+        "labels = text_solids(text=\"A12\", size=5.0, depth=2.0)"
+      ],
       "inputs": [
         {
           "name": "text",
@@ -2332,9 +2563,53 @@
           "type": "[Watertight<Mesh>]",
           "base": "Watertight<Mesh>",
           "list_depth": 1,
-          "optional": false
+          "optional": false,
+          "doc": "One watertight solid per glyph, in text order."
         }
       ]
+    },
+    {
+      "name": "text_tag",
+      "title": "Text Tag",
+      "description": "a display-only text label at a plane.",
+      "category": "Output, display & export",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Text Tag 3D",
+      "examples": [
+        "at = construct_point(x=0.0, y=0.0, z=5.0)\nframe = xy_plane(origin=at)\nlabel = text_tag(location=frame, text=\"part C12\", size=2.0)"
+      ],
+      "inputs": [
+        {
+          "name": "location",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Where the tag sits (the plane orients it)."
+        },
+        {
+          "name": "text",
+          "type": "Text",
+          "base": "Text",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The text to show."
+        },
+        {
+          "name": "size",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "1.0",
+          "doc": "Text height in document units.",
+          "dimension": "length"
+        }
+      ],
+      "outputs": []
     }
   ]
 }

@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: `# Returns` is for a node returning ONE bare value — a multi-output node documents each field of its output struct, and a sink returns nothing
+  --> tests/ui/returns_on_sink.rs:21:1
+   |
+21 | #[node(category = "Output, display & export", tier = "S", version = 1, gh = none)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `__CICADA_NODE_OUTPUTS_BAD` failed here

@@ -23,7 +23,7 @@ runs in parallel from day 1:
 | 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | pending |
 | 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | pending |
 | 6 | WASM script host — load precompiled guests, epoch cancellation, `cicada-guest` SDK | last | weeks | pending |
-| C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | pending |
+| C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); C1+ pending |
 
 Out of v0.1 (unchanged from doc 05): fillets/chamfers and B-rep
 maturity, the Blender bridge, fidget, the .gh importer, Tauri, the AI
@@ -242,6 +242,41 @@ format, doc 08.
   `gh =` present, `# Examples` present and solving); `gh` attribute in
   `#[node]`; `# Examples` execution in CI. **Done when** the regenerated
   catalog is byte-identical to before the move, golden hashes unchanged.
+  **Done 2026-08-20** in three commits: the catalog's within-category
+  tie-break became the dialect name (so the move could be proven
+  byte-identical and future moves never reorder the catalog), then the
+  pure move (117 top-level items byte-identical, 58 golden constants
+  unchanged, catalog byte-identical), then the format: `gh = "…" | none`
+  required by the macro (trybuild cases), `# Examples` ```` ```cic ````
+  fences extracted into `NodeSpec::examples` (bare fences refused —
+  rustdoc would doctest them), all 57 nodes named or `none`d and given a
+  runnable snippet, the conformance test
+  (`crates/cicada-stdlib/tests/conformance.rs`), the runner
+  (`crates/cicada-cli/tests/node_examples.rs` — parse, check with zero
+  diagnostics, lower, solve with a fresh cache; exporters' inputs solve,
+  the exporter itself is asserted skipped), CATALOG.md's `· GH:` tag and
+  catalog.json's `gh`/`examples` fields, the `add-stdlib-node` skill
+  rewritten for the layout. Honest reading of the DoD: "byte-identical"
+  holds against the tie-break commit, not against the pre-C0 catalog —
+  that one was ordered by source position (kinship order: add, subtract,
+  multiply …), so the name tie-break permuted every category's lines
+  once (a pure permutation, proven by sorted-line diff; the ribbon was
+  never affected — the web client sorts each tab by title itself).
+  **Review fixes (2026-08-20)**: `# Returns` (one line) is the doc of a
+  bare single `out` port, required by the macro exactly when a node
+  returns one bare value (three trybuild cases) — the first conformance
+  test had exempted `out`, leaving 47 output ports undocumented in
+  catalog.json; the "example calls the node" rule matches at an
+  identifier boundary (`polyline(` no longer satisfies `line`); every
+  node file now holds its own three tests (deconstruct_domain,
+  deconstruct_point, flatten, mesh_difference, mesh_intersection gained
+  theirs; sphere gained a transcendental-free topology golden) and the
+  conformance test reads the source to enforce the layout
+  (`src/<category>/<node>.rs`, one `#[node]` per file) and the three
+  tests. **Pending (web lane)**: `gh` and `examples` are served by
+  `/api/catalog` but the client's `CatalogNode` mirror and
+  search-to-place do not read them yet; output-port docs likewise stop
+  at the catalog (the view-model's `OutputView` carries no `doc`).
 - **C1**: the nodes our diagnostics already cite — `compact`,
   `pad_last`/`cycle`/`truncate` policies — plus duplicate / reverse /
   sort / dispatch / group_by and the maths tail (min/max/abs/round/
