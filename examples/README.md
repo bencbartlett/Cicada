@@ -24,6 +24,12 @@ touching the committed examples — the app writes what you do.
   OBJ.
 - **04-field.cic** — the Python script-node host: a numpy field solver
   (`scripts/solve_field.py`) driving per-cell prism heights.
+- **wall/** — the full 1,200-part wall as a committed playground (a copy
+  of `corpus/wall.cic` + its scripts and frozen layout). Open it in the
+  app and edit freely; `git checkout -- examples/wall` reverts. The
+  measured original (golden comparisons, nightly CI) stays `corpus/` —
+  make experiments here, never there. First solve is the ~6.5 s cold
+  carve (release); exporters write to `examples/wall/out/` (gitignored).
 - **05-script-geometry.cic** — script nodes beyond numbers
   (`scripts/pyramids.py`): Python returns watertight meshes through a
   multi-output node (`pyr.meshes`, `pyr.volumes`), and an effectful

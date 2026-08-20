@@ -40,4 +40,5 @@ web/playwright-report/
 
 # Stage-6 corpus outputs (explicit exporter runs write here; production references live in corpus/golden/)
 corpus/out/
+examples/wall/out/
 examples/*.csv
