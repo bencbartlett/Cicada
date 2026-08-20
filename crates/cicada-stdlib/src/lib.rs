@@ -7,21 +7,26 @@
 //!
 //! Nodes register at compile time via `#[node]` + `#[derive(Ports)]`
 //! (cicada-macros); the registry is queried through [`registry`].
+//!
+//! Layout (DECISIONS.md stdlib row, revised 2026-08-19): one node per
+//! file, `src/<category>/<node>.rs`, where the categories are the ribbon
+//! tabs (docs/08 §Catalog); a category's `mod.rs` lists its nodes and a
+//! `support.rs` holds whatever several of them share. Catalog order never
+//! depends on this layout (name order within a category).
 
 use cicada_core::spec::NodeSpec;
 
 pub mod curves;
-pub mod display;
-pub mod export;
 pub mod intersect;
 pub mod lists;
 pub mod maths;
 pub mod meshes;
+pub mod output;
 pub mod params;
 pub mod points;
 pub mod sequences;
-pub mod text;
-pub mod transforms;
+pub mod solids;
+pub mod transform;
 
 /// Unwrap a geometry result, turning the error into a node panic — the
 /// scheduler catches panics into red nodes carrying this message
