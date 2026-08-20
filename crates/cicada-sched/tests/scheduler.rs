@@ -21,9 +21,9 @@ use std::time::Duration;
 
 use cicada_core::value::{HashedValue, List, ValueData};
 use cicada_sched::{
-    CancelToken, Clock as _, DiskStore, Event, Input, NodeDecl, NodeError, NodeFn, NodeId,
-    NodeOutcome, Observer, PreviewJob, PreviewSession, Scheduler, SchedulerConfig, SolveGraph,
-    VirtualClock,
+    CancelToken, Clock as _, CostSample, DiskStore, Event, Input, NodeDecl, NodeError, NodeFn,
+    NodeId, NodeOutcome, Observer, PreviewJob, PreviewSession, Scheduler, SchedulerConfig,
+    SolveGraph, VirtualClock,
 };
 
 // ------------------------------------------------------------- fakes --
@@ -1908,4 +1908,112 @@ fn cache_hits_carry_the_recorded_cost_across_reopen() {
         "the node's element count, not the chunk's"
     );
     assert_eq!(mapped_cost.nanos, 12_000);
+}
+
+// A fan that was partly served from the element cache recorded its executed
+// work as "the computation's cost": a later hit read e.g. `1 ms · 3
+// elements` for a node whose from-scratch cost is 3 ms — and `0 ns` for a
+// fan served entirely per element (adversarial review of item 3b,
+// 2026-08-20). An entry's cost is now recorded only when the computation
+// executed EVERY element, so `nanos` is unambiguously what computing that
+// key from scratch cost; a partial fan's entry carries no cost (the op-level
+// sample still learns from the elements that did run).
+#[test]
+fn a_partially_element_cached_fan_records_no_cost_on_its_entry() {
+    let rig = rig(1, |config| {
+        config.element_cache_min_nanos = 1;
+    });
+    let run: NodeFn = {
+        let clock = Arc::clone(&rig.clock);
+        Arc::new(move |_ctx, inputs| {
+            clock.advance(1_000_000);
+            let x = as_number(inputs[0].as_ref().unwrap());
+            Ok(vec![number(x * 2.0)])
+        })
+    };
+    let graph_for = |xs: &[f64]| {
+        SolveGraph::new(vec![decl(
+            "mapped",
+            "fake.partial",
+            vec![Input::Value(number_list(xs, None))],
+            vec![1],
+            Arc::clone(&run),
+        )])
+        .unwrap()
+    };
+    // Calibrate (a cold node's first fan persists at node granularity
+    // only), then a fully computed fan with element persistence on: every
+    // element computes — a complete measurement.
+    solve(
+        &rig.scheduler,
+        &graph_for(&[0.0, 1.0]),
+        &[NodeId(0)],
+        &Recorder::default(),
+    );
+    let full = graph_for(&[2.0, 3.0, 4.0]);
+    let recorder = Recorder::default();
+    solve(&rig.scheduler, &full, &[NodeId(0)], &recorder);
+    assert_eq!(recorder.element_cache_hits(), 0);
+    let report = solve(&rig.scheduler, &full, &[NodeId(0)], &Recorder::default());
+    let NodeOutcome::CacheHit { cost, .. } = report.outcome(NodeId(0)) else {
+        panic!("warm: {:?}", report.outcome(NodeId(0)))
+    };
+    assert_eq!(
+        *cost,
+        Some(CostSample {
+            elements: 3,
+            nanos: 3_000_000
+        }),
+        "a complete measurement rides the entry"
+    );
+    // Shifted: two elements are element-cache hits, one computes.
+    let partial = graph_for(&[3.0, 4.0, 5.0]);
+    let recorder = Recorder::default();
+    let report = solve(&rig.scheduler, &partial, &[NodeId(0)], &recorder);
+    assert_eq!(recorder.element_cache_hits(), 2);
+    let NodeOutcome::Computed {
+        elements, nanos, ..
+    } = report.outcome(NodeId(0))
+    else {
+        panic!("the shifted list is a node-level miss")
+    };
+    assert_eq!(
+        (*elements, *nanos),
+        (3, 1_000_000),
+        "this generation's work"
+    );
+    // Its hit carries no cost: 1 ms is not what 3 elements cost.
+    let report = solve(&rig.scheduler, &partial, &[NodeId(0)], &Recorder::default());
+    let NodeOutcome::CacheHit { cost, .. } = report.outcome(NodeId(0)) else {
+        panic!("warm: {:?}", report.outcome(NodeId(0)))
+    };
+    assert_eq!(*cost, None, "a partial fan's entry records no cost");
+    // Fully element-served (a reordering): computed 0 — no cost either,
+    // never `0 ns`.
+    let reordered = graph_for(&[5.0, 4.0, 3.0]);
+    let recorder = Recorder::default();
+    let report = solve(&rig.scheduler, &reordered, &[NodeId(0)], &recorder);
+    assert_eq!(recorder.element_cache_hits(), 3);
+    assert!(matches!(
+        report.outcome(NodeId(0)),
+        NodeOutcome::Computed { nanos: 0, .. }
+    ));
+    let report = solve(
+        &rig.scheduler,
+        &reordered,
+        &[NodeId(0)],
+        &Recorder::default(),
+    );
+    let NodeOutcome::CacheHit { cost: None, .. } = report.outcome(NodeId(0)) else {
+        panic!("no `0 ns` cost: {:?}", report.outcome(NodeId(0)))
+    };
+    // The op's per-element estimate is untouched by any of this.
+    assert_eq!(
+        rig.scheduler
+            .store()
+            .stats("fake.partial")
+            .unwrap()
+            .per_element_nanos(),
+        Some(1_000_000)
+    );
 }

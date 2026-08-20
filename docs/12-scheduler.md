@@ -93,10 +93,13 @@ Two levels:
 2. **Memo table** — `NodeKey → {output hashes, status, warnings with
    element IDs, cost samples, display-cost samples}`. *(Live: output
    hashes, and — since v0.1 — the producing computation's cost
-   `{elements, nanos}` on node-level entries, so a cache hit still
-   knows what it cost when it last ran and the cost model stays
-   complete across a warm reopen; per-op samples ride beside the
-   entries as their own records.)*
+   `{elements, nanos}` on node-level entries whose computation executed
+   every element (a fan partly served from the element cache measured
+   only what ran, so its entry carries no cost rather than a number
+   that is not what the node costs), so a cache hit still knows what
+   it cost when it last ran and the cost model stays complete across a
+   warm reopen; per-op samples ride beside the entries as their own
+   records.)*
 
 **Location**: the store lives on the engine host in the user cache
 directory (e.g. `%LOCALAPPDATA%/cicada/cache/<project>`), keyed by

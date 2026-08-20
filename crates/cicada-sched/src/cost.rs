@@ -8,9 +8,12 @@ use serde::{Deserialize, Serialize};
 
 /// One computation's measured cost: how many elements it executed and the
 /// work nanoseconds they took (summed across parallel chunks — CPU cost,
-/// not wall clock). Recorded beside a node-level memo entry so a cache hit
-/// still knows what the computation cost when it last ran (docs/12 §Progress
-/// and ETA: "cost samples per `NodeKey` persist in the memo table") — the
+/// not wall clock). Recorded beside a node-level memo entry — only when the
+/// computation executed every element of the node, so the pair means "what
+/// computing this key from scratch costs" and never "what a fan partly
+/// served from the element cache happened to do" — so a cache hit still
+/// knows what the computation cost when it last ran (docs/12 §Progress and
+/// ETA: "cost samples per `NodeKey` persist in the memo table") and the
 /// cost model stays complete across a warm reopen, where nothing computes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CostSample {

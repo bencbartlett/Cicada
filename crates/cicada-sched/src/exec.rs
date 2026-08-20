@@ -645,20 +645,28 @@ impl Ctx<'_> {
         // Effectful and volatile nodes are never memoized (see the memo-read
         // gate); the cost sample below still records — the estimator can
         // know an export's (or a clock's cone's) cost without the cache
-        // ever lying about having run it. The entry carries the cost too:
-        // `elements` is the node's element count (cache-served elements
-        // included — the size the next prediction multiplies), `nanos` what
-        // actually executed.
-        if !decl.effectful
-            && !decl.volatile
-            && let Err(error) = self.scheduler.store.record_memo_with_cost(
-                key,
-                &outputs,
-                CostSample { elements, nanos },
-            )
-        {
-            self.set_fatal(error);
-            return NodeOutcome::Cancelled;
+        // ever lying about having run it. The entry carries the cost too,
+        // but only when the computation executed EVERY element — then
+        // `nanos` is unambiguously what computing this key from scratch
+        // cost and `elements` its size. A fan partly (or wholly) served
+        // from the element cache measured only the elements that ran; an
+        // entry saying "1 ms · 1,200 elements" — or "0 ns" — for it would
+        // be the cache lying about what the work costs, so it records no
+        // cost (the op-level sample below still learns from what ran).
+        if !decl.effectful && !decl.volatile {
+            let recorded = if computed == elements {
+                self.scheduler.store.record_memo_with_cost(
+                    key,
+                    &outputs,
+                    CostSample { elements, nanos },
+                )
+            } else {
+                self.scheduler.store.record_memo(key, &outputs)
+            };
+            if let Err(error) = recorded {
+                self.set_fatal(error);
+                return NodeOutcome::Cancelled;
+            }
         }
         // Sample only what actually executed; a fully-warm fan teaches
         // nothing and would dilute the estimate.
