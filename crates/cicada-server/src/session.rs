@@ -1641,8 +1641,14 @@ impl Session {
         }
         // Write every file temp + rename, in order; a failure restores the
         // ones already replaced — the disk never keeps a partial edit.
-        for (index, (_, absolute, text)) in targets.iter().enumerate() {
-            if let Err(error) = write_atomic(absolute, text.as_bytes()) {
+        for (index, (target, absolute, text)) in targets.iter().enumerate() {
+            let written = match (target, absolute.parent()) {
+                // The first script of a project: `scripts/` may not exist.
+                (EditTarget::Script(_), Some(parent)) => std::fs::create_dir_all(parent)
+                    .and_then(|()| write_atomic(absolute, text.as_bytes())),
+                _ => write_atomic(absolute, text.as_bytes()),
+            };
+            if let Err(error) = written {
                 use std::fmt::Write as _;
                 let mut message = format!("writing {}: {error}", display_path(absolute));
                 let restored = restore_files(&before_files[..index]);
@@ -4383,5 +4389,1203 @@ size = slider(value=4.0, min=0.5, max=5.0)
                 .count(),
             1
         );
+    }
+
+    // ------------------------------------------------------ undo/redo --
+
+    /// The on-disk state of a pipeline: `(text, sidecar text or None)`.
+    fn on_disk(pipeline: &Path) -> (String, Option<String>) {
+        (
+            std::fs::read_to_string(pipeline).unwrap(),
+            std::fs::read_to_string(Sidecar::path_for(pipeline)).ok(),
+        )
+    }
+
+    fn file_hash(path: &Path) -> String {
+        blake3::hash(&std::fs::read(path).unwrap())
+            .to_hex()
+            .to_string()
+    }
+
+    fn history_of(session: &Session) -> serde_json::Value {
+        serde_json::to_value(session.history()).unwrap()
+    }
+
+    fn project_with_clock(
+        source: &str,
+    ) -> (
+        tempfile::TempDir,
+        SessionConfig,
+        Arc<cicada_sched::VirtualClock>,
+    ) {
+        let (dir, mut config) = project(source);
+        let clock = Arc::new(cicada_sched::VirtualClock::new());
+        config.op_clock = Some(clock.clone());
+        (dir, config, clock)
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // one story: five gestures, five undos, five redos, every state checked
+    fn undo_and_redo_walk_the_recorded_states_byte_for_byte() {
+        let (_dir, config, clock) = project_with_clock(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        assert_eq!(
+            history_of(&session),
+            serde_json::json!({"can_undo": false, "can_redo": false, "undo_label": null,
+                               "redo_label": null, "depth": 0})
+        );
+
+        // Five gestures, recording the state AFTER each (state 0 = initial).
+        let mut states: Vec<(String, Option<String>)> = vec![on_disk(&pipeline)];
+        let gestures: Vec<(ClientMessage, &str)> = vec![
+            (
+                ClientMessage::PlaceNode {
+                    func: "sphere".into(),
+                    cell: Some([40, 2]),
+                    connect: None,
+                },
+                "place sphere",
+            ),
+            (
+                ClientMessage::Connect {
+                    from: WireEnd {
+                        node: "size".into(),
+                        port: "out".into(),
+                    },
+                    to: WireEnd {
+                        node: "sphere_1".into(),
+                        port: "radius".into(),
+                    },
+                    lift: false,
+                },
+                "wire size.out → sphere_1.radius",
+            ),
+            (
+                ClientMessage::SetParam {
+                    node: "size".into(),
+                    port: Some("value".into()),
+                    value: "3.0".into(),
+                },
+                "set size.value = 3.0",
+            ),
+            (
+                ClientMessage::MoveNode {
+                    node: "block".into(),
+                    cell: Some([7, 7]),
+                },
+                "move block",
+            ),
+            (
+                ClientMessage::DeleteNode {
+                    node: "span".into(),
+                },
+                "delete span",
+            ),
+        ];
+        for (step, (gesture, label)) in gestures.into_iter().enumerate() {
+            clock.advance(10_000_000); // 10 ms
+            session.handle(id, Some(format!("g{step}")), gesture);
+            session.wait_idle();
+            let msgs = texts(&drain(&mut rx));
+            let deltas: Vec<_> = msgs.iter().filter(|m| m["type"] == "delta").collect();
+            assert_eq!(deltas.len(), 1, "one delta per gesture: {msgs:?}");
+            assert_eq!(deltas[0]["payload"]["source"]["label"], label);
+            assert_eq!(deltas[0]["payload"]["history"]["depth"], step + 1);
+            assert_eq!(deltas[0]["payload"]["history"]["undo_label"], label);
+            assert_eq!(deltas[0]["payload"]["history"]["can_redo"], false);
+            let disk = on_disk(&pipeline);
+            assert_eq!(
+                deltas[0]["payload"]["text"], disk.0,
+                "the delta's text IS the file"
+            );
+            states.push(disk);
+        }
+        assert_eq!(states.len(), 6);
+        assert!(states[4].1.is_some(), "the move wrote a sidecar");
+        assert!(
+            !states[5].0.contains("span ="),
+            "span is gone: {}",
+            states[5].0
+        );
+        let debug = session.debug_state(false);
+        let ops = debug["ops"].as_array().unwrap();
+        assert_eq!(ops.len(), 5);
+        assert_eq!(
+            ops.iter()
+                .map(|o| o["id"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5]
+        );
+        assert_eq!(
+            ops.iter()
+                .map(|o| o["at"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![10, 20, 30, 40, 50],
+            "op timestamps come from the injected clock (ms)"
+        );
+        assert!(
+            ops.iter()
+                .all(|o| o["actor"] == serde_json::json!({"kind": "human"}))
+        );
+
+        // Undo ×5: after the k-th undo the state is states[5 - k], in
+        // memory AND on disk, byte for byte.
+        for k in 1..=5 {
+            session.handle(id, Some(format!("u{k}")), ClientMessage::Undo {});
+            session.wait_idle();
+            let msgs = texts(&drain(&mut rx));
+            let deltas: Vec<_> = msgs.iter().filter(|m| m["type"] == "delta").collect();
+            assert_eq!(deltas.len(), 1, "undo {k}: one delta: {msgs:?}");
+            let expected = &states[5 - k];
+            assert_eq!(
+                deltas[0]["payload"]["text"], expected.0,
+                "undo {k}: the broadcast text is the recorded state"
+            );
+            assert!(
+                deltas[0]["payload"]["source"]["label"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("undo: "),
+                "{}",
+                deltas[0]["payload"]["source"]["label"]
+            );
+            assert_eq!(deltas[0]["payload"]["history"]["depth"], 5 - k);
+            assert_eq!(deltas[0]["payload"]["history"]["can_redo"], true);
+            assert_eq!(
+                on_disk(&pipeline),
+                *expected,
+                "undo {k}: disk (text + sidecar) is the recorded state"
+            );
+            assert_eq!(
+                session.debug_state(false)["text"].as_str().unwrap(),
+                expected.0,
+                "undo {k}: memory is the recorded state"
+            );
+            if k == 1 {
+                // Undo never recomputes: the un-deleted span's cone was
+                // solved two ops ago, so the restored block is a memo hit.
+                let statuses = &session.debug_state(false)["statuses"];
+                assert_eq!(statuses["block"]["state"], "cached", "{statuses}");
+                assert_eq!(statuses["span"]["state"], "cached", "{statuses}");
+            }
+        }
+        assert_eq!(
+            session.debug_state(false)["text"].as_str().unwrap(),
+            states[0].0,
+            "five undos → the initial text"
+        );
+        // One more undo: refused, and says why (empty, not barrier).
+        session.handle(id, Some("u6".into()), ClientMessage::Undo {});
+        let msgs = texts(&drain(&mut rx));
+        let error = msgs.iter().find(|m| m["type"] == "error").unwrap();
+        assert_eq!(error["payload"]["kind"], "nothing_to_undo");
+        assert_eq!(error["payload"]["intent_id"], "u6");
+        assert!(
+            error["payload"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("already undone"),
+            "{}",
+            error["payload"]["message"]
+        );
+        assert!(
+            !msgs.iter().any(|m| m["type"] == "delta"),
+            "a refused undo broadcasts nothing"
+        );
+
+        // Redo ×5: after the k-th redo the state is states[k].
+        for (k, expected) in states.iter().enumerate().skip(1) {
+            session.handle(id, Some(format!("r{k}")), ClientMessage::Redo {});
+            session.wait_idle();
+            let msgs = texts(&drain(&mut rx));
+            let deltas: Vec<_> = msgs.iter().filter(|m| m["type"] == "delta").collect();
+            assert_eq!(deltas.len(), 1, "redo {k}: one delta");
+            assert_eq!(deltas[0]["payload"]["text"], expected.0);
+            assert!(
+                deltas[0]["payload"]["source"]["label"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("redo: ")
+            );
+            assert_eq!(deltas[0]["payload"]["history"]["depth"], k);
+            assert_eq!(on_disk(&pipeline), *expected, "redo {k}: disk matches");
+        }
+        session.handle(id, Some("r6".into()), ClientMessage::Redo {});
+        let msgs = texts(&drain(&mut rx));
+        let error = msgs.iter().find(|m| m["type"] == "error").unwrap();
+        assert_eq!(error["payload"]["kind"], "nothing_to_redo");
+        assert_eq!(
+            history_of(&session),
+            serde_json::json!({"can_undo": true, "can_redo": false, "undo_label": "delete span",
+                               "redo_label": null, "depth": 5})
+        );
+        // The restored final state solves to the same display as before
+        // (undo never recomputes — warm keys): the sphere is back and the
+        // block's box is gone (span was deleted → block is red).
+        let state = session.debug_state(false);
+        assert_eq!(state["statuses"]["block"]["state"], "red");
+        assert!(state["display"]["sphere_1.out"].is_object());
+
+        // A new op after undoing two truncates the redo tail.
+        session.handle(id, None, ClientMessage::Undo {});
+        session.handle(id, None, ClientMessage::Undo {});
+        session.wait_idle();
+        drain(&mut rx);
+        assert_eq!(history_of(&session)["can_redo"], true);
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "4.0".into(),
+            },
+        );
+        session.wait_idle();
+        let history = history_of(&session);
+        assert_eq!(history["can_redo"], false, "{history}");
+        assert_eq!(history["depth"], 4);
+        assert_eq!(history["undo_label"], "set size.value = 4.0");
+        let ops = session.debug_state(false)["ops"].as_array().unwrap().len();
+        assert_eq!(ops, 4, "the two undone ops were dropped from the log");
+    }
+
+    #[test]
+    fn undo_and_redo_are_lease_gated_like_every_write() {
+        let (_dir, config) = project("# cicada 1\na = 1.0\n");
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx1, mut rx1) = unbounded_channel();
+        let (tx2, mut rx2) = unbounded_channel();
+        let (w, _) = session.connect(tx1);
+        let (o, _) = session.connect(tx2);
+        session.handle(
+            w,
+            None,
+            ClientMessage::SetParam {
+                node: "a".into(),
+                port: None,
+                value: "2.0".into(),
+            },
+        );
+        session.wait_idle();
+        drain(&mut rx1);
+        drain(&mut rx2);
+        for (intent, message) in [("u", ClientMessage::Undo {}), ("r", ClientMessage::Redo {})] {
+            session.handle(o, Some(intent.into()), message);
+            let msgs = texts(&drain(&mut rx2));
+            let error = msgs.iter().find(|m| m["type"] == "error").unwrap();
+            assert_eq!(error["payload"]["kind"], "lease", "{intent}");
+            assert_eq!(error["payload"]["intent_id"], intent);
+        }
+        assert!(
+            session.debug_state(false)["text"]
+                .as_str()
+                .unwrap()
+                .contains("a = 2.0"),
+            "the observer's undo changed nothing"
+        );
+        assert_eq!(history_of(&session)["depth"], 1);
+        // The writer's undo goes through — and the observer sees the delta.
+        session.handle(w, None, ClientMessage::Undo {});
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx2));
+        let delta = msgs.iter().find(|m| m["type"] == "delta").unwrap();
+        assert!(
+            delta["payload"]["text"]
+                .as_str()
+                .unwrap()
+                .contains("a = 1.0")
+        );
+        assert_eq!(delta["payload"]["source"]["label"], "undo: set a = 2.0");
+    }
+
+    #[test]
+    fn param_previews_and_effectful_runs_are_never_ops() {
+        let dir = tempfile::tempdir().unwrap();
+        let obj = dir.path().join("out.obj");
+        let obj_text = obj.to_string_lossy().replace('\\', "/");
+        let source = format!(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n\
+             dx = unit_x()\n\
+             blocks = linear_array(geometry=block, direction=dx, count=2)\n\
+             dump = export_obj(meshes=blocks, path=\"{obj_text}\")\n"
+        );
+        let pipeline = dir.path().join("p.cic");
+        std::fs::write(&pipeline, &source).unwrap();
+        let config = SessionConfig {
+            project_dir: dir.path().to_owned(),
+            pipeline: pipeline.clone(),
+            cache_dir: Some(dir.path().join("cache")),
+            threads: 2,
+            project: ProjectConfig::default(),
+            op_clock: None,
+        };
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        session.handle(
+            id,
+            None,
+            ClientMessage::ParamPreview {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "3.0".into(),
+            },
+        );
+        session.wait_idle();
+        assert_eq!(history_of(&session)["depth"], 0, "a preview is not an op");
+        assert!(!texts(&drain(&mut rx)).iter().any(|m| m["type"] == "delta"));
+        session.run_effectful("dump").expect("the export runs");
+        assert!(obj.exists(), "the exporter wrote its file");
+        assert_eq!(
+            history_of(&session),
+            serde_json::json!({"can_undo": false, "can_redo": false, "undo_label": null,
+                               "redo_label": null, "depth": 0}),
+            "an effectful run is not an op (non-undoable, and says so by its absence)"
+        );
+        assert_eq!(
+            session.debug_state(false)["ops"].as_array().unwrap().len(),
+            0
+        );
+        let msgs = texts(&drain(&mut rx));
+        assert!(msgs.iter().any(|m| m["type"] == "run_finished"));
+        assert!(!msgs.iter().any(|m| m["type"] == "delta"));
+        // The text never moved: nothing to undo, and the file is the source.
+        assert_eq!(std::fs::read_to_string(&pipeline).unwrap(), source);
+    }
+
+    #[test]
+    fn the_op_log_keeps_the_last_200_ops() {
+        let (_dir, config) = project("# cicada 1\na = 1.0\n");
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        for i in 0..(OP_LOG_CAP + 5) {
+            session.handle(
+                id,
+                None,
+                ClientMessage::SetParam {
+                    node: "a".into(),
+                    port: None,
+                    value: format!("{}.0", i + 2),
+                },
+            );
+            drain(&mut rx);
+        }
+        session.wait_idle();
+        let state = session.debug_state(false);
+        let ops = state["ops"].as_array().unwrap();
+        assert_eq!(ops.len(), OP_LOG_CAP);
+        assert_eq!(ops[0]["id"], 6, "the five oldest dropped off");
+        assert_eq!(ops[OP_LOG_CAP - 1]["id"], OP_LOG_CAP + 5);
+        assert_eq!(state["history"]["depth"], OP_LOG_CAP);
+        // Undo all 200: back to the oldest KEPT op's before-state — op 6
+        // set 7.0, so its `before` is the 6.0 that op 5 wrote.
+        for _ in 0..OP_LOG_CAP {
+            session.handle(id, None, ClientMessage::Undo {});
+            drain(&mut rx);
+        }
+        session.wait_idle();
+        assert!(
+            session.debug_state(false)["text"]
+                .as_str()
+                .unwrap()
+                .contains("a = 6.0"),
+            "{}",
+            session.debug_state(false)["text"]
+        );
+        session.handle(id, Some("x".into()), ClientMessage::Undo {});
+        let msgs = texts(&drain(&mut rx));
+        assert_eq!(
+            msgs.iter().find(|m| m["type"] == "error").unwrap()["payload"]["kind"],
+            "nothing_to_undo"
+        );
+    }
+
+    #[test]
+    fn an_external_edit_is_the_barrier_that_clears_the_log() {
+        let (_dir, config) = project("# cicada 1\na = 1.0\n");
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetParam {
+                node: "a".into(),
+                port: None,
+                value: "2.0".into(),
+            },
+        );
+        session.wait_idle();
+        assert_eq!(history_of(&session)["depth"], 1);
+        drain(&mut rx);
+        // Someone edits the file outside the canvas (git checkout, editor).
+        std::fs::write(&pipeline, "# cicada 1\na = 2.0\nb = 5.0\n").unwrap();
+        assert!(session.reload_from_disk("test", false).unwrap());
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        let snapshot = msgs.iter().find(|m| m["type"] == "snapshot").unwrap();
+        assert_eq!(snapshot["payload"]["barrier"], true);
+        assert_eq!(
+            snapshot["payload"]["history"],
+            serde_json::json!({"can_undo": false, "can_redo": false, "undo_label": null,
+                               "redo_label": null, "depth": 0}),
+            "the barrier snapshot carries the cleared history"
+        );
+        session.handle(id, Some("u".into()), ClientMessage::Undo {});
+        let msgs = texts(&drain(&mut rx));
+        let error = msgs.iter().find(|m| m["type"] == "error").unwrap();
+        assert_eq!(error["payload"]["kind"], "nothing_to_undo");
+        assert!(
+            error["payload"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("reload barrier"),
+            "the refusal names the barrier: {}",
+            error["payload"]["message"]
+        );
+        assert_eq!(
+            std::fs::read_to_string(&pipeline).unwrap(),
+            "# cicada 1\na = 2.0\nb = 5.0\n",
+            "nothing was restored over the external edit"
+        );
+        // Life goes on: a new op after the barrier is undoable again, and
+        // the message no longer blames the barrier once the log has ops.
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetParam {
+                node: "b".into(),
+                port: None,
+                value: "6.0".into(),
+            },
+        );
+        session.wait_idle();
+        assert_eq!(history_of(&session)["depth"], 1);
+        session.handle(id, None, ClientMessage::Undo {});
+        session.wait_idle();
+        drain(&mut rx);
+        session.handle(id, Some("u2".into()), ClientMessage::Undo {});
+        let msgs = texts(&drain(&mut rx));
+        let error = msgs.iter().find(|m| m["type"] == "error").unwrap();
+        assert!(
+            !error["payload"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("barrier"),
+            "{}",
+            error["payload"]["message"]
+        );
+    }
+
+    // ---------------------------------------------------------- batch --
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // the all-or-nothing story: success, failure, validation
+    fn a_batch_is_one_op_one_delta_all_or_nothing() {
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n\
+             n = 3.0\n",
+        );
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+
+        // A multi-move + a param + a delete as ONE op.
+        session.handle(
+            id,
+            Some("b1".into()),
+            ClientMessage::Batch {
+                label: "move 2 nodes, set n, delete span".into(),
+                ops: vec![
+                    ClientMessage::MoveNode {
+                        node: "size".into(),
+                        cell: Some([1, 1]),
+                    },
+                    ClientMessage::MoveNode {
+                        node: "block".into(),
+                        cell: Some([9, 1]),
+                    },
+                    ClientMessage::SetParam {
+                        node: "n".into(),
+                        port: None,
+                        value: "4.0".into(),
+                    },
+                    ClientMessage::DeleteNode {
+                        node: "span".into(),
+                    },
+                ],
+            },
+        );
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        let deltas: Vec<_> = msgs.iter().filter(|m| m["type"] == "delta").collect();
+        assert_eq!(deltas.len(), 1, "one delta for the whole batch: {msgs:?}");
+        assert_eq!(deltas[0]["payload"]["source"]["intent_id"], "b1");
+        assert_eq!(
+            deltas[0]["payload"]["source"]["label"],
+            "move 2 nodes, set n, delete span"
+        );
+        assert_eq!(deltas[0]["payload"]["history"]["depth"], 1);
+        let dirty = deltas[0]["payload"]["dirty"].as_array().unwrap();
+        assert!(dirty.iter().any(|d| d == "n"), "{dirty:?}");
+        assert!(
+            dirty.iter().any(|d| d == "block"),
+            "delete's dependents: {dirty:?}"
+        );
+        let (text, sidecar) = on_disk(&pipeline);
+        assert!(text.contains("n = 4.0"), "{text}");
+        assert!(!text.contains("span ="), "{text}");
+        let sidecar = sidecar.expect("moves wrote the sidecar");
+        assert!(sidecar.contains("\"size\"") && sidecar.contains("\"block\""));
+        assert_eq!(
+            session.debug_state(false)["ops"].as_array().unwrap().len(),
+            1
+        );
+        let after_batch = on_disk(&pipeline);
+
+        // A batch whose THIRD op fails (unknown node) changes nothing: text,
+        // sidecar, disk and history are exactly as before; no delta.
+        session.handle(
+            id,
+            Some("b2".into()),
+            ClientMessage::Batch {
+                label: "doomed".into(),
+                ops: vec![
+                    ClientMessage::MoveNode {
+                        node: "size".into(),
+                        cell: Some([2, 2]),
+                    },
+                    ClientMessage::SetParam {
+                        node: "n".into(),
+                        port: None,
+                        value: "5.0".into(),
+                    },
+                    ClientMessage::DeleteNode {
+                        node: "nope".into(),
+                    },
+                ],
+            },
+        );
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        assert!(
+            !msgs.iter().any(|m| m["type"] == "delta"),
+            "a failed batch broadcasts no delta: {msgs:?}"
+        );
+        let error = msgs.iter().find(|m| m["type"] == "error").unwrap();
+        assert_eq!(error["payload"]["intent_id"], "b2");
+        assert_eq!(error["payload"]["index"], 2, "names the failing op");
+        assert!(
+            error["payload"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("op 2 (delete_node)"),
+            "{}",
+            error["payload"]["message"]
+        );
+        assert_eq!(on_disk(&pipeline), after_batch, "disk untouched");
+        assert_eq!(
+            session.debug_state(false)["text"].as_str().unwrap(),
+            after_batch.0,
+            "memory untouched"
+        );
+        assert_eq!(
+            session.core.lock_inner().sidecar.overrides["size"].cell,
+            Some([1, 1]),
+            "the first op's move was rolled back in memory"
+        );
+        assert_eq!(history_of(&session)["depth"], 1, "no op recorded");
+
+        // Undo of the batch restores all four gestures at once.
+        session.handle(id, None, ClientMessage::Undo {});
+        session.wait_idle();
+        let (text, sidecar) = on_disk(&pipeline);
+        assert!(
+            text.contains("n = 3.0") && text.contains("span ="),
+            "{text}"
+        );
+        assert!(sidecar.is_none(), "the moves are gone → no sidecar file");
+
+        // Validation: a non-gesture element and an empty batch are refused
+        // before anything is touched.
+        session.handle(
+            id,
+            Some("b3".into()),
+            ClientMessage::Batch {
+                label: "bad".into(),
+                ops: vec![
+                    ClientMessage::MoveNode {
+                        node: "size".into(),
+                        cell: None,
+                    },
+                    ClientMessage::Undo {},
+                ],
+            },
+        );
+        let msgs = texts(&drain(&mut rx));
+        let error = msgs.iter().find(|m| m["type"] == "error").unwrap();
+        assert_eq!(error["payload"]["kind"], "protocol");
+        assert_eq!(error["payload"]["index"], 1);
+        session.handle(
+            id,
+            Some("b4".into()),
+            ClientMessage::Batch {
+                label: "empty".into(),
+                ops: vec![],
+            },
+        );
+        let msgs = texts(&drain(&mut rx));
+        assert_eq!(
+            msgs.iter().find(|m| m["type"] == "error").unwrap()["payload"]["kind"],
+            "protocol"
+        );
+        // A place + connect-to-it + move-it in one batch: later elements
+        // see the earlier ones.
+        session.handle(
+            id,
+            Some("b5".into()),
+            ClientMessage::Batch {
+                label: "add a sphere".into(),
+                ops: vec![
+                    ClientMessage::PlaceNode {
+                        func: "sphere".into(),
+                        cell: None,
+                        connect: None,
+                    },
+                    ClientMessage::Connect {
+                        from: WireEnd {
+                            node: "size".into(),
+                            port: "out".into(),
+                        },
+                        to: WireEnd {
+                            node: "sphere_1".into(),
+                            port: "radius".into(),
+                        },
+                        lift: false,
+                    },
+                    ClientMessage::MoveNode {
+                        node: "sphere_1".into(),
+                        cell: Some([3, 3]),
+                    },
+                ],
+            },
+        );
+        session.wait_idle();
+        let (text, sidecar) = on_disk(&pipeline);
+        assert!(text.contains("sphere_1 = sphere(radius=size)"), "{text}");
+        assert!(sidecar.unwrap().contains("\"sphere_1\""));
+        assert_eq!(
+            session.debug_state(false)["statuses"]["sphere_1"]["state"],
+            "done"
+        );
+    }
+
+    // ----------------------------------------------------- apply_text --
+
+    fn apply(
+        session: &Session,
+        base: &str,
+        files: Vec<(&str, &str)>,
+        label: &str,
+    ) -> Result<serde_json::Value, IntentError> {
+        session.apply_text(
+            &ApplyTextRequest {
+                base_text_hash: base.to_owned(),
+                files: files
+                    .into_iter()
+                    .map(|(path, text)| crate::protocol::FileText {
+                        path: path.to_owned(),
+                        text: text.to_owned(),
+                    })
+                    .collect(),
+                label: label.to_owned(),
+                actor: Actor::Agent {
+                    prompt: Some("test".to_owned()),
+                },
+            },
+            DeltaSource {
+                client: None,
+                intent_id: None,
+                label: label.to_owned(),
+            },
+        )
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // happy path, stale base, parse error, bad paths — one fixture
+    fn apply_text_is_atomic_against_a_base_hash() {
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        assert_eq!(session.relative(), "p.cic");
+        let base = session.edit_text();
+        assert_eq!(base["path"], "p.cic");
+        assert_eq!(base["text"], std::fs::read_to_string(&pipeline).unwrap());
+        assert_eq!(
+            base["text_hash"],
+            file_hash(&pipeline),
+            "the hash IS the file's"
+        );
+        let base_hash = base["text_hash"].as_str().unwrap().to_owned();
+
+        // Happy path: a new binding appears; one delta; depth + 1.
+        let new_text = format!(
+            "{}ball = sphere(radius=size)\n",
+            base["text"].as_str().unwrap()
+        );
+        let result = apply(
+            &session,
+            &base_hash,
+            vec![("p.cic", &new_text)],
+            "add a ball",
+        )
+        .unwrap();
+        session.wait_idle();
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["history"]["depth"], 1);
+        assert_eq!(result["text_hash"], file_hash(&pipeline));
+        assert_eq!(std::fs::read_to_string(&pipeline).unwrap(), new_text);
+        let msgs = texts(&drain(&mut rx));
+        let deltas: Vec<_> = msgs.iter().filter(|m| m["type"] == "delta").collect();
+        assert_eq!(deltas.len(), 1, "{msgs:?}");
+        assert_eq!(deltas[0]["payload"]["source"]["label"], "add a ball");
+        assert_eq!(
+            deltas[0]["payload"]["source"]["client"],
+            serde_json::Value::Null
+        );
+        assert_eq!(deltas[0]["payload"]["dirty"], serde_json::json!(["ball"]));
+        assert_eq!(deltas[0]["payload"]["history"]["undo_label"], "add a ball");
+        let state = session.debug_state(false);
+        assert_eq!(state["statuses"]["ball"]["state"], "done");
+        assert_eq!(
+            state["ops"][0]["actor"],
+            serde_json::json!({"kind": "agent", "prompt": "test"})
+        );
+        let hash_after = state["text_hash"].as_str().unwrap().to_owned();
+
+        // Stale base: refused with the current hash; disk untouched.
+        let error = apply(
+            &session,
+            &base_hash,
+            vec![("p.cic", "# cicada 1\nx = 1.0\n")],
+            "stale",
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), "stale_base");
+        assert_eq!(
+            error.details()["current_text_hash"],
+            hash_after,
+            "the refusal carries the hash to rebase on"
+        );
+        assert_eq!(file_hash(&pipeline), hash_after, "disk untouched");
+        assert_eq!(history_of(&session)["depth"], 1);
+        assert!(!texts(&drain(&mut rx)).iter().any(|m| m["type"] == "delta"));
+
+        // Parse error: refused with diagnostics; disk untouched. (Check
+        // diagnostics — an unknown name — are NOT a refusal: red is a valid
+        // state.)
+        let error = apply(
+            &session,
+            &hash_after,
+            vec![("p.cic", "# cicada 1\nx = (1.0\n")],
+            "broken",
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), "parse_error");
+        let diagnostics = error.details()["diagnostics"].as_array().unwrap().clone();
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0]["span"]["line"], 2);
+        assert_eq!(file_hash(&pipeline), hash_after);
+        let error = apply(
+            &session,
+            &hash_after,
+            vec![("p.cic", "a = 1.0\n")],
+            "no pragma",
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            "parse_error",
+            "a missing pragma is a parse problem"
+        );
+        let red = apply(
+            &session,
+            &hash_after,
+            vec![("p.cic", "# cicada 1\nx = add(a=nope, b=1.0)\n")],
+            "red is fine",
+        )
+        .unwrap();
+        session.wait_idle();
+        assert_eq!(red["history"]["depth"], 2);
+        assert_eq!(session.debug_state(false)["statuses"]["x"]["state"], "red");
+        let hash_red = red["text_hash"].as_str().unwrap().to_owned();
+        drain(&mut rx);
+
+        // Disallowed paths: anything but this pipeline, its sidecar, or
+        // scripts/*.py beside it — refused before any write.
+        for bad in [
+            "other.cic",
+            "../p.cic",
+            "/p.cic",
+            "C:/p.cic",
+            "sub\\p.cic",
+            "scripts/x.txt",
+            "scripts/sub/x.py",
+            "x.py",
+            "p.cic.layout.json.bak",
+            "",
+        ] {
+            let error = apply(&session, &hash_red, vec![(bad, "")], "bad path").unwrap_err();
+            assert_eq!(error.kind(), "path_not_allowed", "`{bad}`: {error}");
+        }
+        // A duplicate path is a protocol error; a sidecar that does not
+        // parse is a parse error.
+        let error = apply(
+            &session,
+            &hash_red,
+            vec![("p.cic", "# cicada 1\n"), ("p.cic", "# cicada 1\n")],
+            "dup",
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), "protocol");
+        let error = apply(
+            &session,
+            &hash_red,
+            vec![("p.cic.layout.json", "{not json")],
+            "bad sidecar",
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), "parse_error");
+        assert_eq!(
+            file_hash(&pipeline),
+            hash_red,
+            "nothing refused touched the disk"
+        );
+        assert!(!Sidecar::path_for(&pipeline).exists());
+        assert_eq!(history_of(&session)["depth"], 2);
+
+        // Text + sidecar together; then undo restores both.
+        let sidecar_text = Sidecar {
+            overrides: [(
+                "x".to_owned(),
+                crate::sidecar::Override {
+                    cell: Some([5, 5]),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        }
+        .render();
+        apply(
+            &session,
+            &hash_red,
+            vec![
+                ("p.cic", "# cicada 1\nx = 2.0\n"),
+                ("p.cic.layout.json", &sidecar_text),
+            ],
+            "text + layout",
+        )
+        .unwrap();
+        session.wait_idle();
+        assert_eq!(
+            std::fs::read_to_string(Sidecar::path_for(&pipeline)).unwrap(),
+            sidecar_text,
+            "the sidecar bytes are written as given"
+        );
+        let nodes = session.debug_state(false)["graph"]["nodes"].clone();
+        let x = nodes
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["name"] == "x")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            x["cell"],
+            serde_json::json!([5, 5]),
+            "and the view reads them"
+        );
+        assert_eq!(history_of(&session)["depth"], 3);
+        session.handle(id, None, ClientMessage::Undo {});
+        session.wait_idle();
+        assert_eq!(
+            std::fs::read_to_string(&pipeline).unwrap(),
+            "# cicada 1\nx = add(a=nope, b=1.0)\n"
+        );
+        assert!(
+            !Sidecar::path_for(&pipeline).exists(),
+            "the sidecar went back to empty → no file"
+        );
+        // The watcher's echo of our own writes is still a no-op.
+        assert!(!session.reload_from_disk("echo", false).unwrap());
+    }
+
+    #[test]
+    fn apply_text_restores_the_earlier_files_when_a_later_write_fails() {
+        let (_dir, config) = project("# cicada 1\na = 1.0\n");
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let _client = session.connect(tx);
+        let before_hash = file_hash(&pipeline);
+        let before_text = std::fs::read_to_string(&pipeline).unwrap();
+        // Fault injection: the second target's TEMP path is a directory, so
+        // its atomic write fails after the first file (the .cic) already
+        // landed — the mid-way failure the rollback exists for.
+        let sidecar_path = Sidecar::path_for(&pipeline);
+        let sidecar_tmp = pipeline
+            .parent()
+            .unwrap()
+            .join(".p.cic.layout.json.cicada-tmp");
+        std::fs::create_dir(&sidecar_tmp).unwrap();
+        let sidecar_text = Sidecar {
+            overrides: [(
+                "a".to_owned(),
+                crate::sidecar::Override {
+                    cell: Some([1, 1]),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        }
+        .render();
+        let error = apply(
+            &session,
+            &before_hash,
+            vec![
+                ("p.cic", "# cicada 1\na = 2.0\n"),
+                ("p.cic.layout.json", &sidecar_text),
+            ],
+            "two files",
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), "io_error");
+        assert!(
+            error
+                .to_string()
+                .contains("1 file(s) written before it were restored"),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&pipeline).unwrap(),
+            before_text,
+            "the .cic went back to its bytes"
+        );
+        assert_eq!(file_hash(&pipeline), before_hash);
+        assert!(!sidecar_path.exists(), "the sidecar was never created");
+        std::fs::remove_dir(&sidecar_tmp).unwrap();
+        let leftovers: Vec<String> = std::fs::read_dir(pipeline.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains("cicada-tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "no temp files linger: {leftovers:?}");
+        let state = session.debug_state(false);
+        assert_eq!(state["text"], before_text, "memory untouched");
+        assert_eq!(state["text_hash"], before_hash);
+        assert_eq!(state["history"]["depth"], 0, "no op recorded");
+        assert!(
+            !texts(&drain(&mut rx)).iter().any(|m| m["type"] == "delta"),
+            "no delta"
+        );
+        // A target that IS a directory is refused before any write (its
+        // pre-read fails) — loud io_error, disk and memory untouched.
+        std::fs::create_dir(&sidecar_path).unwrap();
+        let error = apply(
+            &session,
+            &before_hash,
+            vec![
+                ("p.cic", "# cicada 1\na = 2.0\n"),
+                ("p.cic.layout.json", &sidecar_text),
+            ],
+            "dir target",
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), "io_error");
+        assert_eq!(file_hash(&pipeline), before_hash, "nothing written");
+        std::fs::remove_dir(&sidecar_path).unwrap();
+        // The session is healthy afterwards: a normal apply still works
+        // once the obstacles are gone.
+        apply(
+            &session,
+            &before_hash,
+            vec![("p.cic", "# cicada 1\na = 3.0\n")],
+            "ok",
+        )
+        .unwrap();
+        assert!(
+            std::fs::read_to_string(&pipeline)
+                .unwrap()
+                .contains("a = 3.0")
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // add a script node, echo guard, undo, a broken script — one fixture
+    fn apply_text_with_a_script_reloads_the_catalog_without_clearing_the_log() {
+        // Python 3 on PATH is a dev/CI requirement (as for scripts.rs).
+        let (_dir, config) = project("# cicada 1\na = 2.0\n");
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        // One human op first: it must survive the script reload.
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetParam {
+                node: "a".into(),
+                port: None,
+                value: "3.0".into(),
+            },
+        );
+        session.wait_idle();
+        drain(&mut rx);
+        let base = session.edit_text()["text_hash"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let script = "import cicada\n\n\
+                      @cicada.node(title=\"Triple\", description=\"x times three.\")\n\
+                      def triple(x: \"Number\") -> \"Number\":\n    return x * 3.0\n";
+        assert!(
+            !session.catalog_value()["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|n| n["name"] == "triple")
+        );
+        let result = apply(
+            &session,
+            &base,
+            vec![
+                ("scripts/triple.py", script),
+                ("p.cic", "# cicada 1\na = 3.0\nt = triple(x=a)\n"),
+            ],
+            "add a script node",
+        )
+        .unwrap();
+        session.wait_idle();
+        assert_eq!(
+            result["history"]["depth"], 2,
+            "the earlier op is still there"
+        );
+        assert!(
+            session.catalog_value()["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|n| n["name"] == "triple"),
+            "the catalog reloaded with the new script node"
+        );
+        let msgs = texts(&drain(&mut rx));
+        let snapshots: Vec<_> = msgs.iter().filter(|m| m["type"] == "snapshot").collect();
+        assert_eq!(
+            snapshots.len(),
+            1,
+            "a scripts change hydrates via ONE snapshot: {msgs:?}"
+        );
+        assert_eq!(snapshots[0]["payload"]["barrier"], false, "not a barrier");
+        assert_eq!(snapshots[0]["payload"]["history"]["depth"], 2);
+        assert!(!msgs.iter().any(|m| m["type"] == "delta"));
+        let state = session.debug_state(false);
+        assert_eq!(
+            state["statuses"]["t"]["state"], "done",
+            "{}",
+            state["statuses"]
+        );
+        assert_eq!(state["ops"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            std::fs::read_to_string(pipeline.parent().unwrap().join("scripts/triple.py")).unwrap(),
+            script
+        );
+        // The watcher's rescan for our own script write is recognised as
+        // an echo — NOT a barrier.
+        assert!(
+            !session
+                .reload_from_disk("watcher echo (script)", true)
+                .unwrap(),
+            "our own script write must not reload (that would clear the log)"
+        );
+        assert_eq!(history_of(&session)["depth"], 2);
+        // Undo restores the text (the script file stays: the snapshot is
+        // text + sidecar by the ledger row); the op log still counts it.
+        session.handle(id, None, ClientMessage::Undo {});
+        session.wait_idle();
+        assert_eq!(
+            std::fs::read_to_string(&pipeline).unwrap(),
+            "# cicada 1\na = 3.0\n"
+        );
+        assert_eq!(history_of(&session)["can_redo"], true);
+        // A script that does not describe is a parse failure of the edit:
+        // refused, the files restored (the broken script is gone again).
+        let base = session.edit_text()["text_hash"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let error = apply(
+            &session,
+            &base,
+            vec![("scripts/broken.py", "def (:\n")],
+            "broken script",
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), "parse_error", "{error}");
+        assert!(
+            !pipeline
+                .parent()
+                .unwrap()
+                .join("scripts/broken.py")
+                .exists(),
+            "the broken script was removed again"
+        );
+        assert!(
+            pipeline
+                .parent()
+                .unwrap()
+                .join("scripts/triple.py")
+                .exists(),
+            "the good one stays"
+        );
+        assert_eq!(history_of(&session)["depth"], 1);
     }
 }

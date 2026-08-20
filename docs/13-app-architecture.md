@@ -46,7 +46,8 @@ The edit flow is **intent → authoritative delta**:
 1. The client sends a gesture-level intent matching doc 10's
    round-trip table: `place_node`, `connect`, `accept_lift`,
    `set_param`, `rename`, `delete_node`, `move_node` (layout),
-   `undo`, `redo`, …
+   `undo`, `redo`, `batch` (several gestures as one op), `apply_text`
+   (whole files, agents) — see §Undo/redo for the last four.
 2. The engine validates against the checker, applies the edit to the
    text/sidecar (doc 10 writer discipline), assigns it a sequence
    number, and broadcasts the **delta**: graph view-model changes +
@@ -143,6 +144,8 @@ with near-zero server traffic. `clock` is the unbounded escape hatch
 | `GET /api/project` | Pipelines, scripts, dirty/git status summary |
 | `GET /api/blob/{hash}` | Large payloads on demand (full inspector data, export previews) |
 | `POST /api/run/{node}` | Effectful nodes — requires the explicit-run confirmation, streams progress over the session socket |
+| `GET /api/edit/text` | `{path, text, text_hash}` — the base an agent reads before editing (§Undo/redo) |
+| `POST /api/edit/apply_text` | The atomic whole-file edit for agents / MCP (JSON body = the `apply_text` intent payload; same error kinds as the socket: 409 `stale_base`, 422 `parse_error` / `path_not_allowed`, 500 `io_error`). Applies even while a human holds the writer lease — the agent acts for the user; the delta reaches every client |
 | `GET /api/git/…` | Status, node-level diff, commit, per-node history (doc 10 git integration) |
 | `GET /debug/state`, `GET /debug/screenshot` | The agent/dev verification loop (doc 14). `state` (`?pipeline=&values=&wait=`) is the authoritative JSON oracle — graph view-model, text, statuses, summary, per-output display stats with bounds/triangles, lease, and `timings` (the last 1,024 generations: kind, `queued_ms` intent-arrival → start, `elapsed_ms`, `cancelled`, computed/cached counts, frame bytes, and `cancel_to_idle_ms` on a generation Esc ended — measured server-side, poll-free; the doc-15 measurement currency); `screenshot` (`?target=viewport`) asks a connected client to render the WebGL viewport to PNG (503 when no client is connected — loud, never blank; whole-page shots are Playwright's job) |
 | `GET /health` | Readiness (no token) — Playwright's `webServer` waits on it |
@@ -187,7 +190,15 @@ not rendered), per-element frame ranges, and an auto-layout beyond
   2026-08-19: snapshots, not per-gesture inverse edits; any change from
   any source is one op, so new gestures are undoable for free).
   Sidecar-only ops (node moves, preview toggles) are undo steps;
-  effectful runs are non-undoable and say so.
+  effectful runs are non-undoable and say so. *(Live, v0.1:
+  `session.rs` `OpLog` — `VecDeque<Op {id, label, actor, before, after,
+  at}>` with a cursor, cap 200, the `before`/`after` pair so redo is a
+  restore too; `actor` serializes as `{"kind":"human"}` /
+  `{"kind":"agent","prompt":…}`; `at` is server-monotonic ms. Every
+  `delta` and `snapshot` carries `history {can_undo, can_redo,
+  undo_label, redo_label, depth}`; `/debug/state` adds `history` and
+  `ops: [{id, label, actor, at}]`. `param_preview` and
+  `POST /api/run/{node}` never push an op.)*
 - Continuous gestures coalesce: a slider drag or node drag is one op,
   created on release.
 - An agent inference's graph edits apply as **one atomic labeled op**
@@ -201,9 +212,31 @@ not rendered), per-element frame ranges, and an auto-layout beyond
   external agent (MCP) MUST use this route; a direct disk write is the
   external-change path below (barrier, stack cleared). Rebase onto a
   moved base is a later refinement — v0.1 refuses and the agent
-  re-reads.
+  re-reads. *(Live, v0.1, as two intents: **`batch {ops, label}`** for
+  the canvas — a list of write gestures applied in order under the
+  lock, all or nothing, the error naming the failing `index`; and
+  **`apply_text {base_text_hash, files: [{path, text}], label, actor}`**
+  for agents — paths are project-relative and limited to this
+  pipeline's `.cic`, its `.cic.layout.json`, and `scripts/*.py` beside
+  it (`path_not_allowed` otherwise); refusals are `stale_base` (carries
+  `current_text_hash`), `parse_error` (carries `diagnostics`), and
+  `io_error` (a later file failed to land → the earlier ones were
+  restored). A scripts change reloads the catalog and hydrates clients
+  with a non-barrier `snapshot` instead of a delta — the log is NOT
+  cleared. The HTTP pair: **`GET /api/edit/text`** → `{path, text,
+  text_hash}` is the base to read, **`POST /api/edit/apply_text`**
+  (JSON body = the intent payload) applies it — and it applies even
+  while a human holds the writer lease, because the agent acts FOR the
+  user; the resulting delta reaches every connected client. Status
+  codes: 409 `stale_base`, 422 `parse_error` / `path_not_allowed`, 500
+  `io_error`, 400 for a malformed body.)*
 - `undo`/`redo` are ordinary intents; the engine applies the inverse
-  edit and broadcasts the delta like any other change.
+  edit and broadcasts the delta like any other change. *(Live:
+  `undo {}` / `redo {}` — lease-gated writes that restore the op's
+  `before` / `after` snapshot through the normal persist + delta path,
+  labelled `undo: <label>` / `redo: <label>`; an empty side refuses
+  with `nothing_to_undo` / `nothing_to_redo` and says why — no edits
+  yet, everything already undone, or cleared by the reload barrier.)*
 - **Undo never recomputes** — the restored state's node keys are warm
   in the content-addressed cache (doc 12).
 - The log is ephemeral (cleared on serve restart); git is the durable

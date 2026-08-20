@@ -20,7 +20,8 @@ IS the byte-exact frame spec.
 | Binary frames | `crates/cicada-server/src/frames.rs` (encoder + decoder + tests) | `web/src/protocol/frames.ts` (+ vitest) |
 | Frame construction from values, pick ids, summaries | `crates/cicada-server/src/display.rs` | `web/src/viewport/*` (consumer) |
 | Intents → text edits, statuses, display set | `crates/cicada-server/src/session.rs` | `web/src/state/store.ts` (`applyServerMessage`) |
-| Routes, auth, WS loop, debug endpoints | `crates/cicada-server/src/http.rs` | `web/src/state/connection.ts` |
+| Undo/redo op log (`undo`, `redo`, `batch`, `apply_text`; `history` on delta/snapshot; `error` details `current_text_hash` / `diagnostics` / `index`) | `session.rs` (`OpLog`, `apply_gesture` → `commit`, `apply_text`), `protocol.rs` (`Actor`, `HistoryView`, `ApplyTextRequest`) | `store.ts` (history state), the toolbar/keymap consumers |
+| Routes, auth, WS loop, debug endpoints (`/api/edit/text`, `/api/edit/apply_text` included) | `crates/cicada-server/src/http.rs` | `web/src/state/connection.ts` |
 
 ## Checklist
 
