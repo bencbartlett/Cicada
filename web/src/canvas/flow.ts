@@ -16,6 +16,8 @@ export type CanvasNode = Node<CanvasNodeData, "cicada">;
 
 export interface CanvasEdgeData extends Record<string, unknown> {
   wire: WireView;
+  /** One end is a `#off` ghost: drawn dimmed (the ghost keeps its wiring). */
+  ghost: boolean;
 }
 export type CanvasEdge = Edge<CanvasEdgeData, "cicada">;
 
@@ -75,6 +77,9 @@ export function buildNodes(
 
 /** Graph → React Flow edges (one per wire; ids are the server's wire ids). */
 export function buildEdges(graph: GraphView, selectedWire: string | null): CanvasEdge[] {
+  // A wire into a `#off` ghost is drawn ghosted too (the ghost keeps its
+  // wiring); a wire OUT of one is red already — the server says why.
+  const ghosts = new Set(graph.nodes.filter((n) => n.kind === "disabled").map((n) => n.name));
   return graph.wires.map((wire) => ({
     id: wire.id,
     type: "cicada",
@@ -82,7 +87,7 @@ export function buildEdges(graph: GraphView, selectedWire: string | null): Canva
     sourceHandle: wire.from.port,
     target: wire.to.node,
     targetHandle: wire.to.port,
-    data: { wire },
+    data: { wire, ghost: ghosts.has(wire.to.node) || ghosts.has(wire.from.node) },
     selected: wire.id === selectedWire,
     // A wire is deleted by dragging an end off any handle, never by a
     // local remove: the server owns the graph.

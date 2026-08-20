@@ -151,6 +151,12 @@ export interface Diagnostic {
 
 // ------------------------------------------------------------ view-model --
 
+/**
+ * What a node renders as. `disabled` = a `#off` ghost: when its body parses
+ * the view keeps `func`, `inputs`, `outputs`, `param` and its wires — only
+ * the kind (and the `excluded` reason) says it is off; a body that does not
+ * parse is a port-less ghost showing its text.
+ */
 export type NodeKind = "call" | "literal" | "expression" | "broken" | "disabled";
 
 export interface WireEnd {
@@ -384,6 +390,13 @@ export type GestureMessage =
   | { type: "set_param"; payload: { node: string; port?: string | null; value: string } }
   | { type: "rename"; payload: { node: string; new: string } }
   | { type: "delete_node"; payload: { node: string } }
+  /**
+   * Toggle `#off` on a node (docs/10 gesture table): a live statement
+   * becomes a ghost — ports and wiring intact, skipped in solves, downstream
+   * red as "disabled" — and a ghost becomes live again (usually a cache
+   * hit). The server labels the delta `disable x` / `enable x`.
+   */
+  | { type: "toggle_disable"; payload: { node: string } }
   | { type: "move_node"; payload: { node: string; cell?: [number, number] | null } }
   | { type: "set_preview"; payload: { node: string; on?: boolean | null } };
 
@@ -447,6 +460,7 @@ export function isGesture(message: ClientMessage): message is GestureMessage {
     case "set_param":
     case "rename":
     case "delete_node":
+    case "toggle_disable":
     case "move_node":
     case "set_preview":
       return true;

@@ -23,6 +23,7 @@ const gestures: GestureMessage[] = [
   { type: "set_param", payload: { node: "s", port: "value", value: "2.0" } },
   { type: "rename", payload: { node: "a", new: "c" } },
   { type: "delete_node", payload: { node: "a" } },
+  { type: "toggle_disable", payload: { node: "a" } },
   { type: "move_node", payload: { node: "a", cell: [1, 2] } },
   { type: "set_preview", payload: { node: "a", on: true } },
 ];

@@ -13,7 +13,6 @@ import { canWrite, nodeByName, useCicada, writeBlockReason } from "./state/store
 import { viewportApi } from "./viewport/api";
 
 const NOT_YET = {
-  disable: "disable arrives with #off support (v0.1)",
   group: "groups arrive later",
   transport: "transport arrives with time params",
   commit: "commit dialog arrives with the git panel — every op is already saved",
@@ -195,8 +194,30 @@ export function handleHotkey(event: KeyboardEvent): boolean {
     return true;
   }
 
+  // `D`: toggle `#off` on the selection (docs/16 keyboard map; DECISIONS.md
+  // node-disable row). A multi-selection is ONE op (a `batch`) so one
+  // Ctrl+Z flips them all back; each node toggles its own way.
   if (key === "d" || key === "D") {
-    notice("info", NOT_YET.disable);
+    if (selected.length === 0) {
+      notice("info", "select a node to disable or enable it");
+      return true;
+    }
+    if (needsLease("toggle disable")) return true;
+    const ops: GestureMessage[] = [];
+    let off = 0;
+    for (const name of selected) {
+      const node = nodeByName(state.graph, name);
+      if (node === undefined) continue;
+      if (node.kind === "broken") {
+        notice("info", `\`${name}\` does not parse — fix the line before disabling it`);
+        continue;
+      }
+      if (node.kind === "disabled") off += 1;
+      ops.push({ type: "toggle_disable", payload: { node: name } });
+    }
+    if (ops.length === 0) return true;
+    const verb = off === ops.length ? "enable" : off === 0 ? "disable" : "toggle";
+    state.send(asOneOp(ops, `${verb} ${ops.length} nodes`));
     return true;
   }
   // Space reaches here only from `useKeyboard`'s keyup path (see below):

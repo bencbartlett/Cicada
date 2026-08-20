@@ -118,6 +118,7 @@ function NodeInspect({ name, extra }: { name: string; extra: number }) {
   }
 
   const displayable = node.outputs.some((o) => o.displayable);
+  const off = node.kind === "disabled";
   const stale = values !== undefined && values.generation < generation;
 
   const rename = () => {
@@ -127,6 +128,7 @@ function NodeInspect({ name, extra }: { name: string; extra: number }) {
   };
   const remove = () => send({ type: "delete_node", payload: { node: name } });
   const togglePreview = () => send({ type: "set_preview", payload: { node: name, on: !node.preview } });
+  const toggleDisable = () => send({ type: "toggle_disable", payload: { node: name } });
   const run = async () => {
     setRunBusy(true);
     useCicada.getState().clearRunNotice();
@@ -219,7 +221,14 @@ function NodeInspect({ name, extra }: { name: string; extra: number }) {
         <h3 className="insp-h">inputs</h3>
         {node.inputs.length === 0 && <div className="faint">no inputs</div>}
         {node.inputs.map((input) => (
-          <InputRow key={input.name} node={name} input={input} writer={writer} onSelect={(n) => selectNodes([n])} />
+          <InputRow
+            key={input.name}
+            node={name}
+            input={input}
+            // A `#off` ghost takes no in-place edits (enable it first).
+            writer={writer && !off}
+            onSelect={(n) => selectNodes([n])}
+          />
         ))}
       </section>
 
@@ -281,12 +290,20 @@ function NodeInspect({ name, extra }: { name: string; extra: number }) {
             </button>
           )}
           <button
-            disabled={!writer || !displayable}
-            title={displayable ? "toggle viewport preview (P)" : "no displayable output"}
+            disabled={!writer || !displayable || off}
+            title={off ? "disabled (#off) — enable it first" : displayable ? "toggle viewport preview (P)" : "no displayable output"}
             onClick={togglePreview}
             data-testid="action-preview"
           >
             {node.preview ? "hide preview" : "show preview"}
+          </button>
+          <button
+            disabled={!writer || node.kind === "broken"}
+            title={off ? "remove the #off prefix (D)" : "prefix the statement with #off (D)"}
+            onClick={toggleDisable}
+            data-testid="action-disable"
+          >
+            {off ? "enable" : "disable"}
           </button>
           <button disabled={!writer} onClick={rename} data-testid="action-rename">
             rename

@@ -245,17 +245,78 @@ describe("handleHotkey", () => {
     ]);
   });
 
+  it("D toggles #off on ONE selected node as itself, on several as one batch labelled by the direction", () => {
+    expect(handleHotkey(key("d"))).toBe(true);
+    expect(sent).toEqual([]);
+    expect(useCicada.getState().notices.at(-1)?.message).toMatch(/select a node to disable/);
+    useCicada.getState().selectNodes(["a"]);
+    expect(handleHotkey(key("d"))).toBe(true);
+    expect(sent).toEqual([{ type: "toggle_disable", payload: { node: "a" } }]);
+    sent = [];
+    // Two live nodes → `disable 2 nodes`; one Ctrl+Z flips both back.
+    useCicada.getState().selectNodes(["a", "b"]);
+    expect(handleHotkey(key("D"))).toBe(true);
+    expect(sent).toEqual([
+      {
+        type: "batch",
+        payload: {
+          label: "disable 2 nodes",
+          ops: [
+            { type: "toggle_disable", payload: { node: "a" } },
+            { type: "toggle_disable", payload: { node: "b" } },
+          ],
+        },
+      },
+    ]);
+    sent = [];
+    // All ghosts → `enable N nodes`; a mix → `toggle N nodes`; a broken line
+    // is skipped with a notice (there is nothing to prefix).
+    useCicada.setState({
+      graph: {
+        ...useCicada.getState().graph,
+        nodes: [
+          fakeNode("a", { kind: "disabled" }),
+          fakeNode("b", { kind: "disabled" }),
+          fakeNode("c"),
+          fakeNode("x", { kind: "broken", func: undefined, inputs: [], outputs: [] }),
+        ],
+      },
+    });
+    useCicada.getState().selectNodes(["a", "b"]);
+    expect(handleHotkey(key("d"))).toBe(true);
+    expect((sent.at(-1) as { payload: { label: string } }).payload.label).toBe("enable 2 nodes");
+    useCicada.getState().selectNodes(["a", "c", "x"]);
+    expect(handleHotkey(key("d"))).toBe(true);
+    expect(sent.at(-1)).toEqual({
+      type: "batch",
+      payload: {
+        label: "toggle 2 nodes",
+        ops: [
+          { type: "toggle_disable", payload: { node: "a" } },
+          { type: "toggle_disable", payload: { node: "c" } },
+        ],
+      },
+    });
+    expect(useCicada.getState().notices.at(-1)?.message).toMatch(/`x` does not parse/);
+    // A write: observers get the notice, no intent.
+    sent = [];
+    useCicada.setState({ role: "observer" });
+    useCicada.getState().selectNodes(["c"]);
+    expect(handleHotkey(key("d"))).toBe(true);
+    expect(sent).toEqual([]);
+    expect(useCicada.getState().notices.at(-1)?.message).toMatch(/read-only observer — take the lease to toggle disable/);
+  });
+
   it("deferred features answer with a notice and consume the key", () => {
     for (const [k, mods] of [
       ["g", { ctrlKey: true }],
       ["s", { ctrlKey: true }],
-      ["d", {}],
       [" ", {}],
     ] as [string, Partial<KeyboardEvent>][]) {
       expect(handleHotkey(key(k, mods))).toBe(true);
     }
     expect(sent).toEqual([]);
-    expect(useCicada.getState().notices.length).toBe(4);
+    expect(useCicada.getState().notices.length).toBe(3);
   });
 
   it("leaves unknown keys alone", () => {

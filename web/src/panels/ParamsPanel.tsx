@@ -77,17 +77,27 @@ function ParamRow({
   selected: boolean;
   onSelect: () => void;
 }) {
+  // A `#off` ghost keeps its widget for the eye but takes no edits (the
+  // writer refuses them by name): the row is dimmed and says so.
+  const off = node.kind === "disabled";
   return (
-    <div className={`param-row${selected ? " selected" : ""}`} data-testid={`param-${node.name}`}>
-      <span className="param-name" title={node.text} onClick={onSelect}>
+    <div
+      className={`param-row${selected ? " selected" : ""}${off ? " param-off" : ""}`}
+      data-testid={`param-${node.name}`}
+    >
+      <span
+        className="param-name"
+        title={off ? `${node.text}\ndisabled (#off) — enable it to edit` : node.text}
+        onClick={onSelect}
+      >
         {node.name}
         <small>
-          {node.func ?? node.kind}
-          {param.port !== undefined ? `.${param.port}` : ""}
+          {off ? "disabled (#off)" : (node.func ?? node.kind)}
+          {!off && param.port !== undefined ? `.${param.port}` : ""}
         </small>
       </span>
       <span className="param-widget">
-        <ParamWidget node={node} param={param} disabled={!writer} />
+        <ParamWidget node={node} param={param} disabled={!writer || off} />
       </span>
     </div>
   );

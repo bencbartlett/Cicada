@@ -531,7 +531,13 @@ function CanvasInner() {
               state.updateSettings({ textPanel: true });
             },
           },
-          { label: "disable", separator: true, onClick: notice("disable arrives with #off support (v0.1)") },
+          {
+            label: view.kind === "disabled" ? "enable" : "disable",
+            separator: true,
+            hint: "D",
+            disabled: view.kind === "broken",
+            onClick: () => sendWrite({ type: "toggle_disable", payload: { node: view.name } }),
+          },
           { label: "isolate", onClick: notice("isolate arrives later") },
           { label: "history", onClick: notice("per-node history arrives with the git panel (doc 10)") },
           {

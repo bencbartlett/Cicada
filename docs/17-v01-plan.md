@@ -15,7 +15,7 @@ runs in parallel from day 1:
 | # | Item | Track | Size | Status |
 |---|---|---|---|---|
 | 0 | Fold `corpus/` into `examples/wall/` + `tools/`; this plan | foreground | hours | **in progress** |
-| 1 | Undo/redo — snapshot op log + atomic `batch` path; riders `#off`, Backspace-no-delete | foreground (server/web) | days | pending |
+| 1 | Undo/redo — snapshot op log + atomic `batch` path; riders `#off`, Backspace-no-delete | foreground (server/web) | days | **done on `wt/undo`** (2026-08-20; merge pending) |
 | 2 | Git panel slice 1 — status strip, per-node change markers, commit, revert-to-HEAD | foreground (server/web) | ~1 week | pending |
 | P | OCCT probe — prebuilt 7.8.x build/link on win/mac/linux, determinism, timings, license, CI shape | parallel worktree | hours, cap 1 day | pending |
 | 3 | OCCT-backed Solid — the `Solid` kind, primitives/extrude/loft/revolve/sweep, booleans, `tessellate`, STEP; `mesh_*` renames in the same commit | main geometry track from week 3 | weeks | pending (gated on P) |
@@ -89,6 +89,14 @@ Design: DECISIONS.md rows 37 (revised 2026-08-19) and doc 13 §Undo.
   barrier is refused with the documented reason; Playwright: delete a
   node, `Ctrl+Z`, the node and its wires are back and the solved state
   is a cache hit (`/debug/state` shows `cached` for its outputs).
+- **Shipped** (2026-08-20, `wt/undo`): all of the above plus the review
+  riders — `Ctrl+Z` reaches the map from a focused slider (a range input
+  is a control, not text entry), the one-op canvas gestures
+  (multi-drag, target-anchor rewire) have Playwright coverage, a held
+  `Ctrl+Z` past an empty side does not flood the notices — and `#off`:
+  `writer::toggle_disable`, the `toggle_disable` intent, the ports-intact
+  ghost (a `Line::Disabled` carries its parse), `D` / the node menu / the
+  inspector action, `web/e2e/disable.spec.ts`.
 
 ## Item 2 — git panel slice 1 (~1 week)
 

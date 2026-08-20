@@ -172,17 +172,21 @@ hypothetical wire on a scratch copy — no second copy of the type lattice
 in TypeScript; cost is one re-check per candidate port — fine at the
 wall's ~10-node scale, an incremental checker's job beyond). Persisted
 writes are atomic (temp file + rename) and a refused or failed gesture
-rolls the in-memory document back to what is on disk. Not in the spike:
-undo/redo (no op log yet — the ledger row stands, the log arrives with
-v0.1), transport, git routes, `/api/blob` beyond value summaries,
-reconnect replay (a reconnect is a fresh session join: one hydration
-path — the client retries with backoff and re-hydrates), the
-cost-model's compute-on-release degrade for expensive cones and scrub
-caching (every drag solves latest-wins; a slow cone simply shows
-progress), `#off` node disable and groups (their keyboard rows notice
-loudly), the sidecar's `port_order`/`color`/`collapsed` keys (carried,
-not rendered), per-element frame ranges, and an auto-layout beyond
-"layer by dependency depth, stack in definition order".
+rolls the in-memory document back to what is on disk. Shipped with
+v0.1 item 1 (2026-08-20): undo/redo over the snapshot op log (§Undo/redo
+below), the `batch` and `apply_text` paths, and `#off` node disable
+(`toggle_disable`: the view-model renders a parsed `#off` line as the
+node it is — ports, literals and wires intact — with `kind: disabled`
+and the `disabled (`#off`)` exclusion; its downstream is red with the
+disabled node NAMED). Still not in: transport, git routes, `/api/blob`
+beyond value summaries, reconnect replay (a reconnect is a fresh
+session join: one hydration path — the client retries with backoff and
+re-hydrates), the cost-model's compute-on-release degrade for expensive
+cones and scrub caching (every drag solves latest-wins; a slow cone
+simply shows progress), groups (their keyboard rows notice loudly), the
+sidecar's `port_order`/`color`/`collapsed` keys (carried, not rendered),
+per-element frame ranges, and an auto-layout beyond "layer by
+dependency depth, stack in definition order".
 
 ## Undo/redo (formalizing the ledger row)
 
