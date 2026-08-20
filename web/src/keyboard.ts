@@ -1,9 +1,11 @@
 /**
  * The keyboard map (docs/16 §Keyboard map). One window `keydown` listener;
- * events from inputs / textareas / contenteditable / `data-no-hotkeys`
- * subtrees are ignored so typing never triggers gestures. Every handled
- * key is a gesture-level intent through the store's `send`; nothing here
- * mutates authoritative state.
+ * events from text-entry surfaces (text inputs / textareas / selects /
+ * contenteditable / `data-no-hotkeys` subtrees) are ignored so typing never
+ * triggers gestures; a focused non-text control (a range slider, a
+ * checkbox) keeps its plain keys but lets Ctrl chords through (`hotkeysReach`).
+ * Every handled key is a gesture-level intent through the store's `send`;
+ * nothing here mutates authoritative state.
  */
 import { useEffect } from "react";
 import { asOneOp, type GestureMessage } from "./protocol/messages";
@@ -17,14 +19,61 @@ const NOT_YET = {
   commit: "commit dialog arrives with the git panel — every op is already saved",
 } as const;
 
-/** True when the event originates in a text-entry surface (hotkeys stay off). */
+/**
+ * `<input type=…>` values that are NOT text entry: the control owns a few
+ * plain keys (arrows on a slider, Space on a checkbox) but no typed text and
+ * no Ctrl chords, so the chords reach the hotkey map (`isControlTarget`).
+ * Everything else — `text`, `number`, `search`, a missing `type`, … — is
+ * text entry and keeps every key (`isEditableTarget`).
+ */
+const NON_TEXT_INPUT_TYPES = new Set(["range", "checkbox", "radio", "button", "submit", "reset", "color", "file", "image"]);
+
+function asElement(target: EventTarget | null): HTMLElement | null {
+  if (target === null || typeof target !== "object" || !("tagName" in target)) return null;
+  return target as HTMLElement;
+}
+
+function inputType(el: HTMLElement): string {
+  const type = (el as HTMLInputElement).type;
+  return typeof type === "string" && type !== "" ? type.toLowerCase() : "text";
+}
+
+/**
+ * True when the event originates in a TEXT-ENTRY surface — an input that
+ * takes typed text, a textarea, a select, contenteditable, or a
+ * `data-no-hotkeys` subtree: hotkeys stay off entirely. A slider
+ * (`type="range"`) or a checkbox is NOT one: after a pointer drag the range
+ * input keeps focus, and treating it as text entry swallowed Ctrl+Z after
+ * the most common parametric gesture — tweak a slider, undo — silently.
+ */
 export function isEditableTarget(target: EventTarget | null): boolean {
-  if (target === null || typeof target !== "object" || !("tagName" in target)) return false;
-  const el = target as HTMLElement;
+  const el = asElement(target);
+  if (el === null) return false;
   const tag = el.tagName;
-  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (tag === "INPUT") return !NON_TEXT_INPUT_TYPES.has(inputType(el));
+  if (tag === "TEXTAREA" || tag === "SELECT") return true;
   if (el.isContentEditable) return true;
   return typeof el.closest === "function" && el.closest("[data-no-hotkeys]") !== null;
+}
+
+/**
+ * True for a focused NON-text form control (a range slider, a checkbox, a
+ * button…): its plain keys stay with the control — arrows nudge the slider,
+ * Space toggles the box — while Ctrl/Cmd chords (undo, redo, find, select
+ * all) mean nothing to it and go to the hotkey map.
+ */
+export function isControlTarget(target: EventTarget | null): boolean {
+  const el = asElement(target);
+  if (el === null) return false;
+  if (el.tagName === "INPUT") return NON_TEXT_INPUT_TYPES.has(inputType(el));
+  return el.tagName === "BUTTON";
+}
+
+/** Does a key event from `target` reach the hotkey map at all? */
+export function hotkeysReach(event: Pick<KeyboardEvent, "target" | "ctrlKey" | "metaKey">): boolean {
+  if (isEditableTarget(event.target)) return false;
+  if (isControlTarget(event.target)) return event.ctrlKey || event.metaKey;
+  return true;
 }
 
 /**
@@ -94,18 +143,17 @@ export function handleHotkey(event: KeyboardEvent): boolean {
     return true;
   }
 
-  // Undo / redo (docs/13 op log): Ctrl+Z · Ctrl+Shift+Z / Ctrl+Y. Sent
-  // even when the mirror says the side is empty — the server's refusal
-  // carries the reason (no edits yet / all undone / the reload barrier).
-  if (ctrl && (key === "z" || key === "Z")) {
-    const redo = event.shiftKey;
+  // Undo / redo (docs/13 op log): Ctrl+Z · Ctrl+Shift+Z / Ctrl+Y. A press
+  // is sent even when the mirror says the side is empty — the server's
+  // refusal carries the reason (no edits yet / all undone / the reload
+  // barrier). A key-REPEAT past an empty side is not: the first press
+  // already said so, and a held key must not flood the notices.
+  if (ctrl && ((key === "z" || key === "Z") || key === "y" || key === "Y")) {
+    const redo = key === "y" || key === "Y" || event.shiftKey;
     if (needsLease(redo ? "redo" : "undo")) return true;
+    const empty = redo ? !state.history.can_redo : !state.history.can_undo;
+    if (event.repeat && empty) return true;
     state.send({ type: redo ? "redo" : "undo", payload: {} });
-    return true;
-  }
-  if (ctrl && (key === "y" || key === "Y")) {
-    if (needsLease("redo")) return true;
-    state.send({ type: "redo", payload: {} });
     return true;
   }
   if (ctrl && (key === "g" || key === "G")) {
@@ -198,7 +246,7 @@ export function useKeyboard(): void {
     let spaceHeld = false;
     let spaceUsedForPan = false;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (isEditableTarget(event.target)) return;
+      if (!hotkeysReach(event)) return;
       if (event.isComposing) return;
       if (isSpace(event)) {
         if (!event.repeat) {
@@ -215,7 +263,9 @@ export function useKeyboard(): void {
       const tapped = spaceHeld && !spaceUsedForPan;
       spaceHeld = false;
       spaceUsedForPan = false;
-      if (!tapped || isEditableTarget(event.target)) return;
+      // A plain Space on a focused control (a checkbox, a button) is the
+      // control's: only the no-control case reaches the transport hotkey.
+      if (!tapped || isEditableTarget(event.target) || isControlTarget(event.target)) return;
       if (handleHotkey(event)) event.preventDefault();
     };
     const onPointerDown = () => {

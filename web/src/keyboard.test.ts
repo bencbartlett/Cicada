@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { handleHotkey, isEditableTarget } from "./keyboard";
+import { handleHotkey, hotkeysReach, isControlTarget, isEditableTarget } from "./keyboard";
 import type { ClientMessage, NodeView } from "./protocol/messages";
 import { useCicada } from "./state/store";
 
@@ -127,7 +127,33 @@ describe("handleHotkey", () => {
       history: { can_undo: false, can_redo: false, undo_label: null, redo_label: null, depth: 0 },
     });
     expect(handleHotkey(key("z", { ctrlKey: true }))).toBe(true);
+    expect(handleHotkey(key("y", { ctrlKey: true }))).toBe(true);
+    expect(sent).toEqual([
+      { type: "undo", payload: {} },
+      { type: "redo", payload: {} },
+    ]);
+  });
+
+  it("a key-REPEAT past an empty side sends nothing (consumed, no notice flood); a repeat with history behind it still undoes", () => {
+    useCicada.setState({
+      history: { can_undo: false, can_redo: true, undo_label: null, redo_label: "move a", depth: 0 },
+    });
+    expect(handleHotkey(key("z", { ctrlKey: true, repeat: true }))).toBe(true);
+    expect(sent).toEqual([]);
+    expect(handleHotkey(key("y", { ctrlKey: true, repeat: true }))).toBe(true);
+    expect(handleHotkey(key("Z", { ctrlKey: true, shiftKey: true, repeat: true }))).toBe(true);
+    expect(sent).toEqual([
+      { type: "redo", payload: {} },
+      { type: "redo", payload: {} },
+    ]);
+    useCicada.setState({
+      history: { can_undo: true, can_redo: false, undo_label: "move a", redo_label: null, depth: 1 },
+    });
+    sent = [];
+    expect(handleHotkey(key("z", { ctrlKey: true, repeat: true }))).toBe(true);
+    expect(handleHotkey(key("y", { ctrlKey: true, repeat: true }))).toBe(true);
     expect(sent).toEqual([{ type: "undo", payload: {} }]);
+    expect(useCicada.getState().notices).toEqual([]);
   });
 
   it("undo/redo are writes: observers and dropped sockets get the notice, no intent", () => {
@@ -238,17 +264,48 @@ describe("handleHotkey", () => {
   });
 });
 
-describe("isEditableTarget", () => {
+describe("isEditableTarget / isControlTarget / hotkeysReach", () => {
   const el = (tagName: string, extra: Record<string, unknown> = {}) =>
     ({ tagName, isContentEditable: false, closest: () => null, ...extra }) as unknown as EventTarget;
   it("is false for non-elements and plain elements", () => {
     expect(isEditableTarget(null)).toBe(false);
     expect(isEditableTarget(el("DIV"))).toBe(false);
+    expect(isControlTarget(null)).toBe(false);
+    expect(isControlTarget(el("DIV"))).toBe(false);
   });
-  it("is true for inputs, contenteditable, and data-no-hotkeys subtrees", () => {
-    expect(isEditableTarget(el("INPUT"))).toBe(true);
+  it("is true for text-entry inputs, textareas, selects, contenteditable, and data-no-hotkeys subtrees", () => {
+    expect(isEditableTarget(el("INPUT"))).toBe(true); // no `type` = text
+    expect(isEditableTarget(el("INPUT", { type: "text" }))).toBe(true);
+    expect(isEditableTarget(el("INPUT", { type: "number" }))).toBe(true);
+    expect(isEditableTarget(el("INPUT", { type: "search" }))).toBe(true);
     expect(isEditableTarget(el("TEXTAREA"))).toBe(true);
+    expect(isEditableTarget(el("SELECT"))).toBe(true);
     expect(isEditableTarget(el("DIV", { isContentEditable: true }))).toBe(true);
     expect(isEditableTarget(el("DIV", { closest: () => ({}) }))).toBe(true);
+  });
+  it("a range slider / checkbox / button is a CONTROL, not text entry (the slider kept focus after a drag and swallowed Ctrl+Z)", () => {
+    for (const type of ["range", "checkbox", "radio", "button", "submit", "color"]) {
+      expect(isEditableTarget(el("INPUT", { type })), type).toBe(false);
+      expect(isControlTarget(el("INPUT", { type })), type).toBe(true);
+    }
+    expect(isControlTarget(el("BUTTON"))).toBe(true);
+    expect(isEditableTarget(el("BUTTON"))).toBe(false);
+    expect(isControlTarget(el("INPUT", { type: "text" }))).toBe(false);
+  });
+  it("hotkeysReach: everything from the canvas, nothing from text entry, only Ctrl/Cmd chords from a control", () => {
+    const ev = (target: EventTarget | null, mods: { ctrlKey?: boolean; metaKey?: boolean } = {}) => ({
+      target,
+      ctrlKey: false,
+      metaKey: false,
+      ...mods,
+    });
+    expect(hotkeysReach(ev(el("DIV")))).toBe(true);
+    expect(hotkeysReach(ev(null))).toBe(true);
+    expect(hotkeysReach(ev(el("INPUT", { type: "text" }), { ctrlKey: true }))).toBe(false);
+    expect(hotkeysReach(ev(el("TEXTAREA"), { metaKey: true }))).toBe(false);
+    const slider = el("INPUT", { type: "range" });
+    expect(hotkeysReach(ev(slider)), "arrows on a focused slider stay the slider's").toBe(false);
+    expect(hotkeysReach(ev(slider, { ctrlKey: true })), "Ctrl+Z from a focused slider undoes").toBe(true);
+    expect(hotkeysReach(ev(slider, { metaKey: true }))).toBe(true);
   });
 });

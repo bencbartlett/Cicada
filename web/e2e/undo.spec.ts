@@ -57,8 +57,8 @@ interface DebugState {
   statuses: Record<string, { state: string; message?: string }>;
 }
 
-async function debugState(page: Page): Promise<DebugState> {
-  const response = await page.request.get(`/debug/state?token=${TOKEN}&pipeline=${PIPELINE}&wait=true`);
+async function debugState(page: Page, pipeline: string = PIPELINE): Promise<DebugState> {
+  const response = await page.request.get(`/debug/state?token=${TOKEN}&pipeline=${pipeline}&wait=true`);
   expect(response.ok(), await response.text()).toBeTruthy();
   return (await response.json()) as DebugState;
 }
@@ -96,11 +96,11 @@ async function send(page: Page, message: unknown): Promise<void> {
 }
 
 /** Wait until every output of `node` has SOLVED; returns the state word (`done` or `cached`). */
-async function solvedState(page: Page, node: string): Promise<string> {
+async function solvedState(page: Page, node: string, pipeline: string = PIPELINE): Promise<string> {
   let state = "";
   await expect
     .poll(async () => {
-      state = (await debugState(page)).statuses[node]?.state ?? "";
+      state = (await debugState(page, pipeline)).statuses[node]?.state ?? "";
       return state === "done" || state === "cached";
     })
     .toBe(true);
@@ -308,6 +308,193 @@ test("delete → Ctrl+Z restores the node, its wire and the text as a cache hit;
     depth: 2,
   });
   expect(readFileSync(FILE, "utf8")).toBe(WITH_SPHERE);
+
+  expect(errors, errors.join("\n")).toEqual([]);
+});
+
+// ---------------------------------------------------------------------------
+// The canvas gestures that go as ONE op (a `batch`) and the slider path:
+// a multi-select drag, a wire reconnect by its target anchor, and Ctrl+Z
+// straight after a slider drag (the range input must not swallow it).
+// Its own pipeline file, so the first test's history never leaks in.
+
+const GESTURES_PIPELINE = "undo-gestures.cic";
+const GESTURES_FILE = join(meta.scratch, "examples", GESTURES_PIPELINE);
+const GESTURES_START =
+  "# cicada 1\n" +
+  "size = slider(value=2.0, min=0.5, max=5.0)\n" +
+  "span = construct_domain(start=0.0, end=size)\n" +
+  "block = box(x=span, y=span, z=span)\n" +
+  "ball = sphere(radius=1.0)\n";
+const REWIRED =
+  "# cicada 1\n" +
+  "size = slider(value=2.0, min=0.5, max=5.0)\n" +
+  "span = construct_domain(start=0.0)\n" +
+  "block = box(x=span, y=span, z=span)\n" +
+  "ball = sphere(radius=size)\n";
+
+const nodeBox = (page: Page, name: string) => page.locator(`.react-flow__node[data-id='${name}']`);
+
+async function cellsOf(page: Page): Promise<Record<string, { cell: [number, number]; manual: boolean }>> {
+  const state = await debugState(page, GESTURES_PIPELINE);
+  return Object.fromEntries(state.graph.nodes.map((n) => [n.name, { cell: n.cell, manual: n.manual }]));
+}
+
+/** The live probe's verdict for `size.out → ball.radius`, or null while there is none. */
+async function probeVerdict(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const w = window as unknown as {
+      __cicada: {
+        state: () => { probe: { from: { node: string }; targets: Record<string, { verdict: string }> } | null };
+      };
+    };
+    const probe = w.__cicada.state().probe;
+    if (probe === null || probe.from.node !== "size") return null;
+    return probe.targets["ball.radius"]?.verdict ?? null;
+  });
+}
+
+async function focusedTestId(page: Page): Promise<string | null> {
+  return page.evaluate(
+    () => document.activeElement?.getAttribute("data-testid") ?? document.activeElement?.tagName ?? null,
+  );
+}
+
+test("a multi-select drag, a target-anchor rewire and a slider drag are each ONE undo step — and Ctrl+Z works right after the slider", async ({
+  page,
+}) => {
+  writeFileSync(GESTURES_FILE, GESTURES_START);
+
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`);
+  });
+
+  await page.goto(`/?token=${TOKEN}&pipeline=${GESTURES_PIPELINE}`);
+  await expect(page.getByTestId("app")).toBeVisible();
+  await expect(page.locator(".react-flow__node")).toHaveCount(4);
+  for (const node of ["size", "span", "block", "ball"]) await solvedState(page, node, GESTURES_PIPELINE);
+  const fresh = await debugState(page, GESTURES_PIPELINE);
+  expect(fresh.text).toBe(GESTURES_START);
+  expect(fresh.history.depth).toBe(0);
+  const before = await cellsOf(page);
+  expect(before["block"]?.manual, "a fresh file has auto cells").toBe(false);
+  expect(before["ball"]?.manual).toBe(false);
+
+  // ---- multi-select drag: click `block`, shift-click `ball`, drag `block`
+  // by a few cells. One op — `move 2 nodes` — and one Ctrl+Z moves both back.
+  await nodeBox(page, "block").click({ position: { x: 10, y: 8 } });
+  await nodeBox(page, "ball").click({ position: { x: 10, y: 8 }, modifiers: ["Shift"] });
+  await expect.poll(async () => (await store(page)).selection.nodes.slice().sort()).toEqual(["ball", "block"]);
+  const blockBox = await nodeBox(page, "block").boundingBox();
+  if (blockBox === null) throw new Error("no block node");
+  await page.mouse.move(blockBox.x + 10, blockBox.y + 8);
+  await page.mouse.down();
+  await page.mouse.move(blockBox.x + 10 + 90, blockBox.y + 8 + 60, { steps: 10 });
+  await page.mouse.up();
+  await expect.poll(async () => (await debugState(page, GESTURES_PIPELINE)).history.undo_label).toBe("move 2 nodes");
+  const moved = await debugState(page, GESTURES_PIPELINE);
+  expect(moved.ops.map((op) => op.label), "the drag of two selected nodes is ONE op").toEqual(["move 2 nodes"]);
+  expect(moved.history.depth).toBe(1);
+  const after = await cellsOf(page);
+  for (const name of ["block", "ball"]) {
+    expect(after[name]?.manual, `${name} has a manual cell after the drag`).toBe(true);
+    expect(after[name]?.cell, `${name} moved`).not.toEqual(before[name]?.cell);
+  }
+  const delta = (name: string) => [
+    (after[name]?.cell[0] ?? 0) - (before[name]?.cell[0] ?? 0),
+    (after[name]?.cell[1] ?? 0) - (before[name]?.cell[1] ?? 0),
+  ];
+  expect(delta("ball"), "both nodes moved by the same offset").toEqual(delta("block"));
+  expect(after["size"]?.cell).toEqual(before["size"]?.cell);
+
+  await page.keyboard.press("Control+z");
+  await expect.poll(async () => (await store(page)).lastDeltaLabel).toBe("undo: move 2 nodes");
+  const unmoved = await cellsOf(page);
+  for (const name of ["block", "ball"]) {
+    expect(unmoved[name]?.cell, `${name} is back where it was`).toEqual(before[name]?.cell);
+    expect(unmoved[name]?.manual, `${name} has its auto cell again (the sidecar snapshot came back)`).toBe(false);
+  }
+  expect((await debugState(page, GESTURES_PIPELINE)).history).toMatchObject({ depth: 0, can_redo: true });
+
+  // ---- rewire by the target anchor: drag the target end of
+  // `size.out->span.end` onto `ball.radius`. One op — connect + disconnect as
+  // a `batch` labelled `rewire …` — one wire moved; one Ctrl+Z puts it back.
+  await page.locator(".react-flow__pane").click({ position: { x: 8, y: 8 } });
+  const oldWire = page.locator(".react-flow__edge[data-id='size.out->span.end']");
+  const newWire = page.locator(".react-flow__edge[data-id='size.out->ball.radius']");
+  await expect(oldWire).toHaveCount(1);
+  const a = await oldWire.locator(".react-flow__edgeupdater-target").boundingBox();
+  if (a === null) throw new Error("no target anchor on the size→span wire");
+  const r = await page
+    .locator(".react-flow__node[data-id='ball'] .react-flow__handle.target[data-handleid='radius']")
+    .boundingBox();
+  if (r === null) throw new Error("no radius handle on ball");
+  await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(r.x + r.width / 2, r.y + r.height / 2, { steps: 12 });
+  // The gate fails closed: wait for the probe's verdict on ball.radius
+  // before dropping (a human hovers long enough; the test must too).
+  await expect.poll(async () => probeVerdict(page)).toBe("ok");
+  await page.mouse.move(r.x + r.width / 2 + 1, r.y + r.height / 2);
+  await page.mouse.up();
+  await expect.poll(async () => (await debugState(page, GESTURES_PIPELINE)).text).toBe(REWIRED);
+  const rewired = await debugState(page, GESTURES_PIPELINE);
+  expect(rewired.history.undo_label, "connect + disconnect went as one op").toBe("rewire span.end → ball.radius");
+  expect(rewired.history.depth).toBe(1);
+  expect(rewired.ops.map((op) => op.label)).toEqual(["rewire span.end → ball.radius"]);
+  expect(rewired.graph.wires.map((w) => w.id)).toContain("size.out->ball.radius");
+  expect(rewired.graph.wires.map((w) => w.id)).not.toContain("size.out->span.end");
+  await expect(newWire).toHaveCount(1);
+  await expect(oldWire).toHaveCount(0);
+
+  await page.keyboard.press("Control+z");
+  await expect.poll(async () => (await store(page)).lastDeltaLabel).toBe("undo: rewire span.end → ball.radius");
+  await expect.poll(async () => (await debugState(page, GESTURES_PIPELINE)).text).toBe(GESTURES_START);
+  await expect(oldWire).toHaveCount(1);
+  await expect(newWire).toHaveCount(0);
+  for (const node of ["size", "span", "block", "ball"]) {
+    expect(await solvedState(page, node, GESTURES_PIPELINE), `${node} after undoing the rewire`).toBe("cached");
+  }
+  expect(readFileSync(GESTURES_FILE, "utf8")).toBe(GESTURES_START);
+
+  // ---- slider drag, then Ctrl+Z WITHOUT clicking anywhere else: the range
+  // input kept the focus after the drag and used to swallow the chord.
+  const slider = page.getByTestId("slider-size");
+  await expect(slider).toBeVisible();
+  const s = await slider.boundingBox();
+  if (s === null) throw new Error("no slider");
+  await page.mouse.move(s.x + s.width * 0.3, s.y + s.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(s.x + s.width * 0.9, s.y + s.height / 2, { steps: 15 });
+  await page.mouse.up();
+  await expect
+    .poll(async () => (await debugState(page, GESTURES_PIPELINE)).text)
+    .not.toContain("size = slider(value=2.0,");
+  const dragged = await debugState(page, GESTURES_PIPELINE);
+  expect(dragged.history.depth, "a slider drag is one op on release").toBe(1);
+  expect(dragged.history.undo_label).toMatch(/^set size\.value = /);
+  const draggedLabel = dragged.history.undo_label ?? "";
+  expect(await focusedTestId(page), "the pointer release hands the focus back (Del / arrows work at once)").not.toBe(
+    "slider-size",
+  );
+
+  await page.keyboard.press("Control+z");
+  await expect.poll(async () => (await store(page)).lastDeltaLabel).toBe(`undo: ${draggedLabel}`);
+  await expect.poll(async () => (await debugState(page, GESTURES_PIPELINE)).text).toBe(GESTURES_START);
+  expect((await debugState(page, GESTURES_PIPELINE)).history).toMatchObject({ depth: 0, can_redo: true });
+
+  // Keyboard focus ON the slider (Tab users): Ctrl+Y redoes from there too —
+  // a chord from a non-text control reaches the hotkey map.
+  await slider.focus();
+  expect(await focusedTestId(page)).toBe("slider-size");
+  await page.keyboard.press("Control+y");
+  await expect.poll(async () => (await store(page)).lastDeltaLabel).toBe(`redo: ${draggedLabel}`);
+  await expect.poll(async () => (await debugState(page, GESTURES_PIPELINE)).text).not.toBe(GESTURES_START);
+  await page.keyboard.press("Control+z");
+  await expect.poll(async () => (await store(page)).lastDeltaLabel).toBe(`undo: ${draggedLabel}`);
+  await expect.poll(async () => (await debugState(page, GESTURES_PIPELINE)).text).toBe(GESTURES_START);
 
   expect(errors, errors.join("\n")).toEqual([]);
 });
