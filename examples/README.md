@@ -24,12 +24,16 @@ touching the committed examples — the app writes what you do.
   OBJ.
 - **04-field.cic** — the Python script-node host: a numpy field solver
   (`scripts/solve_field.py`) driving per-cell prism heights.
-- **wall/** — the full 1,200-part wall as a committed playground (a copy
-  of `corpus/wall.cic` + its scripts and frozen layout). Open it in the
-  app and edit freely; `git checkout -- examples/wall` reverts. The
-  measured original (golden comparisons, nightly CI) stays `corpus/` —
-  make experiments here, never there. First solve is the ~6.5 s cold
-  carve (release); exporters write to `examples/wall/out/` (gitignored).
+- **wall/** — the full 1,200-part production wall (`wall/wall.cic` + its
+  Python script nodes, frozen layout, and the golden production
+  references; `wall/README.md`). ONE copy with three jobs: the
+  full-size example, the app playground — open it and edit freely,
+  `git checkout -- examples/wall` reverts — and the pipeline the nightly
+  regression job measures against production (DECISIONS.md corpus row:
+  the corpus = every example with committed golden outputs). First solve
+  is the ~6.5 s cold carve (release); the exporters (`--node bambu
+  --node dxf`) write to `examples/wall/out/` (gitignored); compare with
+  `python tools/normalize.py all …` (see `wall/README.md`).
 - **05-script-geometry.cic** — script nodes beyond numbers
   (`scripts/pyramids.py`): Python returns watertight meshes through a
   multi-output node (`pyr.meshes`, `pyr.volumes`), and an effectful

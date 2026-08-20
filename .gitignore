@@ -5,7 +5,7 @@
 node_modules/
 web/dist/
 
-# Python (script nodes, corpus tooling — stage 4+)
+# Python (script nodes, tools/ — stage 4+)
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -38,7 +38,6 @@ examples/*.obj
 web/test-results/
 web/playwright-report/
 
-# Stage-6 corpus outputs (explicit exporter runs write here; production references live in corpus/golden/)
-corpus/out/
+# Exporter outputs of the examples (explicit runs write here; the wall's production references live in examples/wall/golden/)
 examples/wall/out/
 examples/*.csv

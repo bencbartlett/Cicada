@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """Extract the frozen production wall layout from the wall repo's artifacts.
 
-Dev tool, NOT a pipeline node (stage 6, corpus/tools). Reads the production
+Dev tool, NOT a pipeline node (stage 6; lives in examples/wall/tools). Reads the production
 exports of the Lorenz LED wall (READ ONLY) and writes
 
-  corpus/inputs/layout.json                  the frozen layout (schema: docs /
+  (paths below are relative to examples/wall/ — the --wall-dir)
+  inputs/layout.json                         the frozen layout (schema: docs /
                                              stage-6 contract section 3)
-  corpus/golden/production/board_postprocessed.dxf   (copy)
-  corpus/golden/production/manifest.csv              (copy of export 1.4.1)
-  corpus/golden/production/coil_manifest.csv         (copy, the idx-bearing one)
-  corpus/golden/production/plates_summary.json       per-object geometric
+  golden/production/board_postprocessed.dxf  (copy)
+  golden/production/manifest.csv             (copy of export 1.4.1)
+  golden/production/coil_manifest.csv        (copy, the idx-bearing one)
+  golden/production/plates_summary.json      per-object geometric
                                              summary of the 5 production plate
                                              3MFs + the 2 coil 3MFs
-  corpus/golden/production/extraction_report.json    every check, statistic
+  golden/production/extraction_report.json   every check, statistic
                                              and anomaly this tool measured
 
 Sources of truth (export 1.4.1 unless stated):
@@ -41,9 +42,9 @@ Deterministic: sorted keys, fixed float formatting (%.4f for mm, %.6f for unit
 vectors), re-runnable (overwrites its outputs).
 
 Usage:
-  python corpus/tools/extract_layout.py [--wall-repo DIR] [--corpus-dir DIR] [--quiet]
-  python corpus/tools/recover_seeds.py            # optional: Voronoi seeds + per-cell shrink
-  python corpus/tools/extract_layout.py           # second pass: keeps the seeds and re-derives the
+  python examples/wall/tools/extract_layout.py [--wall-repo DIR] [--wall-dir DIR] [--quiet]
+  python examples/wall/tools/recover_seeds.py     # optional: Voronoi seeds + per-cell shrink
+  python examples/wall/tools/extract_layout.py    # second pass: keeps the seeds and re-derives the
                                                   # field-based fallbacks (trimmed coil parts) AT the seeds
 Two passes are only needed once; afterwards both tools are idempotent (byte-identical outputs).
 """
@@ -562,8 +563,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--wall-repo", default=os.environ.get("CICADA_WALL_REPO", DEFAULT_WALL),
                     help="the wall project repo (read only); env CICADA_WALL_REPO overrides the default")
-    ap.add_argument("--corpus-dir", default=os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")),
-                    help="the corpus/ directory to write inputs/ and golden/production/ into")
+    ap.add_argument("--wall-dir", default=os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")),
+                    help="the examples/wall/ directory to write inputs/ and golden/production/ into")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args(argv)
 
@@ -578,7 +579,7 @@ def main(argv=None):
         if not os.path.exists(p):
             raise Loud("missing input: %s" % p)
 
-    report = {"tool": "corpus/tools/extract_layout.py", "checks": {}, "anomalies": [], "stats": {}}
+    report = {"tool": "examples/wall/tools/extract_layout.py", "checks": {}, "anomalies": [], "stats": {}}
     anomalies = report["anomalies"]
 
     # ---- DXF -------------------------------------------------------------
@@ -745,7 +746,7 @@ def main(argv=None):
     # recover_seeds.py writes seeds/keep/cell_scales into layout.json; when they exist and the cells are unchanged,
     # the field-derived fallbacks below (lean / height of trimmed coil parts) are evaluated AT THE SEEDS, which is
     # where the production solve evaluated its field (exact), instead of at the centroids (~0.1 deg off)
-    layout_path_early = os.path.join(args.corpus_dir, "inputs", "layout.json")
+    layout_path_early = os.path.join(args.wall_dir, "inputs", "layout.json")
     old_layout = None
     if os.path.exists(layout_path_early):
         try:
@@ -1552,7 +1553,7 @@ def main(argv=None):
 
     layout = {
         "source": "wall repo export 1.4.1 (board_postprocessed.dxf, manifest.csv, plates_*_v1.4.1_.3mf) + export 1.4 manifest/plates "
-                  "(5 dropped parts) + export/coil_manifest.csv, coil_*.3mf; extracted %s by corpus/tools/extract_layout.py" % today,
+                  "(5 dropped parts) + export/coil_manifest.csv, coil_*.3mf; extracted %s by examples/wall/tools/extract_layout.py" % today,
         "units": "mm",
         "workable": workable,
         "board": {"min": board_min, "max": board_max},
@@ -1586,9 +1587,9 @@ def main(argv=None):
     report["extracted"] = today
 
     # ---- write ------------------------------------------------------------------
-    corpus = args.corpus_dir
-    inputs = os.path.join(corpus, "inputs")
-    golden = os.path.join(corpus, "golden", "production")
+    wall_dir = args.wall_dir
+    inputs = os.path.join(wall_dir, "inputs")
+    golden = os.path.join(wall_dir, "golden", "production")
     os.makedirs(inputs, exist_ok=True)
     os.makedirs(golden, exist_ok=True)
     layout_path = os.path.join(inputs, "layout.json")
@@ -1606,7 +1607,7 @@ def main(argv=None):
     shutil.copyfile(os.path.join(wall, "export", "coil_manifest.csv"), os.path.join(golden, "coil_manifest.csv"))
     if True:
         plates_summary["source"] = ("per-object summaries of the production 3MFs (export 1.4.1 plates, the coil groups from export/, "
-                                    "and the 1.4 objects used as fallbacks); extracted %s by corpus/tools/extract_layout.py" % today)
+                                    "and the 1.4 objects used as fallbacks); extracted %s by examples/wall/tools/extract_layout.py" % today)
         plates_summary["notes"] = {
             "pristine_writer_output": "files with no Metadata/plate_*.png thumbnails and no Bambu 'source_file' object metadata are "
                                       "byte-for-byte writer output (plate_packer.py / coil_groups.py); the others were re-saved by "

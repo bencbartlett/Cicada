@@ -48,8 +48,8 @@ Run everything headless first; touch the browser only for UI-facing changes.
    cicada run <pipeline.cic> --node <sink> --hashes
    ```
 
-   The wall corpus slice (`corpus/wall.cic`) arrives in stage 6; until
-   then use whatever fixture pipeline the stage under test provides.
+   The wall (`examples/wall/wall.cic`, since stage 6) is the full-size
+   pipeline; otherwise use whatever fixture pipeline the work under test provides.
 
 6. **UI-facing changes**: drive the running app yourself — never hand the
    human a "please click around and check" step. The recipe:

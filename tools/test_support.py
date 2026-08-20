@@ -1,6 +1,7 @@
-"""Shared helpers for the corpus unit tests (python -m unittest discover
--s corpus/tools -p "test_*.py"): install the offline `cicada` stub, import
-corpus/scripts/*.py by path, locate the optional reference material.
+"""Shared helpers for the engine-wide offline tests (python -m unittest
+discover -s tools -p "test_*.py"): install the offline `cicada` stub,
+import the wall's script nodes (examples/wall/scripts/*.py) by path,
+locate the optional reference material.
 
 No engine, no network, no wall-clock: everything here is deterministic.
 """
@@ -9,14 +10,15 @@ import importlib.util
 import os
 import sys
 
-TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
-CORPUS_DIR = os.path.dirname(TOOLS_DIR)
-SCRIPTS_DIR = os.path.join(CORPUS_DIR, "scripts")
-INPUTS_DIR = os.path.join(CORPUS_DIR, "inputs")
+TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))      # <repo>/tools
+REPO_DIR = os.path.dirname(TOOLS_DIR)
+WALL_DIR = os.path.join(REPO_DIR, "examples", "wall")       # the wall project (pipeline dir)
+SCRIPTS_DIR = os.path.join(WALL_DIR, "scripts")
+INPUTS_DIR = os.path.join(WALL_DIR, "inputs")
 
 # The wall repo (READ ONLY) -- only used when present, for the optional
 # production cross-checks; the unit tests never require it.
-WALL_REPO = os.path.join(os.path.dirname(os.path.dirname(CORPUS_DIR)),
+WALL_REPO = os.path.join(os.path.dirname(REPO_DIR),
                          "3D Print Stuff", "Lorenz LED wall")
 WALL_EXPORT = os.path.join(WALL_REPO, "export", "solenoid_art_export_1.4.1")
 
@@ -36,12 +38,12 @@ _SCRIPTS = {}
 
 
 def load_script(name):
-    """Import corpus/scripts/<name>.py as a module (cached)."""
+    """Import examples/wall/scripts/<name>.py as a module (cached)."""
     install_stub()
     if name in _SCRIPTS:
         return _SCRIPTS[name]
     path = os.path.join(SCRIPTS_DIR, name + ".py")
-    spec = importlib.util.spec_from_file_location("corpus_script_" + name, path)
+    spec = importlib.util.spec_from_file_location("wall_script_" + name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     _SCRIPTS[name] = module
@@ -49,8 +51,8 @@ def load_script(name):
 
 
 def settings_dir():
-    """Where the Bambu reference projects live: corpus/inputs/bambu when
-    WP-D has copied them, else the wall repo root (read only), else None."""
+    """Where the Bambu reference projects live: examples/wall/inputs/bambu
+    (committed), else the wall repo root (read only), else None."""
     for cand in (os.path.join(INPUTS_DIR, "bambu"), WALL_REPO):
         if (os.path.isfile(os.path.join(cand, "example_settings.3mf"))
                 and os.path.isfile(os.path.join(cand, "example_settings_x1c.3mf"))):

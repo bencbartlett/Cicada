@@ -10,10 +10,10 @@
  *
  * Usage (Node ≥ 20, no dependencies):
  *   cicada serve <scratch-copy-of-project> --port 8493 --token t     # serve a SCRATCH copy — set_param WRITES the file
- *   node corpus/measure/esc.mjs --url http://127.0.0.1:8493 --token t \
+ *   node tools/measure/esc.mjs --url http://127.0.0.1:8493 --token t \
  *        --pipeline 03-voronoi.cic --param up --node carved [--port factor] \
  *        [--trials 20] [--min 1.0 --max 6.0] [--poll-ms 5] [--json out.json] [--no-restore]
- *   node corpus/measure/esc.mjs --url … --pipeline wall.cic --param amps --node carved
+ *   node tools/measure/esc.mjs --url … --pipeline wall.cic --param amps --node carved   # serving a scratch copy of examples/wall/
  *
  * `--param` is the binding whose literal gets flipped (a slider or a call
  * with a Number kwarg — `--port` names the kwarg, default = the widget's);

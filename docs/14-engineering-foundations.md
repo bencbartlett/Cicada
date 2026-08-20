@@ -20,7 +20,8 @@ crates/
   cicada-server/     # axum app: protocol, sessions, op log, transport, git
   cicada-cli/        # the `cicada` binary: serve, run, fmt, docs, catalog, cache
 web/                 # SPA: React + TypeScript + Vite + xyflow + three.js + zustand
-corpus/              # wall-pipeline end-to-end corpus + golden hashes (in-repo)
+examples/            # runnable examples; examples/wall/ = the wall (pipeline, scripts, inputs, golden refs) — the nightly regression corpus is every example with goldens
+tools/               # engine-wide dev tooling: exporter-output normalizer, offline tests, measurement harness
 docs/                # these documents (+ docs/generated/, see Documentation pipeline)
 ```
 

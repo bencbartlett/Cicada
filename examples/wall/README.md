@@ -1,11 +1,19 @@
-# Corpus — the wall pipeline, end to end
+# The wall — example, playground, and nightly regression corpus
 
-The wall-piece pipeline as Cicada's test corpus (DECISIONS.md: "Test corpus
-= the wall-piece pipeline"; docs/15 stage 6): the production
+The wall-piece pipeline, end to end (docs/15 stage 6): the production
 magnetic-field pyramid wall — 1,200 Voronoi frusta with debossed IDs and
 two crush-rib pin bores each, packed onto 79 Bambu plates, plus the CNC
 board DXF — rebuilt on the engine from a frozen layout and compared
 against the files that were actually fabricated from.
+
+This directory is ONE copy with three jobs (DECISIONS.md, corpus row
+revised 2026-08-19: the regression corpus = every example with committed
+golden outputs; the wall is the first): the full-size example, the app
+playground — open it, edit freely, `git checkout -- examples/wall`
+reverts — and the pipeline the nightly job measures against production.
+Engine-wide tooling (the normalizer, the measurement harness, the offline
+tests) lives in the repo's `tools/`; only the wall-specific layout tools
+live here under `tools/`.
 
 ## What is here
 
@@ -15,41 +23,47 @@ against the files that were actually fabricated from.
 | `scripts/` | The Python script nodes: the production GhPython cores ported verbatim (`scripts/README.md` lists every node, port, source line, and declared deviation) |
 | `inputs/layout.json` | The frozen production layout, extracted from the shipped artifacts: recovered Voronoi seeds, per-cell shrink, heights, lean lengths, bins, export flags — plus the production cells/centroids/leans/IDs as checks |
 | `inputs/bambu/` | The two Bambu reference projects the packer/writer harvest (process overlay, keep-outs, embedded profiles) — copied from the wall repo |
-| `tools/extract_layout.py`, `tools/recover_seeds.py` | Dev tools (not pipeline nodes) that produce `inputs/layout.json` from the wall repo's exports; `recover_seeds.py` needs numpy |
-| `tools/normalize.py` | The output normalizer + comparer (3MF / DXF / manifest; markdown report; exit code = verdict) |
-| `tools/test_*.py` | Offline unit tests for the scripts and the normalizer (`python -m unittest discover -s corpus/tools -p "test_*.py"`; the production cross-checks skip without the wall repo) |
-| `measure/` | The docs/15 measurement harness: `carve.sh`/`carve.ps1` (cold/warm carve), `slider_loop.mjs` (preview latency), `esc.mjs` (cancel time-to-idle); Node ≥ 20, no deps |
+| `tools/extract_layout.py`, `tools/recover_seeds.py` | Wall-only dev tools (not pipeline nodes) that produce `inputs/layout.json` from the wall repo's exports; `recover_seeds.py` needs numpy |
 | `golden/production/` | The production references: `board_postprocessed.dxf` and `manifest.csv` (copies of the shop files), `coil_manifest.csv`, per-file `plates_*.summary.json` (canonical summaries of the five 50–116 MB production 3MFs, which stay outside the repo), the extraction and seed-recovery reports |
 | `golden/cicada/` | Reserved for our own golden output hashes (a normalize-time determinism check, v0.1); the nightly job compares against `golden/production/` today |
 | `out/` | Where the exporters write (gitignored) |
 
+Engine-wide, in the repo's `tools/` (not here):
+
+| Path | Contents |
+|---|---|
+| `tools/normalize.py` | The output normalizer + comparer (3MF / DXF / manifest; markdown report; exit code = verdict) |
+| `tools/test_*.py` | Offline unit tests for the wall scripts and the normalizer (`python -m unittest discover -s tools -p "test_*.py"`; the production cross-checks skip without the wall repo) |
+| `tools/measure/` | The docs/15 measurement harness: `carve.sh`/`carve.ps1` (cold/warm carve), `slider_loop.mjs` (preview latency), `esc.mjs` (cancel time-to-idle); Node ≥ 20, no deps |
+
 ## Running it
 
 ```
+# in the app (the canvas writes THIS committed copy — that is the point; revert with git)
+cargo run --release -p cicada-cli -- serve examples/wall/wall.cic --web-dir web/dist
 # cold carve (the criterion): a fresh cache dir, release build
-cargo run --release -p cicada-cli -- run corpus/wall.cic --node carved --time --cache-dir <fresh-dir>
-# the fabrication files
-cargo run --release -p cicada-cli -- run corpus/wall.cic --node bambu --node dxf --cache-dir <dir>
+cargo run --release -p cicada-cli -- run examples/wall/wall.cic --node carved --time --cache-dir <fresh-dir>
+# the fabrication files (land in examples/wall/out/)
+cargo run --release -p cicada-cli -- run examples/wall/wall.cic --node bambu --node dxf --cache-dir <dir>
 # compare against production (report + verdict)
-python corpus/tools/normalize.py all --ours corpus/out --ref corpus/golden/production --report corpus/out/report.md
-# in the app (serve a scratch copy for experiments — the canvas writes the served files)
-cargo run --release -p cicada-cli -- serve corpus/wall.cic
+python tools/normalize.py all --ours examples/wall/out --ref examples/wall/golden/production --report examples/wall/out/report.md
 ```
 
 Python 3 on PATH is all the scripts need (pure stdlib: the wall's
 scripts never used numpy). The measurement protocol, the recorded numbers,
 and their machine spec live in
-[docs/15-spike-plan.md](../docs/15-spike-plan.md) §Stage-6 results.
+[docs/15-spike-plan.md](../../docs/15-spike-plan.md) §Stage-6 results.
+The first solve is the ~6.5 s cold carve (release build).
 
 The same pipeline runs nightly in CI (`.github/workflows/nightly.yml`,
 `wall-corpus` job): a release build on `ubuntu-latest`, the two exporters
 over a cold cache, then `normalize.py all` against `golden/production/`;
 the job's verdict IS the normalizer's exit code, and the report lands in
 the run's job summary (plus a best-effort artifact). First real run,
-2026-08-20 (commit 63f4212): **overall NOISE** — every difference the
-normalizer found on the Linux build was declared noise, the same verdict
-the Windows dev machine gives; that is the cross-platform evidence the
-golden-hash discipline rests on.
+2026-08-20 (commit 63f4212, when this directory was still `corpus/`):
+**overall NOISE** — every difference the normalizer found on the Linux
+build was declared noise, the same verdict the Windows dev machine gives;
+that is the cross-platform evidence the golden-hash discipline rests on.
 
 ## What the pipeline does, honestly
 
@@ -100,12 +114,15 @@ against the shop file.
 ## Regenerating the inputs
 
 ```
-python corpus/tools/extract_layout.py          # production artifacts → inputs/layout.json + golden/production/*
-python corpus/tools/recover_seeds.py           # bisector least squares; writes seeds/keep/cell_scales only if every cell vertex reproduces within 2e-3 mm
-python corpus/tools/extract_layout.py          # second pass: re-derives the field-based fallbacks at the seeds
-python corpus/tools/normalize.py summarize <prod>.3mf -o corpus/golden/production/plates_f<bin>_<color>_<printer>.summary.json   # per production plate file
+python examples/wall/tools/extract_layout.py   # production artifacts → inputs/layout.json + golden/production/*
+python examples/wall/tools/recover_seeds.py    # bisector least squares; writes seeds/keep/cell_scales only if every cell vertex reproduces within 2e-3 mm
+python examples/wall/tools/extract_layout.py   # second pass: re-derives the field-based fallbacks at the seeds
+python tools/normalize.py summarize <prod>.3mf -o examples/wall/golden/production/plates_f<bin>_<color>_<printer>.summary.json   # per production plate file
 ```
 
 The wall repo is read-only for these tools (path baked in; `--wall-repo`
 overrides). Nothing here is hand-edited: the tools are deterministic and
-idempotent.
+idempotent — the committed `layout.json` and reports still carry the
+provenance stamps of the 2026-08-19 extraction, naming the tools' old
+pre-move directory, which is where they lived when they ran; the next
+regeneration stamps the new path.

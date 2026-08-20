@@ -1,6 +1,6 @@
 """Offline stand-in for the `cicada` module the Python worker injects.
 
-The corpus scripts (corpus/scripts/*.py) start with `import cicada` and
+The wall's script nodes (examples/wall/scripts/*.py) start with `import cicada` and
 are normally executed by the engine's worker (crates/cicada-script/src/
 worker.py), which provides the @cicada.node decorator and the boundary
 types of the stage-6 script ABI (frozen contract section 1):

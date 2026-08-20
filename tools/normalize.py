@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Normalize + compare the wall corpus outputs (stage-6 contract section 6).
+"""Normalize + compare a project's exporter outputs against its golden
+references (stage-6 contract section 6; first user: examples/wall).
 
-A dev tool, NOT a pipeline node. Pure stdlib Python 3 (numpy is not used).
+An engine-wide dev tool, NOT a pipeline node. Pure stdlib Python 3 (numpy is not used).
 
     normalize.py 3mf OURS.3mf REF.3mf|REF.json [--level xml|bytes] [--tol-bbox 0.02]
                  [--tol-volume-rel 0.005] [--tol-translation 0.01] [--report FILE] [--strict]
@@ -22,7 +23,7 @@ mesher vs Manifold). Object meshes are replaced by canonical summaries
 triangle count) and compared bbox / volume within tolerance. The reference
 may be a 3MF or a summary JSON produced by `summarize` (the production
 files are 50-116 MB and live outside the repo; write their summaries once
-with `normalize.py summarize <prod>.3mf -o corpus/golden/production/
+with `normalize.py summarize <prod>.3mf -o examples/wall/golden/production/
 plates_f<bin>_<color>_<printer>.summary.json` -- `all` mode looks for
 exactly those names next to the production DXF + manifest).
 3MF, --level bytes: strict -- every entry byte-exact (only the date
@@ -171,7 +172,7 @@ def _sha(data):
 
 def summarize_3mf(path):
     """The canonical summary of a Bambu production-format 3MF (the format
-    corpus/golden/production/plates_summary.json holds per file)."""
+    examples/wall/golden/production/plates_summary.json holds per file)."""
     zf = zipfile.ZipFile(path)
     names = sorted(zf.namelist())
     root_raw = zf.read("3D/3dmodel.model").decode("utf-8")

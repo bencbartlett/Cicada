@@ -1,7 +1,7 @@
-"""Unit tests for the corpus Python script nodes (corpus/scripts/*.py),
+"""Unit tests for the wall's Python script nodes (examples/wall/scripts/*.py),
 run offline with the `cicada` stub:
 
-    python -m unittest discover -s corpus/tools -p "test_*.py"
+    python -m unittest discover -s tools -p "test_*.py"
 
 Deterministic: synthetic walls from seeded generators, no wall-clock, no
 network, no engine. The optional production cross-checks live in
@@ -23,7 +23,7 @@ cicada = ts.install_stub()
 
 
 def tmpdir():
-    d = tempfile.mkdtemp(prefix="cicada-corpus-test-")
+    d = tempfile.mkdtemp(prefix="cicada-wall-test-")
     return d
 
 
@@ -220,7 +220,7 @@ class WallLayoutTest(unittest.TestCase):
 
     def test_relative_path_resolves_against_the_pipeline_dir(self):
         self.assertEqual(self.wl.resolve_path("inputs/layout.json"),
-                         os.path.normpath(os.path.join(ts.CORPUS_DIR, "inputs", "layout.json")))
+                         os.path.normpath(os.path.join(ts.WALL_DIR, "inputs", "layout.json")))
         self.assertEqual(self.wl.resolve_path(self.dir), self.dir)
 
     def test_schema_violations_are_loud(self):

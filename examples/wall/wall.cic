@@ -1,8 +1,11 @@
 # cicada 1
-# examples/wall/wall.cic — the wall, as a PLAYGROUND: a committed copy of
-# corpus/wall.cic meant to be opened in the app and edited freely; revert
-# with `git checkout -- examples/wall`. The measured original (golden
-# comparisons, CI) stays corpus/wall.cic — keep changes here, not there.
+# examples/wall/wall.cic — the wall: the production magnetic-field pyramid
+# wall's hardest stretch (docs/15 stage 6) on the Cicada engine, measured
+# against the shipped fabrication files (README.md beside this file). This
+# ONE file is both the example — open it in the app and edit freely;
+# `git checkout -- examples/wall` reverts — and the nightly regression
+# corpus (.github/workflows/nightly.yml runs the exporters over it and
+# compares with golden/production/ through tools/normalize.py).
 #
 #   frozen production layout (seeds, per-cell shrink, heights, lean lengths)
 #   → Voronoi → area centroids → per-cell shrink → field solve (Python)
@@ -12,12 +15,13 @@
 #
 # In the app (the canvas writes THIS committed copy — that is the point):
 #   cargo run --release -p cicada-cli -- serve examples/wall/wall.cic --web-dir web/dist
-# Headless:
-#   cargo run --release -p cicada-cli -- run examples/wall/wall.cic --node carved --time
-# The exporters (explicit runs, never on a plain solve — wall lesson 7):
-#   cargo run --release -p cicada-cli -- run examples/wall/wall.cic --node bambu --node dxf
+# The carve (the carve-speed criterion; cold = a fresh --cache-dir):
+#   cargo run --release -p cicada-cli -- run examples/wall/wall.cic --node carved --time --cache-dir <fresh-dir>
+# The fabrication files (explicit runs, never on a plain solve — wall lesson 7; they land in out/):
+#   cargo run --release -p cicada-cli -- run examples/wall/wall.cic --node bambu --node dxf --cache-dir <dir>
+# Compare against production:  python tools/normalize.py all --help
 
-# --- the frozen production layout (corpus/inputs/layout.json) ---------------
+# --- the frozen production layout (inputs/layout.json) ----------------------
 # What the pipeline consumes: the recovered Voronoi seeds, the per-cell shrink
 # factors (the wall's density modulation: cells shrink with field strength),
 # the vertical heights and apex lean lengths (the GH graph-mapper chain that

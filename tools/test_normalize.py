@@ -1,6 +1,6 @@
-"""Unit tests for corpus/tools/normalize.py (the 3MF / DXF / manifest
+"""Unit tests for tools/normalize.py (the 3MF / DXF / manifest
 normalizer + compare). Offline, deterministic: the fixtures are built
-with the corpus writers themselves."""
+with the wall's exporter writers themselves."""
 
 import json
 import os

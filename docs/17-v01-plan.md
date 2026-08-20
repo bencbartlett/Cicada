@@ -14,7 +14,7 @@ runs in parallel from day 1:
 
 | # | Item | Track | Size | Status |
 |---|---|---|---|---|
-| 0 | Fold `corpus/` into `examples/wall/` + `tools/`; this plan | foreground | hours | **in progress** |
+| 0 | Fold `corpus/` into `examples/wall/` + `tools/`; this plan | foreground | hours | **done** 2026-08-20 |
 | 1 | Undo/redo — snapshot op log + atomic `batch` path; riders `#off`, Backspace-no-delete | foreground (server/web) | days | pending |
 | 2 | Git panel slice 1 — status strip, per-node change markers, commit, revert-to-HEAD | foreground (server/web) | ~1 week | pending |
 | P | OCCT probe — prebuilt 7.8.x build/link on win/mac/linux, determinism, timings, license, CI shape | parallel worktree | hours, cap 1 day | pending |

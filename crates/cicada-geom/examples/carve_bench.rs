@@ -1,7 +1,7 @@
 //! The standalone carve benchmark (doc 15 stage 4 DoD): 1,500 labeled
 //! frusta ∖ cutters, timed. The wall's carve stage at production scale,
 //! isolated from the scheduler — this measures the KERNEL SEAM, the
-//! stage-6 `cicada run corpus/wall.cic --node carved --time` measures the
+//! stage-6 `cicada run examples/wall/wall.cic --node carved --time` measures the
 //! whole system against the <10 s criterion.
 //!
 //! Run (release, or the numbers lie):

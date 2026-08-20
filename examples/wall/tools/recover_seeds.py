@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Recover the Voronoi generating seeds (and the per-cell shrink) behind the
-frozen production cells, and write them into corpus/inputs/layout.json ONLY if
+frozen production cells, and write them into examples/wall/inputs/layout.json ONLY if
 re-running the Voronoi reproduces every production cell vertex within 2e-3 mm.
 
-Dev tool, NOT a pipeline node (stage 6, corpus/tools). Exit status 0 = seeds
+Dev tool, NOT a pipeline node (stage 6; lives in examples/wall/tools). Exit status 0 = seeds
 written; 2 = recovery failed (nothing written, the reason is printed); 3 =
 input problem.
 
@@ -44,11 +44,11 @@ is ever needed by the pipeline scripts; `pip install --user numpy scipy`.
 Writes into layout.json (only on success): "seeds" (kept first in idx order,
 then the recovered culled seeds), "keep" (booleans, one per seed),
 "cell_scales" (per part, idx order) and "seeds_note"; plus
-corpus/golden/production/seed_recovery_report.json (always, also on failure).
+examples/wall/golden/production/seed_recovery_report.json (always, also on failure).
 
 Usage:
-  python corpus/tools/recover_seeds.py [--layout PATH] [--report PATH]
-                                       [--tolerance 0.002] [--dry-run]
+  python examples/wall/tools/recover_seeds.py [--layout PATH] [--report PATH]
+                                              [--tolerance 0.002] [--dry-run]
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ except Exception:  # pragma: no cover
     HAVE_SCIPY = False
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CORPUS = os.path.normpath(os.path.join(HERE, ".."))
+WALL_DIR = os.path.normpath(os.path.join(HERE, ".."))  # examples/wall/
 
 
 def load_layout(path):
@@ -164,8 +164,8 @@ def solve_scales(rows, n):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--layout", default=os.path.join(CORPUS, "inputs", "layout.json"))
-    ap.add_argument("--report", default=os.path.join(CORPUS, "golden", "production", "seed_recovery_report.json"))
+    ap.add_argument("--layout", default=os.path.join(WALL_DIR, "inputs", "layout.json"))
+    ap.add_argument("--report", default=os.path.join(WALL_DIR, "golden", "production", "seed_recovery_report.json"))
     ap.add_argument("--tolerance", type=float, default=0.002, help="max allowed vertex deviation, mm (contract: 2e-3)")
     ap.add_argument("--dry-run", action="store_true", help="never write layout.json (the report is still written)")
     args = ap.parse_args(argv)
@@ -178,7 +178,7 @@ def main(argv=None):
     heights = [p["height"] for p in parts]
     W0 = lay["workable"]["min"]
     W1 = lay["workable"]["max"]
-    report = {"tool": "corpus/tools/recover_seeds.py", "scipy": HAVE_SCIPY, "tolerance_mm": args.tolerance, "steps": {}}
+    report = {"tool": "examples/wall/tools/recover_seeds.py", "scipy": HAVE_SCIPY, "tolerance_mm": args.tolerance, "steps": {}}
 
     def fail(msg, code=2):
         report["outcome"] = "FAILED: " + msg
@@ -716,7 +716,7 @@ def main(argv=None):
         part["lean"] = [F6(v) for v in part["lean"]]
     notes = lay.setdefault("notes", {})
     notes["seeds"] = (
-        "recovered by corpus/tools/recover_seeds.py: the Voronoi of `seeds` bounded by `workable` (kept = the first %d in idx "
+        "recovered by examples/wall/tools/recover_seeds.py: the Voronoi of `seeds` bounded by `workable` (kept = the first %d in idx "
         "order, then %d recovered culled neighbours; keep[] says which), each kept cell SHRUNK about its own area centroid by "
         "cell_scales[idx], reproduces every production cell vertex within %.4f mm (max %.4f, median %.4f); the %d kept cells tile "
         "the workable rectangle completely (no culled cells); kept seeds sit %.2f mm (median, max %.2f) from the cell centroids" % (

@@ -1,4 +1,4 @@
-# corpus/scripts — the wall pipeline's Python script nodes
+# examples/wall/scripts — the wall pipeline's Python script nodes
 
 Stage 6 (docs/15): the production wall-piece pipeline ported from the
 Lorenz LED wall repo's GhPython components into Cicada Python script
@@ -16,7 +16,7 @@ wire as 3-tuples with z = 0. Cells arrive as `[Closed<Curve>]` — the
 Voronoi cells after the per-cell shrink, built by the engine in
 wall.cic (`cicada.Polyline`-like objects with `.points`); each script's
 `_cell_points` also accepts plain point lists (offline tests). Relative paths (`inputs/…`, `out/…`)
-resolve against the pipeline directory `corpus/` (the scripts' parent),
+resolve against the pipeline directory `examples/wall/` (the scripts' parent),
 never the process cwd. Every malformed input is a loud error; nothing
 falls back silently.
 
@@ -193,7 +193,7 @@ dxf    = export_dxf(ghosts=labels.ghosts, strokes=labels.board_strokes, strokes_
    cutters, labels.py's own DXF (the shipped CNC file came from
    board_final_dxf.py's regenerated-TEXT path), the Rhino previews.
 
-## Production findings (measured on the shipped 1.4.1 exports; see corpus/tools/test_production_crosscheck.py)
+## Production findings (measured on the shipped 1.4.1 exports; see tools/test_production_crosscheck.py)
 
 * **IDs**: zones + `assign_ordinals` reproduce all 1200 production IDs
   (checked against both manifests, 1142 parts).
@@ -231,9 +231,10 @@ dxf    = export_dxf(ghosts=labels.ghosts, strokes=labels.board_strokes, strokes_
 ## Tests
 
 ```
-python -m unittest discover -s corpus/tools -p "test_*.py"
+python -m unittest discover -s tools -p "test_*.py"
 ```
-Offline (the `cicada` module is stubbed by corpus/tools/_cicada_stub.py):
+Offline (the `cicada` module is stubbed by tools/_cicada_stub.py; the
+tests live in the repo's engine-wide `tools/`, the scripts here):
 test_scripts.py (nodes), test_normalize.py (the normalizer),
 test_production_crosscheck.py (read-only checks against the wall repo;
 skipped when it is absent).

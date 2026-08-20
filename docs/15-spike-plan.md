@@ -34,7 +34,7 @@ The frusta are analytic mesh constructions, as on the wall.
 
 ### Stage 0 — scaffold (the standards land before the code)
 
-Workspace per doc 14 (nine crates, `web/`, `corpus/`), CI skeleton
+Workspace per doc 14 (nine crates, `web/`, the wall corpus dir — since 2026-08-20 `examples/wall/` + `tools/`), CI skeleton
 (fmt, clippy pedantic, tests, WASM/web checks stubbed), root
 `CLAUDE.md`/`AGENTS.md`, `.claude/skills/` (`verify-change`,
 `add-stdlib-node` first), `docs/generated/CATALOG.md` generation
@@ -125,9 +125,9 @@ lands. Rough calendar: week 1 = stages 0–3; week 2 = 4 + 5; week 3 =
 
 | Criterion | How measured | Target |
 |---|---|---|
-| Carve speed | `cicada run corpus/wall.cic --node carved --time`, cold cache, dev desktop | Full ~1,500-part labeled carve **< 10 s** (wall baseline: ~30 min in Rhino); warm rerun < 100 ms |
+| Carve speed | `cicada run examples/wall/wall.cic --node carved --time`, cold cache, dev desktop | Full ~1,500-part labeled carve **< 10 s** (wall baseline: ~30 min in Rhino); warm rerun < 100 ms |
 | Live slider loop | Drag the demo cone's slider 5 s; tracing spans report preview-generation latency | p50 ≤ 16 ms (60 fps) on the cheap cone; p95 ≤ 33 ms; the full-pipeline slider degrades honestly (progress, no freeze) |
-| Esc always works | Scripted cancel injected mid-carve ×20 (`corpus/measure/esc.mjs`; server-side `timings[].cancel_to_idle_ms` from the cancel call to the loop idle, plus the client's poll-observed time-to-idle) | Time-to-idle p95 **< 250 ms**; UI thread never blocks |
+| Esc always works | Scripted cancel injected mid-carve ×20 (`tools/measure/esc.mjs`; server-side `timings[].cancel_to_idle_ms` from the cancel call to the loop idle, plus the client's poll-observed time-to-idle) | Time-to-idle p95 **< 250 ms**; UI thread never blocks |
 | Canvas round-trip | Playwright: place + wire → assert file text; edit file → assert canvas | Byte-exact writer fixtures; canvas reflects file edits < 500 ms |
 | Output equivalence | Hash-compare 3MF/DXF against production wall exports through a normalizer (strips timestamps/UUIDs) | Byte-identical modulo declared noise; every legit diff documented |
 
@@ -142,11 +142,17 @@ built `--release`; the cache on the SSD in the user temp dir; every number
 best-of-three where a spread is quoted. The wall slice is **1,200 parts**
 (the frozen production layout — the wall shipped 1,200; "~1,500" in the
 protocol was the candidate count before culling). The harness lives in
-`corpus/measure/`.
+`tools/measure/`.
+
+Paths in this closed record were rewritten on 2026-08-20 when `corpus/`
+was folded into `examples/wall/` (the wall: pipeline, scripts, inputs,
+golden production references) and `tools/` (normalizer, offline tests,
+measurement harness) — docs/17 item 0, DECISIONS.md corpus row revised
+2026-08-19; the numbers below were measured at the old paths.
 
 | Criterion | Target | Measured | Verdict |
 |---|---|---|---|
-| **Carve speed** (`corpus/wall.cic --node carved`, cold cache) | full labeled carve < 10 s; warm < 100 ms | **cold 6.5 s** (solve wall; best 6.48 s), **warm 0.13 ms** | **PASS** — the wall's Rhino carve was ~30 min |
+| **Carve speed** (`examples/wall/wall.cic --node carved`, cold cache) | full labeled carve < 10 s; warm < 100 ms | **cold 6.5 s** (solve wall; best 6.48 s), **warm 0.13 ms** | **PASS** — the wall's Rhino carve was ~30 min |
 | **Live slider loop** — cheap cone (02-solids `size`) | p50 ≤ 16 ms, p95 ≤ 33 ms | server **p50 0.5 ms / p95 1.4 ms**, client round-trip p50 0.6 ms / p95 1.7 ms, 300/300 previews at 60 Hz | **PASS** |
 | **Live slider loop** — the wall's `amps` (the field cone) | (as above) | server **p50 0.4 ms / p95 17.9 ms**, ~59 previews/s, no freeze | **PASS at p50**; the p95 is the one preview/s that lands mid-flight of the ~50 ms Python field solve — honest, not a freeze |
 | **Live slider loop** — full-pipeline `deboss` (dirties labels → glyphs → carve) | full-pipeline slider degrades honestly (progress, no freeze) | ~4 s/generation, latest-wins supersession, continuous `running` statuses, longest server silence 174 ms | **PASS** (degrades honestly, as the protocol allows) |
@@ -154,8 +160,8 @@ protocol was the candidate count before culling). The harness lives in
 | **Canvas round-trip** (`web/e2e/roundtrip.spec.ts`) | byte-exact writer fixtures; file edit → canvas < 500 ms | writer output byte-exact; file edit → canvas **30 / 100 / 111 / 99 / 104 ms** (5 trials) | **PASS** |
 | **Output equivalence** (`normalize.py all`) | byte-identical modulo declared noise; every diff documented | overall **NOISE** — no unexplained difference | **PASS** |
 
-Output-equivalence detail (`corpus/tools/normalize.py`, against
-`corpus/golden/production/`): the two **pristine** production 3MFs (the H2
+Output-equivalence detail (`tools/normalize.py`, against
+`examples/wall/golden/production/`): the two **pristine** production 3MFs (the H2
 teal and sky-blue plate files) match entry-for-entry after normalization —
 build-item translations within **3 µm**, bboxes within **10 µm**, volumes
 within **0.09 %** — with triangle counts reported, not compared (Manifold's
@@ -168,7 +174,7 @@ names, plate membership, bbox and volume as hard checks — all of which
 pass. The board **DXF** matches every entity of `board_postprocessed.dxf`
 within **1 µm** across all five layers (OUTLINES, PINHOLES, BOARDCUT,
 STOCK, TEXT). The `manifest.csv` matches all 1,137 rows to last-digit
-rounding. Declared deviations, all documented in `corpus/README.md`: the
+rounding. Declared deviations, all documented in `examples/wall/README.md`: the
 bundled font, 3MF zip timestamps fixed at 1980-01-01 (production stamped
 the wall clock), Manifold vs Rhino tessellation, and the recovered-layout
 sub-µm coordinate rounding.

@@ -55,7 +55,7 @@ def _pipeline_dir():
 
 
 def resolve_path(path):
-    """Relative paths resolve against the pipeline directory (corpus/)."""
+    """Relative paths resolve against the pipeline directory (examples/wall/)."""
     path = str(path)
     if os.path.isabs(path):
         return path

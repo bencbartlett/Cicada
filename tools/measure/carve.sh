@@ -6,7 +6,7 @@
 # target node's own compute time, and the whole-process wall time.
 #
 # Usage (bash; Git Bash on Windows is fine):
-#   corpus/measure/carve.sh [pipeline=corpus/wall.cic] [node=carved] [runs=3]
+#   tools/measure/carve.sh [pipeline=examples/wall/wall.cic] [node=carved] [runs=3]
 # Environment:
 #   CICADA_BIN         the engine binary (default: $CARGO_TARGET_DIR/release/cicada[.exe];
 #                      build it with `cargo build --release -p cicada-cli` — record
@@ -16,7 +16,7 @@
 # Prints a JSON result, then one summary line. Nonzero exit = a run failed.
 set -u
 
-pipeline="${1:-corpus/wall.cic}"
+pipeline="${1:-examples/wall/wall.cic}"
 node="${2:-carved}"
 runs="${3:-3}"
 exe=""

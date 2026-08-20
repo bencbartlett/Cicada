@@ -43,12 +43,15 @@ jobs:
           tool: cargo-audit
       - run: cargo audit
 
-  # The wall corpus end to end (doc 15 stage 6): build the engine, run the
-  # exporters over corpus/wall.cic, and compare against the committed
-  # production references through the normalizer. The production 3MFs
-  # themselves live outside the repo (50-116 MB); golden/production carries
-  # their canonical summaries + the DXF/manifest. Nightly, not per-PR:
-  # the cold carve is ~6.5 s and the exporters minutes.
+  # The regression corpus (DECISIONS.md corpus row, revised 2026-08-19:
+  # every example with committed golden outputs; the wall is the first,
+  # at examples/wall/) end to end: build the engine, run the exporters
+  # over examples/wall/wall.cic, and compare against the committed
+  # production references through the engine-wide normalizer
+  # (tools/normalize.py). The production 3MFs themselves live outside the
+  # repo (50-116 MB); examples/wall/golden/production carries their
+  # canonical summaries + the DXF/manifest. Nightly, not per-PR: the cold
+  # carve is ~6.5 s and the exporters minutes.
   wall-corpus:
     name: wall corpus end-to-end
     runs-on: ubuntu-latest
@@ -63,13 +66,13 @@ jobs:
         run: cargo build --locked --release -p cicada-geom || cargo build --locked --release -p cicada-geom
       - name: Build the engine
         run: cargo build --locked --release -p cicada-cli
-      - name: Corpus offline tests (scripts + normalizer)
-        run: python -m unittest discover -s corpus/tools -p "test_*.py"
+      - name: Offline tests (wall scripts + normalizer)
+        run: python -m unittest discover -s tools -p "test_*.py"
       - name: Run the exporters
         run: |
-          ./target/release/cicada run corpus/wall.cic --node bambu --node dxf --cache-dir "$RUNNER_TEMP/cicada-corpus-cache"
+          ./target/release/cicada run examples/wall/wall.cic --node bambu --node dxf --cache-dir "$RUNNER_TEMP/cicada-corpus-cache"
       - name: Compare against production (verdict = exit code; NOISE passes, FAIL blocks)
-        run: python corpus/tools/normalize.py all --ours corpus/out --ref corpus/golden/production --report "$RUNNER_TEMP/corpus-report.md"
+        run: python tools/normalize.py all --ours examples/wall/out --ref examples/wall/golden/production --report "$RUNNER_TEMP/corpus-report.md"
       # The report is the evidence, so it rides two channels: the job summary
       # (always available, no storage quota) and an artifact. The artifact
       # upload is non-blocking — the first real corpus run (2026-08-20) PASSED

@@ -7,9 +7,9 @@ cache), reporting best/median of the solve wall time (`time: total`), the
 target node's own compute time, and the whole-process wall time.
 
 .EXAMPLE
-corpus\measure\carve.ps1                                   # corpus/wall.cic --node carved, 3 runs
-corpus\measure\carve.ps1 -Pipeline examples\03-voronoi.cic -Node carved -Runs 3
-$env:CICADA_BIN = "$env:LOCALAPPDATA\cargo-target\release\cicada.exe"; corpus\measure\carve.ps1
+tools\measure\carve.ps1                                    # examples/wall/wall.cic --node carved, 3 runs
+tools\measure\carve.ps1 -Pipeline examples\03-voronoi.cic -Node carved -Runs 3
+$env:CICADA_BIN = "$env:LOCALAPPDATA\cargo-target\release\cicada.exe"; tools\measure\carve.ps1
 
 .NOTES
 Windows PowerShell 5.1 compatible. The engine binary: -Bin / $env:CICADA_BIN,
@@ -20,7 +20,7 @@ one summary line; nonzero exit = a run failed. -Out also writes the JSON
 to a file.
 #>
 param(
-  [string]$Pipeline = "corpus/wall.cic",
+  [string]$Pipeline = "examples/wall/wall.cic",
   [string]$Node = "carved",
   [int]$Runs = 3,
   [string]$Bin = "",

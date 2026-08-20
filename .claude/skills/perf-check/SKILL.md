@@ -14,13 +14,13 @@ and the commit hash it was measured at.
 | What | Command | Target |
 |---|---|---|
 | Carve seam (kernel-only) | `cargo run --release -p cicada-geom --example carve_bench [parts]` | 1,500 parts in **seconds** (stage-4 DoD); exits nonzero past 10 s |
-| Full-pipeline carve | `cicada run corpus/wall.cic --node carved --time`, cold cache | **< 10 s** cold, < 100 ms warm (doc 15); MEASURED 2026-08-19: cold **6.5 s**, warm **0.13 ms** on the i7-13700KF |
+| Full-pipeline carve | `cicada run examples/wall/wall.cic --node carved --time`, cold cache | **< 10 s** cold, < 100 ms warm (doc 15); MEASURED 2026-08-19: cold **6.5 s**, warm **0.13 ms** on the i7-13700KF |
 | Solve overhead | `cicada run examples/03-voronoi.cic --time --cache-dir <fresh>` | wall ≈ dominated by booleans; warm rerun ≈ zero computed |
 
 Baseline on the dev machine (2026-08-18, commit of stage 4): carve_bench
 1,500 parts = **0.089 s carve** (0.059 ms/part, ~264k result triangles).
 
-Stage-6 measurement harness (`corpus/measure/`, doc 15 §Stage-6 results):
+Stage-6 measurement harness (`tools/measure/`, doc 15 §Stage-6 results):
 `carve.sh`/`carve.ps1` (cold/warm carve), `slider_loop.mjs` (preview
 latency from `/debug/state` `timings`), `esc.mjs` (cancel time-to-idle).
 `CICADA_TRACE=1` on any `cicada run`/`serve` prints per-node phase timings

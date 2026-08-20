@@ -1,8 +1,9 @@
 # Wall corpus: the frozen production layout loader (stage 6, docs/15).
 #
-# Reads corpus/inputs/layout.json (written by corpus/tools/extract_layout.py
-# from the production exports; schema in the stage-6 contract section 3)
-# and fans it out as typed lists the rest of corpus/wall.cic consumes.
+# Reads examples/wall/inputs/layout.json (written by examples/wall/tools/
+# extract_layout.py from the production exports; schema in the stage-6
+# contract section 3) and fans it out as typed lists the rest of wall.cic
+# consumes.
 # Pure stdlib Python 3; deterministic; every missing or malformed field is
 # a loud error, never a default (AGENTS.md: no silent fallbacks).
 #
@@ -22,14 +23,14 @@ _PART_KEYS = ("idx", "id", "bin", "cell", "centroid", "lean", "lean_length",
 
 
 def _pipeline_dir():
-    """corpus/ — the pipeline directory; relative paths resolve against
-    it (scripts live in corpus/scripts/, docs/10 section 5)."""
+    """examples/wall/ — the pipeline directory; relative paths resolve
+    against it (scripts live in examples/wall/scripts/, docs/10 section 5)."""
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def resolve_path(path):
     """Absolute paths pass through; relative ones resolve against the
-    pipeline directory (corpus/), never the process cwd."""
+    pipeline directory (examples/wall/), never the process cwd."""
     path = str(path)
     if os.path.isabs(path):
         return path

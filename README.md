@@ -60,8 +60,10 @@ reproduces the shipped fabrication files modulo declared noise. All five
 met on the dev machine (i7-13700KF): the full labeled carve in **6.5 s**
 cold (the wall's Rhino carve was ~30 min), a cheap-cone slider at
 **0.5 ms** p50, **Esc to idle in 170 ms**, **file-edit → canvas in ~100 ms**,
-and byte-comparable 3MF/DXF exports. The corpus and its measurement harness
-live in [`corpus/`](corpus/README.md). Next is v0.1 (OCCT-backed Solid, the
+and byte-comparable 3MF/DXF exports. The wall — example, playground, and
+the first member of the nightly regression corpus — lives in
+[`examples/wall/`](examples/wall/README.md); the normalizer and the
+measurement harness in [`tools/`](tools/). Next is v0.1 (OCCT-backed Solid, the
 full catalog, WASM script host, undo, git panel — [docs/15](docs/15-spike-plan.md)
 §After the spike); the working status lives in [AGENTS.md](AGENTS.md).
 

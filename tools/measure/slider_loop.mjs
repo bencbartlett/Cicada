@@ -9,10 +9,10 @@
  *
  * Usage (Node ≥ 20, no dependencies):
  *   cicada serve <scratch-copy-of-project> --port 8493 --token t     # serve a SCRATCH copy — the app writes files
- *   node corpus/measure/slider_loop.mjs --url http://127.0.0.1:8493 --token t \
+ *   node tools/measure/slider_loop.mjs --url http://127.0.0.1:8493 --token t \
  *        --pipeline 02-solids.cic --param size [--seconds 5] [--hz 60] \
  *        [--min 0.5 --max 5.0] [--json out.json]
- *   node corpus/measure/slider_loop.mjs --url … --pipeline wall.cic --param amps
+ *   node tools/measure/slider_loop.mjs --url … --pipeline wall.cic --param amps   # serving a scratch copy of examples/wall/
  *
  * `--param` is the slider's binding name; the kwarg, min and max come from
  * the view-model (`--min/--max` override). Prints a JSON result, then one
