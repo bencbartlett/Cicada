@@ -34,6 +34,19 @@ allow = [
 ]
 confidence-threshold = 0.8
 
+# OCCT seam (docs/probes/occt-2026-08.md §Q4, DECISIONS.md OCCT-licensing
+# row). LGPL-2.1 is allowed ONLY for the OCCT binding crate, and only under
+# the deprecated SPDX id its manifest declares (`LGPL-2.1`, not
+# `LGPL-2.1-only`: an exception must be spelled as the crate's expression
+# parses — a parse-error warning remains until the fork's manifest says
+# `LGPL-2.1-only`). cicada-geom depends on `opencascade-sys` alone, so the
+# high-level `opencascade` crate and its unlicensed `kicad-parser` never
+# enter the graph and need no rows. The binding links STATICALLY into our
+# binaries; what that means at go-public is the ledger row's business.
+[[licenses.exceptions]]
+name = "opencascade-sys"
+allow = ["LGPL-2.1"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
@@ -44,3 +57,7 @@ allow-wildcard-paths = true
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+# Ben's fork of opencascade-rs (branch `cicada`, pinned by rev in Cargo.toml)
+# — the fork, never upstream: every patch on it is reviewed (DECISIONS.md
+# rented-kernels row, revised 2026-08-19).
+allow-git = ["https://github.com/bencbartlett/opencascade-rs"]
