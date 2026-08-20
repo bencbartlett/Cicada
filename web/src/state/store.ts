@@ -191,9 +191,26 @@ export interface GitSlice {
   busy: GitBusy;
   /** Reads that answered, good or refused (tests: the refresh policy). */
   answers: number;
+  /**
+   * A write the server confirmed (a `delta`, a barrier `snapshot`) landed
+   * AFTER the read that produced `status` started: the cache describes the
+   * previous tree until the debounced re-read answers. For up to the ≤1 s
+   * debounce after an edit the chip would otherwise read `clean` and the
+   * Commit button "nothing to commit" over an edit that is already on disk
+   * — so while stale the chip dims its count, an empty scope reads
+   * "re-reading" instead of "clean", and commit/revert wait for the answer.
+   */
+  stale: boolean;
+  /**
+   * Confirmed writes seen so far — the stamp a read takes at its start and
+   * hands back with its answer: an answer whose stamp is older than the
+   * latest write was read from the previous tree and clears nothing (the
+   * policy runs one more read for the write that landed mid-flight).
+   */
+  writes: number;
 }
 
-const EMPTY_GIT: GitSlice = { status: null, error: null, loading: false, busy: null, answers: 0 };
+const EMPTY_GIT: GitSlice = { status: null, error: null, loading: false, busy: null, answers: 0, stale: false, writes: 0 };
 
 export interface CicadaState {
   // ---- connection / identity
@@ -281,10 +298,17 @@ export interface CicadaState {
   openSearch: (anchor: { x: number; y: number; cell: [number, number] | null; from: WireEnd | null }) => void;
   closeSearch: () => void;
   clearRunNotice: () => void;
-  /** A status read answered: replace the cache (a byte-identical answer — same `text_hash`, same facts — changes nothing). */
-  setGitStatus: (status: GitStatusResponse) => void;
-  /** A status read was refused: keep the last good answer for display, show the refusal. */
-  setGitError: (error: GitErrorBody) => void;
+  /**
+   * A status read answered: replace the cache (a byte-identical answer —
+   * same `text_hash`, same facts — changes nothing). `asOf` is the
+   * `git.writes` stamp the read took at its start: the answer clears
+   * `stale` only if no write landed since (absent = unconditionally).
+   */
+  setGitStatus: (status: GitStatusResponse, asOf?: number) => void;
+  /** A status read was refused: keep the last good answer for display, show the refusal (`asOf` as above). */
+  setGitError: (error: GitErrorBody, asOf?: number) => void;
+  /** The server confirmed a write (delta / barrier): the cached status is the previous tree's until the re-read lands. */
+  markGitStale: () => void;
   setGitLoading: (loading: boolean) => void;
   setGitBusy: (busy: GitBusy) => void;
   openCommitDialog: () => void;
@@ -567,27 +591,41 @@ export const useCicada = create<CicadaState>((set, get) => ({
   closeSearch: () => set({ search: null }),
   clearRunNotice: () => set({ runNotice: null }),
 
-  setGitStatus: (status) =>
+  setGitStatus: (status, asOf) =>
     set((state) => {
       const answers = state.git.answers + 1;
+      const stale = staleAfter(state.git, asOf);
       // Dedupe on `text_hash` (+ the facts computed alongside it): the same
       // answer again re-renders nothing — the chip, the badges and the tab
       // keep their identity.
       if (state.git.status !== null && sameGitStatus(state.git.status, status)) {
-        return { git: { ...state.git, loading: false, error: null, answers } };
+        return { git: { ...state.git, loading: false, error: null, answers, stale } };
       }
       return {
-        git: { ...state.git, status, error: null, loading: false, answers },
+        git: { ...state.git, status, error: null, loading: false, answers, stale },
         gitMarkers: markersByName(status),
       };
     }),
-  setGitError: (error) =>
-    set((state) => ({ git: { ...state.git, error, loading: false, answers: state.git.answers + 1 } })),
+  setGitError: (error, asOf) =>
+    set((state) => ({
+      git: { ...state.git, error, loading: false, answers: state.git.answers + 1, stale: staleAfter(state.git, asOf) },
+    })),
+  markGitStale: () => set((state) => ({ git: { ...state.git, stale: true, writes: state.git.writes + 1 } })),
   setGitLoading: (loading) => set((state) => ({ git: { ...state.git, loading } })),
   setGitBusy: (busy) => set((state) => ({ git: { ...state.git, busy } })),
   openCommitDialog: () => set({ commitDialog: true }),
   closeCommitDialog: () => set({ commitDialog: false }),
 }));
+
+/**
+ * Is the cache still stale once an answer read as of `asOf` lands? No
+ * stamp = the caller vouches for the answer (tests, a synthetic fill);
+ * a stamp older than the latest confirmed write = the answer describes the
+ * tree before that write, so it stays stale until the follow-up read.
+ */
+export function staleAfter(git: Pick<GitSlice, "writes">, asOf: number | undefined): boolean {
+  return asOf !== undefined && asOf < git.writes;
+}
 
 /** Same `text_hash` and the same facts around it (state, scope, markers)? */
 export function sameGitStatus(a: GitStatusResponse, b: GitStatusResponse): boolean {

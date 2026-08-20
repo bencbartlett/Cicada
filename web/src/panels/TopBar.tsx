@@ -154,6 +154,7 @@ function GitChip() {
       onClick={() => setTab("git")}
       data-testid="tb-git"
       data-kind={git.status?.state.kind ?? (git.error !== null ? "error" : "loading")}
+      data-stale={chip.stale}
     >
       <span className="tb-git-glyph" aria-hidden>
         ⎇
@@ -167,7 +168,11 @@ function GitChip() {
         </span>
       ))}
       {dirtyText !== null && (
-        <span className="tb-git-dirty" data-testid="tb-git-dirty">
+        <span
+          className={`tb-git-dirty${chip.stale ? " stale" : ""}`}
+          data-testid="tb-git-dirty"
+          title={chip.stale ? "the last read's count — an edit landed since, re-reading now" : undefined}
+        >
           {dirtyText}
         </span>
       )}

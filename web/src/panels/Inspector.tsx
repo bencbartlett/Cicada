@@ -38,8 +38,10 @@ export function Inspector() {
   const tab = useInspectorTab((s) => s.tab);
   const setTab = useInspectorTab((s) => s.setTab);
   const textPanel = useCicada((s) => s.settings.textPanel);
-  // The Git tab wears the dirty-file count of this pipeline's commit scope.
+  // The Git tab wears the dirty-file count of this pipeline's commit scope
+  // (dimmed while the cached status is stale — an edit landed, the re-read is on its way).
   const dirty = useCicada((s) => s.git.status?.scope.length ?? 0);
+  const stale = useCicada((s) => s.git.stale);
 
   // The settings toggle "text panel" defaults the inspector to the Text tab.
   useEffect(() => {
@@ -60,7 +62,11 @@ export function Inspector() {
           >
             {label}
             {id === "git" && dirty > 0 && (
-              <span className="insp-tab-count" title={`${dirty} dirty ${dirty === 1 ? "file" : "files"} to commit`} data-testid="insp-tab-git-count">
+              <span
+                className={`insp-tab-count${stale ? " stale" : ""}`}
+                title={`${dirty} dirty ${dirty === 1 ? "file" : "files"} to commit${stale ? " (last read — an edit landed since, re-reading)" : ""}`}
+                data-testid="insp-tab-git-count"
+              >
                 {dirty}
               </span>
             )}

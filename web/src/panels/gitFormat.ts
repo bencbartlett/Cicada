@@ -30,6 +30,13 @@ export interface GitChip {
   notes: string[];
   title: string;
   tone: ChipTone;
+  /**
+   * The count is the PREVIOUS tree's: an edit landed after the last read
+   * and the re-read is on its way (`GitSlice.stale`). The chip dims the
+   * count rather than hiding it — the last known answer with an honest
+   * caveat beats a blank — and the tooltip says so.
+   */
+  stale: boolean;
 }
 
 /** The branch (or where HEAD is) for a repo-ish state. */
@@ -52,7 +59,7 @@ export function dirtyCount(status: GitStatusResponse): number | null {
 
 /** The chip for the current slice (loading · refused · no repo · repo facts). */
 export function gitChip(slice: GitSlice): GitChip {
-  const { status, error } = slice;
+  const { status, error, stale } = slice;
   if (status === null) {
     if (error !== null) {
       return {
@@ -61,9 +68,10 @@ export function gitChip(slice: GitSlice): GitChip {
         notes: [],
         title: `git status could not be read — ${error.message}`,
         tone: "error",
+        stale: false,
       };
     }
-    return { label: "git…", dirty: null, notes: [], title: "reading git status…", tone: "faint" };
+    return { label: "git…", dirty: null, notes: [], title: "reading git status…", tone: "faint", stale: false };
   }
   const info = gitRepoInfo(status.state);
   if (info === null) {
@@ -71,7 +79,7 @@ export function gitChip(slice: GitSlice): GitChip {
       status.state.kind === "not_a_repo"
         ? "the project is not in a git repository — `git init` it to commit from the app"
         : "no `git` on PATH — install git (or put it on PATH) to use the git panel";
-    return { label: describeHead(status.state), dirty: null, notes: [], title, tone: "faint" };
+    return { label: describeHead(status.state), dirty: null, notes: [], title, tone: "faint", stale: false };
   }
   const notes: string[] = [];
   let tone: ChipTone = info.branch === null ? "warn" : "";
@@ -109,10 +117,41 @@ export function gitChip(slice: GitSlice): GitChip {
     info.operation !== undefined ? `a ${info.operation.replace("_", "-")} is in progress — finish it in your shell` : null,
     status.state.kind === "locked" ? "index.lock is held — commit and revert wait" : null,
     error !== null ? `last read refused: ${error.message}` : null,
+    stale ? "an edit landed since — re-reading the status now" : null,
     "click for the Git tab",
   ].filter((s): s is string => s !== null);
   if (error !== null) tone = "error";
-  return { label: describeHead(status.state), dirty, notes, title: titleParts.join(" · "), tone };
+  return { label: describeHead(status.state), dirty, notes, title: titleParts.join(" · "), tone, stale };
+}
+
+/**
+ * What the "files to commit" section says under its heading — ONE rule for
+ * the Git tab and the Ctrl+S dialog, so they cannot disagree:
+ *
+ * - `ignored`: the pipeline matches a `.gitignore` rule — git lists
+ *   nothing for it and refuses to add it, so an empty scope is git's
+ *   refusal, NEVER a clean tree ("nothing to commit — the scope matches
+ *   HEAD" beside the ignored warning were two contradictory statements on
+ *   one screen; every node wears `+`). `files` still lists whatever else
+ *   of the scope is dirty (a sidecar the rule does not match) — shown,
+ *   not committable;
+ * - `refreshing`: the scope is empty but the cache is stale (an edit
+ *   landed after the last read) — "clean" would be the previous tree's
+ *   verdict over an edit already on disk;
+ * - `clean`: an empty scope from a current read;
+ * - `files`: the dirty files, with `refreshing` set when the list may be
+ *   short of the latest edit.
+ */
+export type ScopeNote =
+  | { kind: "ignored"; path: string; files: ScopeFile[] }
+  | { kind: "refreshing" }
+  | { kind: "clean" }
+  | { kind: "files"; files: ScopeFile[]; refreshing: boolean };
+
+export function scopeNote(status: GitStatusResponse, stale: boolean): ScopeNote {
+  if (status.pipeline.ignored) return { kind: "ignored", path: status.pipeline.path, files: status.scope };
+  if (status.scope.length > 0) return { kind: "files", files: status.scope, refreshing: stale };
+  return stale ? { kind: "refreshing" } : { kind: "clean" };
 }
 
 /** The markers grouped the way the tab lists them; `removed` comes from HEAD. */

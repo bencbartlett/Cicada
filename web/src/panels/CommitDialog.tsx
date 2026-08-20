@@ -12,8 +12,8 @@ import { useEffect } from "react";
 import { gitRepoInfo } from "../protocol/messages";
 import { gitWriteBlockReason, ignoredReason } from "../state/git";
 import { canWrite, useCicada } from "../state/store";
-import { describeHead, dirtyCount } from "./gitFormat";
-import { CommitForm, ScopeList } from "./GitPanel";
+import { describeHead, dirtyCount, scopeNote } from "./gitFormat";
+import { CommitForm, ScopeBody } from "./GitPanel";
 import { useInspectorTab } from "./inspectorTab";
 import "./panels.css";
 
@@ -78,18 +78,22 @@ export function CommitDialog() {
 
         {canCommitHere && status !== null ? (
           <>
-            <div className="git-dialog-scope">
+            <div className="git-dialog-scope" data-testid="commit-dialog-scope" data-note={scopeNote(status, git.stale).kind}>
               <div className="insp-h" style={{ marginBottom: 4 }}>
                 files to commit
-                <span className={`badge${(dirtyCount(status) ?? 0) > 0 ? " warn" : ""}`}>{dirtyCount(status) ?? 0}</span>
+                <span className={`badge${(dirtyCount(status) ?? 0) > 0 ? " warn" : ""}${git.stale ? " stale" : ""}`}>
+                  {dirtyCount(status) ?? 0}
+                </span>
+                {git.stale && (
+                  <span className="right faint" data-testid="commit-dialog-refreshing">
+                    refreshing…
+                  </span>
+                )}
               </div>
-              {status.scope.length === 0 ? (
-                <div className="faint" data-testid="commit-dialog-clean">
-                  nothing to commit — the scope matches HEAD
-                </div>
-              ) : (
-                <ScopeList scope={status.scope} />
-              )}
+              {/* The same rule as the Git tab (`scopeNote`): an empty scope reads
+                  "re-reading" while the cache is stale, never "nothing to commit"
+                  over an edit that is already on disk. */}
+              <ScopeBody note={scopeNote(status, git.stale)} />
             </div>
             <CommitForm autoFocus onCommitted={close} onCancel={close} />
           </>

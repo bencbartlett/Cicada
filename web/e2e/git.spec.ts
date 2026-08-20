@@ -2,8 +2,12 @@
  * The git panel in the app (docs/17 item 2; docs/16 git chip · Git tab ·
  * Ctrl+S; doc 10 §Git integration slice 1): a project outside any
  * repository says `no repo` and offers no controls; after `git init` + a
- * baseline commit the chip shows the branch, an edit marks the node
- * `modified` on the canvas and the chip `1 dirty`, Ctrl+S opens the commit
+ * baseline commit the chip shows the branch, an edit marks the cached
+ * status STALE the moment its delta lands (the chip dims its count, the
+ * tab says "re-reading" — never "nothing to commit" over an edit that is
+ * on disk) until the ≤1 s re-read marks the node `modified` on the canvas
+ * (a header badge; at the far zoom tier, where header badges hide, a
+ * stripe and a tint on the node box) and the chip `1 dirty`, Ctrl+S opens the commit
  * dialog and Ctrl+Enter commits with the message VERBATIM (`git log`
  * agrees, the badge clears), a second edit is reverted to HEAD through the
  * confirm step — whose list is BINDING: over a two-file scope with one
@@ -11,8 +15,9 @@
  * exactly the one file listed, the other is left alone (the text panel
  * shows HEAD's line, the reload barrier cleared the undo history, the file
  * on disk equals HEAD, the revert reached the canvas in measured time),
- * and a read-only observer sees the status but no commit or revert
- * controls.
+ * a `.gitignore`d pipeline reads `ignored` with no dirty count and no
+ * "nothing to commit" line beside the warning, and a read-only observer
+ * sees the status but no commit or revert controls.
  *
  * Runs against the REAL `cicada serve` from `playwright.config.ts` over a
  * SCRATCH copy of `examples/` — the repository is created IN the scratch
@@ -25,12 +30,14 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { STALE_REASON } from "../src/state/git";
 import { join } from "node:path";
 import config from "../playwright.config";
 
 const meta = config.metadata as { token: string; scratch: string };
 const TOKEN = meta.token;
 const PIPELINE = "git.cic";
+const IGNORED = "ignored.cic";
 const SIDECAR = `${PIPELINE}.layout.json`;
 const PROJECT = join(meta.scratch, "examples");
 const FILE = join(PROJECT, PIPELINE);
@@ -90,7 +97,7 @@ interface StoreView {
   commitDialog: boolean;
   selection: { nodes: string[] };
   notices: { level: string; message: string }[];
-  git: { answers: number; busy: string | null; status: { text_hash: string; scope: { path: string }[] } | null };
+  git: { answers: number; busy: string | null; stale: boolean; status: { text_hash: string; scope: { path: string }[] } | null };
 }
 
 async function store(page: Page): Promise<StoreView> {
@@ -103,7 +110,7 @@ async function store(page: Page): Promise<StoreView> {
       commitDialog: s.commitDialog,
       selection: { nodes: s.selection.nodes },
       notices: s.notices.map((n) => ({ level: n.level, message: n.message })),
-      git: { answers: s.git.answers, busy: s.git.busy, status: s.git.status },
+      git: { answers: s.git.answers, busy: s.git.busy, stale: s.git.stale, status: s.git.status },
     };
   });
 }
@@ -141,6 +148,92 @@ function stopwatchUntilText(page: Page, want: string): Promise<number> {
       }),
     want,
   );
+}
+
+/**
+ * One sample of what the user sees of the git status: the store's flag,
+ * the chip (its `data-stale` and its count), the Git tab's commit hint and
+ * which scope note it shows. `traceStaleWindow` records the DISTINCT
+ * samples from just before an edit is sent until the re-read has landed
+ * and the DOM agrees — in the page, at 5 ms, so the ≤1 s stale window is
+ * caught deterministically (a Playwright poll from outside could miss it).
+ */
+interface StaleSample {
+  /** ms since the intent was sent (the first sample is taken just before, at 0). */
+  t: number;
+  stale: boolean;
+  chipStale: string | null;
+  dirty: string | null;
+  hint: string | null;
+  scope: string | null;
+}
+
+function traceStaleWindow(page: Page, message: unknown): Promise<StaleSample[]> {
+  return page.evaluate(
+    (msg) =>
+      new Promise<StaleSample[]>((resolve, reject) => {
+        const w = window as unknown as { __cicada: CicadaHandle };
+        const q = (id: string) => document.querySelector(`[data-testid="${id}"]`);
+        const t0 = performance.now();
+        const sample = (): StaleSample => ({
+          t: Math.round(performance.now() - t0),
+          stale: w.__cicada.state().git.stale,
+          chipStale: q("tb-git")?.getAttribute("data-stale") ?? null,
+          dirty: q("tb-git-dirty")?.textContent ?? null,
+          hint: q("git-commit-hint")?.textContent ?? null,
+          scope: q("git-scope-section")?.getAttribute("data-note") ?? null,
+        });
+        const phases: StaleSample[] = [];
+        const same = (a: StaleSample, b: StaleSample) =>
+          a.stale === b.stale && a.chipStale === b.chipStale && a.dirty === b.dirty && a.hint === b.hint && a.scope === b.scope;
+        const push = () => {
+          const now = sample();
+          const last = phases[phases.length - 1];
+          if (last === undefined || !same(last, now)) phases.push(now);
+        };
+        push();
+        w.__cicada.send(msg);
+        const timer = setInterval(() => {
+          push();
+          const now = phases[phases.length - 1]!;
+          const sawStale = phases.some((p) => p.stale);
+          const domCurrent =
+            now.chipStale === "false" && now.scope !== null && now.scope !== "refreshing" && now.hint !== null && !/re-reading/.test(now.hint);
+          if (sawStale && !now.stale && domCurrent) {
+            clearInterval(timer);
+            resolve(phases);
+          } else if (performance.now() - t0 > 15_000) {
+            clearInterval(timer);
+            reject(new Error(`the stale window never closed: ${JSON.stringify(phases)}`));
+          }
+        }, 5);
+      }),
+    message,
+  );
+}
+
+/** Wheel over the canvas until its zoom LOD tier (`data-lod`) is `tier`; throws if it never gets there. */
+async function zoomToTier(page: Page, tier: "far" | "near"): Promise<void> {
+  const canvas = page.locator(".cicada-canvas");
+  const pane = page.locator(".react-flow__pane");
+  const box = await pane.boundingBox();
+  if (box === null) throw new Error("no canvas pane");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  for (let i = 0; i < 40; i += 1) {
+    if ((await canvas.getAttribute("data-lod")) === tier) return;
+    await page.mouse.wheel(0, tier === "far" ? 400 : -400);
+  }
+  throw new Error(`the canvas never reached the ${tier} zoom tier (at ${await canvas.getAttribute("data-lod")})`);
+}
+
+/** The computed style of a node's `::before` (the far-tier git stripe lives there). */
+async function stripeOf(page: Page, node: string): Promise<{ content: string; width: string; background: string }> {
+  return page.evaluate((name) => {
+    const el = document.querySelector(`.react-flow__node[data-id='${name}'] .cn`);
+    if (el === null) throw new Error(`no node ${name}`);
+    const css = getComputedStyle(el, "::before");
+    return { content: css.content, width: css.width, background: css.backgroundColor };
+  }, node);
 }
 
 async function open(page: Page): Promise<void> {
@@ -243,9 +336,36 @@ test.describe("git panel", () => {
     await expect(sizeNode(page)).not.toHaveAttribute("data-git", /.+/);
     await expect(page.getByTestId("insp-tab-git-count")).toHaveCount(0);
 
-    // Edit through the same op pipeline a slider release uses.
-    await send(page, { type: "set_param", payload: { node: "size", port: "value", value: "3.0" } });
+    // The Git tab open over the clean tree: "nothing to commit" is true now.
+    await chip(page).click();
+    await expect(page.getByTestId("git-clean")).toBeVisible();
+    await expect(page.getByTestId("git-scope-section")).toHaveAttribute("data-note", "clean");
+    await expect(page.getByTestId("git-commit-hint")).toHaveText(/nothing to commit/);
+    await expect(chip(page)).toHaveAttribute("data-stale", "false");
+
+    // Edit through the same op pipeline a slider release uses — and watch
+    // the ≤1 s between the delta and the re-read from inside the page: the
+    // cached "clean" answer must be marked STALE the moment the delta lands
+    // (the chip dims its count, the tab says "re-reading", the Commit button
+    // waits), never "nothing to commit" over an edit that is already on disk.
+    const phases = await traceStaleWindow(page, { type: "set_param", payload: { node: "size", port: "value", value: "3.0" } });
     await expect.poll(async () => readFileSync(FILE, "utf8")).toBe(SIZE_3);
+    expect(phases[0], "before the edit: current and clean").toMatchObject({ stale: false, chipStale: "false", dirty: "clean", scope: "clean" });
+    expect(phases[0]!.hint).toMatch(/nothing to commit/);
+    const staleDom = phases.find((p) => p.stale && p.chipStale === "true" && p.scope === "refreshing");
+    expect(staleDom, `a stale phase reached the DOM: ${JSON.stringify(phases)}`).toBeDefined();
+    expect(staleDom!.dirty, "the last known count stays (dimmed), not blanked").toBe("clean");
+    expect(staleDom!.hint, "the Commit hint says re-reading, not nothing-to-commit").toBe(STALE_REASON);
+    const settled = phases[phases.length - 1]!;
+    expect(settled).toMatchObject({ stale: false, chipStale: "false", dirty: "1 dirty", scope: "files" });
+    expect(settled.hint).toMatch(/write a commit message/);
+    console.log(
+      `stale window: the delta marked the cache stale at ${staleDom!.t} ms, the re-read answered at ${settled.t} ms (${phases.length} distinct phases)`,
+    );
+    for (const p of phases) {
+      if (p.stale) expect(p.hint, "no phase says 'nothing to commit' while stale").not.toMatch(/nothing to commit/);
+    }
+    expect((await store(page)).git.stale).toBe(false);
 
     // ≤1 s later the status is re-read: the badge, the chip, the tab count.
     await expect(sizeNode(page)).toHaveAttribute("data-git", "modified");
@@ -257,6 +377,27 @@ test.describe("git panel", () => {
     await expect(page.getByTestId("insp-tab-git-count")).toHaveText("1");
     // The other nodes are untouched.
     await expect(page.locator(".react-flow__node[data-id='span'] .cn")).not.toHaveAttribute("data-git", /.+/);
+
+    // At the far zoom tier the header badges hide; the marker survives as
+    // a stripe down the node's left edge (`::before`, the kind's token) and
+    // a tint over the node — a zoomed-out pipeline still shows what differs
+    // from HEAD. The untouched node wears neither; at the near tier the
+    // stripe is gone again and the badge is back.
+    expect((await stripeOf(page, "size")).content, "no stripe at the near tier (the badge is on the header)").toBe("none");
+    await zoomToTier(page, "far");
+    await expect(badge).toBeHidden();
+    const farStripe = await stripeOf(page, "size");
+    expect(farStripe.content).toBe('""');
+    expect(farStripe.width).toBe("10px");
+    expect(farStripe.background, "the stripe is painted (the kind's token resolved)").not.toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
+    expect((await stripeOf(page, "span")).content, "an unchanged node has no stripe").toBe("none");
+    await zoomToTier(page, "near");
+    await expect(badge).toBeVisible();
+    expect((await stripeOf(page, "size")).content).toBe("none");
+    // Back to the load-time view for the tests that follow (they click into the nodes).
+    await open(page);
+    await expect(sizeNode(page)).toHaveAttribute("data-git", "modified");
+    await expect(page.getByTestId("tb-git-dirty")).toHaveText("1 dirty");
 
     // The Git tab: the marker under `modified`, click → selects the node; the scope lists the file.
     await chip(page).click();
@@ -427,6 +568,54 @@ test.describe("git panel", () => {
     git(["add", "--", SIDECAR]);
     git(["commit", "-q", "-m", "sidecar"]);
     expect(git(["status", "--porcelain", "--", PIPELINE, SIDECAR]).out).toBe("");
+  });
+
+  test("a `.gitignore`d pipeline: the chip says `ignored` with no dirty count; the tab shows the ignored warning and NOT 'nothing to commit' beside it; Commit is disabled with the reason", async () => {
+    // git honors an untracked .gitignore; the rule names the second
+    // pipeline only, so `git.cic` (the other tests) is unaffected.
+    writeFileSync(join(PROJECT, IGNORED), START);
+    writeFileSync(join(PROJECT, ".gitignore"), `${IGNORED}\n`);
+    expect(git(["check-ignore", "--", IGNORED]).out).toBe(IGNORED);
+
+    await page.goto(`/?token=${TOKEN}&pipeline=${IGNORED}`);
+    await expect(page.getByTestId("app")).toBeVisible();
+    await expect(page.locator(".react-flow__node")).toHaveCount(3);
+
+    await expect(page.getByTestId("tb-git-branch")).toHaveText("main");
+    await expect(chip(page)).toContainText("ignored");
+    await expect(page.getByTestId("tb-git-dirty"), "no count: git lists nothing for an ignored file").toHaveCount(0);
+    await expect(chip(page)).toHaveAttribute("title", /is ignored by a \.gitignore rule/);
+
+    await chip(page).click();
+    await expect(page.getByTestId("git-ignored")).toBeVisible();
+    await expect(page.getByTestId("git-ignored")).toContainText(`\`${IGNORED}\` is ignored by a .gitignore rule`);
+    await expect(page.getByTestId("git-scope-section")).toHaveAttribute("data-note", "ignored");
+    // The contradiction this guards against: the ignored warning AND
+    // "nothing to commit — the scope matches HEAD" on one screen (the file
+    // has no HEAD version; every node wears `+`).
+    await expect(page.getByTestId("git-clean")).toHaveCount(0);
+    await expect(page.getByTestId("git-scope-refreshing")).toHaveCount(0);
+    await expect(page.getByTestId("git-marker-count")).toHaveText("3");
+    await expect(page.getByTestId("git-group-added")).toContainText("size");
+    await expect(page.getByTestId("git-commit-submit")).toBeDisabled();
+    await expect(page.getByTestId("git-commit-submit")).toHaveAttribute("title", /is ignored by a \.gitignore rule/);
+    await expect(page.getByTestId("git-revert")).toBeDisabled();
+
+    // Ctrl+S: the dialog says why, no form.
+    await page.locator(".react-flow__pane").click({ position: { x: 20, y: 20 } });
+    await page.keyboard.press("Control+s");
+    await expect(page.getByTestId("commit-dialog")).toBeVisible();
+    await expect(page.getByTestId("commit-dialog-blocked")).toContainText(/is ignored by a \.gitignore rule/);
+    // (The Git tab's own form is still in the inspector — scope to the dialog.)
+    await expect(page.getByTestId("commit-dialog").getByTestId("git-message")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("commit-dialog")).toHaveCount(0);
+
+    // Back on the main pipeline as its writer — the observer test below
+    // needs this page to hold the lease.
+    await open(page);
+    await expect.poll(async () => (await store(page)).role).toBe("writer");
+    await expect(page.getByTestId("tb-git-dirty")).toHaveText("clean");
   });
 
   test("a read-only observer sees the status but no commit or revert controls; Ctrl+S says so", async ({ browser }) => {

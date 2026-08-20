@@ -302,6 +302,43 @@
   background: var(--error-bg);
 }
 
+/* At the far zoom tier the header badges hide (`.cn-badges`, zoom LOD
+   below) — the change marker survives on the node box itself: a stripe
+   down the left edge in the kind's token and the kind's tint over the
+   node face, so a pipeline zoomed out to a thumbnail (the wall) still
+   shows which nodes differ from HEAD. Same tokens as the badges; the
+   `.cn` keeps its own background color under the tint (a flat gradient
+   layered as background-image — the `-bg` tokens are translucent). */
+.cicada-canvas[data-lod="far"] .cn[data-git]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  border-radius: var(--radius) 0 0 var(--radius);
+  pointer-events: none;
+  z-index: 2;
+}
+.cicada-canvas[data-lod="far"] .cn[data-git="added"]::before {
+  background: var(--ok);
+}
+.cicada-canvas[data-lod="far"] .cn[data-git="added"] {
+  background-image: linear-gradient(var(--ok-bg), var(--ok-bg));
+}
+.cicada-canvas[data-lod="far"] .cn[data-git="modified"]::before {
+  background: var(--warn);
+}
+.cicada-canvas[data-lod="far"] .cn[data-git="modified"] {
+  background-image: linear-gradient(var(--warn-bg), var(--warn-bg));
+}
+.cicada-canvas[data-lod="far"] .cn[data-git="renamed"]::before {
+  background: var(--accent);
+}
+.cicada-canvas[data-lod="far"] .cn[data-git="renamed"] {
+  background-image: linear-gradient(var(--accent-bg), var(--accent-bg));
+}
+
 /* comment note (above the header, outside the box) */
 .cn-note {
   position: absolute;

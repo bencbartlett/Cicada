@@ -15,11 +15,11 @@ import { describe, expect, it } from "vitest";
 const src = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (rel: string) => readFileSync(join(src, rel), "utf8");
 
-/** `{selector: declarations}` for every rule whose selector list matches `pick`. */
+/** `{selector: declarations}` for every rule whose selector list matches `pick` (comments stripped first — a commented rule is still a rule). */
 function rules(css: string, pick: RegExp): Map<string, string> {
   const out = new Map<string, string>();
   const re = /([^{}]+)\{([^{}]*)\}/g;
-  for (const match of css.matchAll(re)) {
+  for (const match of css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(re)) {
     const selector = match[1]!.trim();
     if (pick.test(selector)) out.set(selector, match[2]!);
   }
@@ -58,6 +58,35 @@ describe("git badge / marker colors come from the theme tokens", () => {
       }
     });
   }
+
+  it("the far zoom tier keeps a marker on the node box: a stripe (`::before`, the kind's token) and a tint (the kind's `-bg` token) per canvas-visible kind — header badges hide at that tier", () => {
+    // The pre-existing LOD rule hides `.cn-badges` (and the git badge in
+    // it) at the far tier; without these rules a zoomed-out pipeline (the
+    // wall) shows no change markers at all.
+    const css = read("canvas/canvas.css");
+    expect(rules(css, /\[data-lod="far"\][^{]*\.cn-badges/).size, "the badges do hide at the far tier (else this test guards nothing)").toBeGreaterThan(0);
+    const base = rules(css, /^\.cicada-canvas\[data-lod="far"\] \.cn\[data-git\]::before$/);
+    expect(base.size).toBe(1);
+    const baseBody = [...base.values()][0]!;
+    expect(baseBody).toMatch(/content:\s*""/);
+    expect(baseBody).toMatch(/position:\s*absolute/);
+    for (const [kind, token] of [
+      ["added", "ok"],
+      ["modified", "warn"],
+      ["renamed", "accent"],
+    ] as const) {
+      const stripe = rules(css, new RegExp(`^\\.cicada-canvas\\[data-lod="far"\\] \\.cn\\[data-git="${kind}"\\]::before$`));
+      expect(stripe.size, `${kind}: a stripe rule`).toBe(1);
+      expect([...stripe.values()][0]!.trim()).toBe(`background: var(--${token});`);
+      const tint = rules(css, new RegExp(`^\\.cicada-canvas\\[data-lod="far"\\] \\.cn\\[data-git="${kind}"\\]$`));
+      expect(tint.size, `${kind}: a tint rule`).toBe(1);
+      expect([...tint.values()][0]!.trim()).toBe(`background-image: linear-gradient(var(--${token}-bg), var(--${token}-bg));`);
+      for (const t of [token, `${token}-bg`]) {
+        expect(dark.has(t), `--${t} (dark)`).toBe(true);
+        expect(light.has(t), `--${t} (light)`).toBe(true);
+      }
+    }
+  });
 
   it("the four change kinds each have a foreground AND a background token (`--ok-bg` included)", () => {
     for (const token of ["ok", "ok-bg", "warn", "warn-bg", "accent", "accent-bg", "error", "error-bg"]) {

@@ -12,10 +12,10 @@ import { useEffect, useRef, useState } from "react";
 import type { GitState, NodeChange, RemovedNode, ScopeFile } from "../protocol/messages";
 import { gitRepoInfo } from "../protocol/messages";
 import { describeGitError } from "../protocol/git";
-import { commitBlockReason, commitFromApp, gitWriteBlockReason, ignoredReason, refreshGitNow, revertToHead } from "../state/git";
+import { commitBlockReason, commitFromApp, ignoredReason, refreshGitNow, revertBlockReason, revertToHead, STALE_REASON } from "../state/git";
 import { canWrite, useCicada } from "../state/store";
 import { useCommitDraft } from "./commitDraft";
-import { describeHead, groupMarkers, markerBadge, revertRequest } from "./gitFormat";
+import { describeHead, groupMarkers, markerBadge, revertRequest, scopeNote, type ScopeNote } from "./gitFormat";
 import "./panels.css";
 
 export function GitPanel() {
@@ -59,7 +59,7 @@ export function GitPanel() {
           {gitRepoInfo(status.state) !== null && (
             <>
               <MarkersSection />
-              <ScopeSection scope={status.scope} pipelinePath={status.pipeline.path} ignored={status.pipeline.ignored} tracked={status.pipeline.tracked} />
+              <ScopeSection />
               {writer ? (
                 <>
                   <section className="insp-section">
@@ -160,6 +160,7 @@ function StateSection({ state }: { state: GitState }) {
 
 function MarkersSection() {
   const pipeline = useCicada((s) => s.git.status?.pipeline);
+  const stale = useCicada((s) => s.git.stale);
   const graph = useCicada((s) => s.graph);
   const selected = useCicada((s) => s.selection.nodes);
   const selectNodes = useCicada((s) => s.selectNodes);
@@ -213,7 +214,11 @@ function MarkersSection() {
           </span>
         )}
       </h3>
-      {total === 0 && <div className="faint">no node differs from HEAD</div>}
+      {total === 0 && (
+        <div className="faint" data-testid={stale ? "git-markers-refreshing" : "git-markers-clean"}>
+          {stale ? STALE_REASON : "no node differs from HEAD"}
+        </div>
+      )}
       {groups.added.length > 0 && (
         <div className="git-group" data-testid="git-group-added">
           <div className="git-group-h">added · {groups.added.length}</div>
@@ -258,44 +263,72 @@ export function ScopeList({ scope }: { scope: ScopeFile[] }) {
   );
 }
 
-function ScopeSection({
-  scope,
-  pipelinePath,
-  ignored,
-  tracked,
-}: {
-  scope: ScopeFile[];
-  pipelinePath: string;
-  ignored: boolean;
-  tracked: boolean;
-}) {
+/**
+ * The line (or list) under the "files to commit" heading, from the ONE
+ * rule the Ctrl+S dialog uses too (`scopeNote`): an ignored pipeline never
+ * reads "nothing to commit", a stale cache reads "re-reading", a current
+ * empty scope reads clean, and a list carries a `refreshing` hint while an
+ * edit may still be missing from it. `data-testid`s name the branch taken.
+ */
+export function ScopeBody({ note }: { note: ScopeNote }) {
+  switch (note.kind) {
+    case "ignored":
+      return (
+        <>
+          <div className="excluded red" data-testid="git-ignored">
+            {ignoredReason(note.path)} (or <code>git add -f</code> it once in a shell — git refuses to add an ignored
+            file otherwise).
+          </div>
+          {note.files.length > 0 && <ScopeList scope={note.files} />}
+        </>
+      );
+    case "refreshing":
+      return (
+        <div className="faint" data-testid="git-scope-refreshing">
+          {STALE_REASON}
+        </div>
+      );
+    case "clean":
+      return (
+        <div className="faint" data-testid="git-clean">
+          nothing to commit — the scope matches HEAD
+        </div>
+      );
+    case "files":
+      return (
+        <>
+          <ScopeList scope={note.files} />
+          {note.refreshing && (
+            <div className="faint" data-testid="git-scope-refreshing">
+              {STALE_REASON}
+            </div>
+          )}
+        </>
+      );
+  }
+}
+
+function ScopeSection() {
+  const status = useCicada((s) => s.git.status);
+  const stale = useCicada((s) => s.git.stale);
+  if (status === null) return null;
+  const { scope, pipeline } = status;
+  const note = scopeNote(status, stale);
   return (
-    <section className="insp-section">
+    <section className="insp-section" data-testid="git-scope-section" data-note={note.kind}>
       <h3 className="insp-h">
         files to commit
-        <span className={`badge${scope.length > 0 ? " warn" : ""}`} data-testid="git-dirty-count">
+        <span className={`badge${scope.length > 0 ? " warn" : ""}${stale ? " stale" : ""}`} data-testid="git-dirty-count">
           {scope.length}
         </span>
       </h3>
       <div className="faint" style={{ marginBottom: 4 }}>
-        the scope: <code>{pipelinePath}</code>, its sidecar, and <code>scripts/*.py</code> beside it
+        the scope: <code>{pipeline.path}</code>, its sidecar, and <code>scripts/*.py</code> beside it
       </div>
-      {ignored && (
-        <div className="excluded red" data-testid="git-ignored">
-          {ignoredReason(pipelinePath)} (or <code>git add -f</code> it once in a shell — git refuses to add an ignored
-          file otherwise).
-        </div>
-      )}
-      {!ignored && !tracked && (
+      {!pipeline.ignored && !pipeline.tracked && (
         <div className="faint">the pipeline is not tracked yet — the first commit adds it</div>
       )}
-      {scope.length === 0 ? (
-        <div className="faint" data-testid="git-clean">
-          nothing to commit — the scope matches HEAD
-        </div>
-      ) : (
-        <ScopeList scope={scope} />
-      )}
+      <ScopeBody note={note} />
     </section>
   );
 }
@@ -405,12 +438,10 @@ export function CommitForm({
  * one path.)
  */
 function RevertControl({ scope }: { scope: ScopeFile[] }) {
-  const shared = useCicada(gitWriteBlockReason);
   const busy = useCicada((s) => s.git.busy);
   const [confirming, setConfirming] = useState(false);
   const { files, untouched, paths } = revertRequest(scope);
-  const blocked =
-    shared ?? (files.length === 0 ? "nothing to revert — no file of the scope differs from its HEAD version" : null);
+  const blocked = useCicada((s) => revertBlockReason(s, files.length));
 
   // The scope changed under the confirm step (an edit, a refresh): ask again.
   const key = paths.join("\n");
@@ -461,6 +492,7 @@ function RevertControl({ scope }: { scope: ScopeFile[] }) {
         <button onClick={() => setConfirming(false)} data-testid="git-revert-confirm-no">
           keep my edits
         </button>
+        {blocked !== null && <span className="faint">{blocked}</span>}
       </div>
     </div>
   );

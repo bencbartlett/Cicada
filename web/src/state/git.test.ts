@@ -1,8 +1,10 @@
 /**
  * The store's git slice and the policy's feed (docs/17 item 2): which
- * server messages trigger a status read, the `text_hash` dedupe, the
- * canvas-facing marker index, and the gate every commit/revert affordance
- * reads (`gitWriteBlockReason`).
+ * server messages trigger a status read (and mark the cache stale), the
+ * `text_hash` dedupe, the canvas-facing marker index, the stale window
+ * between an edit and its re-read, and the gates every commit/revert
+ * affordance reads (`gitWriteBlockReason`, `commitBlockReason`,
+ * `revertBlockReason`).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitStatusResponse, RepoInfo, ServerEnvelope } from "../protocol/messages";
@@ -13,10 +15,14 @@ import {
   gitPolicy,
   gitWriteBlockReason,
   ignoredReason,
+  revertBlockReason,
+  STALE_REASON,
   startGitStatus,
   stopGitStatus,
 } from "./git";
-import { markersByName, sameGitStatus, useCicada } from "./store";
+import { markersByName, sameGitStatus, staleAfter, useCicada, type GitSlice } from "./store";
+
+const EMPTY_SLICE: GitSlice = { status: null, error: null, loading: false, busy: null, answers: 0, stale: false, writes: 0 };
 
 const INFO: RepoInfo = {
   root: "C:/repo",
@@ -61,9 +67,14 @@ const SUMMARY = {
 };
 
 describe("feedGitPolicy", () => {
-  it("hello → now; delta and barrier snapshot → debounced write; everything else → nothing", () => {
+  beforeEach(() => {
+    useCicada.setState({ git: { ...EMPTY_SLICE } });
+  });
+
+  it("hello → now; delta and barrier snapshot → debounced write AND the cache marked stale; everything else → nothing", () => {
     const policy = { onConnected: vi.fn(), onWrite: vi.fn() };
     const feed = (message: ServerEnvelope) => feedGitPolicy(policy, message);
+    const git = () => useCicada.getState().git;
     feed({
       v: 1,
       seq: 0,
@@ -72,6 +83,8 @@ describe("feedGitPolicy", () => {
     });
     expect(policy.onConnected).toHaveBeenCalledTimes(1);
     expect(policy.onWrite).toHaveBeenCalledTimes(0);
+    expect(git().stale, "a (re)connect does not stale the cache — its read is immediate").toBe(false);
+    expect(git().writes).toBe(0);
 
     const snapshot = (barrier: boolean): ServerEnvelope => ({
       v: 1,
@@ -90,8 +103,11 @@ describe("feedGitPolicy", () => {
     });
     feed(snapshot(false));
     expect(policy.onWrite, "the initial snapshot follows the hello's read").toHaveBeenCalledTimes(0);
+    expect(git().stale).toBe(false);
     feed(snapshot(true));
     expect(policy.onWrite, "a barrier = the tree changed under us").toHaveBeenCalledTimes(1);
+    expect(git().stale, "…and the cached status describes the tree before it").toBe(true);
+    expect(git().writes).toBe(1);
 
     feed({
       v: 1,
@@ -106,6 +122,7 @@ describe("feedGitPolicy", () => {
       },
     });
     expect(policy.onWrite, "a sidecar-only delta dirties the scope too").toHaveBeenCalledTimes(2);
+    expect(git().writes, "every confirmed write stamps the slice").toBe(2);
 
     feed({ v: 1, seq: 3, type: "status", payload: { generation: 1, nodes: {}, summary: SUMMARY } });
     feed({ v: 1, seq: 4, type: "lease", payload: { lease: { writer: 1, clients: [] }, role: "writer" } });
@@ -113,6 +130,7 @@ describe("feedGitPolicy", () => {
     feed({ v: 1, seq: 6, type: "display_reset", payload: { generation: 1 } });
     expect(policy.onConnected).toHaveBeenCalledTimes(1);
     expect(policy.onWrite).toHaveBeenCalledTimes(2);
+    expect(git().writes).toBe(2);
   });
 });
 
@@ -196,6 +214,64 @@ describe("startGitStatus — the installed policy", () => {
     expect(read, "a disposed policy reads no more").toHaveBeenCalledTimes(2);
   });
 
+  it("the stale window, end to end with the real reader: a delta stales the cache until the debounced read ANSWERS; a write that lands mid-read keeps it stale until the follow-up read", async () => {
+    useCicada.setState({
+      token: "t",
+      pipeline: "p.cic",
+      git: { ...EMPTY_SLICE, status: { ...REPO, scope: [], text_hash: "00".repeat(32) }, answers: 1 },
+    });
+    const git = () => useCicada.getState().git;
+    // The server's answers, released by hand: the real `readGitStatus` over
+    // a stubbed global `fetch` (the typed helper defaults to it at call time).
+    const pending: ((status: GitStatusResponse) => void)[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            pending.push((status) => resolve(new Response(JSON.stringify(status), { status: 200, headers: { "content-type": "application/json" } })));
+          }),
+      ),
+    );
+    try {
+      const policy = startGitStatus(null);
+      const delta = (seq: number) =>
+        feedGitPolicy(policy, {
+          v: 1,
+          seq,
+          type: "delta",
+          payload: { source: { client: 1, label: "set size" }, graph: GRAPH, text: "# cicada 1\n", dirty: [], history: HISTORY },
+        });
+
+      delta(2);
+      expect(git().stale, "the moment the delta lands the clean cache is the previous tree's").toBe(true);
+      expect(git().status?.scope, "…and it is kept (dimmed), not blanked").toEqual([]);
+      await vi.advanceTimersByTimeAsync(GIT_REFRESH_DEBOUNCE_MS);
+      expect(pending, "the debounced read went out").toHaveLength(1);
+      expect(git().stale, "in flight = still stale").toBe(true);
+
+      // A second edit lands while that read is in flight.
+      delta(3);
+      expect(git().writes).toBe(2);
+      pending[0]!(REPO);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(git().answers).toBe(2);
+      expect(git().status?.scope, "the answer is the freshest one, so it is shown").toEqual(REPO.scope);
+      expect(git().stale, "…but it was read before the second edit: still stale").toBe(true);
+
+      await vi.advanceTimersByTimeAsync(GIT_REFRESH_DEBOUNCE_MS);
+      expect(pending, "the follow-up read for the second edit").toHaveLength(2);
+      pending[1]!(REPO);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(git().answers).toBe(3);
+      expect(git().stale, "current at last").toBe(false);
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      expect(pending, "and nothing more while idle").toHaveLength(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("a second start replaces the first: the old listener is gone, one policy is live", () => {
     const win = fakeWindow();
     const first = startGitStatus(win, () => Promise.resolve());
@@ -212,10 +288,50 @@ describe("startGitStatus — the installed policy", () => {
 describe("the git slice", () => {
   beforeEach(() => {
     useCicada.setState({
-      git: { status: null, error: null, loading: false, busy: null, answers: 0 },
+      git: { ...EMPTY_SLICE },
       gitMarkers: {},
       notices: [],
     });
+  });
+
+  it("markGitStale flags the cache and stamps the write; an answer read as of that stamp clears it, an older one does not", () => {
+    const git = () => useCicada.getState().git;
+    useCicada.getState().setGitStatus(REPO, 0);
+    expect(git().stale).toBe(false);
+
+    useCicada.getState().markGitStale();
+    expect(git()).toMatchObject({ stale: true, writes: 1, status: REPO });
+    // A read that STARTED before the write (stamp 0) answers after it: the
+    // answer is the previous tree's — still stale, the markers untouched.
+    useCicada.getState().setGitStatus({ ...REPO, text_hash: "22".repeat(32) }, 0);
+    expect(git().stale, "an answer overtaken by a write clears nothing").toBe(true);
+    expect(git().status?.text_hash, "…but it is still the freshest answer, so it is kept").toBe("22".repeat(32));
+    // The follow-up read started under stamp 1: current.
+    useCicada.getState().setGitStatus(REPO, 1);
+    expect(git().stale).toBe(false);
+    expect(git().answers).toBe(3);
+
+    // The same for a refused read, and for the dedupe branch.
+    useCicada.getState().markGitStale();
+    useCicada.getState().markGitStale();
+    expect(git().writes).toBe(3);
+    useCicada.getState().setGitError({ kind: "git_failed", message: "x", command: "git status", code: 1 }, 1);
+    expect(git().stale, "a refusal read before the writes does not vouch for the tree").toBe(true);
+    useCicada.getState().setGitError({ kind: "git_failed", message: "x", command: "git status", code: 1 }, 3);
+    expect(git().stale).toBe(false);
+    useCicada.getState().markGitStale();
+    const before = useCicada.getState().git.status;
+    useCicada.getState().setGitStatus(JSON.parse(JSON.stringify(REPO)) as GitStatusResponse, 4);
+    expect(git().status, "a byte-identical answer is deduped…").toBe(before);
+    expect(git().stale, "…and still clears the stale flag").toBe(false);
+
+    // No stamp = the caller vouches for the answer (tests, synthetic fills).
+    useCicada.getState().markGitStale();
+    useCicada.getState().setGitStatus(REPO);
+    expect(git().stale).toBe(false);
+    expect(staleAfter({ writes: 5 }, undefined)).toBe(false);
+    expect(staleAfter({ writes: 5 }, 4)).toBe(true);
+    expect(staleAfter({ writes: 5 }, 5)).toBe(false);
   });
 
   it("a status answer fills the cache and the marker index (removed nodes are not badged)", () => {
@@ -283,10 +399,10 @@ describe("gitWriteBlockReason", () => {
     });
   beforeEach(() => {
     writer();
-    useCicada.setState({ git: { status: REPO, error: null, loading: false, busy: null, answers: 1 } });
+    useCicada.setState({ git: { status: REPO, error: null, loading: false, busy: null, answers: 1, stale: false, writes: 0 } });
   });
   afterEach(() => {
-    useCicada.setState({ git: { status: null, error: null, loading: false, busy: null, answers: 0 } });
+    useCicada.setState({ git: { status: null, error: null, loading: false, busy: null, answers: 0, stale: false, writes: 0 } });
   });
 
   it("allows the writer of a plain repo", () => {
@@ -305,7 +421,7 @@ describe("gitWriteBlockReason", () => {
     useCicada.getState().setGitBusy(null);
 
     const withState = (state: GitStatusResponse["state"]) =>
-      useCicada.setState({ git: { status: { ...REPO, state }, error: null, loading: false, busy: null, answers: 1 } });
+      useCicada.setState({ git: { status: { ...REPO, state }, error: null, loading: false, busy: null, answers: 1, stale: false, writes: 0 } });
     withState({ kind: "not_a_repo" });
     expect(gitWriteBlockReason()).toMatch(/not in a git repository/);
     withState({ kind: "git_not_found" });
@@ -327,20 +443,56 @@ describe("gitWriteBlockReason", () => {
       pipeline: { path: "ign.cic", tracked: false, ignored: true, dirty: true, nodes: [{ name: "n", change: "added" }], removed: [] },
       scope: [],
     };
-    useCicada.setState({ git: { status: ignored, error: null, loading: false, busy: null, answers: 1 } });
+    useCicada.setState({ git: { status: ignored, error: null, loading: false, busy: null, answers: 1, stale: false, writes: 0 } });
     expect(commitBlockReason(state(), "m")).toBe(ignoredReason("ign.cic"));
     expect(ignoredReason("ign.cic")).toMatch(/^`ign\.cic` is ignored by a \.gitignore rule/);
-    useCicada.setState({ git: { status: { ...REPO, scope: [] }, error: null, loading: false, busy: null, answers: 1 } });
+    useCicada.setState({ git: { status: { ...REPO, scope: [] }, error: null, loading: false, busy: null, answers: 1, stale: false, writes: 0 } });
     expect(commitBlockReason(state(), "m")).toMatch(/^nothing to commit/);
     useCicada.setState({ role: "observer" });
     expect(commitBlockReason(state(), "m")).toBe("read-only observer");
   });
 
+  it("a STALE cache blocks commit and revert with the re-reading sentence — before 'nothing to commit' / 'nothing to revert' (the previous tree's verdict) and the blank message, after the shared gate and an ignored pipeline", () => {
+    const state = () => useCicada.getState();
+    expect(STALE_REASON).toMatch(/reading git status/);
+    // A clean cache, then an edit lands: "nothing to commit" would be a lie for up to 1 s.
+    useCicada.setState({ git: { ...EMPTY_SLICE, status: { ...REPO, scope: [] }, answers: 1 } });
+    expect(commitBlockReason(state(), "m")).toMatch(/^nothing to commit/);
+    expect(revertBlockReason(state(), 0)).toMatch(/^nothing to revert/);
+    state().markGitStale();
+    expect(commitBlockReason(state(), "m")).toBe(STALE_REASON);
+    expect(commitBlockReason(state(), ""), "stale comes before the blank message too").toBe(STALE_REASON);
+    expect(revertBlockReason(state(), 0)).toBe(STALE_REASON);
+    expect(revertBlockReason(state(), 1), "a stale non-empty list is not binding either").toBe(STALE_REASON);
+    expect(gitWriteBlockReason(state()), "the shared gate itself is not stale-aware (the dialog keeps its form)").toBeNull();
+    // The answer lands: the gates open in the usual order.
+    state().setGitStatus(REPO, state().git.writes);
+    expect(commitBlockReason(state(), "m")).toBeNull();
+    expect(commitBlockReason(state(), "")).toBe("write a commit message first");
+    expect(revertBlockReason(state(), 1)).toBeNull();
+    // The shared gate and an ignored pipeline still come first.
+    state().markGitStale();
+    useCicada.setState({ role: "observer" });
+    expect(commitBlockReason(state(), "m")).toBe("read-only observer");
+    expect(revertBlockReason(state(), 1)).toBe("read-only observer");
+    writer();
+    useCicada.setState({
+      git: {
+        ...EMPTY_SLICE,
+        status: { ...REPO, pipeline: { ...REPO.pipeline, path: "ign.cic", ignored: true }, scope: [] },
+        answers: 1,
+        stale: true,
+        writes: 1,
+      },
+    });
+    expect(commitBlockReason(state(), "m")).toBe(ignoredReason("ign.cic"));
+  });
+
   it("before the first answer it says so; after a refused first read it quotes the refusal", () => {
-    useCicada.setState({ git: { status: null, error: null, loading: true, busy: null, answers: 0 } });
+    useCicada.setState({ git: { status: null, error: null, loading: true, busy: null, answers: 0, stale: false, writes: 0 } });
     expect(gitWriteBlockReason()).toMatch(/reading git status/);
     useCicada.setState({
-      git: { status: null, error: { kind: "no_such_pipeline", message: "gone", path: "p.cic" }, loading: false, busy: null, answers: 1 },
+      git: { status: null, error: { kind: "no_such_pipeline", message: "gone", path: "p.cic" }, loading: false, busy: null, answers: 1, stale: false, writes: 0 },
     });
     expect(gitWriteBlockReason()).toMatch(/no pipeline `p\.cic`/);
   });

@@ -193,6 +193,15 @@ header.topbar {
   background: var(--warn-bg);
 }
 
+/* A stale count (an edit landed after the last status read; the ≤1 s
+   re-read is on its way): the last known answer, dimmed — not hidden. */
+.tb-git-dirty.stale,
+.insp-tab-count.stale,
+.badge.stale {
+  opacity: 0.45;
+  font-style: italic;
+}
+
 /* ------------------------------------------------- connection banner */
 
 /* Loud on purpose: a dead server must never leave the app looking live. */

@@ -11,6 +11,7 @@ import {
   projectGitLine,
   revertRequest,
   revertable,
+  scopeNote,
 } from "./gitFormat";
 
 const INFO: RepoInfo = {
@@ -29,12 +30,14 @@ const CLEAN: GitStatusResponse = {
   text_hash: "00".repeat(32),
 };
 
-const slice = (status: GitStatusResponse | null, error: GitSlice["error"] = null): GitSlice => ({
+const slice = (status: GitStatusResponse | null, error: GitSlice["error"] = null, stale = false): GitSlice => ({
   status,
   error,
   loading: false,
   busy: null,
   answers: 1,
+  stale,
+  writes: stale ? 1 : 0,
 });
 
 describe("describeHead", () => {
@@ -73,6 +76,7 @@ describe("gitChip", () => {
       notes: [],
       title: "branch main · HEAD abc1234 · no upstream · nothing to commit in this pipeline's scope · click for the Git tab",
       tone: "",
+      stale: false,
     });
   });
 
@@ -126,12 +130,57 @@ describe("gitChip", () => {
     expect(chip.title).not.toMatch(/nothing to commit/);
   });
 
+  it("a STALE answer keeps its count (the last known one) but says so: `stale` for the chip to dim it, the tooltip names the re-read", () => {
+    const current = gitChip(slice(CLEAN));
+    expect(current.stale).toBe(false);
+    expect(current.title).not.toMatch(/re-reading/);
+    const stale = gitChip(slice(CLEAN, null, true));
+    expect(stale).toMatchObject({ label: "main", dirty: 0, tone: "", stale: true });
+    expect(stale.title).toMatch(/an edit landed since — re-reading the status now/);
+    // Before any answer there is nothing to be stale about.
+    expect(gitChip(slice(null, null, true)).stale).toBe(false);
+    expect(gitChip(slice({ ...CLEAN, state: { kind: "not_a_repo" } }, null, true)).stale).toBe(false);
+  });
+
   it("detached HEAD is a warning tone; a refused re-read over a good answer is error tone with the reason", () => {
     expect(gitChip(slice({ ...CLEAN, state: { kind: "repo", ...INFO, branch: null } })).tone).toBe("warn");
     const chip = gitChip(slice(CLEAN, { kind: "git_timeout", message: "git status did not finish", command: "git status --porcelain=v2 --no-optional-locks" }));
     expect(chip.label).toBe("main");
     expect(chip.tone).toBe("error");
     expect(chip.title).toMatch(/last read refused: git status did not finish/);
+  });
+});
+
+describe("scopeNote — the one rule under 'files to commit' (the Git tab and the Ctrl+S dialog)", () => {
+  const dirty: GitStatusResponse = {
+    ...CLEAN,
+    pipeline: { ...CLEAN.pipeline, dirty: true, nodes: [{ name: "size", change: "modified" }] },
+    scope: [{ path: "p.cic", status: "modified", in_head: true }],
+  };
+  const ignored: GitStatusResponse = {
+    ...CLEAN,
+    pipeline: { path: "ign.cic", tracked: false, ignored: true, dirty: true, nodes: [{ name: "n", change: "added" }], removed: [] },
+    scope: [],
+  };
+
+  it("a current empty scope is clean; a current dirty scope is the list", () => {
+    expect(scopeNote(CLEAN, false)).toEqual({ kind: "clean" });
+    expect(scopeNote(dirty, false)).toEqual({ kind: "files", files: dirty.scope, refreshing: false });
+  });
+
+  it("an IGNORED pipeline never reads 'nothing to commit — the scope matches HEAD' (every node wears `+`; git refuses the file): the ignored note, plus whatever else of the scope is dirty", () => {
+    expect(scopeNote(ignored, false)).toEqual({ kind: "ignored", path: "ign.cic", files: [] });
+    expect(scopeNote(ignored, true), "stale or not").toEqual({ kind: "ignored", path: "ign.cic", files: [] });
+    const sidecar = { path: "ign.cic.layout.json", status: "untracked" as const, in_head: false };
+    expect(scopeNote({ ...ignored, scope: [sidecar] }, false)).toEqual({ kind: "ignored", path: "ign.cic", files: [sidecar] });
+    for (const note of [scopeNote(ignored, false), scopeNote(ignored, true)]) {
+      expect(note.kind).not.toBe("clean");
+    }
+  });
+
+  it("a STALE empty scope reads 'refreshing', never 'clean' (the previous tree's verdict over an edit already on disk); a stale list carries the hint", () => {
+    expect(scopeNote(CLEAN, true)).toEqual({ kind: "refreshing" });
+    expect(scopeNote(dirty, true)).toEqual({ kind: "files", files: dirty.scope, refreshing: true });
   });
 });
 

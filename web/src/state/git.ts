@@ -6,7 +6,12 @@
  * two writes — `commitFromApp`, `revertToHead` — go out over HTTP with the
  * writer's client id, toast their outcome, and re-read. The revert's real
  * answer is the barrier snapshot the server broadcasts (op log cleared);
- * the HTTP response only says what went back.
+ * the HTTP response only says what went back. Between a write's delta and
+ * its re-read the slice is `stale` (the connection module marks it as it
+ * arms the read): the gates here say so (`STALE_REASON`) instead of
+ * "nothing to commit" — the previous tree's verdict — and a read carries
+ * the `writes` stamp it started under so an answer overtaken mid-flight
+ * cannot clear the flag.
  */
 import {
   describeGitError,
@@ -32,19 +37,25 @@ function session(): GitSession {
   return { token: state.token, pipeline: state.pipeline };
 }
 
-/** One status read into the store: a good answer replaces the cache, a refusal is kept beside it. */
+/**
+ * One status read into the store: a good answer replaces the cache, a
+ * refusal is kept beside it. The read carries the `writes` stamp it
+ * started under, so an answer overtaken by a write mid-flight leaves the
+ * slice `stale` for the follow-up read the policy already queued.
+ */
 export async function readGitStatus(): Promise<void> {
   const store = useCicada.getState();
+  const asOf = store.git.writes;
   store.setGitLoading(true);
   try {
     const status = await fetchGitStatus(session());
-    useCicada.getState().setGitStatus(status);
+    useCicada.getState().setGitStatus(status, asOf);
   } catch (error: unknown) {
     const state = useCicada.getState();
     if (error instanceof GitRouteError) {
-      state.setGitError(error.body);
+      state.setGitError(error.body, asOf);
     } else {
-      state.setGitError({ kind: "transport", message: String(error) });
+      state.setGitError({ kind: "transport", message: String(error) }, asOf);
     }
   }
 }
@@ -125,9 +136,26 @@ export function ignoredReason(path: string): string {
 }
 
 /**
+ * The sentence for a stale cache (`GitSlice.stale`): an edit landed after
+ * the last read, the debounced re-read is on its way. Said instead of
+ * "nothing to commit" / "nothing to revert" — those would be the previous
+ * tree's verdict over an edit that is already on disk — and it gates the
+ * two writes, so what the dialog LISTS is what the commit stages and what
+ * the confirm step shows is what the revert names.
+ */
+export const STALE_REASON = "re-reading git status after the last edit…";
+
+/** `STALE_REASON` while the cache is stale, else null (pure over the slice; components subscribe to it). */
+export function staleReason(state: Pick<CicadaState, "git">): string | null {
+  return state.git.stale ? STALE_REASON : null;
+}
+
+/**
  * Why the Commit button is disabled (null = it is enabled): the shared
- * write gate, then this pipeline's own refusals, then the empty scope and
- * the blank message — in the order the user can fix them.
+ * write gate, then this pipeline's own refusals, then a stale cache, then
+ * the empty scope and the blank message — in the order the user can fix
+ * them. The stale check comes before the empty scope on purpose: within
+ * the ≤1 s after an edit the cached scope is the previous tree's.
  */
 export function commitBlockReason(
   state: Pick<CicadaState, "role" | "connection" | "git">,
@@ -138,8 +166,29 @@ export function commitBlockReason(
   const status = state.git.status;
   if (status === null) return "reading git status…";
   if (status.pipeline.ignored) return ignoredReason(status.pipeline.path);
+  const stale = staleReason(state);
+  if (stale !== null) return stale;
   if (status.scope.length === 0) return "nothing to commit — the scope matches HEAD";
   if (message.trim() === "") return "write a commit message first";
+  return null;
+}
+
+/**
+ * Why the Revert button is disabled (null = it is enabled): the shared
+ * write gate, a stale cache, then a scope with no file HEAD has a version
+ * of (`revertable`, the server's `in_head`). Same order and wording rule as
+ * `commitBlockReason`; the confirm step's list is only binding when it is
+ * current.
+ */
+export function revertBlockReason(
+  state: Pick<CicadaState, "role" | "connection" | "git">,
+  revertableFiles: number,
+): string | null {
+  const shared = gitWriteBlockReason(state);
+  if (shared !== null) return shared;
+  const stale = staleReason(state);
+  if (stale !== null) return stale;
+  if (revertableFiles === 0) return "nothing to revert — no file of the scope differs from its HEAD version";
   return null;
 }
 
