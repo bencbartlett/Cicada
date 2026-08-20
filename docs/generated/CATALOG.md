@@ -20,7 +20,10 @@ one `.cic` snippet per node, solved by CI).
 
 ## Sequences & random
 
+- `jitter(list: [E], strength: Number = 1.0, seed: Integer) → (list: [E], map: IndexMap)` — Jitter · GH: Jitter — shuffle a list by a seeded random amount, keeping provenance: every slot gets the key `(1 - strength) · index + strength · n · u` with `u` a `splitmix64` draw in `[0, 1)` (the same generator as `random`), and the list is stably sorted by key — strength `0` is the identity, strength `1` a uniform random order, in between a local scramble. Red when: `strength` lies outside `0.0..=1.0`.
 - `random(domain: Domain, count: Integer, seed: Integer) → [Number]` — Random · GH: Random — seeded uniform random numbers in a domain. Red when: `count` is negative.
+- `range(domain: Domain, steps: Integer) → [Number]` — Range · GH: Range — `steps + 1` evenly spaced numbers across a domain, both ends included exactly (`series` when you know the step instead). Red when: `steps < 1` — a domain cannot be divided into no steps.
+- `repeat(pattern: [E], count: Integer) → [E]` — Repeat · GH: Repeat Data — cycle a pattern until it is `count` slots long (`[a, b]` to `5` → `[a, b, a, b, a]`; GH Repeat Data): the explicit, visible form of the cyclic zip policy (docs/09 — zip is strict; this is the opt-in adapter). Slot-preserving: absent slots repeat in their turn. Red when: `count` is negative, or when the pattern is empty and `count` is positive (nothing to repeat).
 - `series(start: Number = 0.0, step: Number = 1.0, count: Integer) → [Number]` — Series · GH: Series — an arithmetic sequence of numbers. Red when: `count` is negative — loud refusal, never a silent empty list (the scheduler turns node panics into red nodes, stage 3).
 
 ## Maths & logic

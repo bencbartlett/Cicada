@@ -123,6 +123,66 @@
       ]
     },
     {
+      "name": "jitter",
+      "title": "Jitter",
+      "description": "shuffle a list by a seeded random amount, keeping provenance: every slot gets the key `(1 - strength) · index + strength · n · u` with `u` a `splitmix64` draw in `[0, 1)` (the same generator as `random`), and the list is stably sorted by key — strength `0` is the identity, strength `1` a uniform random order, in between a local scramble.",
+      "category": "Sequences & random",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "`strength` lies outside `0.0..=1.0`.",
+      "gh": "Jitter",
+      "examples": [
+        "xs = [1.0, 2.0, 3.0, 4.0, 5.0]\nshuffled, sources = jitter(list=xs, seed=7)"
+      ],
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The list to shuffle (any kind; absent slots shuffle too)."
+        },
+        {
+          "name": "strength",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "1.0",
+          "doc": "How far from the original order to stray, `0.0` (unchanged) to"
+        },
+        {
+          "name": "seed",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "PRNG seed — explicit, always (docs/08 rule 2)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "list",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The shuffled list."
+        },
+        {
+          "name": "map",
+          "type": "IndexMap",
+          "base": "IndexMap",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Provenance: `map[i]` is the source index of `list[i]`."
+        }
+      ]
+    },
+    {
       "name": "random",
       "title": "Random",
       "description": "seeded uniform random numbers in a domain.",
@@ -170,6 +230,92 @@
           "list_depth": 1,
           "optional": false,
           "doc": "`count` uniform draws in `domain`, in draw order — identical for the same seed on every platform."
+        }
+      ]
+    },
+    {
+      "name": "range",
+      "title": "Range",
+      "description": "`steps + 1` evenly spaced numbers across a domain, both ends included exactly (`series` when you know the step instead).",
+      "category": "Sequences & random",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "`steps < 1` — a domain cannot be divided into no steps.",
+      "gh": "Range",
+      "examples": [
+        "span = construct_domain(start=0.0, end=1.0)\nticks = range(domain=span, steps=4)"
+      ],
+      "inputs": [
+        {
+          "name": "domain",
+          "type": "Domain",
+          "base": "Domain",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The interval to divide (decreasing domains count down)."
+        },
+        {
+          "name": "steps",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Number of equal steps; the output has `steps + 1` values."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[Number]",
+          "base": "Number",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "`domain.start`, then `steps - 1` interior values, then `domain.end`."
+        }
+      ]
+    },
+    {
+      "name": "repeat",
+      "title": "Repeat",
+      "description": "cycle a pattern until it is `count` slots long (`[a, b]` to `5` → `[a, b, a, b, a]`; GH Repeat Data): the explicit, visible form of the cyclic zip policy (docs/09 — zip is strict; this is the opt-in adapter). Slot-preserving: absent slots repeat in their turn.",
+      "category": "Sequences & random",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "`count` is negative, or when the pattern is empty and `count` is positive (nothing to repeat).",
+      "gh": "Repeat Data",
+      "examples": [
+        "on_off = [True, False]\nmask = repeat(pattern=on_off, count=5)"
+      ],
+      "inputs": [
+        {
+          "name": "pattern",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The pattern to cycle (any kind; absent slots cycle too)."
+        },
+        {
+          "name": "count",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The slot count to produce (typically `length` of the list it will be"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "`count` slots, the pattern repeated in order and cut at `count`."
         }
       ]
     },
