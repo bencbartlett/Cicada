@@ -25,11 +25,10 @@ pub struct CompactOut {
 /// elements and the index map back into the source (the Optional-flow
 /// counterpart of `cull`: the only other way slots leave a list, docs/09).
 ///
-/// The `list` port is `[E?]`: it takes the holes so `E` can name the
-/// present kind. Today the checker still binds `E` WITH the wired value's
-/// `?` (a `[Point?]` compacts to a `[Point?]` at check time; the node
-/// drops every hole at run time regardless) — the `E?`-port rule that
-/// strips it is the pending dialect change recorded with this node.
+/// The `list` port is `[E?]`: it takes the holes itself, so `E` names the
+/// present kind and `values` types `[Point]` for a `[Point?]` in — the
+/// checker's "`compact` removes the holes" advice is satisfiable by
+/// construction (the `E?`-port rule in the checker's `bind_var`).
 ///
 /// # Examples
 ///

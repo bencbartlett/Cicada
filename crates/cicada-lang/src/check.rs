@@ -1307,11 +1307,18 @@ impl<'a> Checker<'a> {
 /// b=[Point?])` → `[Point?]`) — so an `E` port never earns the
 /// optional-mismatch red; returns true when it absorbed the check. `[]`
 /// (unknowable element type) binds nothing.
+///
+/// A port declared `E?` (`compact(list: [E?])`) takes the holes ITSELF, so
+/// the wired `?` stays on the port and `E` names the present kind: a
+/// `[Point?]` compacts to `values: [Point]`, as docs/08 §4 documents —
+/// otherwise the "`compact` removes the holes" advice could never be
+/// satisfied (the holes would ride through `E` into compact's own output).
 fn bind_var(port: &PortSpec, value: &WireType, bindable: bool, vars: &mut VarBindings) -> bool {
     let Some(constraint) = type_var(port.ty.base) else {
         return false;
     };
     let absorbs = constraint.absorbs_optionality();
+    let carries_hole = absorbs && value.optional && !port.ty.optional;
     match vars.get_mut(port.ty.base) {
         Some(bound) => {
             // The lattice join (`var_base_fit` admitted the value): a wider
@@ -1321,14 +1328,14 @@ fn bind_var(port: &PortSpec, value: &WireType, bindable: bool, vars: &mut VarBin
             {
                 bound.base.clone_from(&value.base);
             }
-            bound.optional |= absorbs && value.optional;
+            bound.optional |= carries_hole;
         }
         None if bindable => {
             vars.insert(
                 port.ty.base.to_owned(),
                 VarBinding {
                     base: value.base.clone(),
-                    optional: absorbs && value.optional,
+                    optional: carries_hole,
                 },
             );
         }

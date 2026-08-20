@@ -125,3 +125,40 @@ fn stdlib_collision_is_a_loud_refusal() {
         "collision named:\n{stderr}"
     );
 }
+
+// Regression (adversarial review, v0.1 C1): the checker's "`compact`
+// removes the holes" advice must be FOLLOWABLE. A script node is the one
+// hole producer reachable from a pipeline (`-> "[Number?]"`); compacting
+// its output must type `[Number]` so a present-wanting port downstream is
+// green — it once typed `[Number?]` (the `?` rode through `E`) and the
+// advice fired again on compact's own output.
+#[test]
+fn compact_makes_a_script_nodes_holes_present_for_downstream_ports() {
+    const HOLEY: &str = "import cicada
+@cicada.node(title=\"Holey\", description=\"every other slot absent.\")
+def holey(count: \"Integer\") -> \"[Number?]\":
+    return [float(i) if i % 2 == 0 else None for i in range(count)]
+";
+    let project = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    std::fs::write(
+        project.path().join("pipeline.cic"),
+        "# cicada 1\n\
+         h = holey(count=5)\n\
+         present, sources = compact(list=h)\n\
+         bumped = add(a=each(present), b=1.0)\n\
+         n = length(list=bumped)\n\
+         total, running = mass_addition(list=bumped)\n",
+    )
+    .unwrap();
+    std::fs::create_dir(project.path().join("scripts")).unwrap();
+    std::fs::write(project.path().join("scripts").join("holey.py"), HOLEY).unwrap();
+    let (stdout, stderr, ok) = run(project.path(), cache.path(), &[]);
+    assert!(
+        ok,
+        "compact's output must fit `add`'s present-wanting port:\n{stderr}"
+    );
+    // [0, None, 2, None, 4] → compact → [0, 2, 4] → +1 → [1, 3, 5].
+    assert!(stdout.contains("n.out = 3"), "{stdout}");
+    assert!(stdout.contains("total.result = 9"), "{stdout}");
+}

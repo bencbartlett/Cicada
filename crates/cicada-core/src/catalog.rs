@@ -50,7 +50,9 @@ pub fn render_markdown(specs: &[&NodeSpec]) -> String {
          node's runtime contract (its `# Panics` conditions — when it goes red) where\n\
          one exists. Type variables: `T` = any transformable kind (kind-preserving),\n\
          `E` = any element kind, optionality included (an `E` port takes absent slots;\n\
-         the `?` rides through to `E` outputs), `Any` = display-sink catch-all.\n\
+         the `?` rides through to `E` outputs — except through an `E?` port, which keeps\n\
+         the `?` itself, so `compact` returns a present `[E]`), `Any` = display-sink\n\
+         catch-all.\n\
          Port docs (every input and output — the bare `out` carries the node's\n\
          `# Returns` line) and runnable examples live in `catalog.json` (`examples`:\n\
          one `.cic` snippet per node, solved by CI).\n",

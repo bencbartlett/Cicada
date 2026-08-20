@@ -1,0 +1,18 @@
+---
+source: crates/cicada-lang/tests/checker.rs
+expression: "serde_json::to_value(&resolution.diagnostics).expect(\"diagnostics serialize\")"
+---
+[
+  {
+    "actual": "[Point?]",
+    "expected": "[Point]",
+    "kind": "type_mismatch",
+    "message": "`holey` carries optional elements; `points` wants them present — `compact` removes the holes (and returns the IndexMap)",
+    "node": "bad",
+    "span": {
+      "col_end": 27,
+      "col_start": 22,
+      "line": 7
+    }
+  }
+]

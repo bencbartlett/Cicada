@@ -7,7 +7,9 @@ component it replaces (absent for Cicada-only nodes) — description, plus the
 node's runtime contract (its `# Panics` conditions — when it goes red) where
 one exists. Type variables: `T` = any transformable kind (kind-preserving),
 `E` = any element kind, optionality included (an `E` port takes absent slots;
-the `?` rides through to `E` outputs), `Any` = display-sink catch-all.
+the `?` rides through to `E` outputs — except through an `E?` port, which keeps
+the `?` itself, so `compact` returns a present `[E]`), `Any` = display-sink
+catch-all.
 Port docs (every input and output — the bare `out` carries the node's
 `# Returns` line) and runnable examples live in `catalog.json` (`examples`:
 one `.cic` snippet per node, solved by CI).
