@@ -1,8 +1,9 @@
 /**
- * Inspector (docs/16 §Inspector contents): tabs Inspect · Params · Text.
- * Inspect shows the selected node (ports + cached values, status,
+ * Inspector (docs/16 §Inspector contents): tabs Inspect · Params · Git ·
+ * Text. Inspect shows the selected node (ports + cached values, status,
  * diagnostics, contract, actions), the selected wire (type, depth, pairing,
- * values), or — nothing selected — the pipeline overview.
+ * values), or — nothing selected — the pipeline overview. Git is the git
+ * panel (slice 1: status, per-node markers, commit, revert-to-HEAD).
  */
 import { useEffect, useRef, useState } from "react";
 import { baseOfType, kindColor } from "../kinds";
@@ -19,6 +20,7 @@ import { canWrite, nodeByName, useCicada } from "../state/store";
 import { viewportApi } from "../viewport/api";
 import { readFrameCounters } from "./debugHandle";
 import { formatBytes, formatMs, statusText, summaryText } from "./format";
+import { GitPanel } from "./GitPanel";
 import { useInspectorTab, type InspectorTab } from "./inspectorTab";
 import { ParamsPanel } from "./ParamsPanel";
 import { TextPanel } from "./TextPanel";
@@ -28,6 +30,7 @@ import "./panels.css";
 const TABS: [InspectorTab, string][] = [
   ["inspect", "Inspect"],
   ["params", "Params"],
+  ["git", "Git"],
   ["text", "Text"],
 ];
 
@@ -35,6 +38,10 @@ export function Inspector() {
   const tab = useInspectorTab((s) => s.tab);
   const setTab = useInspectorTab((s) => s.setTab);
   const textPanel = useCicada((s) => s.settings.textPanel);
+  // The Git tab wears the dirty-file count of this pipeline's commit scope
+  // (dimmed while the cached status is stale — an edit landed, the re-read is on its way).
+  const dirty = useCicada((s) => s.git.status?.scope.length ?? 0);
+  const stale = useCicada((s) => s.git.stale);
 
   // The settings toggle "text panel" defaults the inspector to the Text tab.
   useEffect(() => {
@@ -54,12 +61,22 @@ export function Inspector() {
             onClick={() => setTab(id)}
           >
             {label}
+            {id === "git" && dirty > 0 && (
+              <span
+                className={`insp-tab-count${stale ? " stale" : ""}`}
+                title={`${dirty} dirty ${dirty === 1 ? "file" : "files"} to commit${stale ? " (last read — an edit landed since, re-reading)" : ""}`}
+                data-testid="insp-tab-git-count"
+              >
+                {dirty}
+              </span>
+            )}
           </button>
         ))}
       </div>
       <div className="insp-body" data-testid={`insp-body-${tab}`}>
         {tab === "inspect" && <InspectTab />}
         {tab === "params" && <ParamsPanel />}
+        {tab === "git" && <GitPanel />}
         {tab === "text" && <TextPanel />}
       </div>
     </aside>

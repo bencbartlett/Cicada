@@ -258,6 +258,349 @@ pub struct ProbeCatalogEntry {
     pub ports: Vec<(String, String)>,
 }
 
+// ------------------------------------------------------------- git --
+//
+// The git panel's HTTP shapes (docs/13 §HTTP surface `/api/git/*`, doc 10
+// §Git integration, DECISIONS.md "Git integration is first-class UI").
+// HTTP-only — no WS message; the client polls `status` and dedupes on
+// `text_hash`. [`crate::git`] produces them over the git binary.
+
+/// Where the project stands in git — the tagged state every git route
+/// starts from. `Repo` is the normal case; `Locked` is the same
+/// repository with `index.lock` held (the facts stay visible — the branch
+/// chip must not blank out during the app's own commit); the other two
+/// are typed refusals, never strings. Serialized with the tag `kind` and
+/// the [`RepoInfo`] fields flattened beside it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GitState {
+    /// The project lives inside a git work tree.
+    Repo(RepoInfo),
+    /// The project directory is not inside a git work tree.
+    NotARepo,
+    /// No `git` binary on PATH.
+    GitNotFound,
+    /// Another git process holds `index.lock` — status still answers
+    /// (nothing here takes the lock), but commit / revert wait. Carries
+    /// the same facts as `Repo`.
+    Locked(RepoInfo),
+}
+
+impl GitState {
+    /// The repository facts of `Repo` and `Locked`.
+    #[must_use]
+    pub fn repo(&self) -> Option<&RepoInfo> {
+        match self {
+            Self::Repo(info) | Self::Locked(info) => Some(info),
+            Self::NotARepo | Self::GitNotFound => None,
+        }
+    }
+
+    /// The `kind` tag as serialized.
+    #[must_use]
+    pub fn tag(&self) -> &'static str {
+        match self {
+            Self::Repo(_) => "repo",
+            Self::NotARepo => "not_a_repo",
+            Self::GitNotFound => "git_not_found",
+            Self::Locked(_) => "locked",
+        }
+    }
+}
+
+/// The facts of a repository the project lives in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepoInfo {
+    /// The repository root (as git reports it: absolute, `/`-separated).
+    pub root: String,
+    /// The project directory relative to `root` (`""` when the project
+    /// IS the root; `examples/wall` otherwise — no trailing slash).
+    pub prefix: String,
+    /// The checked-out branch; `None` when HEAD is detached.
+    pub branch: Option<String>,
+    /// HEAD's abbreviated commit id; `None` on an unborn branch (the
+    /// thing to show when `branch` is `None`).
+    pub head_short: Option<String>,
+    /// The branch's upstream and how far apart they are, when set.
+    pub upstream: Option<Upstream>,
+    /// HEAD points at a branch with no commits yet (`git init` without
+    /// a commit): everything is `added`, and the first commit works.
+    pub unborn: bool,
+    /// A merge / rebase / cherry-pick / revert the user started in a
+    /// shell and has not finished. Commit and revert refuse
+    /// (`operation_in_progress`) — finishing it is the shell's job (doc
+    /// 10: branching and merging stay in the shell for v0.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<Operation>,
+}
+
+/// A multi-step git operation left in progress (`.git/MERGE_HEAD` etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Operation {
+    /// `MERGE_HEAD` exists.
+    Merge,
+    /// `rebase-merge/` or `rebase-apply/` exists.
+    Rebase,
+    /// `CHERRY_PICK_HEAD` exists.
+    CherryPick,
+    /// `REVERT_HEAD` exists (a `git revert` of a commit, not ours).
+    Revert,
+}
+
+impl Operation {
+    /// The wire name (`merge`, `rebase`, `cherry_pick`, `revert`).
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Merge => "merge",
+            Self::Rebase => "rebase",
+            Self::CherryPick => "cherry_pick",
+            Self::Revert => "revert",
+        }
+    }
+}
+
+/// A branch's upstream and the ahead/behind counts against it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Upstream {
+    /// The upstream ref (`origin/main`).
+    pub name: String,
+    /// Commits on the branch the upstream lacks.
+    pub ahead: u32,
+    /// Commits on the upstream the branch lacks.
+    pub behind: u32,
+}
+
+/// How a node's binding line differs from HEAD (working tree vs HEAD —
+/// slice 1 has no other ref). By construction a rendering of `git diff`:
+/// a marker exists exactly when a hunk touches the binding's line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeKind {
+    /// The name is not bound in HEAD.
+    Added,
+    /// The line changed and the name exists in HEAD.
+    Modified,
+    /// The name is bound in HEAD and not in the working tree.
+    Removed,
+    /// A removed + added pair whose right-hand sides are byte-identical.
+    Renamed,
+}
+
+/// One node's change marker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeChange {
+    /// The node (binding) name in the working tree.
+    pub name: String,
+    /// The change.
+    pub change: ChangeKind,
+    /// For `renamed`: the name the binding had in HEAD.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+}
+
+/// A binding HEAD has that the working tree no longer does (not part of a
+/// rename pair).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemovedNode {
+    /// The name as bound in HEAD.
+    pub name: String,
+    /// Its 1-based line in `HEAD:<path>` (for "show me what was there").
+    pub line_in_head: usize,
+}
+
+/// A file's git status in the commit scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileStatus {
+    /// Tracked, content differs from HEAD (index or working tree).
+    Modified,
+    /// Added to the index, absent in HEAD.
+    Added,
+    /// Deleted (index or working tree).
+    Deleted,
+    /// Not known to git. (Ignored files never appear in the scope: git
+    /// itself does not list them and `git add` refuses them — an ignored
+    /// pipeline is reported through `PipelineGitStatus::ignored`.)
+    Untracked,
+    /// Renamed in the index.
+    Renamed,
+}
+
+/// One file of the commit scope that is dirty: this pipeline's `.cic`, its
+/// sidecar, or a `scripts/*.py` beside it. Paths are project-relative,
+/// `/`-separated — the same currency as `GET /api/edit/text` and
+/// `apply_text`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScopeFile {
+    /// Project-relative path.
+    pub path: String,
+    /// Its status.
+    pub status: FileStatus,
+    /// HEAD has a version of this path, so `revert` can put it back — THE
+    /// server's rule (`git.rs` `Entry::in_head`: tracked, not an index
+    /// addition, not the new side of a rename, and not on an unborn
+    /// branch), published so that no client re-derives it from `status`.
+    /// The two do not line up: porcelain `AD` (added to the index, then
+    /// deleted from disk) is `deleted` with NO HEAD version; an unmerged
+    /// `AA` is `modified` with none. `false` → a revert leaves the file
+    /// alone (it never deletes) and an explicit ask for it is refused
+    /// `untracked`.
+    pub in_head: bool,
+}
+
+/// The pipeline file's git view: markers per node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PipelineGitStatus {
+    /// Project-relative path of the `.cic`.
+    pub path: String,
+    /// Known to git (in HEAD or the index). Untracked → every node `added`.
+    pub tracked: bool,
+    /// Matched by a `.gitignore` rule (and not tracked): git would refuse
+    /// to add it, so the scope leaves it out and `commit` refuses
+    /// `ignored`. Every node is `added` (there is no HEAD version).
+    #[serde(default)]
+    pub ignored: bool,
+    /// Differs from HEAD (or untracked).
+    pub dirty: bool,
+    /// Markers for nodes in the working tree (added / modified / renamed).
+    pub nodes: Vec<NodeChange>,
+    /// Bindings HEAD has that the working tree lost.
+    pub removed: Vec<RemovedNode>,
+}
+
+/// `GET /api/git/status` → the state, this pipeline's markers, and the
+/// dirty files of the commit scope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitStatusResponse {
+    /// Where the project stands.
+    pub state: GitState,
+    /// The pipeline's markers.
+    pub pipeline: PipelineGitStatus,
+    /// The dirty files of the commit scope (what `commit` would stage).
+    pub scope: Vec<ScopeFile>,
+    /// blake3 hex of the working pipeline file's bytes — the markers were
+    /// computed against exactly this text; clients dedupe on it.
+    pub text_hash: String,
+}
+
+/// `POST /api/git/commit` body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommitRequest {
+    /// The commit message, verbatim (`--cleanup=verbatim`: unicode and a
+    /// trailing newline survive). Empty / whitespace-only → `empty_message`.
+    pub message: String,
+    /// The WS client id of the lease holder (alternative to the
+    /// `X-Cicada-Client` header) — committing is a git action on the
+    /// project, so it needs the writer (unlike `apply_text`).
+    #[serde(default)]
+    pub client: Option<u32>,
+}
+
+/// `POST /api/git/commit` → the commit that landed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommitResponse {
+    /// Full commit id.
+    pub hash: String,
+    /// Abbreviated commit id.
+    pub short: String,
+    /// The subject line (`%s`).
+    pub summary: String,
+    /// The files the commit touched, project-relative.
+    pub files: Vec<String>,
+}
+
+/// `POST /api/git/revert` body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RevertRequest {
+    /// The subset of the scope to revert (project-relative); `None` = the
+    /// whole dirty scope. A path outside the scope → `path_not_allowed`.
+    #[serde(default)]
+    pub paths: Option<Vec<String>>,
+    /// The WS client id of the lease holder (see [`CommitRequest::client`]).
+    #[serde(default)]
+    pub client: Option<u32>,
+}
+
+/// `POST /api/git/revert` → what was restored to HEAD.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RevertResponse {
+    /// The paths `git checkout HEAD --` restored (project-relative).
+    pub reverted: Vec<String>,
+    /// Dirty scope files with no HEAD version (untracked / index-only),
+    /// left exactly as they were — reverting them would mean deleting.
+    pub untracked: Vec<String>,
+    /// The session reloaded the restored files (one barrier snapshot went
+    /// out); `false` when disk already matched memory.
+    pub reloaded: bool,
+}
+
+/// The `kind` of a refused git route — the `{kind, message, …}` error
+/// body's tag (mirrored by the web client).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GitErrorKind {
+    /// Malformed request body or pipeline reference (400).
+    Protocol,
+    /// `?pipeline=` names no pipeline of the project (404).
+    NoSuchPipeline,
+    /// The caller is not the lease holder — or nobody is: no client has
+    /// the pipeline open (403).
+    Lease,
+    /// The project is not in a git work tree (409).
+    NotARepo,
+    /// No `git` on PATH (409).
+    GitNotFound,
+    /// `index.lock` is held (423).
+    Locked,
+    /// Nothing in the scope is dirty (409).
+    NothingToCommit,
+    /// Nothing in the (requested) scope differs from HEAD (409).
+    NothingToRevert,
+    /// The pipeline (or a requested path) has no HEAD version (409).
+    Untracked,
+    /// The pipeline is matched by `.gitignore`: git refuses to add it (409).
+    Ignored,
+    /// A merge / rebase / cherry-pick / revert is in progress in the
+    /// repository — the body carries `operation`; finish it in the shell
+    /// (409).
+    OperationInProgress,
+    /// The commit message is empty (422).
+    EmptyMessage,
+    /// A requested path is outside the commit scope (422).
+    PathNotAllowed,
+    /// A git command failed unexpectedly — the body carries `command`,
+    /// `code`, `stderr` (500).
+    GitFailed,
+    /// A git command did not finish within the timeout (500).
+    GitTimeout,
+    /// Reading the working pipeline (or its HEAD text) failed (500).
+    IoError,
+    /// The files were restored but the session could not reload them — the
+    /// previous state stays live; the message says why (500).
+    ReloadFailed,
+    /// The server itself failed around the git call (a blocking task that
+    /// panicked, an unresolvable project dir) (500).
+    Internal,
+}
+
+/// The git summary on `GET /api/project` (additive).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectGit {
+    /// The state's tag (`repo` / `not_a_repo` / `git_not_found` / `locked`).
+    pub kind: String,
+    /// The branch, when on one.
+    pub branch: Option<String>,
+    /// Dirty entries under the project directory (`git status` lines,
+    /// untracked directories counting once); `0` outside a repo.
+    pub dirty_count: usize,
+    /// When `kind` is `error`: what git said (the project route itself
+    /// still answers — the pipeline list is its job).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// Server → client messages.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]

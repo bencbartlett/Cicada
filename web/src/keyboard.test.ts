@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { handleHotkey, hotkeysReach, isControlTarget, isEditableTarget } from "./keyboard";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createKeyRouter, handleHotkey, hotkeysReach, isCommitChord, isControlTarget, isEditableTarget } from "./keyboard";
 import type { ClientMessage, NodeView } from "./protocol/messages";
 import { useCicada } from "./state/store";
 
@@ -65,6 +65,30 @@ describe("handleHotkey", () => {
     expect(handleHotkey(key("Escape"))).toBe(true);
     expect(useCicada.getState().selection.nodes).toEqual([]);
     expect(useCicada.getState().search).toBeNull();
+  });
+
+  it("Ctrl+S opens the commit dialog for writer and observer alike; a key repeat does nothing more", () => {
+    useCicada.setState({ commitDialog: false });
+    expect(handleHotkey(key("s", { ctrlKey: true }))).toBe(true);
+    expect(useCicada.getState().commitDialog).toBe(true);
+    expect(sent).toEqual([]);
+    expect(useCicada.getState().notices).toEqual([]);
+    useCicada.setState({ commitDialog: false, role: "observer" });
+    expect(handleHotkey(key("S", { metaKey: true }))).toBe(true);
+    expect(useCicada.getState().commitDialog, "the dialog says why an observer cannot commit").toBe(true);
+    useCicada.setState({ commitDialog: false });
+    expect(handleHotkey(key("s", { ctrlKey: true, repeat: true }))).toBe(true);
+    expect(useCicada.getState().commitDialog).toBe(false);
+  });
+
+  it("Esc closes the commit dialog before it cancels a solve or clears the selection", () => {
+    useCicada.setState({ commitDialog: true, summary: { ...useCicada.getState().summary, running: true } });
+    useCicada.getState().selectNodes(["a"]);
+    expect(handleHotkey(key("Escape"))).toBe(true);
+    expect(useCicada.getState().commitDialog).toBe(false);
+    expect(sent, "the running solve was not cancelled").toEqual([]);
+    expect(useCicada.getState().selection.nodes).toEqual(["a"]);
+    useCicada.setState({ summary: { ...useCicada.getState().summary, running: false } });
   });
 
   it("Delete removes ONE selected node as itself, several as one batch (one undo step)", () => {
@@ -313,21 +337,125 @@ describe("handleHotkey", () => {
     expect(useCicada.getState().notices.at(-1)?.message).toMatch(/read-only observer — take the lease to toggle disable/);
   });
 
-  it("deferred features answer with a notice and consume the key", () => {
+  it("deferred features answer with a notice and consume the key (Ctrl+S is no longer one: it opens the commit dialog)", () => {
     for (const [k, mods] of [
       ["g", { ctrlKey: true }],
-      ["s", { ctrlKey: true }],
       [" ", {}],
     ] as [string, Partial<KeyboardEvent>][]) {
       expect(handleHotkey(key(k, mods))).toBe(true);
     }
     expect(sent).toEqual([]);
-    expect(useCicada.getState().notices.length).toBe(3);
+    expect(useCicada.getState().notices.length).toBe(2);
   });
 
   it("leaves unknown keys alone", () => {
     expect(handleHotkey(key("q"))).toBe(false);
     expect(handleHotkey(key("x", { ctrlKey: true }))).toBe(false);
+  });
+});
+
+/**
+ * The WINDOW routing (what `useKeyboard` installs), driven with the targets
+ * the text-entry gate exists for. `Ctrl+S` is the one chord that must be
+ * consumed from every one of them — docs/16: it opens the commit dialog and
+ * never reaches the browser's save — which a `handleHotkey`-level test
+ * cannot see (the gate runs before it).
+ *
+ * What this CANNOT see: a component handler that stops the native event
+ * before it reaches the window (`SearchBox.onKeyDown`, the literal
+ * widgets' `keyGuard` — both do, to keep typed keys from React Flow). They
+ * let the commit chord through by name (`isCommitChord`), and the
+ * Playwright spec `e2e/git.spec.ts` presses Ctrl+S in the real search box
+ * and a real canvas literal input to prove it.
+ */
+describe("createKeyRouter — Ctrl+S from every surface", () => {
+  const el = (tagName: string, extra: Record<string, unknown> = {}) =>
+    ({ tagName, isContentEditable: false, closest: () => null, ...extra }) as unknown as EventTarget;
+  /** A keydown as the window sees it: cancelable, with a target. */
+  const keydown = (k: string, target: EventTarget | null, mods: Partial<KeyboardEvent> = {}) => {
+    const preventDefault = vi.fn();
+    const event = {
+      key: k,
+      code: "",
+      target,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      altKey: false,
+      repeat: false,
+      isComposing: false,
+      defaultPrevented: false,
+      preventDefault,
+      ...mods,
+    } as unknown as KeyboardEvent;
+    return { event, preventDefault };
+  };
+  const SURFACES: [string, EventTarget | null][] = [
+    ["the canvas (no target)", null],
+    ["a plain element", el("DIV")],
+    ["a range slider (a control)", el("INPUT", { type: "range" })],
+    ["a canvas literal input (type=number)", el("INPUT", { type: "number" })],
+    ["a text input (the search box, the params panel)", el("INPUT", { type: "text" })],
+    ["a textarea (the commit message field)", el("TEXTAREA")],
+    ["a select", el("SELECT")],
+    ["contenteditable", el("DIV", { isContentEditable: true })],
+    ["a button inside a data-no-hotkeys subtree (the commit dialog's own ×)", el("BUTTON", { closest: () => ({}) })],
+  ];
+
+  beforeEach(() => {
+    (globalThis as { window?: unknown }).window = { innerWidth: 1000, innerHeight: 800 };
+    useCicada.setState({ role: "writer", connection: "open", commitDialog: false, notices: [] });
+  });
+
+  for (const [name, target] of SURFACES) {
+    it(`consumes Ctrl+S and opens the commit dialog from ${name}`, () => {
+      const router = createKeyRouter();
+      const { event, preventDefault } = keydown("s", target, { ctrlKey: true });
+      router.onKeyDown(event);
+      expect(preventDefault, "the browser's save must never run").toHaveBeenCalledTimes(1);
+      expect(useCicada.getState().commitDialog).toBe(true);
+    });
+  }
+
+  it("Cmd+S and a capital S count; a held key (repeat) and a press inside the open dialog stay consumed without re-opening", () => {
+    const router = createKeyRouter();
+    const meta = keydown("S", el("TEXTAREA"), { metaKey: true });
+    router.onKeyDown(meta.event);
+    expect(meta.preventDefault).toHaveBeenCalledTimes(1);
+    expect(useCicada.getState().commitDialog).toBe(true);
+    // Already open (focus on its × button): consumed, nothing else happens.
+    const inside = keydown("s", el("BUTTON", { closest: () => ({}) }), { ctrlKey: true });
+    router.onKeyDown(inside.event);
+    expect(inside.preventDefault).toHaveBeenCalledTimes(1);
+    expect(useCicada.getState().commitDialog).toBe(true);
+    // Closed, then a key-repeat event: consumed, not re-opened.
+    useCicada.getState().closeCommitDialog();
+    const repeat = keydown("s", null, { ctrlKey: true, repeat: true });
+    router.onKeyDown(repeat.event);
+    expect(repeat.preventDefault).toHaveBeenCalledTimes(1);
+    expect(useCicada.getState().commitDialog).toBe(false);
+  });
+
+  it("a plain `s` or an unrelated chord from a text field is NOT consumed — the gate still protects typing", () => {
+    const router = createKeyRouter();
+    useCicada.getState().installSender(() => "id");
+    for (const { event, preventDefault } of [
+      keydown("s", el("TEXTAREA")),
+      keydown("z", el("INPUT", { type: "text" }), { ctrlKey: true }),
+      keydown("Delete", el("TEXTAREA")),
+      keydown("a", el("INPUT", { type: "number" }), { ctrlKey: true }),
+    ]) {
+      router.onKeyDown(event);
+      expect(preventDefault).not.toHaveBeenCalled();
+    }
+    expect(useCicada.getState().commitDialog).toBe(false);
+  });
+
+  it("isCommitChord: Ctrl/Cmd + s/S only", () => {
+    expect(isCommitChord({ key: "s", ctrlKey: true, metaKey: false })).toBe(true);
+    expect(isCommitChord({ key: "S", ctrlKey: false, metaKey: true })).toBe(true);
+    expect(isCommitChord({ key: "s", ctrlKey: false, metaKey: false })).toBe(false);
+    expect(isCommitChord({ key: "d", ctrlKey: true, metaKey: false })).toBe(false);
   });
 });
 

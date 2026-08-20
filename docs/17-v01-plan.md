@@ -16,7 +16,7 @@ runs in parallel from day 1:
 |---|---|---|---|---|
 | 0 | Fold `corpus/` into `examples/wall/` + `tools/`; this plan | foreground | hours | **done** 2026-08-20 (every nightly step passes locally from the new paths; the first Nightly run itself is pending the push) |
 | 1 | Undo/redo — snapshot op log + atomic `batch`/`apply_text` path; riders `#off`, Backspace-no-delete | foreground (server/web) | days | **done** 2026-08-20 (merged) |
-| 2 | Git panel slice 1 — status strip, per-node change markers, commit, revert-to-HEAD | foreground (server/web) | ~1 week | pending |
+| 2 | Git panel slice 1 — status strip, per-node change markers, commit, revert-to-HEAD | foreground (server/web) | ~1 week | **done** 2026-08-20 (wt/git-panel): `GET /api/git/status` + writer-gated `POST /api/git/commit` / `POST /api/git/revert` (docs/13), the web chip / Git tab / canvas badges / `Ctrl+S` commit dialog (docs/16); measured, debug builds: revert POST → barrier snapshot ≤ 35 ms (route test), Revert click → reloaded text in the store 69–81 ms across runs (Playwright) |
 | P | OCCT probe — prebuilt 7.8.x build/link on win/mac/linux, determinism, timings, license, CI shape | parallel worktree | hours, cap 1 day | **done** 2026-08-20 — GREEN on win-64 with one rename patch, byte-deterministic, ~3 ms/boolean; Linux/macOS measured by item 3 WP-A's CI job; memo `docs/probes/occt-2026-08.md` |
 | 3 | OCCT-backed Solid — the `Solid` kind, primitives/extrude/loft/revolve/sweep, booleans, `tessellate`, STEP; `mesh_*` renames in the same commit | main geometry track from week 3 | weeks | **unblocked** (probe GREEN) — WP-A next: own fork with the recorded patches, `occt` feature, `tools/fetch_occt.py`, the per-OS CI job |
 | 3b | Scheduler foundations — per-solve cancel handle, `volatile`, idle-class hypothetical solve — plus compute-on-release | parallel (sched/server) | ~1 week | **done** 2026-08-20 (`wt/sched`, eighteen commits after three review rounds: the engine half, then the web half — both sliders show the pending value + estimate from `preview_policy`, the release that writes nothing is `end_drag` and every announced drag's end is `drag_ended` — with a Playwright drag of the wall's `deboss`, an observer page watching, as its evidence) |
@@ -133,6 +133,17 @@ Design: DECISIONS.md git row; doc 10 §Git integration; doc 13 routes.
   measured barrier budget.
 - Deferred inside the item: the canvas graph-diff overlay and `git log
   -L` per-node history — after the markers have weeks of use.
+- **Shipped 2026-08-20** (wt/git-panel; docs/13 §HTTP surface rows,
+  docs/16 Git panel bullet, doc 10 §Git integration): every "done when"
+  holds — markers vs `git diff` (`git_routes.rs`
+  `markers_are_exactly_the_bindings_on_the_diffs_changed_lines`), the
+  no-self-retrigger status (`--no-optional-locks`, `.git/index`
+  byte-identical across refreshes), commit = exactly the scope (route
+  test + Playwright `git log`), revert → barrier ≤ 35 ms server-side and
+  click → canvas 69–81 ms in the browser (debug builds). The scope carries
+  `in_head` per file — the revert rule is the server's, published, not
+  re-derived by the client (review finding: porcelain `AD` is `deleted`
+  with no HEAD version).
 
 ## Item P — the OCCT probe (hours, capped at one day)
 

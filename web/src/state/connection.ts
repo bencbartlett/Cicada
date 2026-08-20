@@ -1,12 +1,48 @@
 /**
  * Wires the socket to the store and the frame bus, fetches the catalog,
+ * feeds the git status policy (`state/git.ts`) the events it refreshes on,
  * answers screenshot requests via the viewport, and exposes the debug
  * handle Playwright reads (`window.__cicada`). Called once from `main.tsx`.
  */
 import { CicadaClient, wsUrl } from "../protocol/client";
 import type { Catalog, ClientMessage, ServerEnvelope } from "../protocol/messages";
 import { frameBus } from "./frameBus";
+import { gitPolicy, startGitStatus } from "./git";
+import type { GitRefreshPolicy } from "./gitRefresh";
 import { useCicada } from "./store";
+
+/**
+ * Which server messages make the git policy read again (docs/17 item 2):
+ * `hello` = (re)connected → now; a `delta` (the server persisted a write —
+ * text and/or sidecar, both in the commit scope) and a barrier `snapshot`
+ * (external change, `apply_text`, `git revert`) → the ≤1 s debounce, AND
+ * the store's cached status is marked stale in the same breath (until the
+ * read lands the chip's count, the tab's scope and the commit/revert gates
+ * would otherwise describe the previous tree). The initial snapshot
+ * follows the hello's read and adds nothing; statuses, values, probes and
+ * lease changes never touch the tree.
+ */
+export function feedGitPolicy(policy: Pick<GitRefreshPolicy, "onConnected" | "onWrite">, envelope: ServerEnvelope): void {
+  switch (envelope.type) {
+    case "hello":
+      policy.onConnected();
+      break;
+    case "delta":
+      writeLanded(policy);
+      break;
+    case "snapshot":
+      if (envelope.payload.barrier) writeLanded(policy);
+      break;
+    default:
+      break;
+  }
+}
+
+/** The server confirmed a write: the cache is stale from now on, and the debounced read is armed — never one without the other. */
+function writeLanded(policy: Pick<GitRefreshPolicy, "onWrite">): void {
+  useCicada.getState().markGitStale();
+  policy.onWrite();
+}
 
 export interface StartOptions {
   token: string;
@@ -78,9 +114,11 @@ export function startConnection(options: StartOptions): CicadaClient {
   store.setConnection("connecting");
 
   const url = wsUrl(options.token, options.pipeline);
+  const git = startGitStatus(window);
   client = new CicadaClient(url, {
     onMessage: (envelope: ServerEnvelope) => {
       useCicada.getState().applyServerMessage(envelope);
+      feedGitPolicy(git, envelope);
       if (envelope.type === "screenshot_request") {
         const { id, target } = envelope.payload;
         frameBus
@@ -157,6 +195,12 @@ function installDebugHandle(): void {
     send: (message: ClientMessage) => useCicada.getState().send(message),
     /** Viewport render → PNG blob (same path as /debug/screenshot). */
     screenshot: (target = "viewport") => frameBus.screenshot(target),
+    /** The git status policy's counters: reads started, whether one is pending or in flight, and the cache's staleness. */
+    git: () => {
+      const policy = gitPolicy();
+      const { stale, writes, answers } = useCicada.getState().git;
+      return { reads: policy?.reads ?? 0, busy: policy?.busy ?? false, stale, writes, answers };
+    },
     /** Filled in by the viewport: scene statistics for assertions. */
     scene: null as null | (() => unknown),
   };

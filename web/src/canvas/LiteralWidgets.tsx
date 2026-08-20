@@ -9,6 +9,7 @@
  * drag from it, and Escape reverts to the authoritative value.
  */
 import { useEffect, useRef, useState } from "react";
+import { isCommitChord } from "../keyboard";
 import { paramValueText, type LiteralKind } from "../state/literals";
 import { useCicada } from "../state/store";
 import { useParamSender } from "./useParamSender";
@@ -32,9 +33,15 @@ export interface LiteralWidgetProps {
   label: string;
 }
 
-/** Keyboard inside a widget never reaches the hotkey map or React Flow. */
+/**
+ * Keyboard inside a widget never reaches the hotkey map or React Flow —
+ * except `Ctrl+S`, the commit dialog (docs/16), which must bubble to the
+ * window key router from every surface: a stopped native event never gets
+ * there, and the browser's own save dialog would open over the literal.
+ */
 function keyGuard(onEnter: () => void, onEscape: () => void) {
   return (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (isCommitChord(event)) return;
     if (event.key === "Enter") {
       onEnter();
       (event.target as HTMLInputElement).blur();

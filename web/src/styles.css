@@ -21,6 +21,7 @@
   --warn: #ffb648;
   --warn-bg: rgba(255, 182, 72, 0.16);
   --ok: #7ad38a;
+  --ok-bg: rgba(122, 211, 138, 0.16);
   --running: #7ac2ff;
   --cached: #9aa2b1;
   --blocked: #b19a4a;
@@ -67,6 +68,7 @@
   --warn: #b26a00;
   --warn-bg: rgba(178, 106, 0, 0.12);
   --ok: #2b8a3e;
+  --ok-bg: rgba(43, 138, 62, 0.12);
   --running: #1f6fd0;
   --cached: #6f7683;
   --blocked: #8a6d1d;

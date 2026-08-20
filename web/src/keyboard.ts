@@ -4,8 +4,10 @@
  * contenteditable / `data-no-hotkeys` subtrees) are ignored so typing never
  * triggers gestures; a focused non-text control (a range slider, a
  * checkbox) keeps its plain keys but lets Ctrl chords through (`hotkeysReach`).
- * Every handled key is a gesture-level intent through the store's `send`;
- * nothing here mutates authoritative state.
+ * ONE chord is routed before that gate: `Ctrl+S` — the commit dialog — is
+ * consumed from every surface, so the browser's own save dialog never opens
+ * (`createKeyRouter`). Every handled key is a gesture-level intent through
+ * the store's `send`; nothing here mutates authoritative state.
  */
 import { useEffect } from "react";
 import { asOneOp, type GestureMessage } from "./protocol/messages";
@@ -15,7 +17,6 @@ import { viewportApi } from "./viewport/api";
 const NOT_YET = {
   group: "groups arrive later",
   transport: "transport arrives with time params",
-  commit: "commit dialog arrives with the git panel — every op is already saved",
 } as const;
 
 /**
@@ -68,11 +69,30 @@ export function isControlTarget(target: EventTarget | null): boolean {
   return el.tagName === "BUTTON";
 }
 
-/** Does a key event from `target` reach the hotkey map at all? */
+/** Does a key event from `target` reach the hotkey map at all? (`Ctrl+S` is routed before this — see `createKeyRouter`.) */
 export function hotkeysReach(event: Pick<KeyboardEvent, "target" | "ctrlKey" | "metaKey">): boolean {
   if (isEditableTarget(event.target)) return false;
   if (isControlTarget(event.target)) return event.ctrlKey || event.metaKey;
   return true;
+}
+
+/** The `Ctrl+S` / `Cmd+S` chord — the commit dialog (docs/16: there is no save). */
+export function isCommitChord(event: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey">): boolean {
+  return (event.ctrlKey || event.metaKey) && (event.key === "s" || event.key === "S");
+}
+
+/**
+ * Open the commit dialog for a `Ctrl+S` press: once per press (a held key
+ * repeats the event; the first press already opened it), and never while
+ * it is already open (pressing the reflex inside the dialog's own message
+ * field or on its buttons changes nothing). The dialog itself says why when
+ * this client cannot commit (observer, no repo, no git, locked, an
+ * operation in progress) rather than a notice the user has to read first.
+ */
+function openCommitDialogOnce(event: Pick<KeyboardEvent, "repeat">): void {
+  const state = useCicada.getState();
+  if (event.repeat || state.commitDialog) return;
+  state.openCommitDialog();
 }
 
 /**
@@ -96,6 +116,12 @@ export function handleHotkey(event: KeyboardEvent): boolean {
   };
 
   if (key === "Escape") {
+    // The commit dialog closes first (its own listener covers focus inside
+    // it; this covers a focus on the page behind it).
+    if (state.commitDialog) {
+      state.closeCommitDialog();
+      return true;
+    }
     if (state.summary.running) {
       if (needsLease("cancel the solve")) return true;
       state.send({ type: "cancel", payload: {} });
@@ -159,8 +185,12 @@ export function handleHotkey(event: KeyboardEvent): boolean {
     notice("info", NOT_YET.group);
     return true;
   }
-  if (ctrl && (key === "s" || key === "S")) {
-    notice("info", NOT_YET.commit);
+  // Ctrl+S never gets here from the window: the router consumes it before
+  // the text-entry gate (`createKeyRouter`) — from a slider it would reach
+  // this map, from a text field it would not, and the browser's save must
+  // open from neither. Kept so a chord routed here directly still answers.
+  if (isCommitChord(event)) {
+    openCommitDialogOnce(event);
     return true;
   }
   if (ctrl) return false;
@@ -259,8 +289,25 @@ function isSpace(event: KeyboardEvent): boolean {
   return event.key === " " || event.code === "Space";
 }
 
+/** The window listeners the keyboard map installs (exported so tests drive the real routing, gate included). */
+export interface KeyRouter {
+  onKeyDown: (event: KeyboardEvent) => void;
+  onKeyUp: (event: KeyboardEvent) => void;
+  onPointerDown: () => void;
+  onBlur: () => void;
+}
+
 /**
- * Install the window key listeners (once, from `App`).
+ * The routing every window key event goes through — the thing `useKeyboard`
+ * installs, as a plain object so the tests can drive it with a textarea, a
+ * number input or a `data-no-hotkeys` subtree as the target.
+ *
+ * `Ctrl+S` comes FIRST, before the text-entry gate: docs/16 promises the
+ * chord opens the commit dialog and never reaches the browser's save, and
+ * the surfaces the gate exists for — the canvas literal inputs, the params
+ * panel, the search box, the commit dialog's own message field and
+ * buttons — are exactly where a save reflex lands. It is always consumed;
+ * the dialog opens once per press (`openCommitDialogOnce`).
  *
  * Space is special: React Flow's `panActivationKeyCode` ("Space") listens on
  * the window and `preventDefault`s every Space keydown for the Space+drag
@@ -268,11 +315,16 @@ function isSpace(event: KeyboardEvent): boolean {
  * down and up with no pointer press in between — is the transport hotkey
  * and is answered on keyup; a Space+drag pan stays React Flow's.
  */
-export function useKeyboard(): void {
-  useEffect(() => {
-    let spaceHeld = false;
-    let spaceUsedForPan = false;
-    const onKeyDown = (event: KeyboardEvent) => {
+export function createKeyRouter(): KeyRouter {
+  let spaceHeld = false;
+  let spaceUsedForPan = false;
+  return {
+    onKeyDown(event) {
+      if (isCommitChord(event)) {
+        event.preventDefault();
+        if (!event.isComposing) openCommitDialogOnce(event);
+        return;
+      }
       if (!hotkeysReach(event)) return;
       if (event.isComposing) return;
       if (isSpace(event)) {
@@ -284,8 +336,8 @@ export function useKeyboard(): void {
       }
       if (event.defaultPrevented) return;
       if (handleHotkey(event)) event.preventDefault();
-    };
-    const onKeyUp = (event: KeyboardEvent) => {
+    },
+    onKeyUp(event) {
       if (!isSpace(event)) return;
       const tapped = spaceHeld && !spaceUsedForPan;
       spaceHeld = false;
@@ -294,23 +346,30 @@ export function useKeyboard(): void {
       // control's: only the no-control case reaches the transport hotkey.
       if (!tapped || isEditableTarget(event.target) || isControlTarget(event.target)) return;
       if (handleHotkey(event)) event.preventDefault();
-    };
-    const onPointerDown = () => {
+    },
+    onPointerDown() {
       if (spaceHeld) spaceUsedForPan = true;
-    };
-    const onBlur = () => {
+    },
+    onBlur() {
       spaceHeld = false;
       spaceUsedForPan = false;
-    };
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-    window.addEventListener("pointerdown", onPointerDown, true);
-    window.addEventListener("blur", onBlur);
+    },
+  };
+}
+
+/** Install the window key listeners (once, from `App`). */
+export function useKeyboard(): void {
+  useEffect(() => {
+    const router = createKeyRouter();
+    window.addEventListener("keydown", router.onKeyDown);
+    window.addEventListener("keyup", router.onKeyUp);
+    window.addEventListener("pointerdown", router.onPointerDown, true);
+    window.addEventListener("blur", router.onBlur);
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-      window.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("keydown", router.onKeyDown);
+      window.removeEventListener("keyup", router.onKeyUp);
+      window.removeEventListener("pointerdown", router.onPointerDown, true);
+      window.removeEventListener("blur", router.onBlur);
     };
   }, []);
 }

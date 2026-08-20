@@ -4,7 +4,10 @@
  * (inputs left, outputs right, handles colored by kind family; required
  * filled, optional hollow, refinement double-ringed; lift badges; inline
  * literals), an optional param widget row, comment note above, excluded
- * outline, and — at the closest zoom tier — output value summaries below.
+ * outline, a git change badge when the binding differs from HEAD (docs/16
+ * canvas badges; doc 10's status strip markers — added / modified /
+ * renamed; removed nodes live only in the Git tab), and — at the closest
+ * zoom tier — output value summaries below.
  *
  * Everything dynamic (status, probe verdicts, values, dirty flash, picks) is
  * read from the store per node so a status tick never rebuilds the graph.
@@ -12,6 +15,7 @@
 import { Handle, Position, useConnection, type NodeProps } from "@xyflow/react";
 import { memo, useEffect, useState } from "react";
 import { kindColor } from "../kinds";
+import { markerBadge } from "../panels/gitFormat";
 import type { InputView, NodeView, OutputView, ProbeVerdict, ValueSummary } from "../protocol/messages";
 import { literalKindOf } from "../state/literals";
 import { canWrite, useCicada } from "../state/store";
@@ -179,11 +183,29 @@ ${summaryText(value)}` : ""
 }
 
 /**
+ * The git change badge: one glyph on the header when this binding's line
+ * differs from HEAD (`+` added · `~` modified · `→` renamed), colored by
+ * the theme's semantic tokens, the reason in its tooltip. Read per node
+ * from the store's marker index so a status answer never rebuilds the graph.
+ */
+function GitBadge({ name }: { name: string }) {
+  const marker = useCicada((s) => s.gitMarkers[name]);
+  if (marker === undefined) return null;
+  const badge = markerBadge(marker);
+  return (
+    <span className={`cn-git cn-git-${badge.kind}`} title={badge.title} data-testid={`git-${name}`} data-change={badge.kind}>
+      {badge.glyph}
+    </span>
+  );
+}
+
+/**
  * The port-less ghost: a broken line, or a `#off` line whose body does not
  * parse. A `#off` line that parses renders as the node it is (ports,
  * literals, wires intact) with the `disabled` styling — see `CicadaNodeImpl`.
  */
 function GhostNode({ view, unit }: { view: NodeView; unit: number }) {
+  const gitChange = useCicada((s) => s.gitMarkers[view.name]?.change);
   const label = view.kind === "disabled" ? "disabled (#off)" : "broken line";
   const title = view.diagnostics.map((d) => d.message).join("\n") || label;
   return (
@@ -192,10 +214,14 @@ function GhostNode({ view, unit }: { view: NodeView; unit: number }) {
       style={{ width: view.size[0] * unit, height: view.size[1] * unit }}
       title={title}
       data-node={view.name}
+      data-git={gitChange}
     >
       <div className="cn-header">
         <span className="cn-name">{view.name}</span>
         <span className="cn-func">{label}</span>
+        <span className="cn-badges">
+          <GitBadge name={view.name} />
+        </span>
       </div>
       <div className="cn-raw mono">{view.text}</div>
     </div>
@@ -213,6 +239,7 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
   const picked = useCicada((s) => s.selection.element?.node === name);
   const hovered = useCicada((s) => s.hoverPick?.node === name);
   const writer = useCicada(canWrite);
+  const gitChange = useCicada((s) => s.gitMarkers[name]?.change);
   const dragSource = useDragSource();
   const tier = useLodTier();
 
@@ -291,6 +318,7 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
       title={view.excluded ? `${view.excluded.status}: ${view.excluded.reason}` : undefined}
       data-node={name}
       data-state={disabled ? "off" : (status?.state ?? "idle")}
+      data-git={gitChange}
     >
       {view.comment && (
         <div className="cn-note" title={view.comment}>
@@ -304,6 +332,7 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
         <span className="cn-name">{name}</span>
         <span className="cn-func">{subtitle}</span>
         <span className="cn-badges">
+          <GitBadge name={name} />
           {view.effectful && (
             <span className="cn-fx" title="effectful — runs only explicitly (use the inspector's run)">
               run
