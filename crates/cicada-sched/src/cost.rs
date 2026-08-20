@@ -6,6 +6,20 @@
 
 use serde::{Deserialize, Serialize};
 
+/// One computation's measured cost: how many elements it executed and the
+/// work nanoseconds they took (summed across parallel chunks — CPU cost,
+/// not wall clock). Recorded beside a node-level memo entry so a cache hit
+/// still knows what the computation cost when it last ran (docs/12 §Progress
+/// and ETA: "cost samples per `NodeKey` persist in the memo table") — the
+/// cost model stays complete across a warm reopen, where nothing computes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CostSample {
+    /// Elements the computation processed (1 for scalar nodes).
+    pub elements: u64,
+    /// Work nanoseconds (CPU, summed across chunks).
+    pub nanos: u64,
+}
+
 /// Accumulated cost observations for one operation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CostStats {

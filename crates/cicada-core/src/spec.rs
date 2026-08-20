@@ -116,6 +116,13 @@ pub struct NodeSpec {
     pub version: u32,
     /// False for effectful nodes (exporters — run only on explicit action).
     pub pure: bool,
+    /// Volatile (`#[node(volatile)]`; DECISIONS.md time row — `Clock` is
+    /// "uncached by design"): the scheduler never reads or writes the memo
+    /// for this node's outputs, so it runs in every generation whose cone
+    /// holds it (per element inside an `each()` fan-out); downstream nodes
+    /// key on its fresh output hash like any other input (docs/12
+    /// §Volatile nodes). Exclusive with effectful — the macro refuses both.
+    pub volatile: bool,
     /// True when the node consults `ProjectConfig` tolerances — the
     /// tolerance hash joins the `NodeKey` (DECISIONS.md tolerance row).
     pub uses_tolerance: bool,
@@ -548,6 +555,7 @@ mod tests {
             tier: Tier::S,
             version: 1,
             pure: true,
+            volatile: false,
             uses_tolerance: false,
             panics: None,
             gh: Some("Divide Curve"),

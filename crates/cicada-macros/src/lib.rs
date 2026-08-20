@@ -48,8 +48,10 @@ pub fn derive_ports(input: TokenStream) -> TokenStream {
 /// semantic node version in cache keys, doc 12), `gh = "Component Name"`
 /// or `gh = none` (required — the Grasshopper component this node
 /// replaces, or none for a Cicada-only node), `name = "…"` (optional
-/// dialect-name override), `effectful` (marks impure), `uses_tolerance`
-/// (folds `ProjectConfig` into the `NodeKey`, doc 49).
+/// dialect-name override), `effectful` (marks impure), `volatile` (never
+/// memoized, recomputes every generation — `Clock`'s "uncached by design";
+/// exclusive with `effectful`), `uses_tolerance` (folds `ProjectConfig`
+/// into the `NodeKey`, doc 49).
 ///
 /// Doc sections: `# Panics` becomes the catalog's "Red when" contract;
 /// `# Returns` (one line) becomes the doc of the single `out` port and is
@@ -419,6 +421,7 @@ struct NodeArgs {
     name: Option<LitStr>,
     gh: Option<Gh>,
     effectful: bool,
+    volatile: bool,
     uses_tolerance: bool,
 }
 
@@ -455,6 +458,7 @@ fn parse_node_args(args: &TokenStream2) -> syn::Result<NodeArgs> {
         name: None,
         gh: None,
         effectful: false,
+        volatile: false,
         uses_tolerance: false,
     };
     // Duplicate keys are errors — a silently-last-winning `version = 1,
@@ -487,7 +491,16 @@ fn parse_node_args(args: &TokenStream2) -> syn::Result<NodeArgs> {
             let value = parse_gh(&meta)?;
             set_once(&mut parsed.gh, value, &meta)
         } else if meta.path.is_ident("effectful") {
+            if parsed.volatile {
+                return Err(meta.error(VOLATILE_EFFECTFUL));
+            }
             parsed.effectful = true;
+            Ok(())
+        } else if meta.path.is_ident("volatile") {
+            if parsed.effectful {
+                return Err(meta.error(VOLATILE_EFFECTFUL));
+            }
+            parsed.volatile = true;
             Ok(())
         } else if meta.path.is_ident("uses_tolerance") {
             parsed.uses_tolerance = true;
@@ -495,13 +508,21 @@ fn parse_node_args(args: &TokenStream2) -> syn::Result<NodeArgs> {
         } else {
             Err(meta.error(
                 "unknown #[node(...)] key — expected category, tier, version, gh, name, \
-                 effectful, or uses_tolerance",
+                 effectful, volatile, or uses_tolerance",
             ))
         }
     });
     syn::parse::Parser::parse2(parser, args.clone())?;
     Ok(parsed)
 }
+
+/// Why `volatile` and `effectful` cannot share a node: an effectful node
+/// already bypasses the memo and runs only on explicit action; a volatile
+/// node recomputes in EVERY generation. Both at once would be an exporter
+/// that fires every generation — refused at the macro, not at run time.
+const VOLATILE_EFFECTFUL: &str = "`volatile` and `effectful` are exclusive: an effectful node \
+already bypasses the memo and runs only on explicit action (POST /api/run), a volatile node \
+recomputes in every generation — pick one";
 
 /// Title/description from the doc comment's FIRST PARAGRAPH:
 /// `Title — description…` — the paragraph may wrap across source lines
@@ -728,6 +749,7 @@ fn expand_node(args: &TokenStream2, function: &ItemFn) -> syn::Result<TokenStrea
     );
 
     let pure = !parsed.effectful;
+    let volatile = parsed.volatile;
     let uses_tolerance = parsed.uses_tolerance;
     let spec_ident = format_ident!(
         "__CICADA_NODE_SPEC_{}",
@@ -760,6 +782,7 @@ fn expand_node(args: &TokenStream2, function: &ItemFn) -> syn::Result<TokenStrea
             tier: #tier,
             version: #version,
             pure: #pure,
+            volatile: #volatile,
             uses_tolerance: #uses_tolerance,
             panics: #panics_tokens,
             gh: #gh_tokens,

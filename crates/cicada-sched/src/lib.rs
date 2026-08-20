@@ -21,6 +21,7 @@
 //! node's first fan persists at node granularity only (see `exec`).
 //! Tests drive everything through fake nodes on **virtual time** (doc 14).
 
+pub mod cancel;
 pub mod clock;
 pub mod cost;
 pub mod exec;
@@ -31,10 +32,12 @@ pub mod store;
 
 pub use cicada_core as core;
 
+pub use cancel::{CancelHook, CancelToken, NodeCtx};
 pub use clock::{Clock, MonotonicClock, VirtualClock};
+pub use cost::{CostSample, CostStats};
 pub use exec::{
-    CancelToken, Event, NodeFailure, NodeOutcome, NoopObserver, Observer, Scheduler,
-    SchedulerConfig, SolveError, SolveReport, panic_message,
+    Event, NodeFailure, NodeOutcome, NoopObserver, Observer, Scheduler, SchedulerConfig,
+    SolveError, SolveReport, panic_message,
 };
 pub use graph::{GraphError, Input, NodeDecl, NodeError, NodeFn, NodeId, SolveGraph};
 pub use key::{CACHE_EPOCH, KeyInputs, NodeKey, node_key};

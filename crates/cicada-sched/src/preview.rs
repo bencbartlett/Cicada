@@ -12,7 +12,8 @@
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 
-use crate::exec::{CancelToken, NoopObserver, Observer, Scheduler, SolveError, SolveReport};
+use crate::cancel::CancelToken;
+use crate::exec::{NoopObserver, Observer, Scheduler, SolveError, SolveReport};
 use crate::graph::{NodeId, SolveGraph};
 
 /// One preview request: a graph (typically the same topology with a new

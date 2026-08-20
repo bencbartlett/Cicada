@@ -1,9 +1,14 @@
 //! The executor (docs/12 §Execution, §Cancellation): wavefront over the
 //! DAG on a rayon pool sized `cores − 2`, per-element fan-out for `each()`
 //! nodes in cost-sized chunks, one cancellation token per generation
-//! checked between nodes and between chunks, node panics caught and turned
-//! into red nodes, completed work written through to the store — which is
-//! why cancellation and supersession are nearly free. One honest
+//! (owned by the `solve` call, handed to every node invocation as its
+//! [`NodeCtx`] — see [`crate::cancel`]) checked between nodes and between
+//! chunks, node panics caught and turned into red nodes, completed work
+//! written through to the store — which is why cancellation and
+//! supersession are nearly free. Two flags gate the memo: `effectful`
+//! nodes never consult it (their work IS the side effect) and `volatile`
+//! nodes never consult it either (their value is fresh by definition —
+//! docs/12 §Volatile nodes); both run every time their cone is solved. One honest
 //! qualifier: element-LEVEL persistence needs calibrated cost stats
 //! (docs/12 adaptive granularity), so a cold node's very first fan
 //! persists at node granularity only — a cancelled cold fan still records
@@ -14,14 +19,15 @@
 //! execution order can never reorder output (docs/12 §Determinism rules).
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use cicada_core::hash::ValueHash;
 use cicada_core::value::{HashedValue, List, ValueData};
 
+use crate::cancel::{CancelToken, NodeCtx};
 use crate::clock::Clock;
-use crate::cost;
+use crate::cost::{self, CostSample};
 use crate::graph::{Input, NodeDecl, NodeId, SolveGraph};
 use crate::key::{KeyInputs, NodeKey, node_key};
 use crate::store::{DiskStore, MemoEntry, StoreError};
@@ -53,30 +59,6 @@ impl Default for SchedulerConfig {
             cold_element_nanos: 1_000_000,
             element_cache_min_nanos: 100_000,
         }
-    }
-}
-
-/// One generation's cancellation token (docs/12: checked between nodes and
-/// between element chunks). Cloneable; all clones share the flag.
-#[derive(Debug, Clone, Default)]
-pub struct CancelToken(Arc<AtomicBool>);
-
-impl CancelToken {
-    /// A fresh, uncancelled token.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Cancel. Idempotent, callable from any thread.
-    pub fn cancel(&self) {
-        self.0.store(true, Ordering::SeqCst);
-    }
-
-    /// Has anyone cancelled?
-    #[must_use]
-    pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
     }
 }
 
@@ -185,6 +167,10 @@ pub enum NodeOutcome {
     CacheHit {
         /// Output hashes, port order.
         outputs: Vec<ValueHash>,
+        /// What the computation cost when it last ran, when the entry
+        /// recorded it (node-level entries since v0.1): the cost model's
+        /// evidence for a node that computed nothing this generation.
+        cost: Option<CostSample>,
     },
     /// Computed this generation.
     Computed {
@@ -211,7 +197,7 @@ impl NodeOutcome {
     #[must_use]
     pub fn output_hashes(&self) -> Option<&[ValueHash]> {
         match self {
-            Self::CacheHit { outputs } | Self::Computed { outputs, .. } => Some(outputs),
+            Self::CacheHit { outputs, .. } | Self::Computed { outputs, .. } => Some(outputs),
             _ => None,
         }
     }
@@ -556,7 +542,12 @@ impl Ctx<'_> {
         let _ = self.keys[id.0].set(key);
         // Effectful nodes (exporters) never consult the memo: their WORK is
         // the side effect, and a hit would silently skip it (doc 10 §7).
+        // Volatile nodes never consult it either: their value is fresh by
+        // definition — a hit would serve a stale clock (docs/12 §Volatile
+        // nodes). Both gates are per node; downstream nodes key on the
+        // fresh output hash like any other input.
         if !decl.effectful
+            && !decl.volatile
             && let Some(entry) = self.scheduler.store.memo(&key)
         {
             if entry.outputs.len() == decl.output_count {
@@ -571,6 +562,7 @@ impl Ctx<'_> {
                 }
                 return NodeOutcome::CacheHit {
                     outputs: entry.outputs,
+                    cost: entry.cost,
                 };
             }
             // A record whose arity disagrees with the node is corrupt,
@@ -644,11 +636,20 @@ impl Ctx<'_> {
         computed: u64,
         nanos: u64,
     ) -> NodeOutcome {
-        // Effectful nodes are never memoized (see the memo-read gate); the
-        // cost sample below still records — the estimator can know an
-        // export's cost without the cache ever lying about having run it.
+        // Effectful and volatile nodes are never memoized (see the memo-read
+        // gate); the cost sample below still records — the estimator can
+        // know an export's (or a clock's cone's) cost without the cache
+        // ever lying about having run it. The entry carries the cost too:
+        // `elements` is the node's element count (cache-served elements
+        // included — the size the next prediction multiplies), `nanos` what
+        // actually executed.
         if !decl.effectful
-            && let Err(error) = self.scheduler.store.record_memo(key, &outputs)
+            && !decl.volatile
+            && let Err(error) = self.scheduler.store.record_memo_with_cost(
+                key,
+                &outputs,
+                CostSample { elements, nanos },
+            )
         {
             self.set_fatal(error);
             return NodeOutcome::Cancelled;
@@ -775,8 +776,9 @@ impl Ctx<'_> {
         inputs: &[Option<Arc<HashedValue>>],
     ) -> Computed {
         let clock = &self.scheduler.clock;
+        let ctx = NodeCtx { cancel: self.token };
         let start = clock.now_nanos();
-        let result = catch_unwind(AssertUnwindSafe(|| (decl.run)(inputs)));
+        let result = catch_unwind(AssertUnwindSafe(|| (decl.run)(&ctx, inputs)));
         let nanos = clock.now_nanos().saturating_sub(start);
         let outputs = match result {
             Err(payload) => {
@@ -856,7 +858,10 @@ impl Ctx<'_> {
         // lifted exporter served per-element from cache would silently
         // skip side effects for the warm elements (same rule as the
         // node-level gate — the cache must never lie about work done).
+        // Volatile nodes likewise: a volatile node inside a fan-out
+        // recomputes PER ELEMENT, every generation.
         let element_cache = !decl.effectful
+            && !decl.volatile
             && per_element
                 .is_some_and(|nanos| nanos >= self.scheduler.config.element_cache_min_nanos);
 
@@ -1041,7 +1046,8 @@ impl Ctx<'_> {
         }
 
         executed.fetch_add(1, Ordering::Relaxed);
-        let run_result = catch_unwind(AssertUnwindSafe(|| (decl.run)(&element_inputs)));
+        let ctx = NodeCtx { cancel: self.token };
+        let run_result = catch_unwind(AssertUnwindSafe(|| (decl.run)(&ctx, &element_inputs)));
         let outputs = match run_result {
             Err(payload) => return Err((index, panic_message(payload.as_ref()))),
             Ok(Err(error)) => return Err((index, error.message)),

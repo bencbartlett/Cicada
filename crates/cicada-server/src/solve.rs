@@ -3,19 +3,24 @@
 //! shared scheduler. A submission replaces whatever is pending; each
 //! completed generation immediately starts the next with the newest job.
 //! Two policies, per docs/12: **structural** submissions (edits, reloads)
-//! cancel and supersede the in-flight generation (its `CancelToken` and
-//! the script host's kill switch); **preview** submissions (slider
-//! streams) let the in-flight generation COMPLETE — its work lands in the
-//! store, and killing Python per tick would mean a cone through a script
-//! node never produces a preview at all. Esc (`cancel`) cancels + kills
+//! cancel and supersede the in-flight generation; **preview** submissions
+//! (slider streams) let the in-flight generation COMPLETE — its work lands
+//! in the store, and killing Python per tick would mean a cone through a
+//! script node never produces a preview at all. Esc (`cancel`) cancels
 //! whatever is running.
+//!
+//! Every generation owns its `CancelToken` (v0.1 item 3b): cancelling it is
+//! the whole of cancelling the generation — the executor checks it between
+//! nodes and chunks, and the script bridge's per-call kill switches are
+//! hooked to it (`CancelToken::on_cancel`), so there is no separate "kill
+//! the scripts" step for any cancel site to forget. Explicit effectful runs
+//! (`POST /api/run/{node}`) do NOT go through this loop: they solve on the
+//! same scheduler with their own token, so a slider drag never cancels an
+//! export half-written (see [`crate::session`]) — by construction.
 //!
 //! Wall-clock policy (the ~30 ms structural debounce) is the session's, not
 //! this loop's — `param_preview` streams submit immediately, structural
-//! edits arrive here after the session's timer. Explicit effectful runs
-//! (`POST /api/run/{node}`) do NOT go through this loop: they solve on the
-//! same scheduler with their own token so a slider drag never cancels an
-//! export half-written (see [`crate::session`]).
+//! edits arrive here after the session's timer.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -25,7 +30,6 @@ use std::time::{Duration, Instant};
 use cicada_sched::{CancelToken, Event, NodeId, Observer, Scheduler, SolveError, SolveReport};
 
 use crate::lower::Lowered;
-use crate::scripts::ScriptCancel;
 
 /// Why a generation ran.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,7 +91,6 @@ struct State {
 
 struct Shared {
     scheduler: Arc<Scheduler>,
-    scripts: Arc<ScriptCancel>,
     sink: Arc<dyn SolveSink>,
     state: Mutex<State>,
     wake: Condvar,
@@ -119,14 +122,9 @@ impl SolveLoop {
     /// When the worker thread cannot spawn — a loop without its worker
     /// would swallow every submit silently.
     #[must_use]
-    pub fn new(
-        scheduler: Arc<Scheduler>,
-        scripts: Arc<ScriptCancel>,
-        sink: Arc<dyn SolveSink>,
-    ) -> Self {
+    pub fn new(scheduler: Arc<Scheduler>, sink: Arc<dyn SolveSink>) -> Self {
         let shared = Arc::new(Shared {
             scheduler,
-            scripts,
             sink,
             state: Mutex::new(State {
                 pending: None,
@@ -150,16 +148,14 @@ impl SolveLoop {
     }
 
     /// Submit the newest job: replaces any pending job. A structural job
-    /// also cancels the in-flight generation (token + script kill switch);
-    /// a preview job lets it finish (latest-wins over COMPLETED
-    /// generations, docs/12).
+    /// also cancels the in-flight generation; a preview job lets it finish
+    /// (latest-wins over COMPLETED generations, docs/12).
     pub fn submit(&self, job: Job) {
         let mut state = self.lock();
         let structural = job.kind == JobKind::Structural;
         state.pending = Some(job);
         if structural && let Some(token) = &state.current {
             token.cancel();
-            self.shared.scripts.kill();
         }
         drop(state);
         self.shared.wake.notify_all();
@@ -174,7 +170,6 @@ impl SolveLoop {
         let mut state = self.lock();
         if let Some(token) = &state.current {
             token.cancel();
-            self.shared.scripts.kill();
             // The first Esc during this generation starts the
             // cancel-to-idle clock (a second Esc is the user hammering the
             // key — the honest latency is from the first).
@@ -228,7 +223,6 @@ impl Drop for SolveLoop {
             state.shutdown = true;
             if let Some(token) = &state.current {
                 token.cancel();
-                self.shared.scripts.kill();
             }
         }
         self.shared.wake.notify_all();
@@ -261,8 +255,6 @@ fn worker_loop(shared: &Shared) {
             let generation = shared.generation.fetch_add(1, Ordering::SeqCst) + 1;
             (job, token, generation)
         };
-        // A fresh kill switch for this generation's script calls.
-        let _switch = shared.scripts.begin();
         shared.sink.on_start(generation, &job);
         let observer = GenerationObserver {
             generation,
@@ -355,7 +347,7 @@ mod tests {
     }
 
     fn graph(x: f64) -> Arc<Lowered> {
-        let run: cicada_sched::NodeFn = Arc::new(|inputs: &[Option<Arc<HashedValue>>]| {
+        let run: cicada_sched::NodeFn = Arc::new(|_ctx, inputs: &[Option<Arc<HashedValue>>]| {
             let a = inputs[0].as_ref().unwrap();
             let ValueData::Number(a) = a.data() else {
                 panic!()
@@ -374,6 +366,7 @@ mod tests {
             fan: vec![0],
             output_count: 1,
             effectful: false,
+            volatile: false,
             run,
         };
         Arc::new(Lowered {
@@ -405,7 +398,7 @@ mod tests {
             events: AtomicUsize::new(0),
             settled: AtomicUsize::new(0),
         });
-        let solve = SolveLoop::new(scheduler, ScriptCancel::new(), recorder.clone());
+        let solve = SolveLoop::new(scheduler, recorder.clone());
         for x in 0..20 {
             solve.submit(Job {
                 lowered: graph(f64::from(x)),
@@ -494,10 +487,10 @@ mod tests {
         );
         let last = Last::new();
         let runs = Arc::new(AtomicUsize::new(0));
-        let solve = SolveLoop::new(scheduler, ScriptCancel::new(), last.clone());
+        let solve = SolveLoop::new(scheduler, last.clone());
         let slow = |x: f64, runs: Arc<AtomicUsize>| -> Arc<Lowered> {
             let run: cicada_sched::NodeFn =
-                Arc::new(move |inputs: &[Option<Arc<HashedValue>>]| {
+                Arc::new(move |_ctx, inputs: &[Option<Arc<HashedValue>>]| {
                     runs.fetch_add(1, Ordering::SeqCst);
                     std::thread::sleep(std::time::Duration::from_millis(40));
                     let a = inputs[0].as_ref().unwrap();
@@ -518,6 +511,7 @@ mod tests {
                 fan: vec![0],
                 output_count: 1,
                 effectful: false,
+                volatile: false,
                 run,
             };
             Arc::new(Lowered {
@@ -567,7 +561,7 @@ mod tests {
             .unwrap(),
         );
         let last = Last::new();
-        let solve = SolveLoop::new(scheduler, ScriptCancel::new(), last.clone());
+        let solve = SolveLoop::new(scheduler, last.clone());
         solve.submit(Job {
             lowered: graph(1.0),
             targets: vec![NodeId(0)],
@@ -612,15 +606,16 @@ mod tests {
             .unwrap(),
         );
         let last = Last::new();
-        let solve = SolveLoop::new(scheduler, ScriptCancel::new(), last.clone());
+        let solve = SolveLoop::new(scheduler, last.clone());
         let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
         let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
         let release_rx = Mutex::new(release_rx);
-        let run: cicada_sched::NodeFn = Arc::new(move |_inputs: &[Option<Arc<HashedValue>>]| {
-            started_tx.send(()).unwrap();
-            release_rx.lock().unwrap().recv().unwrap();
-            Ok(vec![HashedValue::new(ValueData::Number(1.0)).unwrap()])
-        });
+        let run: cicada_sched::NodeFn =
+            Arc::new(move |_ctx, _inputs: &[Option<Arc<HashedValue>>]| {
+                started_tx.send(()).unwrap();
+                release_rx.lock().unwrap().recv().unwrap();
+                Ok(vec![HashedValue::new(ValueData::Number(1.0)).unwrap()])
+            });
         let decl = NodeDecl {
             name: "gate".to_owned(),
             op: "gate".to_owned(),
@@ -631,6 +626,7 @@ mod tests {
             fan: vec![],
             output_count: 1,
             effectful: false,
+            volatile: false,
             run,
         };
         let lowered = Arc::new(Lowered {

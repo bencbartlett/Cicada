@@ -547,6 +547,7 @@ impl Lowering<'_> {
                 fan,
                 output_count: 1,
                 effectful: false,
+                volatile: false,
                 run,
             },
             vec!["out".to_owned()],
@@ -589,7 +590,7 @@ impl Lowering<'_> {
                 // NodeKey already folds the tolerance hash for
                 // uses_tolerance nodes.
                 let config = *self.config;
-                let run: NodeFn = Arc::new(move |values| {
+                let run: NodeFn = Arc::new(move |_ctx, values| {
                     invoke(&config, values).map_err(|error| NodeError::new(error.to_string()))
                 });
                 (run, None)
@@ -634,6 +635,7 @@ impl Lowering<'_> {
                 fan,
                 output_count: spec.outputs.len(),
                 effectful: !spec.pure,
+                volatile: spec.volatile,
                 run,
             },
             outputs,
@@ -813,7 +815,7 @@ fn expression_ir_hash(expr: &Expr, variables: &[String]) -> ValueHash {
 /// with `^` = `powf`. NaN results refuse at value construction (docs/12).
 fn expression_fn(name: &str, expr: Expr, integer_mode: bool) -> NodeFn {
     let name = name.to_owned();
-    Arc::new(move |values| {
+    Arc::new(move |_ctx, values| {
         let mut variables: Vec<(String, &Arc<HashedValue>)> = Vec::new();
         let mut ordered: Vec<&Arc<HashedValue>> = Vec::with_capacity(values.len());
         for value in values {

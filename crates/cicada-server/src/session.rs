@@ -780,7 +780,7 @@ impl Session {
             config,
         });
         let sink: Arc<dyn SolveSink> = core.clone();
-        let solve = Arc::new(SolveLoop::new(scheduler, scripts_cancel, sink));
+        let solve = Arc::new(SolveLoop::new(scheduler, sink));
         *core
             .solve
             .lock()

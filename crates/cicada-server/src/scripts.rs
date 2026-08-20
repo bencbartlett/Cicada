@@ -23,21 +23,25 @@
 //! the `.py` recomputes exactly its cone; renaming the binding never
 //! does.
 //!
-//! Cancellation (stage 5's job, docs/12 §Cancellation): every script node
-//! runs against a [`ScriptCancel`] bridge — the solve loop installs one
-//! [`KillSwitch`] per generation and kills it when the generation's
-//! `CancelToken` is cancelled, so Esc kills the worker mid-call and the
-//! node lands `cancelled`, never "still running in the background".
+//! Cancellation (docs/12 §Cancellation; v0.1 item 3b): every script call
+//! runs under the generation's own cancel handle — the executor hands each
+//! invocation its `NodeCtx`, and the [`ScriptCancel`] bridge mints one
+//! [`KillSwitch`] per call, hooked to THAT token (`CancelToken::on_cancel`).
+//! Whoever cancels the generation — Esc, structural supersession, idle
+//! pre-emption, a fatal store error — kills exactly its in-flight worker
+//! calls, by construction: there is no session-global switch for a slider
+//! drag to share with an export (docs/13). The node lands `cancelled`,
+//! never "still running in the background".
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use cicada_core::geometry::{Curve, Mesh};
 use cicada_core::hash::ValueHash;
 use cicada_core::spec::{NodeSpec, PortSpec, PortType, Tier};
 use cicada_core::value::{HashedValue, ValueData};
-use cicada_sched::{NodeError, NodeFn};
+use cicada_sched::{CancelToken, NodeCtx, NodeError, NodeFn};
 use cicada_script::{KillSwitch, OutputDesc, PortDesc, ScriptError, WorkerPool};
 
 /// One discovered script node: the leaked spec plus its cache-key
@@ -127,54 +131,82 @@ pub const MARSHALLABLE: &[&str] = &[
     "Closed<Curve>",
 ];
 
-/// The `CancelToken` → [`KillSwitch`] bridge: one switch per solve
-/// generation, shared by every script node run function of a session.
-/// [`Self::begin`] installs a fresh switch for a new generation;
-/// [`Self::kill`] kills the current one (every in-flight script call of
-/// that generation has its worker killed). Headless `cicada run` uses a
-/// bridge it never kills — the switch simply stays unkilled.
+/// The `CancelToken` → [`KillSwitch`] bridge. Stateless by design since
+/// v0.1: there is no "current generation" to install — a script call
+/// [`enter`](Self::enter)s under the token of the generation running it and
+/// gets a switch that dies with that token and no other. Headless
+/// `cicada run` passes a token it never cancels; the switch simply stays
+/// unkilled. The type stays as the named seam the WASM host's epoch bump
+/// joins (item 6) and as the handle `compile::load` threads to discovery.
 #[derive(Debug, Default)]
 pub struct ScriptCancel {
-    current: Mutex<KillSwitch>,
+    /// Script calls in flight right now (diagnostics; tests assert the
+    /// bridge leaves nothing behind).
+    in_flight: std::sync::atomic::AtomicUsize,
 }
 
 impl ScriptCancel {
-    /// A bridge with an unkilled switch installed.
+    /// A bridge.
     #[must_use]
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
 
-    /// Install a fresh switch for a new generation and return it.
-    pub fn begin(&self) -> KillSwitch {
-        let fresh = KillSwitch::new();
-        *self
-            .current
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = fresh.clone();
-        fresh
+    /// Enter a script call under `token`: the returned guard's switch is
+    /// killed the moment the token is cancelled (immediately, if it already
+    /// is), and leaves no trace once the guard drops.
+    #[must_use = "the guard carries the switch the call polls"]
+    pub fn enter(self: &Arc<Self>, token: &CancelToken) -> ScriptCall {
+        let switch = KillSwitch::new();
+        let hook = {
+            let switch = switch.clone();
+            token.on_cancel(move || switch.kill())
+        };
+        self.in_flight
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        ScriptCall {
+            bridge: Arc::clone(self),
+            switch,
+            _hook: hook,
+        }
     }
 
-    /// Kill the current generation's switch.
-    pub fn kill(&self) {
-        self.current
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .kill();
+    /// Script calls currently in flight through this bridge.
+    #[must_use]
+    pub fn in_flight(&self) -> usize {
+        self.in_flight.load(std::sync::atomic::Ordering::SeqCst)
     }
+}
 
-    fn switch(&self) -> KillSwitch {
-        self.current
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+/// One script call's place in the bridge: its kill switch, bound to the
+/// generation's cancel handle for exactly the call's lifetime.
+#[derive(Debug)]
+pub struct ScriptCall {
+    bridge: Arc<ScriptCancel>,
+    switch: KillSwitch,
+    _hook: cicada_sched::CancelHook,
+}
+
+impl ScriptCall {
+    /// The switch the worker pool polls.
+    #[must_use]
+    pub fn switch(&self) -> &KillSwitch {
+        &self.switch
+    }
+}
+
+impl Drop for ScriptCall {
+    fn drop(&mut self) {
+        self.bridge
+            .in_flight
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
 /// Discover and describe every script node next to `pipeline`
 /// (`<dir>/scripts/*.py`, sorted). No scripts → empty map and NO Python
 /// requirement; the pool spawns only when scripts exist. Run functions
-/// take their kill switch from `cancel` at call time.
+/// enter `cancel` under the calling generation's token at call time.
 ///
 /// # Errors
 ///
@@ -349,6 +381,9 @@ fn build_node(
         // effect on warm runs. Effectful nodes are never memoized and
         // never auto-run (doc 10 §7) — exactly export_obj's contract.
         pure: !desc.effectful,
+        // No script-side `volatile` yet: the decorator has no such flag,
+        // and the first volatile node (`Clock`) is stdlib (item 4).
+        volatile: false,
         uses_tolerance: false,
         panics: None,
         // Project script nodes have no Grasshopper counterpart and no
@@ -368,8 +403,8 @@ fn build_node(
     // declared output annotation (kind, depth, optionality, AND the
     // refinement predicate for Watertight<Mesh>/Closed<Curve>) — a script
     // whose return lies about its type reds HERE, at the boundary, not
-    // three nodes downstream. The kill switch is the CURRENT generation's,
-    // read at call time.
+    // three nodes downstream. The kill switch is minted per call under the
+    // CALLING generation's token (`ctx.cancel`) — never a neighbour's.
     let port_names: Vec<String> = desc.inputs.iter().map(|p| p.name.clone()).collect();
     let (file, fn_name) = (file.to_owned(), desc.name.clone());
     let out_ports: Vec<(&'static str, PortType)> = spec
@@ -377,16 +412,18 @@ fn build_node(
         .iter()
         .map(|port| (port.name, port.ty))
         .collect();
-    let run: NodeFn = Arc::new(move |values| {
+    let run: NodeFn = Arc::new(move |ctx: &NodeCtx<'_>, values| {
         let mut inputs = BTreeMap::new();
         for (name, slot) in port_names.iter().zip(values) {
             if let Some(value) = slot {
                 inputs.insert(name.clone(), Arc::clone(value));
             }
         }
+        let call = cancel.enter(ctx.cancel);
         let outs = pool
-            .invoke(&file, &source, &fn_name, &inputs, &cancel.switch())
+            .invoke(&file, &source, &fn_name, &inputs, call.switch())
             .map_err(|error| NodeError::new(error.to_string()))?;
+        drop(call);
         if outs.len() != out_ports.len() {
             return Err(NodeError::new(format!(
                 "script `{fn_name}` returned {} output value(s) for {} declared output \
@@ -589,6 +626,15 @@ def liar(x: "Number") -> "Number":
         (dir, nodes)
     }
 
+    /// A run-function context for tests: a fresh, never-cancelled token.
+    fn run(
+        node: &ScriptNode,
+        inputs: &[Option<Arc<HashedValue>>],
+    ) -> Result<Vec<Arc<HashedValue>>, NodeError> {
+        let token = CancelToken::new();
+        (node.run)(&NodeCtx { cancel: &token }, inputs)
+    }
+
     // Input SLOTS for the run functions (`Option` = the absent-optional
     // slot type of `NodeFn`, not an unnecessary wrap).
     #[allow(clippy::unnecessary_wraps)]
@@ -641,12 +687,15 @@ def liar(x: "Number") -> "Number":
     fn none_return_runs_the_effect_and_refuses_a_value() {
         let (dir, nodes) = discover_fixture();
         let path = dir.path().join("note.txt");
-        let outs =
-            (nodes["write_note"].run)(&[text(&path.to_string_lossy()), text("hi")]).expect("runs");
+        let outs = run(
+            &nodes["write_note"],
+            &[text(&path.to_string_lossy()), text("hi")],
+        )
+        .expect("runs");
         assert!(outs.is_empty(), "no output values for -> None");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "hi");
 
-        let error = (nodes["chatty"].run)(&[number(1.0)]).expect_err("a value for -> None");
+        let error = run(&nodes["chatty"], &[number(1.0)]).expect_err("a value for -> None");
         assert!(
             error.message.contains("declared `-> None`") && error.message.contains("float"),
             "{}",
@@ -660,7 +709,7 @@ def liar(x: "Number") -> "Number":
         let split = &nodes["split"];
         assert_eq!(port_names(split.spec), ["twice", "labels"]);
         assert_eq!(split.spec.outputs[1].ty.render(), "[Text]");
-        let outs = (split.run)(&[number(2.0)]).expect("runs");
+        let outs = run(split, &[number(2.0)]).expect("runs");
         assert_eq!(outs.len(), 2);
         assert_eq!(*outs[0].data(), ValueData::Number(4.0));
         let ValueData::List(labels) = outs[1].data() else {
@@ -672,19 +721,19 @@ def liar(x: "Number") -> "Number":
     #[test]
     fn multi_output_key_mismatches_are_loud_with_counts() {
         let (_dir, nodes) = discover_fixture();
-        let error = (nodes["forgetful"].run)(&[number(1.0)]).expect_err("missing key");
+        let error = run(&nodes["forgetful"], &[number(1.0)]).expect_err("missing key");
         assert!(
             error.message.contains("1 missing [thrice]") && error.message.contains("0 extra []"),
             "{}",
             error.message
         );
-        let error = (nodes["inventive"].run)(&[number(1.0)]).expect_err("extra key");
+        let error = run(&nodes["inventive"], &[number(1.0)]).expect_err("extra key");
         assert!(
             error.message.contains("0 missing []") && error.message.contains("1 extra [surprise]"),
             "{}",
             error.message
         );
-        let error = (nodes["bare"].run)(&[number(1.0)]).expect_err("non-dict");
+        let error = run(&nodes["bare"], &[number(1.0)]).expect_err("non-dict");
         assert!(
             error
                 .message
@@ -701,7 +750,7 @@ def liar(x: "Number") -> "Number":
         assert_eq!(shift.spec.inputs[0].ty.render(), "Mesh");
         assert_eq!(shift.spec.outputs[0].ty.render(), "Mesh");
         let input = HashedValue::new(ValueData::Mesh(tetrahedron())).unwrap();
-        let outs = (shift.run)(&[Some(input), number(0.5)]).expect("runs");
+        let outs = run(shift, &[Some(input), number(0.5)]).expect("runs");
         let ValueData::Mesh(out) = outs[0].data() else {
             panic!("mesh")
         };
@@ -715,9 +764,9 @@ def liar(x: "Number") -> "Number":
         let (_dir, nodes) = discover_fixture();
         let tetra = &nodes["tetra"];
         assert_eq!(tetra.spec.outputs[0].ty.render(), "Watertight<Mesh>");
-        let outs = (tetra.run)(&[boolean(false)]).expect("a watertight mesh passes");
+        let outs = run(tetra, &[boolean(false)]).expect("a watertight mesh passes");
         assert!(matches!(outs[0].data(), ValueData::Mesh(m) if m.is_watertight()));
-        let error = (tetra.run)(&[boolean(true)]).expect_err("an open mesh is refused");
+        let error = run(tetra, &[boolean(true)]).expect_err("an open mesh is refused");
         assert!(
             error
                 .message
@@ -731,9 +780,9 @@ def liar(x: "Number") -> "Number":
 
         let ring = &nodes["ring"];
         assert_eq!(ring.spec.outputs[0].ty.render(), "[Closed<Curve>]");
-        let outs = (ring.run)(&[boolean(true)]).expect("a closed polyline passes");
+        let outs = run(ring, &[boolean(true)]).expect("a closed polyline passes");
         assert!(matches!(outs[0].data(), ValueData::List(_)));
-        let error = (ring.run)(&[boolean(false)]).expect_err("an open polyline is refused");
+        let error = run(ring, &[boolean(false)]).expect_err("an open polyline is refused");
         assert!(
             error.message.contains("declared `[Closed<Curve>]`")
                 && error
@@ -744,7 +793,7 @@ def liar(x: "Number") -> "Number":
         );
 
         // The boundary lie from stage 4 still reds at the boundary.
-        let error = (nodes["liar"].run)(&[number(1.0)]).expect_err("type lie");
+        let error = run(&nodes["liar"], &[number(1.0)]).expect_err("type lie");
         assert!(
             error.message.contains("declared `Number`") && error.message.contains("a Text"),
             "{}",
@@ -796,20 +845,37 @@ def liar(x: "Number") -> "Number":
     }
 
     #[test]
-    fn cancel_bridge_kills_only_the_current_generation() {
+    fn cancel_bridge_kills_exactly_the_cancelled_generations_calls() {
+        // Two generations in flight through one bridge — a preview and an
+        // export. Cancelling the preview's token kills the preview's
+        // switch and nothing else (docs/13: a slider drag never cancels an
+        // export); a call entered under an already-cancelled token is
+        // killed on entry; completed calls leave no hook behind.
         let bridge = ScriptCancel::new();
-        let first = bridge.begin();
-        assert!(!first.is_killed());
-        bridge.kill();
-        assert!(first.is_killed(), "the installed switch is the one killed");
-        let second = bridge.begin();
-        assert!(!second.is_killed(), "a new generation starts unkilled");
-        assert!(!bridge.switch().is_killed());
-        bridge.kill();
-        assert!(second.is_killed());
+        let preview = CancelToken::new();
+        let export = CancelToken::new();
+        let preview_call = bridge.enter(&preview);
+        let export_call = bridge.enter(&export);
+        assert_eq!(bridge.in_flight(), 2);
+        assert!(!preview_call.switch().is_killed());
+        preview.cancel();
+        assert!(preview_call.switch().is_killed(), "the preview's call dies");
         assert!(
-            first.is_killed(),
-            "old switches stay killed — never resurrected"
+            !export_call.switch().is_killed(),
+            "the export's call is untouched"
         );
+        let late = bridge.enter(&preview);
+        assert!(
+            late.switch().is_killed(),
+            "entering under a cancelled token is killed on entry"
+        );
+        drop(late);
+        drop(preview_call);
+        drop(export_call);
+        assert_eq!(bridge.in_flight(), 0, "nothing in flight after the calls");
+        // A completed call's hook is gone: cancelling its token now kills
+        // nothing (no dangling switch to observe — the guard took it).
+        export.cancel();
+        assert!(export.is_cancelled());
     }
 }
