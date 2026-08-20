@@ -75,6 +75,120 @@ the pending value and an honest estimate, and solves once on release.
 Scrub caching (doc 12) upgrades expensive sliders back into the
 smooth tier by warming their range during idle time.
 
+*(Live, v0.1 item 3b — the engine half.)* The decision is the
+server's and is made **per tick, monotone within a drag**: every
+`param_preview` predicts its own dirty cone (doc 12 §Cost prediction —
+a hash-only dry run of that tick's keys against the memo, so warmed
+values predict as the cache reads they are); a tick predicted at or
+above `COMPUTE_ON_RELEASE_MS` (1 s) is **withheld** — always, whatever
+earlier ticks of the drag did, so a drag that starts on a warm value
+and moves onto cold ones never solves a multi-second preview live.
+The session broadcasts ONE additive message per drag, on its first
+withheld tick:
+
+```json
+{"v":1,"seq":N,"type":"preview_policy","payload":{
+  "node":"deboss","port":"value","mode":"compute_on_release",
+  "estimate_ms":3942.3,"rough":false,"pending_value":"0.875"}}
+```
+
+`port` is absent (not `null`) for a bare literal; `mode` is the only
+mode ever announced (a cheap cone gets no message and previews
+latest-wins as before); `estimate_ms` is the predicted wall time of a
+live preview, a floor when `rough` (some node in the cone has no cost
+evidence yet — render with `~`, like the ETA); `pending_value` is the
+withheld tick's literal — the client tracks later ticks itself and
+clears the pending state on the delta its release `set_param`
+produces (or, when the pointer is released without a write, on its
+own `end_drag` and the `drag_ended` it earns — below). Once a
+drag has switched it never switches back: a later tick that is a pure
+cache read (a value visited before, or warmed by scrub caching)
+previews live — that is scrub caching's upgrade path — but any tick
+that would compute stays withheld whatever its estimate, so nothing
+flip-flops. The release is the one real op and the one generation,
+exactly as before.
+
+**What a drag is, server-side**: the run of ticks on one param closer
+together than `DRAG_GAP_MS` (300 ms of op-clock time). A drag ends on
+any write attempt (the release's `set_param`, any edit, a reload —
+landed or refused), on Esc, on the client's **`end_drag`** (the
+pointer released on the committed value — both sliders skip
+`set_param` then, and send `{"type":"end_drag","payload":{"node":
+"deboss","port":"value"}}` instead, `port: null` for a bare literal;
+it needs the lease like the ticks, ends the drag when it is that
+param's — an expired one included — and is a no-op otherwise, never an
+error: a routine release must not raise a notice), on the writer's
+departure or a lease handover, and on a pause longer than the gap; the
+next tick starts a fresh drag, predicted again and **announced again**
+if withheld, with its own `pending_value`. The gap rule is the
+fallback for a release the server never hears of (a client that died
+mid-drag); the release itself is `end_drag`, so a re-grab inside the
+gap is a fresh drag too. Server-side, every write intent but the
+preview tick and `end_drag` ends the drag at the dispatcher's door
+(gestures, undo, redo, batch — landed or refused), and `apply_text`, a
+reload and Esc end it at their own entries.
+
+**The end of an announced drag is announced** (revised 2026-08-20 —
+the review of the web half found the observer, and the writer's own
+twin widget, had no signal for a drag that ended without a write: a
+stale badge and a value that was neither committed nor pending stood
+indefinitely): whenever a drag that `preview_policy` went out for
+ends, the session broadcasts the additive
+
+```json
+{"v":1,"seq":N,"type":"drag_ended","payload":{"node":"deboss","port":"value"}}
+```
+
+(`port` absent for a bare literal) **after** whatever ended it
+answered with — the delta of a landed write, the error of a refused
+one (unicast: for every other client `drag_ended` is the whole news),
+the snapshot of a reload — and on its own for `end_drag`, Esc, the
+writer's departure and a lease handover. A drag that stayed live
+throughout ends silently (nothing to take down). The one end that is
+**not** announced is the gap rule's: it is decided lazily, at the next
+tick, and a pause is not a release — the pointer may still be down
+and the user looking at a viewport that is honestly not moving — so
+the pending state stands until the release (or the re-announcement
+replaces it).
+
+**The frozen contract for the client** (the web client implements it
+in `web/src/state/store.ts` — one `pending` param, replaced by every
+arrival, cleared by a delta, a non-`lease` error, a `drag_ended` that
+names it, a snapshot, a disconnect, or the widget itself on its own
+release without a write, optimistically, as it sends `end_drag`; both
+sliders render it as `pending · N s`):
+
+1. `preview_policy` may arrive more than once for the same param —
+   after a pause longer than the gap, after a release, after an Esc,
+   after an undo. Each one is the current verdict with its own
+   `pending_value` and `estimate_ms`: **replace** the pending state,
+   never stack it.
+2. Frames and statuses **can** arrive during a withheld drag: a tick
+   that is a pure cache read (a value visited before, or warmed by
+   scrub caching) previews live even after the drag has switched. A
+   frame or a status is therefore never "the drag ended" — only the
+   release's delta, `drag_ended`, the client's own release without a
+   write, or a fresh `preview_policy` changes the pending state.
+3. The server never sends a "back to live" message for a **standing**
+   drag: a drag's policy stands until the drag ends, and a pause is
+   not an end (a badge must not flicker off while the pointer is
+   down). It does announce the **end** of every announced drag
+   (`drag_ended`, above), the gap rule's excepted; the next drag is
+   predicted afresh and is live unless announced otherwise.
+4. The server relays no ticks: an observer's slider (and the twin
+   widget of the one being dragged, in the same client, until it
+   tracks the dragging widget's ticks) shows the policy's
+   `pending_value` — the first withheld tick — with the badge, not the
+   writer's live thumb. Honest, and marked pending; the release
+   (`drag_ended` or the delta) brings the value.
+5. `/debug/state` → `solve.previews_deferred` counts withheld ticks in
+   total and `solve.drag` shows the standing drag `{node, port, mode:
+   "live" | "compute_on_release", deferred, last_tick_ms}` (`null`
+   between drags).
+
+`PROTOCOL_VERSION` is unchanged (additive: two new message types an
+old client ignores).
+
 ## Binary frame format
 
 Frames are typed arrays ready for GPU upload — zero parsing on the
@@ -124,6 +238,17 @@ inspected wires. Diagnostics carry the doc 11 structure — kind, span,
 expected/actual, suggested fix — so the same payload drives canvas
 error chips, the text panel, and agent loops.
 
+*(Live, v0.1 item 3b.)* A `cached` node's status carries `elements`
+and `nanos` when its memo entry recorded the cost of its last compute
+(node-level entries do, since 3b): the count is what the ETA's
+per-node prediction multiplies by — it survives a warm reopen, where
+nothing computes — and the time is the **last compute's**, which doc
+12 §Progress asks the badge to show; it is never this generation's
+(that was a cache read). Clients render it as "last 43.9 s" beside
+`cached`, not as a bare time. Additive: both fields were already
+optional on the wire, and `done` nodes carry this generation's numbers
+as before.
+
 ## Animation transport
 
 Time params (`cycle`, `clock` — docs/08) are driven by a
@@ -149,7 +274,7 @@ with near-zero server traffic. `clock` is the unbounded escape hatch
 | `GET /api/edit/text` | `{path, text, text_hash}` — the base an agent reads before editing (§Undo/redo) |
 | `POST /api/edit/apply_text` | The atomic whole-file edit for agents / MCP (JSON body = the `apply_text` intent payload; same error kinds as the socket: 409 `stale_base`, 422 `parse_error` / `path_not_allowed`, 500 `io_error`). Applies even while a human holds the writer lease — the agent acts for the user; the delta reaches every client |
 | `GET /api/git/…` | Status, node-level diff, commit, per-node history (doc 10 git integration) |
-| `GET /debug/state`, `GET /debug/screenshot` | The agent/dev verification loop (doc 14). `state` (`?pipeline=&values=&wait=`) is the authoritative JSON oracle — graph view-model, text, statuses, summary, per-output display stats with bounds/triangles, lease, and `timings` (the last 1,024 generations: kind, `queued_ms` intent-arrival → start, `elapsed_ms`, `cancelled`, computed/cached counts, frame bytes, and `cancel_to_idle_ms` on a generation Esc ended — measured server-side, poll-free; the doc-15 measurement currency); `screenshot` (`?target=viewport`) asks a connected client to render the WebGL viewport to PNG (503 when no client is connected — loud, never blank; whole-page shots are Playwright's job) |
+| `GET /debug/state`, `GET /debug/screenshot` | The agent/dev verification loop (doc 14). `state` (`?pipeline=&values=&wait=`) is the authoritative JSON oracle — graph view-model, text, statuses, summary, per-output display stats with bounds/triangles, lease, `solve` (`busy`, `last_complete_generation`, `previews_deferred`, the standing `drag` verdict), and `timings` (the last 1,024 generations: kind — `structural` / `preview` / `explicit` / `hypothetical` (idle-class, never painted; `wait=true` does not wait for it) — `queued_ms` intent-arrival → start, `elapsed_ms`, `cancelled`, computed/cached counts, frame bytes, and `cancel_to_idle_ms` on a generation Esc ended — measured server-side, poll-free; the doc-15 measurement currency); `screenshot` (`?target=viewport`) asks a connected client to render the WebGL viewport to PNG (503 when no client is connected — loud, never blank; whole-page shots are Playwright's job) |
 | `GET /health` | Readiness (no token) — Playwright's `webServer` waits on it |
 
 ## Stage-5 slice, stated honestly
@@ -178,15 +303,23 @@ below), the `batch` and `apply_text` paths, and `#off` node disable
 (`toggle_disable`: the view-model renders a parsed `#off` line as the
 node it is — ports, literals and wires intact — with `kind: disabled`
 and the `disabled (`#off`)` exclusion; its downstream is red with the
-disabled node NAMED). Still not in: transport, git routes, `/api/blob`
-beyond value summaries, reconnect replay (a reconnect is a fresh
-session join: one hydration path — the client retries with backoff and
-re-hydrates), the cost-model's compute-on-release degrade for expensive
-cones and scrub caching (every drag solves latest-wins; a slow cone
-simply shows progress), groups (their keyboard rows notice loudly), the
-sidecar's `port_order`/`color`/`collapsed` keys (carried, not rendered),
-per-element frame ranges, and an auto-layout beyond "layer by
-dependency depth, stack in definition order".
+disabled node NAMED). Shipped with v0.1 item 3b (engine half): every generation owns its
+cancel handle — an explicit effectful run, the interactive loop and an
+idle-class hypothetical solve (`Session::solve_hypothetical`, doc 12
+§Speculative warming) each have their own, and the script bridge's
+kill switches hang off the calling generation's token, so "a slider
+drag never cancels an export" is true by construction; and the
+compute-on-release degrade for expensive cones (§Slider drags above —
+the `preview_policy` message, and both sliders' `pending · N s`
+rendering of it). Still not in: transport, git routes,
+`/api/blob` beyond value summaries, reconnect replay (a reconnect is a
+fresh session join: one hydration path — the client retries with
+backoff and re-hydrates), scrub caching (its substrate — the idle
+class — is in; the warmer and the buffer bar are item 5), groups (their
+keyboard rows notice loudly), the sidecar's `port_order`/`color`/
+`collapsed` keys (carried, not rendered), per-element frame ranges,
+and an auto-layout beyond "layer by dependency depth, stack in
+definition order".
 
 ## Undo/redo (formalizing the ledger row)
 

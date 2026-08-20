@@ -88,6 +88,19 @@ mod naming_fixtures {
     pub fn some_other_ident(input: FixtureIn) -> f64 {
         input.r#true
     }
+
+    /// Volatile Fixture — `#[node(volatile)]` must register uncached
+    /// (docs/12 §Volatile nodes; the flag `Clock` will wear, item 4). No
+    /// shipped node is volatile yet — this fixture keeps the macro → spec
+    /// path honest until one is.
+    ///
+    /// # Returns
+    ///
+    /// The truthy value.
+    #[node(category = "Maths & logic", tier = "S", version = 1, gh = none, volatile)]
+    pub fn fixture_volatile(input: FixtureIn) -> f64 {
+        input.r#true
+    }
 }
 
 #[cfg(test)]
@@ -150,6 +163,22 @@ mod tests {
         };
         assert_eq!((out.name, out.ty.render().as_str()), ("out", "Number"));
         assert_eq!(out.doc, "The sum `a + b`.");
+    }
+
+    #[test]
+    fn volatile_attribute_registers_and_every_shipped_node_is_not() {
+        let specs = registry();
+        let fixture = specs
+            .iter()
+            .find(|s| s.name == "fixture_volatile")
+            .expect("the test-only volatile fixture registers");
+        assert!(fixture.volatile, "#[node(volatile)] sets the flag");
+        assert!(fixture.pure, "volatile is not effectful");
+        // Exporters are effectful; nothing shipped is volatile (Clock
+        // arrives with item 4 — revise this assertion with it).
+        for spec in specs.iter().filter(|s| s.name != "fixture_volatile") {
+            assert!(!spec.volatile, "`{}` is volatile unexpectedly", spec.name);
+        }
     }
 
     #[test]

@@ -37,7 +37,7 @@ use cicada_core::spatial::{Plane, Point, Vector, Xform};
 use cicada_core::value::{HashedValue, List, ValueData};
 use serde::{Deserialize, Serialize};
 
-use crate::cost::CostStats;
+use crate::cost::{CostSample, CostStats};
 use crate::key::NodeKey;
 
 /// Default in-memory value budget (bytes of encoded size). See the module
@@ -107,6 +107,35 @@ pub enum StoreError {
         /// Why.
         message: String,
     },
+    /// The store was last written by a newer engine whose memo-log records
+    /// this one cannot decode ([`LOG_FORMAT`]). Refused instead of
+    /// mistaking the newer records for corruption and truncating the log
+    /// — a warm cache is minutes of work.
+    #[error(
+        "cache store {root} was written by a newer engine (memo-log format {found}; this          engine reads up to {supported}) — open it with that engine, or delete the store to          start cold"
+    )]
+    NewerFormat {
+        /// The store root.
+        root: PathBuf,
+        /// The format the marker names.
+        found: u32,
+        /// The newest format this engine reads.
+        supported: u32,
+    },
+    /// The format marker holds something other than a number — a damaged
+    /// or foreign store root. (An EMPTY marker is not this: it is the
+    /// signature of a write torn between create and fill, and opens as
+    /// "no marker" — see `read_format_marker`.)
+    #[error(
+        "cache store format marker {path} is unreadable: {text:?} — if this store is yours, \
+         delete that one file (only the marker) and reopen; the memo log is untouched"
+    )]
+    FormatMarker {
+        /// The marker file.
+        path: PathBuf,
+        /// Its contents.
+        text: String,
+    },
     /// No user cache directory exists on this host.
     #[error("no user cache directory on this host")]
     NoCacheDir,
@@ -157,6 +186,20 @@ pub struct OpenReport {
     /// semantics as the memo log; the dropped blobs recompute).
     pub pack_recovery: Option<LogRecovery>,
 }
+
+/// The memo log's format: the newest [`LogRecord`] variant an engine must
+/// know to replay the log. The enum is append-only, so every older log
+/// replays under a newer engine; this marker protects the OTHER direction.
+/// It is written to `<root>/format` when a store opens, and an engine that
+/// finds a higher number there refuses with [`StoreError::NewerFormat`]
+/// instead of mistaking the records it cannot decode for corruption and
+/// truncating the log at the first of them (which is what every engine
+/// before the marker existed does — switching such an engine onto a store
+/// written by a newer one drops the memo table once, loudly but with a
+/// misleading diagnosis). **Bump it in the same commit that adds a
+/// `LogRecord` variant.** History: 1 = `Memo`/`Sample`/`Unmemo` (the
+/// spike); 2 = `MemoCost` (v0.1 item 3b).
+pub const LOG_FORMAT: u32 = 2;
 
 /// Compressed blobs up to this size live in the append-only pack file
 /// (`values/pack.bin`) instead of one file each. A cold wall-scale solve
@@ -279,11 +322,16 @@ fn decompress(bytes: &[u8]) -> std::io::Result<Vec<u8>> {
 }
 
 /// One memo entry: the output value hashes of a completed computation, in
-/// output-port order.
+/// output-port order, plus — for node-level entries recorded since v0.1 —
+/// what the computation cost.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoEntry {
     /// Output hashes, one per port.
     pub outputs: Vec<ValueHash>,
+    /// The producing computation's measured cost, when recorded (node-level
+    /// entries; `None` for element-level entries and for logs written
+    /// before the cost rode along).
+    pub cost: Option<CostSample>,
 }
 
 /// The user-cache-directory store root for one project, keyed by the
@@ -314,6 +362,43 @@ pub fn project_cache_dir(project: &Path) -> Result<PathBuf, StoreError> {
         });
     }
     Ok(dir)
+}
+
+/// The store's format marker (`<root>/format`, see [`LOG_FORMAT`]): `None`
+/// for a store from before the marker existed — and for an EMPTY marker,
+/// which is what a crash between creating the file and filling it leaves
+/// behind (the marker is written temp + rename since the review of item
+/// 3b, so only markers from before that can be torn; an empty file names
+/// no format, so it is treated as absent and re-stamped, never refused);
+/// the number it names otherwise — refused when a newer engine wrote it,
+/// or when it is not a number at all (a damaged or foreign root, with the
+/// remedy in the message).
+fn read_format_marker(root: &Path, path: &Path) -> Result<Option<u32>, StoreError> {
+    match fs::read_to_string(path) {
+        Ok(text) if text.trim().is_empty() => Ok(None),
+        Ok(text) => {
+            let found = text
+                .trim()
+                .parse::<u32>()
+                .map_err(|_| StoreError::FormatMarker {
+                    path: path.to_owned(),
+                    text: text.clone(),
+                })?;
+            if found > LOG_FORMAT {
+                return Err(StoreError::NewerFormat {
+                    root: root.to_owned(),
+                    found,
+                    supported: LOG_FORMAT,
+                });
+            }
+            Ok(Some(found))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(StoreError::Io {
+            path: path.to_owned(),
+            source,
+        }),
+    }
 }
 
 /// Move a bad blob aside (`.zst.corrupt`) so a future `store_value` can
@@ -484,6 +569,76 @@ enum LogRecord {
     /// (quarantined blob). Replay removes the entry, so the next solve
     /// recomputes and re-stores — the self-heal path.
     Unmemo { key: [u8; 32] },
+    /// A node-level memo entry WITH the cost of the computation that
+    /// produced it (v0.1, item 3b): what a cache hit cost when it last ran,
+    /// so the cost model — ETA, compute-on-release prediction — stays
+    /// complete across a warm reopen. Element-level entries keep using
+    /// `Memo` (their cost is the op's per-element sample). Trailing
+    /// variant: logs written before it replay unchanged.
+    MemoCost {
+        key: [u8; 32],
+        outputs: Vec<[u8; 32]>,
+        elements: u64,
+        nanos: u64,
+    },
+}
+
+/// What one replayed record was (the open report counts them).
+enum Replayed {
+    Memo,
+    Sample,
+    Tombstone,
+}
+
+/// Apply one log record to the in-memory tables (the replay step of
+/// [`DiskStore::open`]).
+fn replay(
+    record: LogRecord,
+    memo: &mut HashMap<NodeKey, MemoEntry>,
+    samples: &mut HashMap<String, CostStats>,
+) -> Replayed {
+    let outputs_of = |outputs: Vec<[u8; 32]>| -> Vec<ValueHash> {
+        outputs.into_iter().map(ValueHash::from_bytes).collect()
+    };
+    match record {
+        LogRecord::Memo { key, outputs } => {
+            memo.insert(
+                NodeKey::from_hash(ValueHash::from_bytes(key)),
+                MemoEntry {
+                    outputs: outputs_of(outputs),
+                    cost: None,
+                },
+            );
+            Replayed::Memo
+        }
+        LogRecord::MemoCost {
+            key,
+            outputs,
+            elements,
+            nanos,
+        } => {
+            memo.insert(
+                NodeKey::from_hash(ValueHash::from_bytes(key)),
+                MemoEntry {
+                    outputs: outputs_of(outputs),
+                    cost: Some(CostSample { elements, nanos }),
+                },
+            );
+            Replayed::Memo
+        }
+        LogRecord::Sample {
+            op,
+            elements,
+            nanos,
+        } => {
+            samples.entry(op).or_default().record(elements, nanos);
+            Replayed::Sample
+        }
+        LogRecord::Unmemo { key } => {
+            memo.remove(&NodeKey::from_hash(ValueHash::from_bytes(key)));
+            Replayed::Tombstone
+        }
+    }
 }
 
 // --------------------------------------------------------------- the store --
@@ -768,6 +923,10 @@ impl DiskStore {
         };
         fs::create_dir_all(root.join("values")).map_err(io(root))?;
         let log_path = root.join("memo.log");
+        // The format marker first: a store a newer engine wrote is refused
+        // before a single record is read (or truncated).
+        let format_path = root.join("format");
+        let marker = read_format_marker(root, &format_path)?;
 
         let mut memo = HashMap::new();
         let mut samples: HashMap<String, CostStats> = HashMap::new();
@@ -801,27 +960,10 @@ impl DiskStore {
                     });
                     break;
                 };
-                match record {
-                    LogRecord::Memo { key, outputs } => {
-                        memo_entries += 1;
-                        memo.insert(
-                            NodeKey::from_hash(ValueHash::from_bytes(key)),
-                            MemoEntry {
-                                outputs: outputs.into_iter().map(ValueHash::from_bytes).collect(),
-                            },
-                        );
-                    }
-                    LogRecord::Sample {
-                        op,
-                        elements,
-                        nanos,
-                    } => {
-                        sample_records += 1;
-                        samples.entry(op).or_default().record(elements, nanos);
-                    }
-                    LogRecord::Unmemo { key } => {
-                        memo.remove(&NodeKey::from_hash(ValueHash::from_bytes(key)));
-                    }
+                match replay(record, &mut memo, &mut samples) {
+                    Replayed::Memo => memo_entries += 1,
+                    Replayed::Sample => sample_records += 1,
+                    Replayed::Tombstone => {}
                 }
                 offset += 4 + len;
             }
@@ -844,6 +986,22 @@ impl DiskStore {
             .append(true)
             .open(&log_path)
             .map_err(io(&log_path))?;
+        // This engine may now append records of its own format: say so
+        // for the next engine that opens the store (absent on stores from
+        // before the marker; lower after an upgrade). Temp + rename: a
+        // crash mid-write must never leave an empty or half-written
+        // marker standing where the number should be.
+        if marker != Some(LOG_FORMAT) {
+            let temp = root.join(format!("format.tmp-{}", std::process::id()));
+            fs::write(&temp, format!("{LOG_FORMAT}\n")).map_err(io(&temp))?;
+            if let Err(source) = fs::rename(&temp, &format_path) {
+                let _ = fs::remove_file(&temp);
+                return Err(StoreError::Io {
+                    path: format_path,
+                    source,
+                });
+            }
+        }
 
         let (pack, pack_recovery) = Pack::open(&root.join("values").join("pack.bin"))?;
         let packed_values = pack.index.len();
@@ -939,6 +1097,39 @@ impl DiskStore {
                 key,
                 MemoEntry {
                     outputs: outputs.to_vec(),
+                    cost: None,
+                },
+            );
+        Ok(())
+    }
+
+    /// [`Self::record_memo`] for a node-level entry, carrying the cost of
+    /// the computation that produced it (a later cache hit reports it, so
+    /// the cost model needs no recompute to stay complete).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Io`] when the log append fails.
+    pub fn record_memo_with_cost(
+        &self,
+        key: NodeKey,
+        outputs: &[ValueHash],
+        cost: CostSample,
+    ) -> Result<(), StoreError> {
+        self.append(&LogRecord::MemoCost {
+            key: *key.as_hash().as_bytes(),
+            outputs: outputs.iter().map(|hash| *hash.as_bytes()).collect(),
+            elements: cost.elements,
+            nanos: cost.nanos,
+        })?;
+        self.memo
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(
+                key,
+                MemoEntry {
+                    outputs: outputs.to_vec(),
+                    cost: Some(cost),
                 },
             );
         Ok(())

@@ -73,6 +73,12 @@ pub fn render_markdown(specs: &[&NodeSpec]) -> String {
             if let Some(gh) = spec.gh {
                 let _ = write!(out, " · GH: {gh}");
             }
+            if spec.volatile {
+                // Uncached by design (docs/12 §Volatile nodes): an agent
+                // must know a node recomputes every generation before
+                // wiring a heavy cone behind it.
+                out.push_str(" · volatile");
+            }
             let _ = write!(out, " — {}", spec.description);
             if let Some(panics) = spec.panics {
                 let _ = write!(out, " Red when: {panics}");
@@ -105,6 +111,7 @@ mod tests {
             tier: Tier::S,
             version: 1,
             pure: true,
+            volatile: false,
             uses_tolerance: false,
             panics: None,
             gh: None,
@@ -150,6 +157,24 @@ mod tests {
             rendered.contains("- `add() → Number` — Add · GH: Addition — Test node.\n"),
             "{rendered}"
         );
+    }
+
+    #[test]
+    fn node_line_tags_volatile_nodes() {
+        static VOLATILE: NodeSpec = NodeSpec {
+            volatile: true,
+            ..spec("clock", "Clock", "Params & input")
+        };
+        let rendered = render_markdown(&[&VOLATILE]);
+        assert!(
+            rendered.contains(
+                "- `clock() → Number` — Clock · volatile — Test node.
+"
+            ),
+            "{rendered}"
+        );
+        // Nothing shipped is volatile yet: the tag never appears otherwise.
+        assert!(!render_markdown(&[&MATHS_NODE]).contains("volatile"));
     }
 
     #[test]

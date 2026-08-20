@@ -58,10 +58,17 @@ pub struct NodeStatus {
     /// Elements processed so far / total (fan-out nodes while running).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elements_done: Option<u64>,
-    /// Elements processed (done nodes).
+    /// Elements processed: this generation's count for a `done` node; for
+    /// a `cached` node whose memo entry recorded its cost (node-level
+    /// entries since v0.1 item 3b), the count of the LAST compute — the
+    /// ETA's per-node element counts survive a warm reopen through it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elements: Option<u64>,
-    /// Measured work nanoseconds (done nodes).
+    /// Measured work nanoseconds (CPU, summed across chunks): this
+    /// generation's for a `done` node; for a `cached` node, what the LAST
+    /// compute of that key cost (docs/12 §Progress: the badge shows the
+    /// "last compute time") — never this generation's, which paid a
+    /// cache read. Render it as "last" next to `cached`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nanos: Option<u64>,
     /// Failure message (red) or reason (blocked: "fed by red `x`").
@@ -402,6 +409,65 @@ pub enum ServerMessage {
         /// Message.
         message: String,
     },
+    /// The server's drag policy for one param (DECISIONS.md interactive
+    /// param row; docs/13 §Slider drags; v0.1 item 3b, additive): sent ONCE
+    /// per drag — on the first `param_preview` tick whose dirty cone the
+    /// cost model predicts at or above the compute-on-release threshold —
+    /// and never for a cheap cone (those preview live, no message). From
+    /// then on the session solves no preview for that param that would
+    /// compute (a pure cache read still paints): the client shows the
+    /// pending value and the estimate, and the one real `set_param` on
+    /// release solves as usual. A drag is the run of ticks on one param
+    /// closer together than `DRAG_GAP_MS`; a write attempt, an Esc or a
+    /// longer pause ends it, and the next drag is announced again — the
+    /// client replaces its pending state on every arrival, never stacks it.
+    PreviewPolicy {
+        /// The param's binding.
+        node: String,
+        /// Its kwarg (`None` for a bare literal) — as the intent spelled it.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        port: Option<String>,
+        /// `compute_on_release` — the only mode that is ever announced.
+        mode: PreviewMode,
+        /// Predicted wall milliseconds of the dirty cone (what a live
+        /// preview would cost); a lower bound when `rough`.
+        estimate_ms: f64,
+        /// Some node in the cone has no cost evidence yet (no sample for
+        /// its op, or no element count) and contributed nothing — the
+        /// estimate is a floor, shown with a `~` like the ETA.
+        rough: bool,
+        /// The withheld tick's literal — the value the slider will land on
+        /// unless the drag moves on; the client tracks later ticks itself.
+        pending_value: String,
+    },
+    /// An ANNOUNCED drag (one `preview_policy` went out for) has ended
+    /// (docs/13 §Slider drags, contract item 3; additive). Broadcast after
+    /// whatever ended it produced — the delta of a landed write, the
+    /// snapshot of a reload (both already clear the client's pending state;
+    /// this is a no-op there) — and on its own for the ends that produce
+    /// nothing every client hears: the pointer released on the committed
+    /// value (`end_drag`), Esc, a refused write (its `error` is unicast),
+    /// the writer's departure or a lease handover. A pause longer than
+    /// `DRAG_GAP_MS` is NOT an end the server announces: the pointer may
+    /// still be down, and the pending state stands until the release. Never
+    /// sent for a drag that was live throughout (nothing to take down). The
+    /// client clears its pending entry when this names it.
+    DragEnded {
+        /// The param's binding.
+        node: String,
+        /// Its kwarg (`None` for a bare literal) — as the drag's ticks
+        /// spelled it.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        port: Option<String>,
+    },
+}
+
+/// How a drag's previews are handled (`preview_policy.mode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewMode {
+    /// Previews are withheld; the value solves once, on release.
+    ComputeOnRelease,
 }
 
 /// The wire envelope around a [`ServerMessage`].
@@ -491,6 +557,22 @@ pub enum ClientMessage {
         port: Option<String>,
         /// The literal's source text.
         value: String,
+    },
+    /// The pointer was released on the committed value: no `set_param`
+    /// follows, and the drag is over (docs/13 §Slider drags). Both sliders
+    /// send it on every release that writes nothing — a release that
+    /// writes ends the drag with its `set_param` instead. Ends the session's
+    /// drag when it is this param's (a drag that expired by the gap rule
+    /// included) and broadcasts `drag_ended` if that drag was announced;
+    /// when the standing drag is another param's or there is none (a
+    /// reload, an Esc or a write ended it first) it is a no-op — a routine
+    /// release is never an error. Needs the lease like the ticks do.
+    EndDrag {
+        /// Node.
+        node: String,
+        /// Kwarg (`None` for bare literals).
+        #[serde(default)]
+        port: Option<String>,
     },
     /// Rename a binding (text + references + sidecar, atomically).
     Rename {
@@ -609,6 +691,7 @@ pub fn is_write(message: &ClientMessage) -> bool {
             | ClientMessage::AcceptLift { .. }
             | ClientMessage::SetParam { .. }
             | ClientMessage::ParamPreview { .. }
+            | ClientMessage::EndDrag { .. }
             | ClientMessage::Rename { .. }
             | ClientMessage::DeleteNode { .. }
             | ClientMessage::ToggleDisable { .. }
@@ -671,6 +754,110 @@ pub fn encode(seq: u64, message: &ServerMessage) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The frozen wire shape of the compute-on-release announcement (v0.1
+    // item 3b; the web client mirrors exactly this in messages.ts).
+    #[test]
+    fn preview_policy_encodes_the_documented_shape() {
+        let text = encode(
+            9,
+            &ServerMessage::PreviewPolicy {
+                node: "deboss".into(),
+                port: Some("value".into()),
+                mode: PreviewMode::ComputeOnRelease,
+                estimate_ms: 6512.5,
+                rough: false,
+                pending_value: "1.3".into(),
+            },
+        );
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "v": PROTOCOL_VERSION, "seq": 9, "type": "preview_policy",
+                "payload": {
+                    "node": "deboss", "port": "value", "mode": "compute_on_release",
+                    "estimate_ms": 6512.5, "rough": false, "pending_value": "1.3"
+                }
+            })
+        );
+        // A bare literal has no port key at all (not `null`).
+        let bare = encode(
+            10,
+            &ServerMessage::PreviewPolicy {
+                node: "x".into(),
+                port: None,
+                mode: PreviewMode::ComputeOnRelease,
+                estimate_ms: 1000.0,
+                rough: true,
+                pending_value: "2.0".into(),
+            },
+        );
+        let bare: serde_json::Value = serde_json::from_str(&bare).unwrap();
+        assert!(bare["payload"].get("port").is_none(), "{bare}");
+        assert_eq!(bare["payload"]["rough"], true);
+    }
+
+    // The frozen wire shape of the drag's end (docs/13 §Slider drags,
+    // contract item 3) and of the release that writes nothing; the web
+    // client mirrors both in messages.ts.
+    #[test]
+    fn drag_ended_and_end_drag_have_the_documented_shapes() {
+        let text = encode(
+            11,
+            &ServerMessage::DragEnded {
+                node: "deboss".into(),
+                port: Some("value".into()),
+            },
+        );
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "v": PROTOCOL_VERSION, "seq": 11, "type": "drag_ended",
+                "payload": { "node": "deboss", "port": "value" }
+            })
+        );
+        let bare = encode(
+            12,
+            &ServerMessage::DragEnded {
+                node: "x".into(),
+                port: None,
+            },
+        );
+        let bare: serde_json::Value = serde_json::from_str(&bare).unwrap();
+        assert_eq!(
+            bare["payload"],
+            serde_json::json!({ "node": "x" }),
+            "no port key for a bare literal"
+        );
+
+        let release: IntentEnvelope = serde_json::from_str(
+            r#"{"v":1,"type":"end_drag","payload":{"node":"deboss","port":"value"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            release.message,
+            ClientMessage::EndDrag {
+                node: "deboss".into(),
+                port: Some("value".into()),
+            }
+        );
+        assert!(
+            is_write(&release.message),
+            "end_drag needs the lease like the ticks"
+        );
+        assert!(!is_gesture(&release.message), "not a batch element");
+        let bare: IntentEnvelope =
+            serde_json::from_str(r#"{"v":1,"type":"end_drag","payload":{"node":"x"}}"#).unwrap();
+        assert_eq!(
+            bare.message,
+            ClientMessage::EndDrag {
+                node: "x".into(),
+                port: None,
+            }
+        );
+    }
 
     #[test]
     fn intents_round_trip_and_tag_by_type() {

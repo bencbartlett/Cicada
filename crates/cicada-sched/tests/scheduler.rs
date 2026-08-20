@@ -21,9 +21,9 @@ use std::time::Duration;
 
 use cicada_core::value::{HashedValue, List, ValueData};
 use cicada_sched::{
-    CancelToken, Clock as _, DiskStore, Event, Input, NodeDecl, NodeError, NodeFn, NodeId,
-    NodeOutcome, Observer, PreviewJob, PreviewSession, Scheduler, SchedulerConfig, SolveGraph,
-    VirtualClock,
+    CancelToken, Clock as _, CostSample, DiskStore, Event, Input, NodeDecl, NodeError, NodeFn,
+    NodeId, NodeOutcome, Observer, PreviewJob, PreviewSession, Scheduler, SchedulerConfig,
+    SolveGraph, VirtualClock,
 };
 
 // ------------------------------------------------------------- fakes --
@@ -95,6 +95,18 @@ impl Recorder {
             .collect()
     }
 
+    fn failed(&self) -> Vec<String> {
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|seen| match seen {
+                Seen::Failed(node) => Some(node.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn element_cache_hits(&self) -> usize {
         self.events
             .lock()
@@ -144,7 +156,7 @@ fn fake_fn(
     f: impl Fn(f64) -> f64 + Send + Sync + 'static,
 ) -> NodeFn {
     let clock = Arc::clone(clock);
-    Arc::new(move |inputs| {
+    Arc::new(move |_ctx, inputs| {
         clock.advance(cost);
         let sum: f64 = inputs.iter().flatten().map(|value| as_number(value)).sum();
         Ok(vec![number(f(sum))])
@@ -162,6 +174,7 @@ fn decl(name: &str, op: &str, inputs: Vec<Input>, fan: Vec<u8>, run: NodeFn) -> 
         fan,
         output_count: 1,
         effectful: false,
+        volatile: false,
         run,
     }
 }
@@ -540,7 +553,7 @@ fn cancel_to_idle_under_100_virtual_ms() {
         let clock = Arc::clone(&rig.clock);
         let token = token.clone();
         let cancel_at = Arc::clone(&cancel_at);
-        Arc::new(move |inputs| {
+        Arc::new(move |_ctx, inputs| {
             clock.advance(element_cost);
             let x = as_number(inputs[0].as_ref().unwrap());
             // Deterministic trigger: element #42 pulls the plug.
@@ -645,7 +658,7 @@ fn synthetic_1500_element_map_saturates_a_4_thread_pool() {
         let barrier = Arc::clone(&barrier);
         let in_flight = Arc::clone(&in_flight);
         let high_water = Arc::clone(&high_water);
-        Arc::new(move |inputs| {
+        Arc::new(move |_ctx, inputs| {
             let current = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
             high_water.fetch_max(current, Ordering::SeqCst);
             barrier.arrive();
@@ -789,7 +802,7 @@ fn expensive_elements_memoize_individually_and_dedupe_across_lists() {
     });
     let run: NodeFn = {
         let clock = Arc::clone(&rig.clock);
-        Arc::new(move |inputs| {
+        Arc::new(move |_ctx, inputs| {
             clock.advance(1_000_000);
             let x = as_number(inputs[0].as_ref().unwrap());
             Ok(vec![number(x * 2.0)])
@@ -850,7 +863,7 @@ fn chunk_sizing_follows_measured_cost() {
     });
     let run: NodeFn = {
         let clock = Arc::clone(&rig.clock);
-        Arc::new(move |inputs| {
+        Arc::new(move |_ctx, inputs| {
             clock.advance(10_000_000);
             let x = as_number(inputs[0].as_ref().unwrap());
             Ok(vec![number(x)])
@@ -884,7 +897,7 @@ fn element_failures_are_red_with_ids_and_block_downstream() {
     let rig = rig(2, |_| {});
     let run: NodeFn = {
         let clock = Arc::clone(&rig.clock);
-        Arc::new(move |inputs| {
+        Arc::new(move |_ctx, inputs| {
             clock.advance(1_000);
             let x = as_number(inputs[0].as_ref().unwrap());
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -988,7 +1001,7 @@ fn holes_in_fanned_input_are_refused_with_ids() {
 #[test]
 fn node_panic_becomes_a_red_node_not_a_crash() {
     let rig = rig(2, |_| {});
-    let run: NodeFn = Arc::new(move |_inputs| panic!("kaboom: count must be >= 0"));
+    let run: NodeFn = Arc::new(move |_ctx, _inputs| panic!("kaboom: count must be >= 0"));
     let graph = SolveGraph::new(vec![
         decl(
             "boom",
@@ -1040,7 +1053,7 @@ fn fanned_multi_output_assembles_per_port_lists_and_keeps_axis() {
     let rig = rig(2, |_| {});
     let run: NodeFn = {
         let clock = Arc::clone(&rig.clock);
-        Arc::new(move |inputs| {
+        Arc::new(move |_ctx, inputs| {
             clock.advance(1_000);
             let x = as_number(inputs[0].as_ref().unwrap());
             Ok(vec![number(x * 2.0), number(x * 3.0)])
@@ -1310,7 +1323,7 @@ fn cost_samples_exclude_element_cache_hits() {
     });
     let run: NodeFn = {
         let clock = Arc::clone(&rig.clock);
-        Arc::new(move |inputs| {
+        Arc::new(move |_ctx, inputs| {
             clock.advance(1_000_000);
             let x = as_number(inputs[0].as_ref().unwrap());
             Ok(vec![number(x * 2.0)])
@@ -1366,7 +1379,7 @@ fn effectful_fanned_node_never_element_caches() {
     let run: NodeFn = {
         let clock = Arc::clone(&rig.clock);
         let executions = Arc::clone(&executions);
-        Arc::new(move |_inputs| {
+        Arc::new(move |_ctx, _inputs| {
             executions.fetch_add(1, Ordering::SeqCst);
             clock.advance(1_000_000);
             Ok(vec![])
@@ -1420,7 +1433,7 @@ fn cancelled_cold_fan_still_calibrates() {
     let run: NodeFn = {
         let clock = Arc::clone(&rig.clock);
         let token = token.clone();
-        Arc::new(move |inputs| {
+        Arc::new(move |_ctx, inputs| {
             clock.advance(10_000_000);
             let x = as_number(inputs[0].as_ref().unwrap());
             if x >= 3.0 {
@@ -1469,7 +1482,7 @@ fn cancel_mid_chunk_stops_at_the_next_element_not_the_chunk_end() {
         let clock = Arc::clone(&rig.clock);
         let token = token.clone();
         let ran = Arc::clone(&ran);
-        Arc::new(move |inputs| {
+        Arc::new(move |_ctx, inputs| {
             clock.advance(1_000_000);
             ran.fetch_add(1, Ordering::SeqCst);
             let x = as_number(inputs[0].as_ref().unwrap());
@@ -1526,4 +1539,704 @@ fn empty_fan_produces_empty_lists_not_errors() {
         panic!("fan output is a list")
     };
     assert!(list.slots.is_empty());
+}
+
+// ------------------------------------------ per-solve cancel handle (v0.1) --
+
+/// A node sees ITS generation's token through `NodeCtx`, and cancelling a
+/// concurrent generation's token never reaches it (docs/13: "a slider drag
+/// never cancels an export" — by construction, not by convention).
+#[test]
+fn cancelling_one_generation_never_cancels_a_concurrent_one() {
+    let rig = Arc::new(rig(2, |_| {}));
+    let preview_token = CancelToken::new();
+    let export_token = CancelToken::new();
+
+    // The "export": starts, reports which token it was handed, waits until
+    // the test has cancelled the PREVIEW's token, then checks its own.
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<u64>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    let seen_cancelled = Arc::new(Mutex::new(None::<bool>));
+    let export_run: NodeFn = {
+        let clock = Arc::clone(&rig.clock);
+        let seen = Arc::clone(&seen_cancelled);
+        Arc::new(move |ctx, _inputs| {
+            started_tx.send(ctx.cancel.id()).unwrap();
+            release_rx.lock().unwrap().recv().unwrap();
+            clock.advance(1_000);
+            *seen.lock().unwrap() = Some(ctx.cancel.is_cancelled());
+            Ok(vec![number(1.0)])
+        })
+    };
+    let export_graph = Arc::new(
+        SolveGraph::new(vec![decl(
+            "export",
+            "fake.export",
+            vec![],
+            vec![],
+            export_run,
+        )])
+        .unwrap(),
+    );
+    let export = {
+        let rig = Arc::clone(&rig);
+        let token = export_token.clone();
+        let graph = Arc::clone(&export_graph);
+        std::thread::spawn(move || {
+            rig.scheduler
+                .solve(&graph, &[NodeId(0)], 1, &token, &Recorder::default())
+                .unwrap()
+        })
+    };
+    let handed = started_rx.recv().unwrap();
+    assert_eq!(
+        handed,
+        export_token.id(),
+        "the node is handed the token of the solve running it"
+    );
+
+    // The preview generation, cancelled before it starts: its one node
+    // lands Cancelled; the export's token is untouched.
+    preview_token.cancel();
+    let preview = rig
+        .scheduler
+        .solve(
+            &diamond(&rig.clock, 1.0, 2.0),
+            &[NodeId(3)],
+            2,
+            &preview_token,
+            &Recorder::default(),
+        )
+        .unwrap();
+    assert!(preview.cancelled);
+    assert!(!export_token.is_cancelled());
+
+    release_tx.send(()).unwrap();
+    let report = export.join().unwrap();
+    assert!(!report.cancelled, "the export ran to completion");
+    assert!(matches!(
+        report.outcome(NodeId(0)),
+        NodeOutcome::Computed { .. }
+    ));
+    assert_eq!(
+        *seen_cancelled.lock().unwrap(),
+        Some(false),
+        "inside the export node, its own token was never cancelled"
+    );
+}
+
+/// A long node polls `ctx.cancel` at its own safe points and stops early.
+#[test]
+fn a_node_can_poll_its_own_cancel_handle() {
+    let rig = rig(1, |_| {});
+    let token = CancelToken::new();
+    let steps = Arc::new(AtomicUsize::new(0));
+    let run: NodeFn = {
+        let clock = Arc::clone(&rig.clock);
+        let steps = Arc::clone(&steps);
+        let token_for_node = token.clone();
+        Arc::new(move |ctx, _inputs| {
+            for step in 0..100 {
+                if ctx.cancel.is_cancelled() {
+                    return Err(NodeError::cancelled(format!("stopped at step {step}")));
+                }
+                clock.advance(1_000_000);
+                steps.fetch_add(1, Ordering::SeqCst);
+                if step == 4 {
+                    // Someone presses Esc mid-loop.
+                    token_for_node.cancel();
+                }
+            }
+            Ok(vec![number(1.0)])
+        })
+    };
+    let graph = SolveGraph::new(vec![decl("long", "fake.long", vec![], vec![], run)]).unwrap();
+    let report = rig
+        .scheduler
+        .solve(&graph, &[NodeId(0)], 0, &token, &Recorder::default())
+        .unwrap();
+    assert!(report.cancelled);
+    assert_eq!(
+        steps.load(Ordering::SeqCst),
+        5,
+        "the loop stopped at its next safe point"
+    );
+    // Bailing out with `NodeError::cancelled` under a cancelled token is
+    // the cancellation surfacing, not a red node.
+    assert!(
+        matches!(report.outcome(NodeId(0)), NodeOutcome::Cancelled),
+        "{:?}",
+        report.outcome(NodeId(0))
+    );
+}
+
+/// Review finding (2026-08-20): the first cut landed EVERY failure under a
+/// cancelled token as `cancelled`, so a node that genuinely failed while
+/// the user pressed Esc showed "cancelled" and its red was hidden until
+/// the next edit. The rule is narrow now: only an error the node marked
+/// as cancellation (`NodeError::cancelled`, the bridge's verdict for a
+/// killed worker) lands cancelled — and only under a cancelled token; a
+/// plain error stays red whatever the token says, and a node CLAIMING
+/// cancellation under a live token is red too (a cancellation that never
+/// happened is a bug to see, not a state to trust).
+#[test]
+fn an_unrelated_failure_under_a_cancelled_token_stays_red() {
+    let rig = rig(1, |_| {});
+
+    // A node whose failure has nothing to do with the Esc that lands
+    // mid-run: it cancels its own generation's token (the user's Esc) and
+    // then reports a genuine error.
+    let token = CancelToken::new();
+    let run: NodeFn = {
+        let clock = Arc::clone(&rig.clock);
+        let token_for_node = token.clone();
+        Arc::new(move |_ctx, _inputs| {
+            clock.advance(1_000_000);
+            token_for_node.cancel();
+            Err(NodeError::new("boom: the input mesh is not watertight"))
+        })
+    };
+    let graph = SolveGraph::new(vec![decl("red", "fake.red", vec![], vec![], run)]).unwrap();
+    let recorder = Recorder::default();
+    let report = rig
+        .scheduler
+        .solve(&graph, &[NodeId(0)], 0, &token, &recorder)
+        .unwrap();
+    assert!(report.cancelled, "the generation WAS cancelled");
+    match report.outcome(NodeId(0)) {
+        NodeOutcome::Failed(failure) => {
+            assert_eq!(failure.message, "boom: the input mesh is not watertight");
+        }
+        other => panic!("a genuine failure under Esc must stay red, got {other:?}"),
+    }
+    assert_eq!(recorder.failed(), vec!["red".to_owned()]);
+
+    // A node that says "cancelled" while its token is live is red with
+    // that message — the executor never takes a cancellation on trust.
+    let live = CancelToken::new();
+    let run: NodeFn = Arc::new(move |_ctx, _inputs| {
+        Err(NodeError::cancelled("cancelled: the worker was killed"))
+    });
+    let graph = SolveGraph::new(vec![decl("liar", "fake.liar", vec![], vec![], run)]).unwrap();
+    let report = rig
+        .scheduler
+        .solve(&graph, &[NodeId(0)], 0, &live, &Recorder::default())
+        .unwrap();
+    assert!(!report.cancelled);
+    assert!(
+        matches!(report.outcome(NodeId(0)), NodeOutcome::Failed(f) if f.message.contains("killed")),
+        "{:?}",
+        report.outcome(NodeId(0))
+    );
+}
+
+/// The element-level half of the same rule: an element that bails with
+/// `NodeError::cancelled` under a cancelled token leaves its slot unfilled
+/// (the node lands cancelled, like a fan whose later chunks never
+/// started) and is NOT cost evidence — the calibration sample counts the
+/// elements that ran to a verdict; an element's plain error stays a red
+/// verdict on that element.
+#[test]
+fn a_cancelled_element_is_neither_red_nor_cost_evidence() {
+    let rig = rig(1, |_| {});
+    let token = CancelToken::new();
+    let elements: Vec<f64> = (0..10).map(f64::from).collect();
+    let run: NodeFn = {
+        let clock = Arc::clone(&rig.clock);
+        let token_for_node = token.clone();
+        Arc::new(move |ctx, inputs| {
+            let x = as_number(inputs[0].as_ref().unwrap());
+            clock.advance(1_000_000);
+            if x == 3.0 {
+                // Esc arrives while element 3 runs; it notices at its
+                // safe point and bails the sanctioned way.
+                token_for_node.cancel();
+            }
+            if ctx.cancel.is_cancelled() {
+                return Err(NodeError::cancelled("stopped: generation cancelled"));
+            }
+            Ok(vec![number(x + 1.0)])
+        })
+    };
+    let graph = SolveGraph::new(vec![decl(
+        "mapped",
+        "fake.cancelled_map",
+        vec![Input::Value(number_list(&elements, None))],
+        vec![1],
+        run,
+    )])
+    .unwrap();
+    let recorder = Recorder::default();
+    let report = rig
+        .scheduler
+        .solve(&graph, &[NodeId(0)], 0, &token, &recorder)
+        .unwrap();
+    assert!(report.cancelled);
+    assert!(
+        matches!(report.outcome(NodeId(0)), NodeOutcome::Cancelled),
+        "{:?}",
+        report.outcome(NodeId(0))
+    );
+    assert_eq!(recorder.failed(), Vec::<String>::new(), "nothing went red");
+    // Elements 0, 1, 2 ran to a verdict; element 3 bailed; 4..9 never ran.
+    let stats = rig
+        .scheduler
+        .store()
+        .stats("fake.cancelled_map")
+        .expect("the partial fan still calibrates");
+    assert_eq!(stats.elements, 3, "the bailed element is not evidence");
+
+    // Control: an element's PLAIN error under a live token is a red
+    // verdict with its id, as always.
+    let run: NodeFn = {
+        let clock = Arc::clone(&rig.clock);
+        Arc::new(move |_ctx, inputs| {
+            let x = as_number(inputs[0].as_ref().unwrap());
+            clock.advance(1_000_000);
+            if x == 3.0 {
+                return Err(NodeError::new("boom"));
+            }
+            Ok(vec![number(x + 1.0)])
+        })
+    };
+    let graph = SolveGraph::new(vec![decl(
+        "mapped",
+        "fake.red_map",
+        vec![Input::Value(number_list(&elements, None))],
+        vec![1],
+        run,
+    )])
+    .unwrap();
+    let report = solve(&rig.scheduler, &graph, &[NodeId(0)], &Recorder::default());
+    match report.outcome(NodeId(0)) {
+        NodeOutcome::Failed(failure) => {
+            assert_eq!(failure.element_ids, vec![3]);
+            assert!(failure.message.contains("element 3: boom"), "{failure:?}");
+        }
+        other => panic!("expected red with ids, got {other:?}"),
+    }
+}
+
+// ------------------------------------------------------- volatile (v0.1) --
+
+/// A volatile node (`Clock`'s "uncached by design") runs in EVERY
+/// generation — the memo is neither read nor written for it — while a
+/// non-volatile sibling with identical inputs is a memo hit; downstream
+/// nodes key on the volatile output's fresh hash, so they recompute exactly
+/// when that value changed (docs/12 §Volatile nodes).
+#[test]
+fn volatile_node_runs_every_generation_and_downstream_follows_its_value() {
+    let rig = rig(2, |_| {});
+    let ticks = Arc::new(AtomicUsize::new(0));
+    // The volatile "clock": returns the value of an external counter the
+    // test controls — same input hashes every time, different outputs when
+    // the counter moves.
+    let counter = Arc::new(AtomicU64::new(7));
+    let mut volatile_decl = decl(
+        "clock",
+        "fake.clock",
+        vec![Input::Value(number(0.0))],
+        vec![0],
+        {
+            let clock = Arc::clone(&rig.clock);
+            let ticks = Arc::clone(&ticks);
+            let counter = Arc::clone(&counter);
+            Arc::new(move |_ctx, _inputs| {
+                clock.advance(1_000);
+                ticks.fetch_add(1, Ordering::SeqCst);
+                #[allow(clippy::cast_precision_loss)]
+                Ok(vec![number(counter.load(Ordering::SeqCst) as f64)])
+            })
+        },
+    );
+    volatile_decl.volatile = true;
+    let graph = SolveGraph::new(vec![
+        volatile_decl,
+        // A non-volatile sibling with the same (constant) input.
+        decl(
+            "sibling",
+            "fake.sibling",
+            vec![Input::Value(number(0.0))],
+            vec![0],
+            fake_fn(&rig.clock, 1_000, |x| x + 1.0),
+        ),
+        // Downstream of the clock.
+        decl(
+            "shown",
+            "fake.shown",
+            vec![port(0)],
+            vec![0],
+            fake_fn(&rig.clock, 1_000, |x| x * 10.0),
+        ),
+    ])
+    .unwrap();
+
+    let first = Recorder::default();
+    solve(&rig.scheduler, &graph, &[NodeId(1), NodeId(2)], &first);
+    assert_eq!(first.computed().len(), 3, "cold: everything computes");
+    assert_eq!(ticks.load(Ordering::SeqCst), 1);
+
+    // Same inputs, same counter: the clock runs AGAIN; its output hash is
+    // unchanged, so `shown` is a memo hit; the sibling is a memo hit.
+    let second = Recorder::default();
+    let report = solve(&rig.scheduler, &graph, &[NodeId(1), NodeId(2)], &second);
+    assert_eq!(
+        ticks.load(Ordering::SeqCst),
+        2,
+        "volatile nodes never hit the memo"
+    );
+    assert_eq!(second.computed(), vec!["clock".to_owned()]);
+    let mut hits = second.cache_hits();
+    hits.sort();
+    assert_eq!(hits, vec!["shown".to_owned(), "sibling".to_owned()]);
+    assert!(matches!(
+        report.outcome(NodeId(0)),
+        NodeOutcome::Computed { .. }
+    ));
+
+    // The clock moves: downstream recomputes; the sibling still hits.
+    counter.store(8, Ordering::SeqCst);
+    let third = Recorder::default();
+    solve(&rig.scheduler, &graph, &[NodeId(1), NodeId(2)], &third);
+    assert_eq!(ticks.load(Ordering::SeqCst), 3);
+    let mut computed = third.computed();
+    computed.sort();
+    assert_eq!(computed, vec!["clock".to_owned(), "shown".to_owned()]);
+    assert_eq!(third.cache_hits(), vec!["sibling".to_owned()]);
+
+    // The memo never saw the clock: its key is absent from the store.
+    let key = cicada_sched::node_key(&cicada_sched::KeyInputs {
+        op: "fake.clock",
+        version: 1,
+        body_hash: None,
+        tolerance: None,
+        inputs: &[Some(number(0.0).hash())],
+        fan: &[0],
+    });
+    assert!(
+        rig.scheduler.store().memo(&key).is_none(),
+        "a volatile node's outputs are never recorded"
+    );
+}
+
+/// The memo-READ gate on its own (review finding, 2026-08-20: the write
+/// gate masked it — a volatile key is never written, so no test could
+/// tell whether the executor would READ one). Seed the store with an
+/// entry under exactly the key a volatile node would build (a node made
+/// volatile without a version bump, a foreign store) and the node still
+/// computes: a volatile node never serves a stored value, whatever the
+/// memo holds.
+#[test]
+fn a_volatile_node_never_reads_a_memo_entry_under_its_key() {
+    let rig = rig(1, |_| {});
+    let runs = Arc::new(AtomicUsize::new(0));
+    let mut clock_decl = decl(
+        "clock",
+        "fake.clock",
+        vec![Input::Value(number(0.0))],
+        vec![0],
+        {
+            let clock = Arc::clone(&rig.clock);
+            let runs = Arc::clone(&runs);
+            Arc::new(move |_ctx, _inputs| {
+                clock.advance(1_000);
+                runs.fetch_add(1, Ordering::SeqCst);
+                Ok(vec![number(42.0)])
+            })
+        },
+    );
+    clock_decl.volatile = true;
+    let graph = SolveGraph::new(vec![clock_decl]).unwrap();
+
+    // The stale entry: exactly the key the executor builds for this node,
+    // promising a value the node would never produce now.
+    let key = cicada_sched::node_key(&cicada_sched::KeyInputs {
+        op: "fake.clock",
+        version: 1,
+        body_hash: None,
+        tolerance: None,
+        inputs: &[Some(number(0.0).hash())],
+        fan: &[0],
+    });
+    let stale = number(-1.0);
+    rig.scheduler.store().store_value(&stale).unwrap();
+    rig.scheduler
+        .store()
+        .record_memo(key, &[stale.hash()])
+        .unwrap();
+    assert!(rig.scheduler.store().memo(&key).is_some(), "seeded");
+
+    let recorder = Recorder::default();
+    let report = solve(&rig.scheduler, &graph, &[NodeId(0)], &recorder);
+    assert_eq!(runs.load(Ordering::SeqCst), 1, "the volatile node ran");
+    assert_eq!(recorder.cache_hits(), Vec::<String>::new(), "no memo read");
+    assert_eq!(recorder.computed(), vec!["clock".to_owned()]);
+    match report.outcome(NodeId(0)) {
+        NodeOutcome::Computed { outputs, .. } => {
+            assert_eq!(
+                outputs.as_slice(),
+                &[number(42.0).hash()],
+                "the fresh value, not the stale one"
+            );
+        }
+        other => panic!("expected Computed, got {other:?}"),
+    }
+}
+
+/// Element granularity: a volatile node inside an `each()` fan-out
+/// recomputes PER ELEMENT every generation, even once the measured
+/// per-element cost would have turned element memoization on.
+#[test]
+fn volatile_fanned_node_recomputes_every_element() {
+    let rig = rig(2, |config| {
+        config.element_cache_min_nanos = 1;
+    });
+    let runs = Arc::new(AtomicUsize::new(0));
+    let elements: Vec<f64> = (0..20).map(f64::from).collect();
+    let build = |volatile: bool, runs: &Arc<AtomicUsize>| {
+        let mut node = decl(
+            "mapped",
+            if volatile {
+                "fake.volatile_map"
+            } else {
+                "fake.plain_map"
+            },
+            vec![Input::Value(number_list(&elements, None))],
+            vec![1],
+            {
+                let clock = Arc::clone(&rig.clock);
+                let runs = Arc::clone(runs);
+                Arc::new(move |_ctx, inputs| {
+                    clock.advance(1_000_000);
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    Ok(vec![number(as_number(inputs[0].as_ref().unwrap()) + 1.0)])
+                })
+            },
+        );
+        node.volatile = volatile;
+        SolveGraph::new(vec![node]).unwrap()
+    };
+
+    // Control: the plain map is a node-level hit the second time.
+    let plain = build(false, &runs);
+    solve(&rig.scheduler, &plain, &[NodeId(0)], &Recorder::default());
+    solve(&rig.scheduler, &plain, &[NodeId(0)], &Recorder::default());
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        20,
+        "the plain map is a node-level hit"
+    );
+
+    // Volatile: three generations, sixty element runs, no hits of any kind.
+    runs.store(0, Ordering::SeqCst);
+    let volatile = build(true, &runs);
+    let recorder = Recorder::default();
+    for _ in 0..3 {
+        solve(&rig.scheduler, &volatile, &[NodeId(0)], &recorder);
+    }
+    assert_eq!(runs.load(Ordering::SeqCst), 60);
+    assert_eq!(recorder.element_cache_hits(), 0);
+    assert_eq!(recorder.cache_hits(), Vec::<String>::new());
+}
+
+// ---------------------------------------------- memo cost records (v0.1) --
+
+/// A node-level memo entry remembers what its computation cost, a cache hit
+/// reports it, and it survives a reopen — the cost model stays complete
+/// when a warm reopen computes nothing.
+#[test]
+fn cache_hits_carry_the_recorded_cost_across_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let clock = Arc::new(VirtualClock::new());
+    let elements: Vec<f64> = (0..12).map(f64::from).collect();
+    let graph = || {
+        SolveGraph::new(vec![
+            decl(
+                "scalar",
+                "fake.scalar",
+                vec![Input::Value(number(1.0))],
+                vec![0],
+                fake_fn(&clock, 2_500, |x| x),
+            ),
+            decl(
+                "mapped",
+                "fake.mapped",
+                vec![Input::Value(number_list(&elements, None))],
+                vec![1],
+                fake_fn(&clock, 1_000, |x| x),
+            ),
+        ])
+        .unwrap()
+    };
+    let open = || {
+        let (store, _) = DiskStore::open(dir.path()).unwrap();
+        Scheduler::new(
+            Arc::new(store),
+            Arc::clone(&clock) as _,
+            SchedulerConfig {
+                threads: 1,
+                ..SchedulerConfig::default()
+            },
+        )
+        .unwrap()
+    };
+    {
+        let scheduler = open();
+        let report = solve(
+            &scheduler,
+            &graph(),
+            &[NodeId(0), NodeId(1)],
+            &Recorder::default(),
+        );
+        let NodeOutcome::Computed {
+            elements: 12,
+            nanos,
+            ..
+        } = report.outcome(NodeId(1))
+        else {
+            panic!("cold map computes 12 elements")
+        };
+        assert_eq!(*nanos, 12_000);
+    }
+    let scheduler = open();
+    let recorder = Recorder::default();
+    let report = solve(&scheduler, &graph(), &[NodeId(0), NodeId(1)], &recorder);
+    assert_eq!(
+        recorder.computed(),
+        Vec::<String>::new(),
+        "warm reopen computes nothing"
+    );
+    let NodeOutcome::CacheHit {
+        cost: Some(scalar_cost),
+        ..
+    } = report.outcome(NodeId(0))
+    else {
+        panic!(
+            "a node-level hit carries its cost: {:?}",
+            report.outcome(NodeId(0))
+        )
+    };
+    assert_eq!(scalar_cost.elements, 1);
+    assert_eq!(scalar_cost.nanos, 2_500);
+    let NodeOutcome::CacheHit {
+        cost: Some(mapped_cost),
+        ..
+    } = report.outcome(NodeId(1))
+    else {
+        panic!("the map's hit carries its cost")
+    };
+    assert_eq!(
+        mapped_cost.elements, 12,
+        "the node's element count, not the chunk's"
+    );
+    assert_eq!(mapped_cost.nanos, 12_000);
+}
+
+// A fan that was partly served from the element cache recorded its executed
+// work as "the computation's cost": a later hit read e.g. `1 ms · 3
+// elements` for a node whose from-scratch cost is 3 ms — and `0 ns` for a
+// fan served entirely per element (adversarial review of item 3b,
+// 2026-08-20). An entry's cost is now recorded only when the computation
+// executed EVERY element, so `nanos` is unambiguously what computing that
+// key from scratch cost; a partial fan's entry carries no cost (the op-level
+// sample still learns from the elements that did run).
+#[test]
+fn a_partially_element_cached_fan_records_no_cost_on_its_entry() {
+    let rig = rig(1, |config| {
+        config.element_cache_min_nanos = 1;
+    });
+    let run: NodeFn = {
+        let clock = Arc::clone(&rig.clock);
+        Arc::new(move |_ctx, inputs| {
+            clock.advance(1_000_000);
+            let x = as_number(inputs[0].as_ref().unwrap());
+            Ok(vec![number(x * 2.0)])
+        })
+    };
+    let graph_for = |xs: &[f64]| {
+        SolveGraph::new(vec![decl(
+            "mapped",
+            "fake.partial",
+            vec![Input::Value(number_list(xs, None))],
+            vec![1],
+            Arc::clone(&run),
+        )])
+        .unwrap()
+    };
+    // Calibrate (a cold node's first fan persists at node granularity
+    // only), then a fully computed fan with element persistence on: every
+    // element computes — a complete measurement.
+    solve(
+        &rig.scheduler,
+        &graph_for(&[0.0, 1.0]),
+        &[NodeId(0)],
+        &Recorder::default(),
+    );
+    let full = graph_for(&[2.0, 3.0, 4.0]);
+    let recorder = Recorder::default();
+    solve(&rig.scheduler, &full, &[NodeId(0)], &recorder);
+    assert_eq!(recorder.element_cache_hits(), 0);
+    let report = solve(&rig.scheduler, &full, &[NodeId(0)], &Recorder::default());
+    let NodeOutcome::CacheHit { cost, .. } = report.outcome(NodeId(0)) else {
+        panic!("warm: {:?}", report.outcome(NodeId(0)))
+    };
+    assert_eq!(
+        *cost,
+        Some(CostSample {
+            elements: 3,
+            nanos: 3_000_000
+        }),
+        "a complete measurement rides the entry"
+    );
+    // Shifted: two elements are element-cache hits, one computes.
+    let partial = graph_for(&[3.0, 4.0, 5.0]);
+    let recorder = Recorder::default();
+    let report = solve(&rig.scheduler, &partial, &[NodeId(0)], &recorder);
+    assert_eq!(recorder.element_cache_hits(), 2);
+    let NodeOutcome::Computed {
+        elements, nanos, ..
+    } = report.outcome(NodeId(0))
+    else {
+        panic!("the shifted list is a node-level miss")
+    };
+    assert_eq!(
+        (*elements, *nanos),
+        (3, 1_000_000),
+        "this generation's work"
+    );
+    // Its hit carries no cost: 1 ms is not what 3 elements cost.
+    let report = solve(&rig.scheduler, &partial, &[NodeId(0)], &Recorder::default());
+    let NodeOutcome::CacheHit { cost, .. } = report.outcome(NodeId(0)) else {
+        panic!("warm: {:?}", report.outcome(NodeId(0)))
+    };
+    assert_eq!(*cost, None, "a partial fan's entry records no cost");
+    // Fully element-served (a reordering): computed 0 — no cost either,
+    // never `0 ns`.
+    let reordered = graph_for(&[5.0, 4.0, 3.0]);
+    let recorder = Recorder::default();
+    let report = solve(&rig.scheduler, &reordered, &[NodeId(0)], &recorder);
+    assert_eq!(recorder.element_cache_hits(), 3);
+    assert!(matches!(
+        report.outcome(NodeId(0)),
+        NodeOutcome::Computed { nanos: 0, .. }
+    ));
+    let report = solve(
+        &rig.scheduler,
+        &reordered,
+        &[NodeId(0)],
+        &Recorder::default(),
+    );
+    let NodeOutcome::CacheHit { cost: None, .. } = report.outcome(NodeId(0)) else {
+        panic!("no `0 ns` cost: {:?}", report.outcome(NodeId(0)))
+    };
+    // The op's per-element estimate is untouched by any of this.
+    assert_eq!(
+        rig.scheduler
+            .store()
+            .stats("fake.partial")
+            .unwrap()
+            .per_element_nanos(),
+        Some(1_000_000)
+    );
 }

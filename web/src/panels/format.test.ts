@@ -9,6 +9,8 @@ import {
   lineOwners,
   nodeLineRange,
   paramValueText,
+  pendingHint,
+  pendingTitle,
   shortHash,
   snapSlider,
   statusText,
@@ -115,11 +117,32 @@ describe("statusText", () => {
     expect(statusText({ state: "done", generation: 1, nanos: 2_124_300, elements: 1 })).toBe(
       "done · 2.1 ms · 1 element",
     );
+    // A cached node's time is its memo entry's LAST compute, not this
+    // generation's cache read (docs/13 §Solve streaming).
+    expect(statusText({ state: "cached", generation: 4, nanos: 43_900_000_000, elements: 1200 })).toBe(
+      "cached · last 43.90 s · 1200 elements",
+    );
+    expect(statusText({ state: "cached", generation: 4 })).toBe("cached");
     expect(
       statusText({ state: "running", generation: 1, elements: 10, elements_done: 3 }),
     ).toBe("running · 3/10 elements");
     expect(statusText({ state: "red", generation: 1, message: "boom" })).toBe("red · boom");
     expect(statusText(undefined)).toBe("no status yet");
+  });
+});
+
+describe("compute-on-release hint (docs/13 §Slider drags)", () => {
+  it("spells the estimate like the ETA: plain when measured, ~ when it is a floor", () => {
+    expect(pendingHint({ estimateMs: 3990.9, rough: false })).toBe("pending · 3.99 s");
+    expect(pendingHint({ estimateMs: 3990.9, rough: true })).toBe("pending · ~3.99 s");
+    expect(pendingHint({ estimateMs: 1000, rough: false })).toBe("pending · 1.00 s");
+    expect(pendingHint({ estimateMs: 640, rough: true })).toBe("pending · ~640 ms");
+  });
+  it("the tooltip says what pending means and what release does", () => {
+    expect(pendingTitle({ estimateMs: 3990.9, rough: false })).toBe(
+      "compute-on-release: a live preview would take about 3.99 s, so the viewport waits — the value solves once, when you release",
+    );
+    expect(pendingTitle({ estimateMs: 1000, rough: true })).toMatch(/at least ~1\.00 s/);
   });
 });
 

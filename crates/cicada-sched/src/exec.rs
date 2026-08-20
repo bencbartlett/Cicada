@@ -1,9 +1,14 @@
 //! The executor (docs/12 §Execution, §Cancellation): wavefront over the
 //! DAG on a rayon pool sized `cores − 2`, per-element fan-out for `each()`
 //! nodes in cost-sized chunks, one cancellation token per generation
-//! checked between nodes and between chunks, node panics caught and turned
-//! into red nodes, completed work written through to the store — which is
-//! why cancellation and supersession are nearly free. One honest
+//! (owned by the `solve` call, handed to every node invocation as its
+//! [`NodeCtx`] — see [`crate::cancel`]) checked between nodes and between
+//! chunks, node panics caught and turned into red nodes, completed work
+//! written through to the store — which is why cancellation and
+//! supersession are nearly free. Two flags gate the memo: `effectful`
+//! nodes never consult it (their work IS the side effect) and `volatile`
+//! nodes never consult it either (their value is fresh by definition —
+//! docs/12 §Volatile nodes); both run every time their cone is solved. One honest
 //! qualifier: element-LEVEL persistence needs calibrated cost stats
 //! (docs/12 adaptive granularity), so a cold node's very first fan
 //! persists at node granularity only — a cancelled cold fan still records
@@ -14,14 +19,15 @@
 //! execution order can never reorder output (docs/12 §Determinism rules).
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use cicada_core::hash::ValueHash;
 use cicada_core::value::{HashedValue, List, ValueData};
 
+use crate::cancel::{CancelToken, NodeCtx};
 use crate::clock::Clock;
-use crate::cost;
+use crate::cost::{self, CostSample};
 use crate::graph::{Input, NodeDecl, NodeId, SolveGraph};
 use crate::key::{KeyInputs, NodeKey, node_key};
 use crate::store::{DiskStore, MemoEntry, StoreError};
@@ -53,30 +59,6 @@ impl Default for SchedulerConfig {
             cold_element_nanos: 1_000_000,
             element_cache_min_nanos: 100_000,
         }
-    }
-}
-
-/// One generation's cancellation token (docs/12: checked between nodes and
-/// between element chunks). Cloneable; all clones share the flag.
-#[derive(Debug, Clone, Default)]
-pub struct CancelToken(Arc<AtomicBool>);
-
-impl CancelToken {
-    /// A fresh, uncancelled token.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Cancel. Idempotent, callable from any thread.
-    pub fn cancel(&self) {
-        self.0.store(true, Ordering::SeqCst);
-    }
-
-    /// Has anyone cancelled?
-    #[must_use]
-    pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
     }
 }
 
@@ -185,6 +167,10 @@ pub enum NodeOutcome {
     CacheHit {
         /// Output hashes, port order.
         outputs: Vec<ValueHash>,
+        /// What the computation cost when it last ran, when the entry
+        /// recorded it (node-level entries since v0.1): the cost model's
+        /// evidence for a node that computed nothing this generation.
+        cost: Option<CostSample>,
     },
     /// Computed this generation.
     Computed {
@@ -211,7 +197,7 @@ impl NodeOutcome {
     #[must_use]
     pub fn output_hashes(&self) -> Option<&[ValueHash]> {
         match self {
-            Self::CacheHit { outputs } | Self::Computed { outputs, .. } => Some(outputs),
+            Self::CacheHit { outputs, .. } | Self::Computed { outputs, .. } => Some(outputs),
             _ => None,
         }
     }
@@ -556,7 +542,12 @@ impl Ctx<'_> {
         let _ = self.keys[id.0].set(key);
         // Effectful nodes (exporters) never consult the memo: their WORK is
         // the side effect, and a hit would silently skip it (doc 10 §7).
+        // Volatile nodes never consult it either: their value is fresh by
+        // definition — a hit would serve a stale clock (docs/12 §Volatile
+        // nodes). Both gates are per node; downstream nodes key on the
+        // fresh output hash like any other input.
         if !decl.effectful
+            && !decl.volatile
             && let Some(entry) = self.scheduler.store.memo(&key)
         {
             if entry.outputs.len() == decl.output_count {
@@ -571,6 +562,7 @@ impl Ctx<'_> {
                 }
                 return NodeOutcome::CacheHit {
                     outputs: entry.outputs,
+                    cost: entry.cost,
                 };
             }
             // A record whose arity disagrees with the node is corrupt,
@@ -616,6 +608,10 @@ impl Ctx<'_> {
         let commit_started = std::time::Instant::now();
         let outcome = match computed {
             Computed::Cancelled => NodeOutcome::Cancelled,
+            // Red stays red, Esc or not: only an error the node MARKED as
+            // cancellation (`NodeError::cancelled`, under a cancelled
+            // token) became `Computed::Cancelled` above — see
+            // `compute_scalar` / `run_element`.
             Computed::Failed(failure) => NodeOutcome::Failed(failure),
             Computed::Done {
                 outputs,
@@ -644,14 +640,31 @@ impl Ctx<'_> {
         computed: u64,
         nanos: u64,
     ) -> NodeOutcome {
-        // Effectful nodes are never memoized (see the memo-read gate); the
-        // cost sample below still records — the estimator can know an
-        // export's cost without the cache ever lying about having run it.
-        if !decl.effectful
-            && let Err(error) = self.scheduler.store.record_memo(key, &outputs)
-        {
-            self.set_fatal(error);
-            return NodeOutcome::Cancelled;
+        // Effectful and volatile nodes are never memoized (see the memo-read
+        // gate); the cost sample below still records — the estimator can
+        // know an export's (or a clock's cone's) cost without the cache
+        // ever lying about having run it. The entry carries the cost too,
+        // but only when the computation executed EVERY element — then
+        // `nanos` is unambiguously what computing this key from scratch
+        // cost and `elements` its size. A fan partly (or wholly) served
+        // from the element cache measured only the elements that ran; an
+        // entry saying "1 ms · 1,200 elements" — or "0 ns" — for it would
+        // be the cache lying about what the work costs, so it records no
+        // cost (the op-level sample below still learns from what ran).
+        if !decl.effectful && !decl.volatile {
+            let recorded = if computed == elements {
+                self.scheduler.store.record_memo_with_cost(
+                    key,
+                    &outputs,
+                    CostSample { elements, nanos },
+                )
+            } else {
+                self.scheduler.store.record_memo(key, &outputs)
+            };
+            if let Err(error) = recorded {
+                self.set_fatal(error);
+                return NodeOutcome::Cancelled;
+            }
         }
         // Sample only what actually executed; a fully-warm fan teaches
         // nothing and would dilute the estimate.
@@ -775,8 +788,9 @@ impl Ctx<'_> {
         inputs: &[Option<Arc<HashedValue>>],
     ) -> Computed {
         let clock = &self.scheduler.clock;
+        let ctx = NodeCtx { cancel: self.token };
         let start = clock.now_nanos();
-        let result = catch_unwind(AssertUnwindSafe(|| (decl.run)(inputs)));
+        let result = catch_unwind(AssertUnwindSafe(|| (decl.run)(&ctx, inputs)));
         let nanos = clock.now_nanos().saturating_sub(start);
         let outputs = match result {
             Err(payload) => {
@@ -785,6 +799,14 @@ impl Ctx<'_> {
                     message: panic_message(payload.as_ref()),
                     element_ids: Vec::new(),
                 });
+            }
+            // The node bailed at its own safe point (or its worker was
+            // killed) because THIS generation was cancelled: cancelled,
+            // not red. A "cancelled" error under a live token is a node
+            // claiming a cancellation that never happened — red, with
+            // its message, like any other failure.
+            Ok(Err(error)) if error.cancelled && self.token.is_cancelled() => {
+                return Computed::Cancelled;
             }
             Ok(Err(error)) => {
                 return Computed::Failed(NodeFailure {
@@ -856,7 +878,10 @@ impl Ctx<'_> {
         // lifted exporter served per-element from cache would silently
         // skip side effects for the warm elements (same rule as the
         // node-level gate — the cache must never lie about work done).
+        // Volatile nodes likewise: a volatile node inside a fan-out
+        // recomputes PER ELEMENT, every generation.
         let element_cache = !decl.effectful
+            && !decl.volatile
             && per_element
                 .is_some_and(|nanos| nanos >= self.scheduler.config.element_cache_min_nanos);
 
@@ -962,14 +987,17 @@ impl Ctx<'_> {
                             break;
                         }
                         let index = start + offset;
-                        *slot = Some(self.run_element(
-                            decl,
-                            inputs,
-                            fanned,
-                            index,
-                            element_cache,
-                            executed,
-                        ));
+                        let Some(result) =
+                            self.run_element(decl, inputs, fanned, index, element_cache, executed)
+                        else {
+                            // The element's run reported THIS generation's
+                            // cancellation at its own safe point (a killed
+                            // worker, a polled loop): its slot stays
+                            // unfilled, exactly like one whose turn never
+                            // came, and the node lands cancelled.
+                            break;
+                        };
+                        *slot = Some(result);
                         done += 1;
                     }
                     let nanos = clock.now_nanos().saturating_sub(begin);
@@ -989,7 +1017,10 @@ impl Ctx<'_> {
     }
 
     /// One element of a fan-out: element key → element memo → run.
-    /// Increments `executed` only when the run function actually runs.
+    /// Increments `executed` only when the run function actually ran to
+    /// a verdict (success or red) — a run that bailed because the
+    /// generation was cancelled is `None`: no result, no cost evidence,
+    /// its slot stays unfilled.
     fn run_element(
         &self,
         decl: &NodeDecl,
@@ -998,7 +1029,7 @@ impl Ctx<'_> {
         index: usize,
         element_cache: bool,
         executed: &AtomicU64,
-    ) -> Result<Vec<Arc<HashedValue>>, (usize, String)> {
+    ) -> Option<ElementResult> {
         // Element inputs: fanned ports take slot `index` (holes were
         // refused above), broadcast ports pass through.
         let mut element_inputs: Vec<Option<Arc<HashedValue>>> = inputs.to_vec();
@@ -1030,47 +1061,58 @@ impl Ctx<'_> {
             // (docs/12), and recomputing re-stores good bytes.
             if entry.outputs.len() == decl.output_count {
                 match self.load_element_hit(decl, key, &entry, index) {
-                    Ok(Some(outputs)) => return Ok(outputs),
+                    Ok(Some(outputs)) => return Some(Ok(outputs)),
                     Ok(None) => {} // broken promise, tombstoned — compute
-                    Err(failure) => return Err(failure),
+                    Err(failure) => return Some(Err(failure)),
                 }
             } else if let Err(error) = self.scheduler.store.invalidate_memo(key) {
                 self.set_fatal(error);
-                return Err((index, "store failure".to_owned()));
+                return Some(Err((index, "store failure".to_owned())));
             }
         }
 
+        let ctx = NodeCtx { cancel: self.token };
+        let run_result = catch_unwind(AssertUnwindSafe(|| (decl.run)(&ctx, &element_inputs)));
+        // Bailed at a safe point because THIS generation was cancelled
+        // (`NodeError::cancelled` under a cancelled token): not a verdict
+        // on the element — no slot, no cost evidence.
+        if let Ok(Err(error)) = &run_result
+            && error.cancelled
+            && self.token.is_cancelled()
+        {
+            return None;
+        }
+        // Everything else is a verdict the run reached: it counts.
         executed.fetch_add(1, Ordering::Relaxed);
-        let run_result = catch_unwind(AssertUnwindSafe(|| (decl.run)(&element_inputs)));
         let outputs = match run_result {
-            Err(payload) => return Err((index, panic_message(payload.as_ref()))),
-            Ok(Err(error)) => return Err((index, error.message)),
+            Err(payload) => return Some(Err((index, panic_message(payload.as_ref())))),
+            Ok(Err(error)) => return Some(Err((index, error.message))),
             Ok(Ok(outputs)) => outputs,
         };
         if outputs.len() != decl.output_count {
-            return Err((
+            return Some(Err((
                 index,
                 format!(
                     "node returned {} outputs; its spec declares {}",
                     outputs.len(),
                     decl.output_count
                 ),
-            ));
+            )));
         }
         if let Some(key) = element_key {
             for value in &outputs {
                 if let Err(error) = self.scheduler.store.store_value(value) {
                     self.set_fatal(error);
-                    return Err((index, "store failure".to_owned()));
+                    return Some(Err((index, "store failure".to_owned())));
                 }
             }
             let hashes: Vec<ValueHash> = outputs.iter().map(|value| value.hash()).collect();
             if let Err(error) = self.scheduler.store.record_memo(key, &hashes) {
                 self.set_fatal(error);
-                return Err((index, "store failure".to_owned()));
+                return Some(Err((index, "store failure".to_owned())));
             }
         }
-        Ok(outputs)
+        Some(Ok(outputs))
     }
 
     /// Load an element-memo hit's outputs. `Ok(Some)` = served from cache;

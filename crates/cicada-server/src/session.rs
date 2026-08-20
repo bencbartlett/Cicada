@@ -40,8 +40,9 @@ use cicada_lang::check::BindingType;
 use cicada_lang::diag::{Diagnostic, DiagnosticKind};
 use cicada_lang::{Catalog, Document, Line, resolve, writer};
 use cicada_sched::{
-    CancelToken, Clock, DiskStore, Event, LogRecovery, MonotonicClock, NodeId, NodeOutcome,
-    Observer, Scheduler, SchedulerConfig, SolveError, SolveReport, project_cache_dir,
+    CancelToken, Clock, DiskStore, Event, Input, KeyInputs, LogRecovery, MonotonicClock, NodeId,
+    NodeOutcome, NoopObserver, Observer, Scheduler, SchedulerConfig, SolveError, SolveReport,
+    node_key, project_cache_dir,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -51,12 +52,12 @@ use crate::display::{self, DisplayStats, PickTable};
 use crate::lower::{Lowered, LoweredBinding, lower, lower_partial};
 use crate::protocol::{
     Actor, ApplyTextRequest, ClientMessage, DeltaSource, HistoryView, LeaseView, NodeState,
-    NodeStatus, ProbeCatalogEntry, ProbeVerdict, Role, ServerMessage, SolveSummary, ValueSummary,
-    encode, is_gesture, is_write, type_tag,
+    NodeStatus, PreviewMode, ProbeCatalogEntry, ProbeVerdict, Role, ServerMessage, SolveSummary,
+    ValueSummary, encode, is_gesture, is_write, type_tag,
 };
 use crate::scripts::ScriptCancel;
 use crate::sidecar::Sidecar;
-use crate::solve::{Job, JobKind, SolveLoop, SolveSink};
+use crate::solve::{IdleError, Job, JobKind, SolveLoop, SolveSink};
 use crate::viewmodel::{self, GraphView, NodeRefs, WireEnd};
 
 /// A path for humans: Windows' `\\?\` verbatim prefix stripped, forward
@@ -74,6 +75,27 @@ pub const STRUCTURAL_DEBOUNCE: Duration = Duration::from_millis(30);
 pub const STATUS_PERIOD: Duration = Duration::from_millis(100);
 /// Grid unit hint sent to clients (px per unit).
 pub const UNIT_PX: u32 = 24;
+
+/// Compute-on-release threshold (DECISIONS.md interactive param row: "the
+/// cost model degrades expensive cones (≥ ~1 s) to compute-on-release
+/// automatically"): a `param_preview` tick whose dirty cone is PREDICTED to
+/// cost at least this many wall milliseconds is not solved — the client
+/// shows the pending value and the estimate, and the release's `set_param`
+/// solves once. Below it, previews run latest-wins as always. A constant,
+/// not a `ProjectConfig` field: it is a feel threshold of the app, not a
+/// property of the model, and `ProjectConfig` hashes into cache keys.
+pub const COMPUTE_ON_RELEASE_MS: f64 = 1000.0;
+
+/// What ends a drag when no write does (docs/13 §Slider drags): a
+/// `param_preview` arriving more than this many op-clock milliseconds after
+/// the previous tick on the same param starts a NEW drag — re-predicted,
+/// and re-announced with `preview_policy` if it is withheld. Both sliders
+/// skip `set_param` when the release lands on the committed value, so
+/// without this rule a withheld drag's announcement would never repeat and
+/// the next drag would be withheld silently. Ticks stream at ≥ 30 Hz while
+/// the pointer moves; a pause this long is the user holding still or a
+/// new grab — a repeated announcement is idempotent for the client.
+pub const DRAG_GAP_MS: u64 = 300;
 
 /// Session construction options.
 #[derive(Clone)]
@@ -550,6 +572,101 @@ struct Inner {
     /// watcher's echo guard for script writes (`apply_text`): a rescan
     /// whose files hash to exactly these is our own write, not a barrier.
     scripts_fingerprint: BTreeMap<String, [u8; 32]>,
+    /// The drag in progress (compute-on-release, DECISIONS.md row 39). A
+    /// drag is a run of `param_preview`s on one param closer together than
+    /// [`DRAG_GAP_MS`]; any write attempt (the release's `set_param`, an
+    /// edit, a reload — landed or refused), an Esc, the client's `end_drag`
+    /// (a release that writes nothing), the writer's departure or a lease
+    /// handover, or a longer pause ends it. Every tick is predicted on its
+    /// own; the drag remembers whether `preview_policy` has gone out (once
+    /// per drag) and that, once withheld, it never goes back to solving
+    /// cold previews. An announced drag's end is announced too
+    /// (`drag_ended`, [`end_drag`] / [`announce_drag_ended`]) — except the
+    /// gap rule's, which is bookkeeping for the NEXT drag's announcement,
+    /// not a release. Protected by the `Inner` lock like every write site
+    /// that clears it.
+    drag: Option<Drag>,
+    /// Preview ticks withheld under compute-on-release, total (the
+    /// measurement harness reads it from `/debug/state`).
+    previews_deferred: u64,
+}
+
+/// One drag's standing state ([`Inner::drag`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Drag {
+    node: String,
+    port: Option<String>,
+    /// `preview_policy` went out for this drag: it has switched to
+    /// compute-on-release. Monotone — from here on only a tick that is a
+    /// pure cache read previews live; anything that would compute is
+    /// withheld, whatever its estimate.
+    announced: bool,
+    /// Op-clock milliseconds of the last tick (the [`DRAG_GAP_MS`] rule).
+    last_tick_ms: u64,
+    /// Ticks withheld in this drag.
+    deferred: u64,
+}
+
+/// Does this intent end a drag at the dispatcher's door (docs/13 §Slider
+/// drags: "a write attempt — landed or refused")? The canvas gestures
+/// (the release's `set_param` among them), undo, redo and batch. Not the
+/// preview tick (it IS the drag), not `end_drag` (it ends the drag in its
+/// own arm, by name), and not the writes with entry points of their own —
+/// `apply_text` (also HTTP), `cancel` (also HTTP) — which end the drag
+/// themselves, as `reload` (the watcher) does.
+fn ends_drag(message: &ClientMessage) -> bool {
+    is_gesture(message)
+        || matches!(
+            message,
+            ClientMessage::Undo {} | ClientMessage::Redo {} | ClientMessage::Batch { .. }
+        )
+}
+
+/// End the standing drag, whatever it is, and announce it if it was
+/// announced ([`announce_drag_ended`]). The one way a drag ends outside
+/// [`Core::preview_is_live`]'s gap rule — which is silent on purpose: a
+/// pause is not a release, and the pending state must stand while the
+/// pointer is down.
+fn end_drag(inner: &mut Inner) {
+    if let Some(drag) = inner.drag.take() {
+        announce_drag_ended(inner, &drag);
+    }
+}
+
+/// Broadcast `drag_ended` for a drag that has been taken out of
+/// `inner.drag` — if `preview_policy` went out for it (docs/13 §Slider
+/// drags, contract item 3: every announced drag's end is announced; a
+/// drag that was live throughout has nothing to take down). Called AFTER
+/// whatever ended the drag has been broadcast (the delta, the snapshot),
+/// so a client never sees the pending badge go before the value arrives.
+fn announce_drag_ended(inner: &Inner, drag: &Drag) {
+    if drag.announced {
+        broadcast(
+            inner,
+            &ServerMessage::DragEnded {
+                node: drag.node.clone(),
+                port: drag.port.clone(),
+            },
+        );
+    }
+}
+
+/// The cost model's verdict on one param's dirty cone
+/// ([`Core::predict_cone`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ConeCost {
+    /// Predicted wall milliseconds: Σ over the cone's nodes the dry run
+    /// predicts to COMPUTE (memo misses) of `per-element nanos (op sample)
+    /// × last element count ÷ min(threads, elements)`; memo hits cost 0.
+    ms: f64,
+    /// Some predicted-to-compute node had no evidence and contributed 0 —
+    /// `ms` is a floor.
+    rough: bool,
+    /// Nodes in the cone (hits and misses, exporters excluded).
+    nodes: usize,
+    /// Nodes predicted to compute (memo misses, nodes fed by a miss,
+    /// volatile nodes). Zero = a pure cache read.
+    misses: usize,
 }
 
 /// The per-node status board — written by observer events on worker
@@ -625,6 +742,35 @@ pub struct GenerationTiming {
     pub cached: usize,
     /// Frame bytes broadcast for it.
     pub frame_bytes: usize,
+}
+
+/// What an idle-class hypothetical solve did ([`Session::solve_hypothetical`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HypotheticalReport {
+    /// The generation number it ran under (unique per session).
+    pub generation: u64,
+    /// Pre-empted by a real generation (or Esc) before it finished.
+    pub cancelled: bool,
+    /// Nodes computed.
+    pub computed: usize,
+    /// Nodes answered by the memo.
+    pub cached: usize,
+    /// Nodes that went red.
+    pub failed: usize,
+    /// Wall time of the solve (waiting for the loop to go idle included).
+    pub elapsed: Duration,
+}
+
+/// Why [`Session::solve_hypothetical`] returned no report.
+#[derive(Debug, thiserror::Error)]
+pub enum HypotheticalError {
+    /// The override itself was refused — unknown node or port, a value that
+    /// is not one literal token — the `param_preview` refusals.
+    #[error("hypothetical override refused: {0}")]
+    Override(#[from] IntentError),
+    /// The loop shut down first, or the engine failed.
+    #[error(transparent)]
+    Idle(#[from] IdleError),
 }
 
 /// How many timing records to keep: a 5 s slider stream at 60 Hz is 300
@@ -756,6 +902,8 @@ impl Session {
                 text_hash,
                 oplog: OpLog::default(),
                 scripts_fingerprint,
+                drag: None,
+                previews_deferred: 0,
             }),
             status: Mutex::new(StatusBoard {
                 nodes: BTreeMap::new(),
@@ -780,7 +928,7 @@ impl Session {
             config,
         });
         let sink: Arc<dyn SolveSink> = core.clone();
-        let solve = Arc::new(SolveLoop::new(scheduler, scripts_cancel, sink));
+        let solve = Arc::new(SolveLoop::new(scheduler, sink));
         *core
             .solve
             .lock()
@@ -875,6 +1023,9 @@ impl Session {
         inner.clients.remove(&id);
         if inner.writer == Some(id) {
             inner.writer = None;
+            // The drag was the writer's; its release will never come, and
+            // the observers' pending badges must not stand for it.
+            end_drag(&mut inner);
         }
         let lease = lease_view(&inner);
         for client in inner.clients.values() {
@@ -1024,26 +1175,50 @@ impl Session {
 
     // --------------------------------------------------------- intents --
 
-    /// Handle one intent from `client`. Errors are sent back to that
-    /// client as `error` messages; nothing here panics on bad input. Every
-    /// write arm rolls its own mutations back under its own lock hold
-    /// ([`write_or_roll_back`]) — nothing is left for an outer pass to undo
-    /// after the lock was released.
+    /// Handle one intent from `client`: the door (the lease check, the
+    /// drag-ending rule), the intent ([`Self::dispatch`]), then the answers
+    /// in order — the `error` of a refused intent back to that client, and
+    /// the `drag_ended` an ended announced drag earns to everyone. Nothing
+    /// here panics on bad input. Every write arm rolls its own mutations
+    /// back under its own lock hold ([`write_or_roll_back`]) — nothing is
+    /// left for an outer pass to undo after the lock was released.
     pub fn handle(&self, client: u32, intent_id: Option<String>, message: ClientMessage) {
-        let result = self.dispatch(client, intent_id.clone(), message);
-        if let Err(error) = result {
-            let inner = self.core.lock_inner();
-            if let Some(c) = inner.clients.get(&client) {
-                let _ = c.tx.send(Outgoing::Text(encode(
-                    inner.seq,
-                    &ServerMessage::Error {
-                        intent_id,
-                        kind: error.kind().to_owned(),
-                        message: error.to_string(),
-                        details: error.details(),
-                    },
-                )));
+        // The dispatcher's door: the lease check, then the drag-ending rule.
+        let ended = {
+            let mut inner = self.core.lock_inner();
+            if is_write(&message) && inner.writer != Some(client) {
+                send_to(
+                    &inner,
+                    client,
+                    &error_message(intent_id, &IntentError::Lease),
+                );
+                return;
             }
+            // A write attempt ends the drag (docs/13 §Slider drags) —
+            // landed or refused, decided HERE at the door rather than in
+            // every arm: a refused release, an undo mid-drag, a batch
+            // whose third element fails all leave no verdict standing,
+            // and the next tick re-predicts and re-announces. The other
+            // drag-enders end it at their own entry points, which are
+            // also HTTP/watcher entries: `apply_text`, `reload`, `cancel`.
+            if ends_drag(&message) {
+                inner.drag.take()
+            } else {
+                None
+            }
+        };
+        let result = self.dispatch(client, intent_id.clone(), message);
+        let inner = self.core.lock_inner();
+        if let Err(error) = result {
+            send_to(&inner, client, &error_message(intent_id, &error));
+        }
+        // The end of an announced drag is announced AFTER the intent's own
+        // answer — the delta of a landed write, the error of a refused one
+        // — so no client's pending badge goes down before the value (or the
+        // refusal) arrives; the error is unicast, and for every other
+        // client this is the whole news.
+        if let Some(drag) = ended {
+            announce_drag_ended(&inner, &drag);
         }
     }
 
@@ -1054,12 +1229,6 @@ impl Session {
         intent_id: Option<String>,
         message: ClientMessage,
     ) -> Result<(), IntentError> {
-        {
-            let inner = self.core.lock_inner();
-            if is_write(&message) && inner.writer != Some(client) {
-                return Err(IntentError::Lease);
-            }
-        }
         let source = |label: String| DeltaSource {
             client: Some(client),
             intent_id: intent_id.clone(),
@@ -1091,7 +1260,7 @@ impl Session {
                 // of what the user waits for after moving the slider.
                 let accepted = Instant::now();
                 let job = {
-                    let inner = self.core.lock_inner();
+                    let mut inner = self.core.lock_inner();
                     let mut scratch = inner.loaded.document.clone();
                     apply_param(&mut scratch, &node, port.as_deref(), &value)?;
                     let resolution = resolve(&scratch, &Catalog::new(&inner.loaded.specs));
@@ -1103,6 +1272,18 @@ impl Session {
                         &inner.loaded.scripts,
                     )
                     .map_err(|e| IntentError::Protocol(e.to_string()))?;
+                    if !self.core.preview_is_live(
+                        &mut inner,
+                        &lowered,
+                        &node,
+                        port.as_deref(),
+                        &value,
+                    ) {
+                        // Compute-on-release: this tick is withheld; the
+                        // release's set_param solves once.
+                        inner.previews_deferred += 1;
+                        return Ok(());
+                    }
                     let targets = all_targets(&lowered);
                     Job {
                         lowered: Arc::new(lowered),
@@ -1112,6 +1293,24 @@ impl Session {
                     }
                 };
                 self.solve.submit(job);
+                Ok(())
+            }
+            ClientMessage::EndDrag { node, port } => {
+                // The pointer came up on the committed value: no set_param
+                // follows, so this is the drag's end — by name, so a stale
+                // release (the drag already ended by a write, an Esc or a
+                // reload; or another param's drag stands) is a no-op, never
+                // an error: a routine release must not raise a notice.
+                // A drag that expired by the gap rule still ends here: the
+                // pause was not the release, this is.
+                let mut inner = self.core.lock_inner();
+                let mine = inner
+                    .drag
+                    .as_ref()
+                    .is_some_and(|drag| drag.node == node && drag.port == port);
+                if mine {
+                    end_drag(&mut inner);
+                }
                 Ok(())
             }
             ClientMessage::Undo {} => {
@@ -1282,6 +1481,12 @@ impl Session {
             ClientMessage::TakeLease {} => {
                 let mut inner = self.core.lock_inner();
                 let previous = inner.writer;
+                if previous != Some(client) {
+                    // A handover ends the previous writer's drag: its ticks
+                    // and its release are refused from here on (`lease`),
+                    // which is decided before the drag-ending door.
+                    end_drag(&mut inner);
+                }
                 inner.writer = Some(client);
                 if let Some(prev) = previous
                     && let Some(c) = inner.clients.get_mut(&prev)
@@ -1790,6 +1995,9 @@ impl Session {
         }
         self.core.rebuild(&mut inner);
         inner.seq += 1;
+        // The write ends the drag; its end is announced after the delta
+        // (or the snapshot) below.
+        let ended = inner.drag.take();
         let after = state_snapshot(&inner);
         if after != before {
             // An apply that left text and sidecar as they were (a
@@ -1821,6 +2029,9 @@ impl Session {
                 history: inner.oplog.view(),
             };
             broadcast(&inner, &message);
+        }
+        if let Some(drag) = ended {
+            announce_drag_ended(&inner, &drag);
         }
         if new_text.is_some() || scripts_changed {
             self.core.seed_statuses_locked(&inner);
@@ -1904,7 +2115,7 @@ impl Session {
         reason: &str,
         rescan_scripts: bool,
     ) -> Result<bool, SessionError> {
-        {
+        let ended = {
             // Read UNDER the lock: a read racing a commit (two quick writes,
             // the watcher's read between them) would otherwise compare a
             // stale text against the newer hash and reload the old text
@@ -1947,13 +2158,20 @@ impl Session {
             inner.oplog.clear_by_barrier();
             self.core.rebuild(&mut inner);
             inner.seq += 1;
-        }
+            // The barrier ends the drag; its end is announced after the
+            // snapshot below (which already clears every client's pending
+            // state — the announcement is the rule, not the mechanism).
+            inner.drag.take()
+        };
         // Barrier snapshot to everyone.
         let snapshot = self.snapshot(true, reason);
         {
             let inner = self.core.lock_inner();
             for client in inner.clients.values() {
                 let _ = client.tx.send(Outgoing::Text(snapshot.clone()));
+            }
+            if let Some(drag) = &ended {
+                announce_drag_ended(&inner, drag);
             }
             self.core.seed_statuses_locked(&inner);
         }
@@ -2012,6 +2230,10 @@ impl Session {
     /// solve is dropped; the summary says so and the next edit resubmits.
     pub fn cancel(&self) {
         let dropped_pending = self.solve.cancel();
+        // Esc ends the drag too: the next tick starts a fresh one
+        // (re-predicted, re-announced if withheld) — and the end of an
+        // announced one is broadcast, Esc being a deliberate stop.
+        end_drag(&mut self.core.lock_inner());
         if dropped_pending {
             let inner = self.core.lock_inner();
             broadcast(
@@ -2157,6 +2379,87 @@ impl Session {
         }
     }
 
+    // ----------------------------------------------- hypothetical solves --
+
+    /// Solve the pipeline with ONE param overridden — `node`/`port`/`value`
+    /// exactly as `param_preview` spells them — at **idle priority**,
+    /// writing nothing and painting nothing (docs/12 §Speculative warming;
+    /// the substrate of scrub caching and `cycle` warming). The solve waits
+    /// until the interactive loop is idle, runs on the calling thread under
+    /// its own cancel handle, and is pre-empted by any real generation or
+    /// Esc (the report then says `cancelled`; whatever completed is in the
+    /// memo, so a retry resumes from there). No frames, no statuses, no
+    /// solve-bar traffic, invisible to `wait_idle` and `/debug/state?wait`;
+    /// its results land in the ordinary memo, so a later real solve of the
+    /// same value is a cache hit — which is the whole point. The only trace
+    /// is a `hypothetical` timing row in `/debug/state` (the agent's
+    /// oracle, not a client's).
+    ///
+    /// # Errors
+    ///
+    /// [`HypotheticalError::Override`] when the override is refused (the
+    /// same refusals as `param_preview`: unknown node/port, a non-literal
+    /// value); [`HypotheticalError::Idle`] when the loop shut down first or
+    /// the engine failed.
+    pub fn solve_hypothetical(
+        &self,
+        node: &str,
+        port: Option<&str>,
+        value: &str,
+    ) -> Result<HypotheticalReport, HypotheticalError> {
+        let (lowered, targets) = {
+            let inner = self.core.lock_inner();
+            let mut scratch = inner.loaded.document.clone();
+            apply_param(&mut scratch, node, port, value)?;
+            let resolution = resolve(&scratch, &Catalog::new(&inner.loaded.specs));
+            let lowered = lower_partial(
+                &scratch,
+                &resolution,
+                &inner.loaded.specs,
+                &self.core.config.project,
+                &inner.loaded.scripts,
+            )
+            .map_err(|e| IntentError::Protocol(e.to_string()))?;
+            let targets = all_targets(&lowered);
+            (lowered, targets)
+        };
+        let started = Instant::now();
+        let run = self.solve.run_idle(&lowered, &targets, &NoopObserver)?;
+        let elapsed = started.elapsed();
+        let computed = run
+            .report
+            .outcomes
+            .iter()
+            .filter(|o| matches!(o, NodeOutcome::Computed { .. }))
+            .count();
+        let cached = run
+            .report
+            .outcomes
+            .iter()
+            .filter(|o| matches!(o, NodeOutcome::CacheHit { .. }))
+            .count();
+        self.core.record_timing(GenerationTiming {
+            generation: run.generation,
+            kind: "hypothetical",
+            started_ms: (started - self.core.epoch).as_secs_f64() * 1000.0,
+            queued_ms: 0.0,
+            elapsed_ms: Some(elapsed.as_secs_f64() * 1000.0),
+            cancelled: run.report.cancelled,
+            cancel_to_idle_ms: None,
+            computed,
+            cached,
+            frame_bytes: 0,
+        });
+        Ok(HypotheticalReport {
+            generation: run.generation,
+            cancelled: run.report.cancelled,
+            computed,
+            cached,
+            failed: run.report.failures().len(),
+            elapsed,
+        })
+    }
+
     // ------------------------------------------------------ screenshots --
 
     /// Ask a connected client (the writer, else any) to render the
@@ -2279,6 +2582,12 @@ impl Session {
             "solve": {
                 "busy": self.solve.is_busy(),
                 "last_complete_generation": inner.last_complete.as_ref().map(|k| k.generation),
+                "previews_deferred": inner.previews_deferred,
+                "drag": inner.drag.as_ref().map(|d| serde_json::json!({
+                    "node": d.node, "port": d.port,
+                    "mode": if d.announced { "compute_on_release" } else { "live" },
+                    "deferred": d.deferred, "last_tick_ms": d.last_tick_ms,
+                })),
             },
             "display": display,
             "lease": lease_view(&inner),
@@ -2325,6 +2634,16 @@ fn broadcast(inner: &Inner, message: &ServerMessage) {
 fn broadcast_binary(inner: &Inner, bytes: &Bytes) {
     for client in inner.clients.values() {
         let _ = client.tx.send(Outgoing::Binary(bytes.clone()));
+    }
+}
+
+/// The `error` answer to a refused intent.
+fn error_message(intent_id: Option<String>, error: &IntentError) -> ServerMessage {
+    ServerMessage::Error {
+        intent_id,
+        kind: error.kind().to_owned(),
+        message: error.to_string(),
+        details: error.details(),
     }
 }
 
@@ -3010,6 +3329,231 @@ impl Core {
         }
     }
 
+    /// The compute-on-release decision for one `param_preview` tick
+    /// (DECISIONS.md row 39, docs/13 §Slider drags): true = solve it live.
+    /// Decided PER TICK, monotone within a drag:
+    ///
+    /// - every tick predicts its own dirty cone ([`Self::predict_cone`] —
+    ///   a hash-only dry run of `scratch`, the graph the preview would
+    ///   solve, against the memo); a tick predicted at or above
+    ///   [`COMPUTE_ON_RELEASE_MS`] is withheld, always — a drag that began
+    ///   on a warm value (a memo hit) and moves onto cold ones never solves
+    ///   a multi-second preview live;
+    /// - `preview_policy` is broadcast ONCE per drag, on the first withheld
+    ///   tick;
+    /// - once a drag has switched, only a tick that is a pure cache read
+    ///   (no node predicted to compute — a value visited before or warmed
+    ///   by scrub caching) previews live; a tick that would compute stays
+    ///   withheld whatever its estimate, so the drag never flips back to
+    ///   solving previews (the hysteresis the ledger row asks for);
+    /// - before it has switched, ticks under the bar preview live exactly
+    ///   as they always did.
+    ///
+    /// A drag is the run of ticks on one param closer together than
+    /// [`DRAG_GAP_MS`]; a write attempt, an Esc, a reload, the client's
+    /// `end_drag` or a longer pause ends it, and the next tick starts a
+    /// fresh one — re-predicted and re-announced if withheld. The pause is
+    /// the one end that is NOT broadcast as `drag_ended`: it is decided
+    /// lazily here, at the next tick, and the pointer may still be down
+    /// (the user is looking) — the pending state stands until the release
+    /// says otherwise, and the re-announcement replaces it. No cone, or a cone the model cannot see at
+    /// all (no node with any evidence): live — the generation measures it,
+    /// the next tick knows. A cone predicted slow from PARTIAL evidence is
+    /// withheld: the floor already clears the bar.
+    fn preview_is_live(
+        &self,
+        inner: &mut Inner,
+        scratch: &Lowered,
+        node: &str,
+        port: Option<&str>,
+        value: &str,
+    ) -> bool {
+        let now = self.now_ms();
+        let continuing = inner.drag.as_ref().is_some_and(|drag| {
+            drag.node == node
+                && drag.port.as_deref() == port
+                && now.saturating_sub(drag.last_tick_ms) <= DRAG_GAP_MS
+        });
+        if !continuing {
+            inner.drag = None;
+        }
+        let cost = self.predict_cone(inner, scratch, node, port);
+        let drag = inner.drag.get_or_insert_with(|| Drag {
+            node: node.to_owned(),
+            port: port.map(str::to_owned),
+            announced: false,
+            last_tick_ms: now,
+            deferred: 0,
+        });
+        drag.last_tick_ms = now;
+        let live = match cost {
+            // At or over the bar: withheld, whatever the drag did so far.
+            Some(cost) if cost.ms >= COMPUTE_ON_RELEASE_MS => false,
+            // A switched drag paints pure cache reads only.
+            Some(cost) if drag.announced => cost.misses == 0,
+            // Under the bar in a live drag; or no cone / no evidence.
+            None | Some(_) => true,
+        };
+        if live {
+            return true;
+        }
+        drag.deferred += 1;
+        let announce = !drag.announced;
+        drag.announced = true;
+        // `cost` is Some here: the only `None` arm is live.
+        if announce && let Some(cost) = cost {
+            broadcast(
+                inner,
+                &ServerMessage::PreviewPolicy {
+                    node: node.to_owned(),
+                    port: port.map(str::to_owned),
+                    mode: PreviewMode::ComputeOnRelease,
+                    estimate_ms: (cost.ms * 10.0).round() / 10.0,
+                    rough: cost.rough,
+                    pending_value: value.to_owned(),
+                },
+            );
+        }
+        false
+    }
+
+    /// Predict what a live preview of `node`/`port` would cost, as a
+    /// **hash-only dry run** of the tick's `scratch` graph against the memo
+    /// (docs/12 §Cost prediction): the param's dirty cone is the downstream
+    /// cone of the node holding the literal (for a bare literal: of every
+    /// node referencing it), exporters excluded. Walking the cone in
+    /// topological order, a node whose inputs are all known builds its
+    /// `NodeKey` exactly as the executor would; a memo hit costs nothing and
+    /// its recorded outputs feed downstream keys — so a value the slider
+    /// has visited before (or scrub caching has warmed) predicts as what it
+    /// is: a cache read. A miss — or a node fed by a miss, or a volatile
+    /// node — is predicted to compute, at the op's persisted per-element
+    /// sample × the node's LAST element count (its last outcome: computed
+    /// this session, or the cost its memo entry recorded — a warm reopen
+    /// still knows), scaled by `1 ÷ min(threads, elements)` for the
+    /// fan-out's parallelism. A predicted-to-compute node without a sample
+    /// or a count contributes 0 and marks the estimate rough (a floor).
+    /// Inputs from outside the cone take their hashes from the last
+    /// complete generation by name; an unknown one makes its consumers
+    /// misses (conservative). `None` when the param feeds no node of the
+    /// graph, or when nodes are predicted to compute and none of them has
+    /// evidence — then there is nothing to predict from (a cone of pure
+    /// hits is `Some(0 ms)`). Same evidence as the ETA; the
+    /// regression estimator of docs/12 replaces the mean when it lands.
+    #[allow(clippy::too_many_lines)] // the dry run IS the executor's key phase, in one place
+    fn predict_cone(
+        &self,
+        inner: &Inner,
+        scratch: &Lowered,
+        node: &str,
+        port: Option<&str>,
+    ) -> Option<ConeCost> {
+        let graph = &scratch.graph;
+        let seeds: Vec<NodeId> = match port {
+            Some(_) => graph.find(node).into_iter().collect(),
+            None => dependents_of(&inner.loaded.document, node)
+                .iter()
+                .filter_map(|name| graph.find(name))
+                .collect(),
+        };
+        if seeds.is_empty() {
+            return None;
+        }
+        let cone = graph.downstream_cone(&seeds);
+        let store = self.scheduler.store();
+        let kept = inner.last_complete.as_ref();
+        let last_outcome = |name: &str| -> Option<&NodeOutcome> {
+            let kept = kept?;
+            let id = kept.lowered.graph.find(name)?;
+            Some(kept.report.outcome(id))
+        };
+        let last_elements = |name: &str| -> Option<u64> {
+            match last_outcome(name)? {
+                NodeOutcome::Computed { elements, .. } => Some(*elements),
+                NodeOutcome::CacheHit { cost, .. } => cost.map(|c| c.elements),
+                _ => None,
+            }
+        };
+        // Output hashes per node as the dry run learns them: outside the
+        // cone from the last complete generation, inside it from memo hits.
+        let mut known: Vec<Option<Vec<ValueHash>>> = vec![None; graph.len()];
+        let mut total_nanos = 0.0_f64;
+        let mut rough = false;
+        let mut evidence = 0_usize;
+        let mut misses = 0_usize;
+        let mut nodes = 0_usize;
+        for &id in graph.topo_order() {
+            let decl = graph.node(id);
+            if !cone[id.0] {
+                known[id.0] = last_outcome(&decl.name)
+                    .and_then(NodeOutcome::output_hashes)
+                    .map(<[ValueHash]>::to_vec);
+                continue;
+            }
+            if decl.effectful {
+                continue;
+            }
+            nodes += 1;
+            // The executor's key phase, hash-only.
+            let inputs: Option<Vec<Option<ValueHash>>> = decl
+                .inputs
+                .iter()
+                .map(|input| match input {
+                    Input::Value(value) => Some(Some(value.hash())),
+                    Input::Absent => Some(None),
+                    Input::Port { node, output } => known[node.0]
+                        .as_ref()
+                        .and_then(|outputs| outputs.get(*output).copied())
+                        .map(Some),
+                })
+                .collect();
+            if !decl.volatile
+                && let Some(inputs) = inputs
+            {
+                let key = node_key(&KeyInputs {
+                    op: &decl.op,
+                    version: decl.version,
+                    body_hash: decl.body_hash.as_ref(),
+                    tolerance: decl.tolerance.as_ref(),
+                    inputs: &inputs,
+                    fan: &decl.fan,
+                });
+                if let Some(entry) = store.memo(&key)
+                    && entry.outputs.len() == decl.output_count
+                {
+                    known[id.0] = Some(entry.outputs);
+                    continue;
+                }
+            }
+            // A miss: predicted to compute.
+            misses += 1;
+            let per_element = store
+                .stats(&decl.op)
+                .and_then(|stats| stats.per_element_nanos());
+            match (per_element, last_elements(&decl.name)) {
+                (Some(per), Some(elements)) if elements > 0 => {
+                    evidence += 1;
+                    #[allow(clippy::cast_precision_loss)]
+                    let parallel = elements.min(self.threads.max(1) as u64) as f64;
+                    #[allow(clippy::cast_precision_loss)]
+                    let cpu = per as f64 * elements as f64;
+                    total_nanos += cpu / parallel;
+                }
+                _ => rough = true,
+            }
+        }
+        if misses > 0 && evidence == 0 {
+            return None;
+        }
+        // Every node a memo hit: a cache read, predicted as exactly that.
+        Some(ConeCost {
+            ms: total_nanos / 1_000_000.0,
+            rough,
+            nodes,
+            misses,
+        })
+    }
+
     /// Submit a structural generation over the current lowered graph.
     fn submit_structural(&self) {
         let job = {
@@ -3316,7 +3860,19 @@ impl Core {
             let name = lowered.graph.node(NodeId(index)).name.clone();
             let entry = match outcome {
                 NodeOutcome::Skipped => continue,
-                NodeOutcome::CacheHit { .. } => NodeStatus::new(NodeState::Cached, generation),
+                NodeOutcome::CacheHit { cost, .. } => {
+                    // A hit whose memo entry recorded its cost shows the
+                    // last compute time and element count (docs/12
+                    // §Progress: "last compute time" per node) — and the
+                    // ETA's `last_elements` knows the count after a warm
+                    // reopen, where nothing computes.
+                    let mut s = NodeStatus::new(NodeState::Cached, generation);
+                    if let Some(cost) = cost {
+                        s.elements = Some(cost.elements);
+                        s.nanos = Some(cost.nanos);
+                    }
+                    s
+                }
                 NodeOutcome::Computed {
                     elements, nanos, ..
                 } => {
@@ -4857,6 +5413,1527 @@ size = slider(value=4.0, min=0.5, max=5.0)
         assert!(!msgs.iter().any(|m| m["type"] == "delta"));
         // The text never moved: nothing to undo, and the file is the source.
         assert_eq!(std::fs::read_to_string(&pipeline).unwrap(), source);
+    }
+
+    // -------------------------------------------- the script cancel bridge --
+
+    /// Poll `condition` until it holds or `deadline` passes — a wait for an
+    /// event (a Python worker entering or leaving the bridge), bounded so a
+    /// broken bridge fails the test instead of wedging it. `on_timeout`
+    /// runs before the panic: it releases whatever the test holds blocked,
+    /// so the session can still drop (a generation stuck in Python would
+    /// otherwise wedge the solve loop's join and hang the test binary).
+    /// This is the ONE polling wait in the server suite (doc 14: no
+    /// sleeps): the event it waits for happens in a real subprocess the
+    /// virtual clock cannot drive; a passing run never waits out the
+    /// deadline, a failing one pays it once.
+    fn wait_until(
+        what: &str,
+        deadline: Duration,
+        condition: impl Fn() -> bool,
+        on_timeout: impl FnOnce(),
+    ) {
+        let started = Instant::now();
+        while !condition() {
+            if started.elapsed() >= deadline {
+                on_timeout();
+                panic!("waited {deadline:?} for {what} — it never happened");
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // one story: Esc kills the generation's Python call, and ONLY that one
+    fn esc_kills_exactly_the_cancelled_generations_python_calls() {
+        // Review finding (2026-08-20): the headline wiring of the per-solve
+        // cancel handle — a script node enters the bridge under ITS
+        // generation's token — had no end-to-end test; a bridge entered
+        // under a throwaway token passed every test. This drives
+        // Session → SolveLoop → executor → NodeCtx → ScriptCancel::enter →
+        // KillSwitch → worker, both ways: (1) Esc during a structural
+        // generation kills its blocked Python call and the node lands
+        // `cancelled` promptly; (2) an explicit effectful run's Python
+        // call SURVIVES an Esc and a preview submission (docs/13: a slider
+        // drag never cancels an export). Python 3 on PATH is a dev/CI
+        // requirement, as for scripts.rs.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("scripts")).unwrap();
+        std::fs::write(
+            dir.path().join("scripts").join("hold.py"),
+            "import os\nimport time\n\nimport cicada\n\n\
+             @cicada.node(title=\"Hold\", description=\"returns x once its release file exists.\")\n\
+             def hold(path: \"Text\", x: \"Number\") -> \"Number\":\n\
+             \x20   while not os.path.exists(path):\n\
+             \x20       time.sleep(0.005)\n\
+             \x20   return x\n\n\
+             @cicada.node(title=\"Hold Export\", description=\"an exporter that waits for its release file.\", effectful=True)\n\
+             def hold_export(path: \"Text\", x: \"Number\") -> None:\n\
+             \x20   while not os.path.exists(path):\n\
+             \x20       time.sleep(0.005)\n",
+        )
+        .unwrap();
+        let release_slow = dir.path().join("release-slow");
+        let release_dump = dir.path().join("release-dump");
+        let literal = |path: &Path| path.to_string_lossy().replace('\\', "/");
+        let source = format!(
+            "# cicada 1\n\
+             x = 2.0\n\
+             slow = hold(path=\"{}\", x=x)\n\
+             dump = hold_export(path=\"{}\", x=x)\n",
+            literal(&release_slow),
+            literal(&release_dump)
+        );
+        let pipeline = dir.path().join("p.cic");
+        std::fs::write(&pipeline, &source).unwrap();
+        let config = SessionConfig {
+            project_dir: dir.path().to_owned(),
+            pipeline,
+            cache_dir: Some(dir.path().join("cache")),
+            threads: 2,
+            project: ProjectConfig::default(),
+            op_clock: None,
+        };
+        // Python startup included: generous, and only ever waited in full
+        // when the bridge is broken — then every hold is released so the
+        // session can drop and the failure is a panic, not a hang.
+        let deadline = Duration::from_secs(30);
+        let release_all = || {
+            let _ = std::fs::write(&release_slow, b"timeout");
+            let _ = std::fs::write(&release_dump, b"timeout");
+        };
+
+        // (1) The load's structural generation blocks in `hold`.
+        let session = Session::open(config).unwrap();
+        let bridge = Arc::clone(&session.core.scripts);
+        wait_until(
+            "the load's Python call to enter the bridge",
+            deadline,
+            || bridge.in_flight() == 1,
+            release_all,
+        );
+        assert!(session.solve.is_busy(), "the generation is in flight");
+        assert!(!release_slow.exists(), "nothing released it");
+        session.cancel();
+        // The token's hook killed the switch; the pool notices within its
+        // poll period and kills the worker.
+        wait_until(
+            "the killed call to leave the bridge",
+            deadline,
+            || bridge.in_flight() == 0,
+            release_all,
+        );
+        session.wait_idle();
+        let state = session.debug_state(false);
+        assert_eq!(
+            state["statuses"]["slow"]["state"], "cancelled",
+            "{}",
+            state["statuses"]
+        );
+        let last = state["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rfind(|t| t["kind"] == "structural")
+            .cloned()
+            .unwrap();
+        assert_eq!(last["cancelled"], true, "{last}");
+        assert!(
+            last["cancel_to_idle_ms"].as_f64().is_some(),
+            "an Esc ended it: {last}"
+        );
+
+        // (2) Isolation. Let `slow` complete from now on, then hold an
+        // explicit export open in Python while the interactive side is
+        // cancelled and re-submitted around it.
+        std::fs::write(&release_slow, b"go").unwrap();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let _ = drain(&mut rx);
+        let outcome = std::thread::scope(|scope| {
+            let export = scope.spawn(|| session.run_effectful("dump"));
+            wait_until(
+                "the export's Python call to enter the bridge",
+                deadline,
+                || bridge.in_flight() >= 1,
+                release_all,
+            );
+            // Esc: cancels the loop's generation (none in flight) and every
+            // idle solve — never the export's token.
+            session.cancel();
+            // A slider tick: a preview generation over `slow` (its own
+            // token), solved around the export.
+            session.handle(
+                id,
+                None,
+                ClientMessage::ParamPreview {
+                    node: "x".into(),
+                    port: None,
+                    value: "3.0".into(),
+                },
+            );
+            session.wait_idle();
+            let state = session.debug_state(false);
+            assert_eq!(
+                state["statuses"]["slow"]["state"], "done",
+                "the preview's call ran to completion: {}",
+                state["statuses"]
+            );
+            assert_eq!(
+                state["statuses"]["dump"]["state"], "running",
+                "the export is still in Python: {}",
+                state["statuses"]
+            );
+            assert_eq!(bridge.in_flight(), 1, "exactly the export's call remains");
+            // Release the export: it completes — which it could not have,
+            // had the Esc or the preview touched its switch.
+            std::fs::write(&release_dump, b"go").unwrap();
+            export.join().unwrap()
+        });
+        let report = outcome.expect("the export ran to completion through the Esc");
+        assert_eq!(report["ok"], true, "{report}");
+        wait_until(
+            "the export's call to leave the bridge",
+            deadline,
+            || bridge.in_flight() == 0,
+            release_all,
+        );
+        let state = session.debug_state(false);
+        assert_eq!(
+            state["statuses"]["dump"]["state"], "done",
+            "{}",
+            state["statuses"]
+        );
+        let msgs = texts(&drain(&mut rx));
+        let finished = msgs
+            .iter()
+            .find(|m| m["type"] == "run_finished")
+            .expect("run_finished reaches the clients");
+        assert_eq!(finished["payload"]["ok"], true, "{finished}");
+    }
+
+    // ------------------------------------------------ hypothetical solves --
+
+    #[test]
+    fn a_hypothetical_solve_warms_the_memo_and_paints_nothing() {
+        // docs/12 §Speculative warming's substrate (v0.1 item 3b): solve with
+        // an override at idle priority — no write, no op, no frames, no
+        // statuses, not even a `wait_idle` blip — and the later REAL
+        // set_param to that value is fully cached.
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let pipeline = config.pipeline.clone();
+        let source = std::fs::read_to_string(&pipeline).unwrap();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        // Quiet the channel: the join's snapshot, display reset and frames.
+        let _ = drain(&mut rx);
+        let before = session.debug_state(false);
+
+        let report = session
+            .solve_hypothetical("size", Some("value"), "3.5")
+            .expect("the override is a plain literal on a real port");
+        assert!(!report.cancelled, "{report:?}");
+        assert!(
+            report.computed >= 2,
+            "the cone (span, block) computed for the hypothetical value: {report:?}"
+        );
+        assert_eq!(report.failed, 0);
+
+        // Painted nothing, wrote nothing, changed nothing a client can see.
+        assert!(
+            drain(&mut rx).is_empty(),
+            "no frames, no statuses, no notices for a hypothetical solve"
+        );
+        assert_eq!(std::fs::read_to_string(&pipeline).unwrap(), source);
+        let after = session.debug_state(false);
+        assert_eq!(after["text"], before["text"]);
+        assert_eq!(after["statuses"], before["statuses"]);
+        assert_eq!(after["summary"], before["summary"]);
+        assert_eq!(after["display"], before["display"]);
+        assert_eq!(
+            after["solve"]["last_complete_generation"],
+            before["solve"]["last_complete_generation"]
+        );
+        assert_eq!(history_of(&session)["depth"], 0, "not an op");
+        // The only trace: the agent oracle's timing row.
+        let hypothetical: Vec<&serde_json::Value> = after["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|t| t["kind"] == "hypothetical")
+            .collect();
+        assert_eq!(hypothetical.len(), 1);
+        assert_eq!(hypothetical[0]["generation"], report.generation);
+        assert_eq!(hypothetical[0]["computed"], report.computed);
+
+        // The real thing: the release to that value is a pure cache read.
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "3.5".into(),
+            },
+        );
+        session.wait_idle();
+        let state = session.debug_state(false);
+        let structural = state["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rfind(|t| t["kind"] == "structural")
+            .expect("the set_param's generation");
+        assert_eq!(
+            structural["computed"], 0,
+            "everything the hypothetical solve did is in the memo: {structural}"
+        );
+        assert!(structural["cached"].as_u64().unwrap() >= 2, "{structural}");
+        for node in ["span", "block"] {
+            assert_eq!(
+                state["statuses"][node]["state"], "cached",
+                "{node}: {}",
+                state["statuses"][node]
+            );
+        }
+        assert!(
+            state["text"].as_str().unwrap().contains("value=3.5"),
+            "the release wrote the text"
+        );
+
+        // Refusals are the preview's refusals, typed.
+        let error = session
+            .solve_hypothetical("size", Some("value"), "size + 1")
+            .expect_err("a non-literal override is refused");
+        assert!(
+            matches!(error, HypotheticalError::Override(IntentError::Refused(_))),
+            "{error:?}"
+        );
+        let error = session
+            .solve_hypothetical("nope", Some("value"), "1.0")
+            .expect_err("an unknown node is refused");
+        assert!(matches!(error, HypotheticalError::Override(_)), "{error:?}");
+    }
+
+    // ------------------------------------------------ compute-on-release --
+
+    /// The tick's scratch graph, exactly as the preview path lowers it.
+    fn scratch_lowered(inner: &Inner, node: &str, port: Option<&str>, value: &str) -> Lowered {
+        let mut scratch = inner.loaded.document.clone();
+        apply_param(&mut scratch, node, port, value).unwrap();
+        let resolution = resolve(&scratch, &Catalog::new(&inner.loaded.specs));
+        lower_partial(
+            &scratch,
+            &resolution,
+            &inner.loaded.specs,
+            &ProjectConfig::default(),
+            &inner.loaded.scripts,
+        )
+        .unwrap()
+    }
+
+    /// Preview generations recorded so far (the harness's currency).
+    fn preview_generations(session: &Session) -> usize {
+        session.debug_state(false)["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|t| t["kind"] == "preview")
+            .count()
+    }
+
+    fn structural_generations(session: &Session) -> usize {
+        session.debug_state(false)["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|t| t["kind"] == "structural")
+            .count()
+    }
+
+    fn preview(session: &Session, id: u32, value: &str) {
+        session.handle(
+            id,
+            None,
+            ClientMessage::ParamPreview {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: value.into(),
+            },
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // one drag story: predict → withhold → release → re-decide
+    fn a_cone_predicted_slow_switches_to_compute_on_release_once_per_drag() {
+        // DECISIONS.md row 39 / docs/13 §Slider drags: a drag whose dirty
+        // cone the cost model predicts at ≥ 1 s solves NO previews — one
+        // `preview_policy` per drag, the release solves once. Virtual op
+        // clock: every tick is inside the drag gap unless the test says so.
+        let (_dir, config, _clock) = project_with_clock(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let _ = drain(&mut rx);
+
+        // The model's evidence: the load computed every node (element
+        // counts known); teach the store that a `box` costs 5 s.
+        session
+            .core
+            .scheduler
+            .store()
+            .record_sample("box", 1, 5_000_000_000)
+            .unwrap();
+        let predicted = {
+            let inner = session.core.lock_inner();
+            let scratch = scratch_lowered(&inner, "size", Some("value"), "2.05");
+            session
+                .core
+                .predict_cone(&inner, &scratch, "size", Some("value"))
+                .expect("the cone is predictable")
+        };
+        assert_eq!(predicted.nodes, 3, "size → span → block: {predicted:?}");
+        assert_eq!(predicted.misses, 3, "a cold value: every node computes");
+        assert!(!predicted.rough, "every node in the cone has evidence");
+        // The estimator is the per-op MEAN: the load's sub-ms box sample
+        // and the 5 s one average to ≈ 2.5 s — well past the bar.
+        assert!(
+            predicted.ms > 2000.0 && predicted.ms <= 5000.0,
+            "dominated by the box's mean: {predicted:?}"
+        );
+
+        // A drag: ten ticks, zero preview generations, one policy message.
+        let baseline_previews = preview_generations(&session);
+        for tenth in 1..=10 {
+            preview(&session, id, &format!("2.{tenth}"));
+        }
+        session.wait_idle();
+        assert_eq!(
+            preview_generations(&session),
+            baseline_previews,
+            "no preview solved"
+        );
+        let msgs = texts(&drain(&mut rx));
+        let policies: Vec<&serde_json::Value> = msgs
+            .iter()
+            .filter(|m| m["type"] == "preview_policy")
+            .collect();
+        assert_eq!(policies.len(), 1, "exactly one policy per drag: {msgs:?}");
+        let payload = &policies[0]["payload"];
+        assert_eq!(payload["node"], "size");
+        assert_eq!(payload["port"], "value");
+        assert_eq!(payload["mode"], "compute_on_release");
+        assert_eq!(payload["rough"], false);
+        assert!(
+            (payload["estimate_ms"].as_f64().unwrap() - predicted.ms).abs() < 1.0,
+            "{payload}"
+        );
+        assert_eq!(payload["pending_value"], "2.1", "the first tick's value");
+        assert!(
+            !msgs
+                .iter()
+                .any(|m| m["type"] == "status" && m["payload"]["summary"]["running"] == true),
+            "nothing ran: {msgs:?}"
+        );
+        let state = session.debug_state(false);
+        assert_eq!(state["solve"]["previews_deferred"], 10);
+        assert_eq!(state["solve"]["drag"]["mode"], "compute_on_release");
+        assert_eq!(state["solve"]["drag"]["deferred"], 10);
+
+        // The release: one real op, one structural generation, drag over.
+        let baseline_structural = structural_generations(&session);
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "3.0".into(),
+            },
+        );
+        session.wait_idle();
+        assert_eq!(structural_generations(&session), baseline_structural + 1);
+        assert_eq!(preview_generations(&session), baseline_previews);
+        let msgs = texts(&drain(&mut rx));
+        assert_eq!(msgs.iter().filter(|m| m["type"] == "delta").count(), 1);
+        assert_eq!(
+            history_of(&session)["depth"],
+            1,
+            "the release is the one op"
+        );
+        assert!(session.debug_state(false)["solve"]["drag"].is_null());
+
+        // A second drag decides again (same evidence → same verdict) and
+        // announces itself again — once.
+        preview(&session, id, "3.1");
+        preview(&session, id, "3.2");
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        assert_eq!(
+            msgs.iter()
+                .filter(|m| m["type"] == "preview_policy")
+                .count(),
+            1
+        );
+        assert_eq!(preview_generations(&session), baseline_previews);
+        // Esc ends a drag too: the next tick re-decides and re-announces.
+        session.cancel();
+        preview(&session, id, "3.3");
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        assert_eq!(
+            msgs.iter()
+                .filter(|m| m["type"] == "preview_policy")
+                .count(),
+            1
+        );
+        assert_eq!(session.debug_state(false)["solve"]["previews_deferred"], 13);
+    }
+
+    #[test]
+    fn a_value_already_in_the_memo_previews_live_even_on_a_slow_cone() {
+        // The prediction is a dry run of the tick's keys against the memo:
+        // a value the cone has been solved for (here by a hypothetical
+        // solve — scrub caching's move) predicts as the cache read it is,
+        // so the slider stays live there; a cold value on the same cone
+        // still switches.
+        let (_dir, config, _clock) = project_with_clock(
+            "# cicada 1
+             size = slider(value=2.0, min=0.5, max=5.0)
+             span = construct_domain(start=0.0, end=size)
+             block = box(x=span, y=span, z=span)
+",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        session
+            .core
+            .scheduler
+            .store()
+            .record_sample("box", 1, 5_000_000_000)
+            .unwrap();
+        let warmed = session
+            .solve_hypothetical("size", Some("value"), "4.0")
+            .unwrap();
+        assert!(!warmed.cancelled && warmed.computed >= 2, "{warmed:?}");
+        {
+            let inner = session.core.lock_inner();
+            let warm = scratch_lowered(&inner, "size", Some("value"), "4.0");
+            let cost = session
+                .core
+                .predict_cone(&inner, &warm, "size", Some("value"))
+                .expect("a cone of hits is a prediction");
+            assert!(cost.ms.abs() < f64::EPSILON, "every key hits: {cost:?}");
+            assert_eq!(cost.misses, 0);
+            assert!(!cost.rough);
+            let cold = scratch_lowered(&inner, "size", Some("value"), "4.1");
+            let cost = session
+                .core
+                .predict_cone(&inner, &cold, "size", Some("value"))
+                .unwrap();
+            assert!(cost.ms >= COMPUTE_ON_RELEASE_MS, "{cost:?}");
+        }
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let _ = drain(&mut rx);
+        let baseline = preview_generations(&session);
+        preview(&session, id, "4.0");
+        session.wait_idle();
+        assert_eq!(
+            preview_generations(&session),
+            baseline + 1,
+            "the warm tick previews"
+        );
+        let msgs = texts(&drain(&mut rx));
+        assert!(
+            !msgs.iter().any(|m| m["type"] == "preview_policy"),
+            "{msgs:?}"
+        );
+        let state = session.debug_state(false);
+        let last = state["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rfind(|t| t["kind"] == "preview")
+            .unwrap();
+        assert_eq!(last["computed"], 0, "a pure cache read: {last}");
+        // End the drag (Esc), then a cold value: compute-on-release.
+        session.cancel();
+        preview(&session, id, "4.1");
+        session.wait_idle();
+        assert_eq!(preview_generations(&session), baseline + 1);
+        let msgs = texts(&drain(&mut rx));
+        assert_eq!(
+            msgs.iter()
+                .filter(|m| m["type"] == "preview_policy")
+                .count(),
+            1,
+            "{msgs:?}"
+        );
+    }
+
+    #[test]
+    fn a_warm_first_tick_never_locks_a_drag_live() {
+        // Review finding (2026-08-20): the first tick of a drag landing on
+        // a memo-warm value (the load's value, a prior release) must not
+        // decide the whole drag — a cold tick in the SAME drag is
+        // predicted on its own and withheld, with the policy announced
+        // there; a later warm tick in the now-switched drag is a pure
+        // cache read and previews live; a cold one after it stays withheld
+        // without a second announcement.
+        let (_dir, config, _clock) = project_with_clock(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        session
+            .core
+            .scheduler
+            .store()
+            .record_sample("box", 1, 5_000_000_000)
+            .unwrap();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let _ = drain(&mut rx);
+        let baseline = preview_generations(&session);
+
+        // Tick 1: the load's value — warm, previews live (computed 0).
+        preview(&session, id, "2.0");
+        session.wait_idle();
+        assert_eq!(preview_generations(&session), baseline + 1);
+        assert_eq!(session.debug_state(false)["solve"]["drag"]["mode"], "live");
+        assert!(
+            !texts(&drain(&mut rx))
+                .iter()
+                .any(|m| m["type"] == "preview_policy")
+        );
+
+        // Tick 2, same drag: cold — withheld, announced.
+        preview(&session, id, "2.3");
+        session.wait_idle();
+        assert_eq!(
+            preview_generations(&session),
+            baseline + 1,
+            "the cold tick solved nothing"
+        );
+        let msgs = texts(&drain(&mut rx));
+        let policies: Vec<_> = msgs
+            .iter()
+            .filter(|m| m["type"] == "preview_policy")
+            .collect();
+        assert_eq!(policies.len(), 1, "{msgs:?}");
+        assert_eq!(policies[0]["payload"]["pending_value"], "2.3");
+        let state = session.debug_state(false);
+        assert_eq!(state["solve"]["drag"]["mode"], "compute_on_release");
+        assert_eq!(state["solve"]["previews_deferred"], 1);
+
+        // Tick 3, same drag: back on the warm value — a pure cache read
+        // previews live (scrub caching's upgrade path), no new message.
+        preview(&session, id, "2.0");
+        session.wait_idle();
+        assert_eq!(preview_generations(&session), baseline + 2);
+        let last = session.debug_state(false)["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rfind(|t| t["kind"] == "preview")
+            .cloned()
+            .unwrap();
+        assert_eq!(last["computed"], 0, "{last}");
+        assert!(
+            !texts(&drain(&mut rx))
+                .iter()
+                .any(|m| m["type"] == "preview_policy")
+        );
+
+        // Tick 4, same drag: cold again — withheld, still one announcement.
+        preview(&session, id, "2.4");
+        session.wait_idle();
+        assert_eq!(preview_generations(&session), baseline + 2);
+        assert!(
+            !texts(&drain(&mut rx))
+                .iter()
+                .any(|m| m["type"] == "preview_policy")
+        );
+        let state = session.debug_state(false);
+        assert_eq!(state["solve"]["previews_deferred"], 2);
+        assert_eq!(state["solve"]["drag"]["deferred"], 2);
+        assert_eq!(state["solve"]["drag"]["mode"], "compute_on_release");
+
+        // Every preview generation this test caused was a cache read: no
+        // multi-second preview ever solved live.
+        let computed: Vec<u64> = session.debug_state(false)["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|t| t["kind"] == "preview")
+            .map(|t| t["computed"].as_u64().unwrap())
+            .collect();
+        assert!(computed.iter().all(|&c| c == 0), "{computed:?}");
+    }
+
+    #[test]
+    fn a_drag_that_ends_without_a_write_is_re_announced_after_the_gap() {
+        // Review finding (2026-08-20): both sliders skip `set_param` when
+        // the release lands on the committed value, so a drag can end with
+        // no write at all. The server-side rule: a tick more than
+        // DRAG_GAP_MS after the previous one starts a new drag — predicted
+        // again, announced again. Ticks inside the gap continue the drag
+        // (one announcement). A refused release ends the drag as well.
+        let (_dir, config, clock) = project_with_clock(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        session
+            .core
+            .scheduler
+            .store()
+            .record_sample("box", 1, 5_000_000_000)
+            .unwrap();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let _ = drain(&mut rx);
+        let baseline = preview_generations(&session);
+        let policies = |rx: &mut tokio::sync::mpsc::UnboundedReceiver<Outgoing>| {
+            texts(&drain(rx))
+                .into_iter()
+                .filter(|m| m["type"] == "preview_policy")
+                .map(|m| m["payload"]["pending_value"].clone())
+                .collect::<Vec<_>>()
+        };
+
+        // Drag 1: announced on its first tick; the pointer is released on
+        // the committed value — no set_param follows.
+        preview(&session, id, "1.5");
+        session.wait_idle();
+        assert_eq!(policies(&mut rx), vec!["1.5"]);
+
+        // Inside the gap: the same drag, no second announcement.
+        clock.advance(DRAG_GAP_MS * 1_000_000);
+        preview(&session, id, "1.6");
+        session.wait_idle();
+        assert!(policies(&mut rx).is_empty(), "still drag 1");
+        assert_eq!(session.debug_state(false)["solve"]["drag"]["deferred"], 2);
+
+        // Past the gap: drag 2 — announced again, with ITS pending value.
+        clock.advance((DRAG_GAP_MS + 1) * 1_000_000);
+        preview(&session, id, "1.7");
+        preview(&session, id, "1.8");
+        session.wait_idle();
+        assert_eq!(policies(&mut rx), vec!["1.7"]);
+        let state = session.debug_state(false);
+        assert_eq!(state["solve"]["drag"]["deferred"], 2, "drag 2's own count");
+        assert_eq!(state["solve"]["previews_deferred"], 4);
+        assert_eq!(preview_generations(&session), baseline, "nothing solved");
+
+        // A refused release (a non-literal) ends the drag: the next tick
+        // announces drag 3 even inside the gap.
+        session.handle(
+            id,
+            Some("bad".into()),
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "size + 1".into(),
+            },
+        );
+        let msgs = texts(&drain(&mut rx));
+        assert!(
+            msgs.iter()
+                .any(|m| m["type"] == "error" && m["payload"]["intent_id"] == "bad"),
+            "{msgs:?}"
+        );
+        assert!(session.debug_state(false)["solve"]["drag"].is_null());
+        preview(&session, id, "1.9");
+        session.wait_idle();
+        assert_eq!(policies(&mut rx), vec!["1.9"]);
+        assert_eq!(preview_generations(&session), baseline);
+    }
+
+    #[test]
+    fn a_cheap_cone_still_previews_every_tick() {
+        // The 02-solids shape: sub-millisecond cone, latest-wins previews
+        // exactly as before — no policy message, nothing deferred.
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let _ = drain(&mut rx);
+        let predicted = {
+            let inner = session.core.lock_inner();
+            let scratch = scratch_lowered(&inner, "size", Some("value"), "2.05");
+            session
+                .core
+                .predict_cone(&inner, &scratch, "size", Some("value"))
+                .expect("predictable: the load measured every node")
+        };
+        assert!(predicted.ms < COMPUTE_ON_RELEASE_MS, "{predicted:?}");
+        let baseline = preview_generations(&session);
+        // Settle between ticks so none is superseded: five ticks, five
+        // generations.
+        for tenth in 1..=5 {
+            preview(&session, id, &format!("2.{tenth}"));
+            session.wait_idle();
+        }
+        assert_eq!(preview_generations(&session), baseline + 5);
+        let msgs = texts(&drain(&mut rx));
+        assert!(
+            !msgs.iter().any(|m| m["type"] == "preview_policy"),
+            "a cheap cone never hears of the policy: {msgs:?}"
+        );
+        let state = session.debug_state(false);
+        assert_eq!(state["solve"]["previews_deferred"], 0);
+        assert_eq!(state["solve"]["drag"]["mode"], "live");
+        assert!(
+            frames(&drain(&mut rx)).is_empty(),
+            "(frames were drained with the texts above — sanity)"
+        );
+    }
+
+    #[test]
+    fn cone_prediction_follows_the_literal_to_its_consumers() {
+        // A bare literal is no graph node: its dirty cone is that of every
+        // node referencing it. An unknown param, or a param feeding no node,
+        // has no cone — the decision falls back to live.
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             x = 2.0\n\
+             y = x * 2.0\n\
+             z = y + 1.0\n\
+             lonely = 5.0\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let inner = session.core.lock_inner();
+        let scratch = scratch_lowered(&inner, "x", None, "3.0");
+        let cone = session
+            .core
+            .predict_cone(&inner, &scratch, "x", None)
+            .expect("x feeds y, which feeds z");
+        assert_eq!(cone.nodes, 2, "{cone:?}");
+        assert!(!cone.rough);
+        let scratch = scratch_lowered(&inner, "lonely", None, "6.0");
+        assert!(
+            session
+                .core
+                .predict_cone(&inner, &scratch, "lonely", None)
+                .is_none()
+        );
+        assert!(
+            session
+                .core
+                .predict_cone(&inner, &scratch, "nope", Some("value"))
+                .is_none()
+        );
+        drop(inner);
+        // And a live decision for them: no policy message, previews solve.
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let _ = drain(&mut rx);
+        session.handle(
+            id,
+            None,
+            ClientMessage::ParamPreview {
+                node: "lonely".into(),
+                port: None,
+                value: "6.0".into(),
+            },
+        );
+        session.wait_idle();
+        assert!(
+            !texts(&drain(&mut rx))
+                .iter()
+                .any(|m| m["type"] == "preview_policy")
+        );
+        assert_eq!(session.debug_state(false)["solve"]["previews_deferred"], 0);
+    }
+
+    /// Teach the store so that a live preview of `size` on the
+    /// size → span → block cone predicts EXACTLY `target_nanos`: every
+    /// node in the cone is scalar (÷ 1), so the prediction is the sum of
+    /// the cone ops' per-element means; one extra `box` sample of one
+    /// element, sized so the integer-division mean lands where it must,
+    /// makes the sum exact.
+    fn seed_cone_to(session: &Session, target_nanos: u64) {
+        let store = session.core.scheduler.store();
+        let ops: Vec<String> = {
+            let inner = session.core.lock_inner();
+            let graph = &inner.lowered.graph;
+            ["size", "span", "block"]
+                .iter()
+                .map(|name| graph.node(graph.find(name).unwrap()).op.clone())
+                .collect()
+        };
+        assert_eq!(ops[2], "box", "{ops:?}");
+        let others: u64 = ops[..2]
+            .iter()
+            .map(|op| store.stats(op).unwrap().per_element_nanos().unwrap())
+            .sum();
+        let box_stats = store.stats("box").unwrap();
+        let wanted_mean = target_nanos - others;
+        // (nanos + x) / (elements + 1) == wanted_mean, exactly.
+        let x = wanted_mean * (box_stats.elements + 1) - box_stats.nanos;
+        store.record_sample("box", 1, x).unwrap();
+        let reached: u64 = ops
+            .iter()
+            .map(|op| store.stats(op).unwrap().per_element_nanos().unwrap())
+            .sum();
+        assert_eq!(reached, target_nanos, "the seeding is exact");
+    }
+
+    #[test]
+    fn the_compute_on_release_bar_is_inclusive_at_exactly_one_second() {
+        // Review finding (2026-08-20, mutation S1 survived): no test put a
+        // cone at exactly `COMPUTE_ON_RELEASE_MS`, so `>=` and `>` were
+        // indistinguishable. One nanosecond under the bar previews live;
+        // exactly on it is withheld, with the estimate reported as 1000.0.
+        let (_dir, config, _clock) = project_with_clock(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let _ = drain(&mut rx);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let bar_nanos = (COMPUTE_ON_RELEASE_MS * 1_000_000.0) as u64;
+
+        // One nanosecond under: live.
+        seed_cone_to(&session, bar_nanos - 1);
+        {
+            let inner = session.core.lock_inner();
+            let scratch = scratch_lowered(&inner, "size", Some("value"), "2.05");
+            let cost = session
+                .core
+                .predict_cone(&inner, &scratch, "size", Some("value"))
+                .unwrap();
+            assert!(cost.ms < COMPUTE_ON_RELEASE_MS, "{cost:?}");
+            assert!(cost.ms > COMPUTE_ON_RELEASE_MS - 0.001, "{cost:?}");
+        }
+        let baseline = preview_generations(&session);
+        preview(&session, id, "2.05");
+        session.wait_idle();
+        assert_eq!(
+            preview_generations(&session),
+            baseline + 1,
+            "under the bar: live"
+        );
+        assert!(
+            !texts(&drain(&mut rx))
+                .iter()
+                .any(|m| m["type"] == "preview_policy")
+        );
+
+        // Exactly on the bar (the live generation above recorded fresh
+        // samples — seed again from what the store holds now): withheld.
+        session.cancel(); // end the drag so the next tick decides afresh
+        seed_cone_to(&session, bar_nanos);
+        {
+            let inner = session.core.lock_inner();
+            let scratch = scratch_lowered(&inner, "size", Some("value"), "2.06");
+            let cost = session
+                .core
+                .predict_cone(&inner, &scratch, "size", Some("value"))
+                .unwrap();
+            assert!(
+                (cost.ms - COMPUTE_ON_RELEASE_MS).abs() < f64::EPSILON,
+                "exactly on the bar: {cost:?}"
+            );
+        }
+        preview(&session, id, "2.06");
+        session.wait_idle();
+        assert_eq!(
+            preview_generations(&session),
+            baseline + 1,
+            "on the bar: withheld"
+        );
+        let msgs = texts(&drain(&mut rx));
+        let policies: Vec<_> = msgs
+            .iter()
+            .filter(|m| m["type"] == "preview_policy")
+            .collect();
+        assert_eq!(policies.len(), 1, "{msgs:?}");
+        assert!(
+            (policies[0]["payload"]["estimate_ms"].as_f64().unwrap() - COMPUTE_ON_RELEASE_MS).abs()
+                < f64::EPSILON,
+            "{}",
+            policies[0]
+        );
+        assert_eq!(session.debug_state(false)["solve"]["previews_deferred"], 1);
+    }
+
+    #[test]
+    fn cone_prediction_divides_a_fanned_node_by_its_parallelism() {
+        // Review finding (2026-08-20, mutation S10 survived): every test
+        // cone had one element, so `÷ min(threads, elements)` — the rule
+        // that makes the wall's estimate 4.5 s rather than 98 s — was
+        // exercised by the manual measurement only. A six-element fan on
+        // two threads costs per × 6 ÷ 2; the same store reopened on one
+        // thread predicts per × 6 (from memo-recorded counts — nothing
+        // computes on the warm reopen); the scalar nodes are ÷ 1 either
+        // way.
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             step = slider(value=1.0, min=0.5, max=5.0)\n\
+             xs = series(start=1.0, step=step, count=6)\n\
+             spans = construct_domain(start=0.0, end=each(xs))\n\
+             blocks = box(x=each(spans), y=each(spans), z=each(spans))\n",
+        );
+        assert_eq!(config.threads, 2);
+        let expected = |session: &Session, threads: u64| -> f64 {
+            let store = session.core.scheduler.store();
+            let inner = session.core.lock_inner();
+            let graph = &inner.lowered.graph;
+            let mut total = 0.0_f64;
+            for &id in graph.topo_order() {
+                let decl = graph.node(id);
+                let per = store.stats(&decl.op).unwrap().per_element_nanos().unwrap();
+                let elements: u64 = if decl.fan.iter().any(|&d| d > 0) {
+                    6
+                } else {
+                    1
+                };
+                #[allow(clippy::cast_precision_loss)]
+                let cpu = per as f64 * elements as f64;
+                #[allow(clippy::cast_precision_loss)]
+                let parallel = elements.min(threads) as f64;
+                total += cpu / parallel;
+            }
+            total / 1_000_000.0
+        };
+        let predict = |session: &Session| -> ConeCost {
+            let inner = session.core.lock_inner();
+            let scratch = scratch_lowered(&inner, "step", Some("value"), "1.5");
+            session
+                .core
+                .predict_cone(&inner, &scratch, "step", Some("value"))
+                .unwrap()
+        };
+
+        let session = Session::open(config.clone()).unwrap();
+        session.wait_idle();
+        // Make the fanned nodes matter: a box costs a second per element.
+        session
+            .core
+            .scheduler
+            .store()
+            .record_sample("box", 6, 6_000_000_000)
+            .unwrap();
+        let cost = predict(&session);
+        assert_eq!(cost.nodes, 4);
+        assert_eq!(cost.misses, 4, "a cold value: every node computes");
+        assert!(!cost.rough);
+        let want = expected(&session, 2);
+        assert!(
+            (cost.ms - want).abs() < 1e-9,
+            "two threads: {cost:?} vs Σ per × n ÷ min(2, n) = {want}"
+        );
+        // The fan IS divided: predicting it serially would be a second
+        // per box more.
+        let serial = expected(&session, 1);
+        assert!(serial - cost.ms > 1000.0, "{serial} vs {}", cost.ms);
+        drop(session);
+
+        // A warm reopen on one thread: nothing computes, the element
+        // counts come from the memo entries' recorded costs, and the
+        // divisor is 1.
+        let config = SessionConfig {
+            threads: 1,
+            ..config
+        };
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let state = session.debug_state(false);
+        let last = state["timings"].as_array().unwrap().last().unwrap().clone();
+        assert_eq!(last["computed"], 0, "warm reopen: {last}");
+        let cost = predict(&session);
+        assert_eq!(cost.misses, 4);
+        assert!(!cost.rough, "memo-recorded counts stand in for outcomes");
+        let want = expected(&session, 1);
+        assert!(
+            (cost.ms - want).abs() < 1e-9,
+            "one thread: {cost:?} vs {want}"
+        );
+    }
+
+    #[test]
+    fn a_cached_status_carries_its_last_computes_cost() {
+        // Decided at the review of item 3b (2026-08-20): a `cached` node's
+        // status carries `elements` and `nanos` from the memo entry's
+        // recorded cost — docs/12 §Progress asks the badge for the "last
+        // compute time", and the ETA's per-node element counts must
+        // survive a warm reopen where nothing computes. Additive on the
+        // wire; docs/13 §Solve streaming says what the numbers mean.
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config.clone()).unwrap();
+        session.wait_idle();
+        let done = session.debug_state(false)["statuses"]["block"].clone();
+        assert_eq!(done["state"], "done");
+        let nanos = done["nanos"]
+            .as_u64()
+            .expect("a done node measured its work");
+        assert_eq!(done["elements"], 1);
+        drop(session);
+
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let cached = session.debug_state(false)["statuses"]["block"].clone();
+        assert_eq!(cached["state"], "cached", "{cached}");
+        assert_eq!(cached["elements"], 1, "the count the memo entry recorded");
+        assert_eq!(
+            cached["nanos"].as_u64(),
+            Some(nanos),
+            "the LAST compute's time, not this generation's: {cached}"
+        );
+    }
+
+    #[test]
+    fn undo_redo_and_a_refused_batch_end_a_withheld_drag() {
+        // Review finding (2026-08-20, mutation S5 survived): the drag was
+        // cleared both in `commit` and in the gesture arm, and no test
+        // exercised the paths only `commit` covered — undo, redo, batch —
+        // nor a batch refused before it reaches `commit`. One clear now,
+        // at the dispatcher's door, for every write intent but the preview
+        // tick; this test drags, ends the drag each of those ways, and
+        // expects the next tick (inside the gap) to announce again.
+        let (_dir, config, _clock) = project_with_clock(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        session
+            .core
+            .scheduler
+            .store()
+            .record_sample("box", 1, 5_000_000_000)
+            .unwrap();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        // Something to undo: one release.
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "3.0".into(),
+            },
+        );
+        session.wait_idle();
+        let _ = drain(&mut rx);
+        let baseline = preview_generations(&session);
+        let policies = |rx: &mut tokio::sync::mpsc::UnboundedReceiver<Outgoing>| {
+            texts(&drain(rx))
+                .into_iter()
+                .filter(|m| m["type"] == "preview_policy")
+                .map(|m| m["payload"]["pending_value"].clone())
+                .collect::<Vec<_>>()
+        };
+
+        // Drag 1, withheld and announced.
+        preview(&session, id, "3.1");
+        session.wait_idle();
+        assert_eq!(policies(&mut rx), vec!["3.1"]);
+        assert_eq!(
+            session.debug_state(false)["solve"]["drag"]["mode"],
+            "compute_on_release"
+        );
+
+        // Undo mid-drag ends it: the next tick is drag 2, announced.
+        session.handle(id, None, ClientMessage::Undo {});
+        session.wait_idle();
+        assert!(
+            session.debug_state(false)["solve"]["drag"].is_null(),
+            "undo ended the drag"
+        );
+        let _ = drain(&mut rx);
+        preview(&session, id, "3.2");
+        session.wait_idle();
+        assert_eq!(policies(&mut rx), vec!["3.2"]);
+
+        // Redo ends drag 2.
+        session.handle(id, None, ClientMessage::Redo {});
+        session.wait_idle();
+        assert!(
+            session.debug_state(false)["solve"]["drag"].is_null(),
+            "redo ended the drag"
+        );
+        let _ = drain(&mut rx);
+        preview(&session, id, "3.3");
+        session.wait_idle();
+        assert_eq!(policies(&mut rx), vec!["3.3"]);
+
+        // A batch whose element is refused never reaches `commit` — it is
+        // a write attempt all the same and ends drag 3.
+        session.handle(
+            id,
+            Some("b".into()),
+            ClientMessage::Batch {
+                ops: vec![ClientMessage::SetParam {
+                    node: "size".into(),
+                    port: Some("value".into()),
+                    value: "size + 1".into(),
+                }],
+                label: "bad batch".into(),
+            },
+        );
+        let msgs = texts(&drain(&mut rx));
+        assert!(
+            msgs.iter()
+                .any(|m| m["type"] == "error" && m["payload"]["intent_id"] == "b"),
+            "{msgs:?}"
+        );
+        assert!(
+            session.debug_state(false)["solve"]["drag"].is_null(),
+            "a refused batch ended the drag"
+        );
+        preview(&session, id, "3.4");
+        session.wait_idle();
+        assert_eq!(policies(&mut rx), vec!["3.4"]);
+
+        // Throughout: nothing was solved as a preview; the two real ops
+        // (undo, redo) were the only generations.
+        assert_eq!(preview_generations(&session), baseline);
+        assert_eq!(session.debug_state(false)["solve"]["previews_deferred"], 4);
+        assert_eq!(
+            history_of(&session)["depth"],
+            1,
+            "set_param, undone, redone"
+        );
+    }
+
+    /// The message types one client received, in order, with `drag_ended`
+    /// and `preview_policy` carrying their param (`type`, or `type:node.port`).
+    fn drag_events(rx: &mut tokio::sync::mpsc::UnboundedReceiver<Outgoing>) -> Vec<String> {
+        texts(&drain(rx))
+            .into_iter()
+            .filter_map(|m| match m["type"].as_str()? {
+                t @ ("preview_policy" | "drag_ended") => Some(format!(
+                    "{t}:{}.{}",
+                    m["payload"]["node"].as_str().unwrap_or("?"),
+                    m["payload"]["port"].as_str().unwrap_or("-")
+                )),
+                t @ ("delta" | "error" | "snapshot") => Some(t.to_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn end_drag(session: &Session, id: u32) {
+        session.handle(
+            id,
+            None,
+            ClientMessage::EndDrag {
+                node: "size".into(),
+                port: Some("value".into()),
+            },
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // one story: every way an announced drag ends, heard by both clients
+    fn an_announced_drags_end_is_announced_to_every_client() {
+        // Review findings (2026-08-20, web half): the frozen contract had
+        // no signal for a drag that ends without a write — an observer
+        // (and a writer whose panel slider never fired `change`) kept the
+        // pending badge and a value that was neither committed nor pending
+        // indefinitely; and a re-grab inside the gap after a no-write
+        // release continued the server's drag un-announced while the
+        // client had already cleared. The rule now: the client's release
+        // that writes nothing is an intent (`end_drag`), and the end of
+        // every ANNOUNCED drag is broadcast (`drag_ended`) after whatever
+        // ended it answered — the delta, the error — so every client can
+        // take the badge down, and the next tick is a fresh drag.
+        let (_dir, config, clock) = project_with_clock(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        session
+            .core
+            .scheduler
+            .store()
+            .record_sample("box", 1, 5_000_000_000)
+            .unwrap();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let (obs_tx, mut obs_rx) = unbounded_channel();
+        let (obs, role) = session.connect(obs_tx);
+        assert_eq!(role, Role::Observer);
+        let _ = drain(&mut rx);
+        let _ = drain(&mut obs_rx);
+        let baseline = preview_generations(&session);
+
+        // Drag 1: announced to both; the pointer comes up on the committed
+        // value — no set_param, an `end_drag` instead: the end is
+        // broadcast, the drag is gone, nothing was solved.
+        preview(&session, id, "2.5");
+        session.wait_idle();
+        assert_eq!(drag_events(&mut rx), ["preview_policy:size.value"]);
+        assert_eq!(drag_events(&mut obs_rx), ["preview_policy:size.value"]);
+        end_drag(&session, id);
+        assert_eq!(drag_events(&mut rx), ["drag_ended:size.value"]);
+        assert_eq!(drag_events(&mut obs_rx), ["drag_ended:size.value"]);
+        assert!(session.debug_state(false)["solve"]["drag"].is_null());
+
+        // The re-grab INSIDE the gap (finding 3): a fresh drag, announced
+        // again — the release ended the previous one, the gap rule is not
+        // consulted.
+        preview(&session, id, "2.6");
+        session.wait_idle();
+        assert_eq!(drag_events(&mut rx), ["preview_policy:size.value"]);
+        assert_eq!(drag_events(&mut obs_rx), ["preview_policy:size.value"]);
+        assert_eq!(session.debug_state(false)["solve"]["drag"]["deferred"], 1);
+
+        // A pause longer than the gap is NOT announced: the pointer may
+        // still be down. The release after it still ends the (expired)
+        // drag, and says so.
+        clock.advance((DRAG_GAP_MS + 1) * 1_000_000);
+        assert!(drag_events(&mut rx).is_empty(), "a pause announces nothing");
+        assert!(drag_events(&mut obs_rx).is_empty());
+        end_drag(&session, id);
+        assert_eq!(drag_events(&mut rx), ["drag_ended:size.value"]);
+        assert_eq!(drag_events(&mut obs_rx), ["drag_ended:size.value"]);
+
+        // Esc mid-drag: a deliberate stop, announced.
+        preview(&session, id, "2.7");
+        session.wait_idle();
+        let _ = drain(&mut rx);
+        let _ = drain(&mut obs_rx);
+        session.cancel();
+        assert_eq!(drag_events(&mut rx), ["drag_ended:size.value"]);
+        assert_eq!(drag_events(&mut obs_rx), ["drag_ended:size.value"]);
+
+        // A refused release: the writer hears the error FIRST, then the
+        // end; the observer hears the end alone (errors are unicast).
+        preview(&session, id, "2.8");
+        session.wait_idle();
+        let _ = drain(&mut rx);
+        let _ = drain(&mut obs_rx);
+        session.handle(
+            id,
+            Some("bad".into()),
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "size + 1".into(),
+            },
+        );
+        assert_eq!(drag_events(&mut rx), ["error", "drag_ended:size.value"]);
+        assert_eq!(drag_events(&mut obs_rx), ["drag_ended:size.value"]);
+
+        // A landed release: the delta FIRST (it carries the value and
+        // already clears every client's pending state), then the end.
+        preview(&session, id, "2.9");
+        session.wait_idle();
+        let _ = drain(&mut rx);
+        let _ = drain(&mut obs_rx);
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "2.9".into(),
+            },
+        );
+        session.wait_idle();
+        assert_eq!(drag_events(&mut rx), ["delta", "drag_ended:size.value"]);
+        assert_eq!(drag_events(&mut obs_rx), ["delta", "drag_ended:size.value"]);
+
+        // The released value is warm now: a drag that stays live (every
+        // tick a cache read) is never announced, and its `end_drag` is
+        // silent — there is nothing to take down.
+        preview(&session, id, "2.9");
+        session.wait_idle();
+        end_drag(&session, id);
+        assert!(drag_events(&mut rx).is_empty(), "a live drag ends silently");
+        assert!(drag_events(&mut obs_rx).is_empty());
+        assert!(session.debug_state(false)["solve"]["drag"].is_null());
+
+        // An `end_drag` with no drag standing, or for another param's
+        // drag, is a routine no-op — never an error, never an announcement.
+        end_drag(&session, id);
+        session.handle(
+            id,
+            None,
+            ClientMessage::EndDrag {
+                node: "span".into(),
+                port: None,
+            },
+        );
+        assert!(drag_events(&mut rx).is_empty());
+        preview(&session, id, "3.1");
+        session.wait_idle();
+        assert_eq!(drag_events(&mut rx), ["preview_policy:size.value"]);
+        session.handle(
+            id,
+            None,
+            ClientMessage::EndDrag {
+                node: "span".into(),
+                port: None,
+            },
+        );
+        assert!(
+            drag_events(&mut rx).is_empty(),
+            "another param: the drag stands"
+        );
+        assert_eq!(
+            session.debug_state(false)["solve"]["drag"]["node"],
+            "size",
+            "another param's release leaves this drag standing"
+        );
+        // An observer's `end_drag` is refused by the lease, like its ticks.
+        session.handle(
+            obs,
+            Some("o".into()),
+            ClientMessage::EndDrag {
+                node: "size".into(),
+                port: Some("value".into()),
+            },
+        );
+        let msgs = texts(&drain(&mut obs_rx));
+        assert!(
+            msgs.iter().any(|m| m["type"] == "error"
+                && m["payload"]["kind"] == "lease"
+                && m["payload"]["intent_id"] == "o"),
+            "{msgs:?}"
+        );
+        assert!(!session.debug_state(false)["solve"]["drag"].is_null());
+
+        // Throughout: the one landed release was the only solve; every
+        // withheld tick stayed withheld (the warm 2.9 tick previewed as a
+        // cache read).
+        assert_eq!(preview_generations(&session), baseline + 1);
+        assert_eq!(session.debug_state(false)["solve"]["previews_deferred"], 6);
+    }
+
+    #[test]
+    fn the_writers_departure_and_a_lease_handover_end_the_drag_for_the_observers() {
+        // The two ends no intent announces: the dragging writer's socket
+        // dies, or an observer takes the lease mid-drag (the ex-writer's
+        // release is refused by the lease from then on, which is decided
+        // before the drag-ending door). Both leave the observers with a
+        // badge nobody would take down — so the server does.
+        let (_dir, config, _clock) = project_with_clock(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        session
+            .core
+            .scheduler
+            .store()
+            .record_sample("box", 1, 5_000_000_000)
+            .unwrap();
+        let (tx, mut rx) = unbounded_channel();
+        let (writer, _) = session.connect(tx);
+        let (obs_tx, mut obs_rx) = unbounded_channel();
+        let (obs, _) = session.connect(obs_tx);
+        let _ = drain(&mut rx);
+        let _ = drain(&mut obs_rx);
+
+        // The observer takes the lease mid-drag: the drag ends, announced;
+        // the ex-writer's release is a `lease` refusal and ends nothing.
+        preview(&session, writer, "2.5");
+        session.wait_idle();
+        assert_eq!(drag_events(&mut obs_rx), ["preview_policy:size.value"]);
+        let _ = drain(&mut rx);
+        session.handle(obs, None, ClientMessage::TakeLease {});
+        assert_eq!(drag_events(&mut rx), ["drag_ended:size.value"]);
+        assert_eq!(drag_events(&mut obs_rx), ["drag_ended:size.value"]);
+        assert!(session.debug_state(false)["solve"]["drag"].is_null());
+        session.handle(
+            writer,
+            Some("late".into()),
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "2.5".into(),
+            },
+        );
+        assert_eq!(drag_events(&mut rx), ["error"]);
+        assert!(drag_events(&mut obs_rx).is_empty());
+
+        // The new writer drags and its socket dies: the end is announced
+        // to whoever is left.
+        session.handle(
+            obs,
+            None,
+            ClientMessage::ParamPreview {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "2.6".into(),
+            },
+        );
+        session.wait_idle();
+        assert_eq!(drag_events(&mut rx), ["preview_policy:size.value"]);
+        let _ = drain(&mut obs_rx);
+        session.disconnect(obs);
+        assert_eq!(drag_events(&mut rx), ["drag_ended:size.value"]);
+        assert!(session.debug_state(false)["solve"]["drag"].is_null());
+        // A live drag's writer leaving announces nothing (nothing pending).
+        session.transfer_lease_if_free();
+        let _ = drain(&mut rx);
+        session.handle(
+            writer,
+            None,
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "2.6".into(),
+            },
+        );
+        session.wait_idle();
+        let _ = drain(&mut rx);
+        preview(&session, writer, "2.6");
+        session.wait_idle();
+        assert!(drag_events(&mut rx).is_empty(), "warm: live, unannounced");
+        session.disconnect(writer);
+        assert!(session.debug_state(false)["solve"]["drag"].is_null());
     }
 
     #[test]

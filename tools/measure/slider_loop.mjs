@@ -20,6 +20,21 @@
  * targets is IN the JSON, not the exit code); nonzero = could not measure
  * (a refused intent counts as "could not measure").
  *
+ * Two modes, decided by the SERVER (DECISIONS.md row 39, v0.1 item 3b):
+ * a cheap cone previews live and the report is the latency statistics
+ * above; a cone the cost model predicts at ≥ 1 s answers the first preview
+ * with a `preview_policy {mode: "compute_on_release"}` message instead of
+ * a generation — then the harness pauses past the server's drag gap (so
+ * the stream is a drag of its own and is announced exactly once), streams
+ * the drag (every cold tick withheld; a memo-warm tick may paint as a pure
+ * cache read), sends the release `set_param` snapped to the slider's step
+ * (this WRITES the served pipeline — serve a scratch copy), and reports
+ * `policy`, the deferred-tick count, the preview generations (every one
+ * must be a cache read: computed 0) and the release generations (must be
+ * 1). Pass `--expect live` or `--expect compute_on_release` to make a
+ * mismatch a nonzero exit: "the policy engaged" is then asserted, not
+ * observed.
+ *
  * How the client round-trip is paired with a generation: the first preview
  * (sent while the loop is idle) calibrates the session clock — its timing's
  * `started_ms − queued_ms` is the server's acceptance time of that very
@@ -73,22 +88,57 @@ if (!Number.isFinite(min) || !Number.isFinite(max) || !(max > min)) {
 
 const session = await new Session(url, token, pipeline).open();
 const baselineGeneration = initial.solve.last_complete_generation ?? 0;
+const baselineDeferred = initial.solve.previews_deferred ?? 0;
+// The server ends a drag after this long without a tick (docs/13 §Slider
+// drags, `DRAG_GAP_MS` = 300): waiting past it makes the next tick a new,
+// separately announced drag.
+const DRAG_GAP_MS = 300;
+// The slider's step, when it has one: the release value is snapped to it so
+// the written file is one the UI could have produced.
+const step = node.param?.step ?? 0;
+const snapToStep = (value) => {
+  if (!(step > 0)) return value;
+  const snapped = min + Math.round((value - min) / step) * step;
+  return Number(Math.min(max, Math.max(min, snapped)).toFixed(10));
+};
 const preview = (value) =>
   session.send({ type: "param_preview", payload: { node: param, port, value: numberLiteral(value) } });
+const policyFor = (m) =>
+  m.envelope.type === "preview_policy" && m.envelope.payload.node === param && (m.envelope.payload.port ?? null) === port;
+const expect = args.expect;
+if (expect !== undefined && expect !== "live" && expect !== "compute_on_release") {
+  die(`--expect takes live or compute_on_release, not ${JSON.stringify(expect)}`);
+}
 
-// ---- calibration: one preview from idle → the session epoch in client time.
+// ---- calibration: one preview from idle → EITHER a preview generation
+// (live mode: it anchors the session epoch in client time) OR the server's
+// `preview_policy` for this param (compute-on-release: no generation will
+// ever come for a preview, so the drag is measured by its release).
 const calibration = preview(min + (max - min) * 0.25);
 const calibrationDeadline = performance.now() + 60_000;
 let calibrationTiming = null;
-while (calibrationTiming === null) {
+let policy = null;
+while (calibrationTiming === null && policy === null) {
   const state = await http.debugState({ wait: true });
+  policy = session.messages.find((m) => m.at >= calibration.at && policyFor(m))?.envelope.payload ?? null;
+  if (policy !== null) break;
   calibrationTiming = (state.timings ?? []).find(
     (t) => t.kind === "preview" && t.generation > baselineGeneration,
   ) ?? null;
   if (calibrationTiming === null && performance.now() > calibrationDeadline) {
-    die("the calibration preview never produced a generation — is the slider wired to anything?");
+    die("the calibration preview never produced a generation or a preview_policy — is the slider wired to anything?");
   }
 }
+const mode = policy === null ? "live" : policy.mode;
+if (expect !== undefined && expect !== mode) {
+  die(`expected the server to run this drag ${expect}, it chose ${mode}${policy ? ` (${JSON.stringify(policy)})` : ""}`);
+}
+
+if (mode === "compute_on_release") {
+  await measureRelease();
+  process.exit(session.errors.length === 0 ? 0 : 1);
+}
+
 // accept_ms (ms since the session epoch) = started − queued; it happened
 // right after the send, so epoch ≈ send − accept.
 const epochClient = calibration.at - (calibrationTiming.started_ms - calibrationTiming.queued_ms);
@@ -185,6 +235,7 @@ const client = stats(roundTrips);
 const passes = (s) => s.count > 0 && s.p50 <= TARGET.p50_ms && s.p95 <= TARGET.p95_ms;
 const result = {
   harness: "slider_loop",
+  mode,
   engine: finalState.engine,
   threads: finalState.threads,
   pipeline,
@@ -234,3 +285,125 @@ console.log(
 );
 session.close();
 process.exit(session.errors.length === 0 ? 0 : 1);
+
+/**
+ * Compute-on-release: stream the drag (the server withholds every tick),
+ * release once, and report what the policy promised — zero preview
+ * generations, exactly one policy message for the drag, exactly one
+ * generation on release.
+ */
+async function measureRelease() {
+  // Past the drag gap: the calibration tick was its own drag (announced
+  // once); the stream below is the next one, announced exactly once more.
+  await sleep(DRAG_GAP_MS * 2);
+  const beforeStream = await http.debugState({ wait: true });
+  const lastGenerationBefore = Math.max(0, ...(beforeStream.timings ?? []).map((t) => t.generation));
+  const deferredBeforeStream = beforeStream.solve.previews_deferred ?? 0;
+  const sends = [];
+  const intervalMs = 1000 / hz;
+  const total = Math.round(seconds * hz);
+  const streamStart = performance.now();
+  let last = min;
+  for (let i = 0; i < total; i += 1) {
+    const due = streamStart + i * intervalMs;
+    const now = performance.now();
+    if (due > now) await sleep(due - now);
+    last = min + ((max - min) * (i + 0.5)) / total;
+    sends.push({ ...preview(last), value: last, i });
+  }
+  const streamEnd = performance.now();
+  const streamed = await http.debugState({ wait: true });
+
+  // The release: the one real op (it writes the served file), on the
+  // slider's step grid like a real release.
+  const releaseValue = snapToStep(last);
+  const releaseSend = session.send({
+    type: "set_param",
+    payload: { node: param, port, value: numberLiteral(releaseValue) },
+  });
+  const delta = await session.waitFor(
+    (m) => m.type === "delta" || (m.type === "error" && m.payload.intent_id === releaseSend.id),
+    60_000,
+    "the release's delta",
+  );
+  if (delta.type === "error") die(`the release was refused: ${JSON.stringify(delta.payload)}`);
+  const deltaAt = performance.now();
+  const finalState = await http.debugState({ wait: true });
+  const settledAt = performance.now();
+
+  const timings = (finalState.timings ?? []).filter((t) => t.generation > lastGenerationBefore);
+  const previewGenerations = timings.filter((t) => t.kind === "preview");
+  const releaseGenerations = timings.filter((t) => t.kind === "structural");
+  const policies = session.messages.filter((m) => m.at >= calibration.at && policyFor(m));
+  const streamPolicies = policies.filter((m) => m.at >= streamStart);
+  const deferred = (finalState.solve.previews_deferred ?? 0) - baselineDeferred;
+  const deferredInStream = (streamed.solve.previews_deferred ?? 0) - deferredBeforeStream;
+  const release = releaseGenerations[releaseGenerations.length - 1] ?? null;
+  const firstFrameAfterRelease = session.frames.find((f) => f.at >= releaseSend.at)?.at ?? null;
+  // The promise: the stream (one drag) is announced exactly once, nothing
+  // cold is solved for it (a preview generation may exist only as a pure
+  // cache read of a memo-warm tick), and the release is exactly one
+  // generation that ran to completion.
+  const pass =
+    streamPolicies.length === 1 &&
+    previewGenerations.every((t) => (t.computed ?? 0) === 0) &&
+    deferredInStream >= 1 &&
+    releaseGenerations.length === 1 &&
+    release !== null &&
+    !release.cancelled;
+  const result = {
+    harness: "slider_loop",
+    mode,
+    engine: finalState.engine,
+    threads: finalState.threads,
+    pipeline,
+    param,
+    port,
+    range: [min, max],
+    seconds,
+    hz,
+    sends: sends.length + 1,
+    stream_ms: Math.round((streamEnd - streamStart) * 10) / 10,
+    policy,
+    policy_messages: policies.length,
+    policy_messages_in_stream: streamPolicies.length,
+    previews_deferred: deferred,
+    previews_deferred_in_stream: deferredInStream,
+    previews_deferred_before_release: (streamed.solve.previews_deferred ?? 0) - baselineDeferred,
+    preview_generations: previewGenerations.length,
+    preview_generations_that_computed: previewGenerations.filter((t) => (t.computed ?? 0) > 0).length,
+    release: {
+      value: numberLiteral(releaseValue),
+      step,
+      generations: releaseGenerations.length,
+      elapsed_ms: release?.elapsed_ms ?? null,
+      queued_ms: release?.queued_ms ?? null,
+      computed: release?.computed ?? null,
+      cached: release?.cached ?? null,
+      cancelled: release?.cancelled ?? null,
+      client_send_to_delta_ms: Math.round((deltaAt - releaseSend.at) * 10) / 10,
+      client_send_to_first_frame_ms:
+        firstFrameAfterRelease === null ? null : Math.round((firstFrameAfterRelease - releaseSend.at) * 10) / 10,
+      client_send_to_idle_ms: Math.round((settledAt - releaseSend.at) * 10) / 10,
+    },
+    estimate_vs_actual: {
+      estimate_ms: policy.estimate_ms,
+      rough: policy.rough,
+      actual_release_elapsed_ms: release?.elapsed_ms ?? null,
+    },
+    errors: session.errors,
+    pass: { compute_on_release: pass },
+  };
+  console.log(JSON.stringify(result, null, 2));
+  if (args.json) writeFileSync(args.json, JSON.stringify(result, null, 2));
+  console.log(
+    `slider_loop ${pipeline} ${param}: compute_on_release — ${result.sends} sends/${seconds}s → ${deferred} deferred,` +
+      ` ${previewGenerations.length} preview generations (${result.preview_generations_that_computed} computed anything),` +
+      ` ${policies.length} policy message(s), ${streamPolicies.length} for the stream` +
+      ` (estimate ${policy.estimate_ms} ms${policy.rough ? " ~rough" : ""});` +
+      ` release → ${releaseGenerations.length} generation(s), elapsed ${release?.elapsed_ms ?? "?"} ms,` +
+      ` computed ${release?.computed ?? "?"} cached ${release?.cached ?? "?"};` +
+      ` errors ${session.errors.length}; one-generation-per-release: ${pass ? "PASS" : "FAIL"}`,
+  );
+  session.close();
+}

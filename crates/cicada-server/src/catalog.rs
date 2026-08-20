@@ -26,6 +26,9 @@ struct Node<'a> {
     tier: &'a str,
     version: u32,
     pure: bool,
+    /// Never memoized; recomputes every generation (docs/12 §Volatile
+    /// nodes). Format 2, additive (v0.1 item 3b).
+    volatile: bool,
     uses_tolerance: bool,
     /// The runtime contract (rustdoc `# Panics`, one line): when the node
     /// goes red. Format 2.
@@ -94,6 +97,7 @@ fn build<'a>(specs: &[&'a NodeSpec]) -> Catalog<'a> {
                 },
                 version: spec.version,
                 pure: spec.pure,
+                volatile: spec.volatile,
                 uses_tolerance: spec.uses_tolerance,
                 panics: spec.panics,
                 gh: spec.gh,

@@ -806,6 +806,22 @@ aside.inspector {
   font-size: 11px;
 }
 
+/* compute-on-release (docs/13 §Slider drags): the hint is a line in the
+   name column, so the range track keeps its width under a held pointer */
+.param-name .param-pending {
+  color: var(--warn);
+  font-family: var(--mono);
+}
+
+.param-row.pending .param-widget input[type="range"] {
+  accent-color: var(--warn);
+}
+
+.param-row.pending .param-widget input[type="number"] {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
 .param-widget input[type="text"] {
   width: 100%;
 }

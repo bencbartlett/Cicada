@@ -19,7 +19,7 @@ runs in parallel from day 1:
 | 2 | Git panel slice 1 — status strip, per-node change markers, commit, revert-to-HEAD | foreground (server/web) | ~1 week | pending |
 | P | OCCT probe — prebuilt 7.8.x build/link on win/mac/linux, determinism, timings, license, CI shape | parallel worktree | hours, cap 1 day | **done** 2026-08-20 — GREEN on win-64 with one rename patch, byte-deterministic, ~3 ms/boolean; Linux/macOS measured by item 3 WP-A's CI job; memo `docs/probes/occt-2026-08.md` |
 | 3 | OCCT-backed Solid — the `Solid` kind, primitives/extrude/loft/revolve/sweep, booleans, `tessellate`, STEP; `mesh_*` renames in the same commit | main geometry track from week 3 | weeks | **unblocked** (probe GREEN) — WP-A next: own fork with the recorded patches, `occt` feature, `tools/fetch_occt.py`, the per-OS CI job |
-| 3b | Scheduler foundations — per-solve cancel handle, `volatile`, idle-class hypothetical solve — plus compute-on-release | parallel (sched/server) | ~1 week | pending |
+| 3b | Scheduler foundations — per-solve cancel handle, `volatile`, idle-class hypothetical solve — plus compute-on-release | parallel (sched/server) | ~1 week | **done** 2026-08-20 (`wt/sched`, eighteen commits after three review rounds: the engine half, then the web half — both sliders show the pending value + estimate from `preview_policy`, the release that writes nothing is `end_drag` and every announced drag's end is `drag_ended` — with a Playwright drag of the wall's `deboss`, an observer page watching, as its evidence) |
 | 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | pending |
 | 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | pending |
 | 6 | WASM script host — load precompiled guests, epoch cancellation, `cicada-guest` SDK | last | weeks | pending |
@@ -202,6 +202,120 @@ Design: DECISIONS.md rows 16 and 42 (revised 2026-08-19), doc 03, doc 08
 - **Done when**: virtual-time scheduler tests cover both gates; the
   deboss drag produces exactly one generation per release in
   `slider_loop.mjs`; the cheap-cone numbers (p50 0.5 ms) are unchanged.
+- **Shipped (engine half, 2026-08-20, `wt/sched`)**: (1) the cancel
+  handle — `NodeFn` takes the generation's `NodeCtx` (its
+  `CancelToken`, now with `on_cancel` hooks); the script bridge mints
+  one kill switch per call hooked to the calling token, so explicit
+  runs, the interactive loop and idle solves are isolated by
+  construction (the old session-global switch let an Esc kill an
+  export's Python call); (2) `#[node(volatile)]` → `NodeSpec`/`NodeDecl`
+  with node- and element-level memo gates, downstream keyed as usual on
+  the fresh hash (doc 12 §Volatile nodes), `volatile`+`effectful`
+  refused by the macro (trybuild), a cfg(test) fixture node,
+  `"volatile"` in catalog.json; (3) `SolveLoop::run_idle` +
+  `Session::solve_hypothetical` — idle class, pre-empted by any real
+  submission or Esc, invisible to `wait_idle`, paints nothing, one
+  `hypothetical` timing row; (4) compute-on-release — decided PER TICK
+  from a hash-only dry run of the tick's keys against the memo (warm
+  values stay live; a cold tick is withheld whatever the drag's first
+  tick was), monotone within a drag, announced once per drag by the
+  additive `preview_policy` message (doc 13 §Slider drags has the
+  frozen shape and the drag-gap rule: a drag ends on a write attempt,
+  an Esc, or a 300 ms pause, and the next one is announced again),
+  `COMPUTE_ON_RELEASE_MS` = 1 s; memo entries record their
+  computation's cost so the model is complete after a warm reopen.
+  Review fixes 2026-08-20: the warm-first-tick and no-write-drag holes
+  closed (both reproduced on the wall), the Python bridge wiring pinned
+  by an end-to-end Esc test. Measured: 02-solids `size` warm p50/p95
+  0.22/0.82 → 0.23/0.84 ms server, 0.42/1.4 → 0.43/1.42 ms client
+  (within noise); wall `deboss` 301 ticks → 0 preview generations, 1
+  policy message (estimate 3.9 s), 1 generation on release (3.7 s);
+  after a warm reopen the estimate is 4.1 s from memo costs alone and
+  the released value previews live at 0.2 ms. `slider_loop.mjs` gained
+  the compute-on-release mode and `--expect`. Re-measured after the
+  review fixes (per-tick prediction on every tick): 02-solids `size`
+  warm 0.24/0.84 ms server, 0.45/1.47 ms client; wall `deboss` 301
+  ticks → 301 withheld, 0 preview generations, exactly one policy for
+  the stream (estimate 3.9 s), one 3.5 s generation on the step-snapped
+  release. Second review round (2026-08-20): the "failure under a
+  cancelled token is cancelled" rule narrowed to errors the node MARKS
+  as cancellation (`NodeError::cancelled`; the bridge's verdict for a
+  killed worker) so a genuine red coinciding with Esc stays red; the
+  drag is ended in one place (the dispatcher's door, for every write
+  intent but the tick) with undo / redo / a refused batch pinned as
+  drag-enders; the inclusive 1 s bar, the `÷ min(threads, elements)`
+  divisor and the volatile memo-READ gate each got the test whose
+  absence a mutation had exposed; a `cached` status carrying its last
+  compute's `elements`/`nanos` is a decision now (doc 13 §Solve
+  streaming), not an open question; the store's format marker is
+  written temp + rename and an empty (torn) one heals.
+- **Shipped (web half, 2026-08-20, `wt/sched`)**: both sliders (canvas
+  and params panel) show the pending value — thumb and number in the
+  warn color — and a `pending · N s` chip (`~` when `rough`, the ETA's
+  spelling) from `preview_policy`; the store holds ONE pending param
+  (the server holds one drag), every arrival replaces it, and it
+  clears on the delta of the release's `set_param` (any write ends the
+  drag), on a refused write's `error` (a `lease` refusal excepted — it
+  is decided before the drag-ending door), on a snapshot and on a
+  disconnect; a release on the committed value writes nothing, so the
+  widget clears it itself AND sends `end_drag`, and the server's
+  `drag_ended` takes it down everywhere else (see the review round
+  below); frames and statuses never clear it (a memo-warm tick paints
+  live mid-drag by design); observers render the same from the
+  broadcast; `cached` statuses read `cached · last 43.9 s`. Evidence:
+  store unit tests for every transition and
+  `web/e2e/compute_on_release.spec.ts` — a real pointer drag of the
+  wall's `deboss` on the debug engine (2 threads): cold open 31 s,
+  estimate 23 s, 9 ticks withheld, 0 computing previews, the hint up
+  while held, one 29.6 s generation on release (1.2 min on the dev
+  machine; it is the suite's slow spec by design and carries its own
+  timeout). Re-measured at the final engine: 02-solids `size` warm
+  0.24/0.89 and 0.24/0.72 ms server p50/p95 (0.44/1.52, 0.43/1.33 ms
+  client); wall `deboss` 301 ticks → 301 withheld, 0 preview
+  generations, 1 policy for the stream (estimate 3.6 s), one 3.6 s
+  generation on release; warm reopen estimate 3.9 s, release 0.22 ms
+  all cached.
+- **Review round on the web half (2026-08-20)**: three holes, one
+  contract revision (doc 13 §Slider drags, the "end of an announced
+  drag is announced" paragraph; DECISIONS.md row 39). (1) The params
+  panel's slider ended its drag only from the native `change` event,
+  which Chrome does not fire when a drag returns to its start value —
+  the badge stood for ever after such a drag (the canvas widget, which
+  releases from pointer events, did not have the bug); both sliders
+  now decide the no-write release on the pointer's / key's release.
+  (2) Observers (and the non-dragging twin widget, and a writer whose
+  release is refused by the lease) had no signal at all for a drag
+  that ended without a write: the frozen contract's "the server never
+  sends back-to-live" left them a stale badge and a value that was
+  neither committed nor pending. Decided: the release that writes
+  nothing is an intent — `end_drag` — and the server broadcasts
+  `drag_ended` whenever an ANNOUNCED drag ends (after the delta /
+  error / snapshot when there is one; alone for `end_drag`, Esc, the
+  writer's departure, a lease handover), the gap rule's end excepted
+  because a pause is not a release and the badge must not flicker off
+  under a held pointer. (3) A re-grab inside the 300 ms gap after a
+  no-write release continued the server's drag un-announced while the
+  client had already cleared — `end_drag` ends the server's drag at
+  the release, so the re-grab is a fresh drag, announced again. Tests:
+  session tests for every end and both clients (`an_announced_drags_
+  end_is_announced_to_every_client`, `the_writers_departure_and_a_
+  lease_handover_end_the_drag_for_the_observers`), the protocol shapes,
+  store tests for `endDrag` / `drag_ended`, and — new — jsdom +
+  Testing Library component tests for BOTH sliders (the chip and the
+  value while pending, the pending value following the thumb, the
+  drag-return release, the write release, the keyboard path, the
+  observer view; they fail on the review's mutations), and the e2e
+  grew a second half: an observer page, a real pointer drag away and
+  back to the committed value (28 more ticks withheld, both pages'
+  badges down on release, the server's drag ended, nothing written,
+  nothing solved), the re-grab announced again, the canvas twin's chip
+  and value asserted from the DOM (1.7 min on the dev machine). The
+  `cancel` on the canvas sender drops a queued tick on a no-write
+  release (sent after the `end_drag` it would be a fresh drag on the
+  committed value — cold while its own carve is still running). Still
+  not relayed: the writer's later ticks to observers (they see the
+  policy's first withheld value with the badge until the release —
+  doc 13 contract item 4).
 
 ## Item 4 — time transport, Cycle thin slice (~1 week)
 

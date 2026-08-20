@@ -17,6 +17,7 @@ import type {
   HistoryView,
   LeaseView,
   NodeStatus,
+  PreviewMode,
   ProbeCatalogEntry,
   ProbeVerdict,
   Role,
@@ -133,6 +134,49 @@ export interface WireValues {
   pairing: string;
 }
 
+/**
+ * The param whose drag is under compute-on-release (docs/13 §Slider drags,
+ * DECISIONS.md row 39): the server withheld this drag's previews because
+ * the cone is predicted at ≥ 1 s, and `preview_policy` said so — the
+ * slider shows `value` as pending with the estimate; the viewport is NOT
+ * expected to move until release. `value` starts as the message's
+ * `pending_value` (the first withheld tick) and follows the dragging
+ * widget's later ticks (`trackPendingValue`); observers keep the last
+ * value they heard. The server holds ONE drag at a time, so there is one
+ * pending param at a time: every `preview_policy` REPLACES it (for the
+ * same param or another — the other's drag has ended). Cleared by the
+ * release's delta (any write ends the drag server-side — a refused one
+ * too: an `error`), by `drag_ended` (the server announcing the end of an
+ * announced drag: after a release that wrote nothing, an Esc, a refused
+ * write, the writer's departure or a lease handover — the signal observers
+ * and the non-dragging twin widget have for those ends), by a snapshot (a
+ * reload barrier ends it), a disconnect, or the widget itself on its own
+ * release that writes nothing (`endDrag`: optimistic, ahead of the
+ * `drag_ended` its `end_drag` intent earns).
+ */
+export interface PendingParam {
+  node: string;
+  /** The kwarg; `null` for a bare literal. */
+  port: string | null;
+  mode: PreviewMode;
+  /** The dialect literal the release will solve. */
+  value: string;
+  /** Predicted wall ms of a live preview — a floor when `rough`. */
+  estimateMs: number;
+  rough: boolean;
+  /**
+   * The session `seq` current when the `preview_policy` arrived — the
+   * write counter, NOT unique per message (two policies between writes
+   * share it). Informational; nothing decides on it.
+   */
+  seq: number;
+}
+
+/** Does this pending entry belong to `node`/`port` (`null` = a bare literal)? */
+function pendingIs(pending: PendingParam | null, node: string, port: string | null | undefined): boolean {
+  return pending !== null && pending.node === node && pending.port === (port ?? null);
+}
+
 const EMPTY_GRAPH: GraphView = { nodes: [], wires: [], diagnostics: [] };
 /** No ops yet — what the server reports before any edit (and after a reload barrier). */
 export const EMPTY_HISTORY: HistoryView = {
@@ -207,6 +251,17 @@ export interface CicadaState {
   wireValues: Record<string, WireValues>;
   probe: ProbeState | null;
 
+  // ---- ephemeral drag state
+  /**
+   * The param whose current drag is compute-on-release, or null
+   * (`preview_policy` sets it — the latest arrival replaces it; every
+   * delta / error / snapshot / disconnect clears it: a write attempt or a
+   * reload ends the drag server-side; `drag_ended` clears it when it names
+   * it; the widget's own `endDrag` clears it ahead of that). Null for
+   * cheap cones, which never hear of the policy.
+   */
+  pending: PendingParam | null;
+
   // ---- ui
   selection: Selection;
   hoverPick: ElementPick | null;
@@ -239,6 +294,28 @@ export interface CicadaState {
   clearSelection: () => void;
   setHoverPick: (pick: ElementPick | null) => void;
   clearProbe: () => void;
+  /**
+   * The dragging widget reports each later tick's literal so the pending
+   * entry (and every other view of this param) follows the thumb — the
+   * message only carried the FIRST withheld tick's value. A no-op (same
+   * state object) when this param is not the pending one.
+   */
+  trackPendingValue: (node: string, port: string | null, value: string) => void;
+  /**
+   * The widget released on the committed value — no `set_param` goes out
+   * (both sliders skip it then), so no delta will clear this param's
+   * pending entry: the widget clears it here, optimistically, and tells
+   * the server the drag is over (`end_drag`) so the server's drag ends NOW
+   * — a re-grab inside the 300 ms gap is a fresh drag, announced again,
+   * rather than a silent continuation of one this client already took
+   * down — and so every other client hears `drag_ended`. (A release that
+   * writes leaves it to the delta — value and badge change in one render,
+   * no snap-back.) Sent on every release that writes nothing, pending or
+   * not: the server's drag exists for cheap cones too, and a stale one is
+   * a no-op there. Nothing is sent when this client cannot write (the
+   * lease, the socket) — its drag is not the server's then.
+   */
+  endDrag: (node: string, port: string | null) => void;
   addNotice: (level: Notice["level"], message: string) => void;
   dismissNotice: (id: number) => void;
   updateSettings: (patch: Partial<Settings>) => void;
@@ -277,6 +354,8 @@ export const useCicada = create<CicadaState>((set, get) => ({
   wireValues: {},
   probe: null,
 
+  pending: null,
+
   selection: { nodes: [], wire: null, element: null },
   hoverPick: null,
   notices: [],
@@ -304,6 +383,9 @@ export const useCicada = create<CicadaState>((set, get) => ({
       lease: { writer: null, clients: [] },
       probe: null,
       search: null,
+      // The drag died with the socket: the re-hydrated session knows
+      // nothing of it, and the next tick is announced afresh.
+      pending: null,
     }),
   setReconnect: (reconnect) => set({ reconnect }),
   setIdentity: (token, pipeline) => set({ token, pipeline }),
@@ -358,6 +440,8 @@ export const useCicada = create<CicadaState>((set, get) => ({
           },
           nodeValues: {},
           wireValues: {},
+          // A reload barrier (and a fresh hydration) ends the drag.
+          pending: null,
         });
         if (p.barrier) {
           get().addNotice("info", `reloaded from disk (${p.reason})`);
@@ -396,6 +480,10 @@ export const useCicada = create<CicadaState>((set, get) => ({
           // solve bar red (probe friction: "1 red · 0 diagnostics").
           statuses: pruneKeys(state.statuses, live),
           nodeValues: pruneKeys(state.nodeValues, live),
+          // Any write ends the drag server-side (docs/13 §Slider drags) —
+          // the release's own `set_param` above all: its delta is the
+          // signal that the pending value is now the committed one.
+          pending: null,
         });
         break;
       }
@@ -417,7 +505,15 @@ export const useCicada = create<CicadaState>((set, get) => ({
       }
       case "error": {
         const p = envelope.payload;
-        set({ lastError: lastErrorOf(p) });
+        // A refused write (a release the writer could not apply, an undo
+        // with nothing to undo) ends the drag server-side exactly like a
+        // landed one (docs/13 §Slider drags: "landed or refused") — the
+        // pending value is NOT going to solve, so the badge must not
+        // stand. Errors are unicast answers to this client's own intents;
+        // mid-drag those are writes. The one refusal the session decides
+        // BEFORE the drag-ending door is the lease check, so a `lease`
+        // error leaves the drag (and the badge) standing.
+        set({ lastError: lastErrorOf(p), pending: p.kind === "lease" ? get().pending : null });
         // An empty undo/redo side is a routine answer to Ctrl+Z, not a
         // failure: the message still says why (including the barrier).
         get().addNotice(errorNoticeLevel(p.kind), p.message);
@@ -469,6 +565,38 @@ export const useCicada = create<CicadaState>((set, get) => ({
         get().addNotice(p.ok ? "info" : "error", p.message);
         break;
       }
+      case "preview_policy": {
+        // Once per server-side drag, on its first withheld tick — and again
+        // for the next drag (after a release, an Esc, a pause): each arrival
+        // is the current verdict and REPLACES the pending param, never
+        // stacks it (the server holds one drag at a time — a policy for
+        // another param means this one's drag has ended).
+        const p = envelope.payload;
+        set({
+          pending: {
+            node: p.node,
+            port: p.port ?? null,
+            mode: p.mode,
+            value: p.pending_value,
+            estimateMs: p.estimate_ms,
+            rough: p.rough,
+            seq,
+          },
+        });
+        break;
+      }
+      case "drag_ended": {
+        // The announced drag is over — after a release that wrote nothing
+        // (this client's own `end_drag`, already cleared optimistically, or
+        // the writer's, which is the only way an observer or the twin
+        // widget hears of it), an Esc, a refused write, the writer's
+        // departure or a lease handover; after a landed write it follows
+        // the delta and finds nothing to do. Only the named param: a newer
+        // policy for another param has already replaced this one.
+        const p = envelope.payload;
+        set((state) => (pendingIs(state.pending, p.node, p.port ?? null) ? { pending: null } : state));
+        break;
+      }
       case "screenshot_request":
         // Handled by the connection module (needs the viewport).
         break;
@@ -498,6 +626,18 @@ export const useCicada = create<CicadaState>((set, get) => ({
   clearSelection: () => set({ selection: { nodes: [], wire: null, element: null } }),
   setHoverPick: (pick) => set({ hoverPick: pick }),
   clearProbe: () => set({ probe: null }),
+
+  trackPendingValue: (node, port, value) =>
+    set((state) => {
+      const entry = state.pending;
+      if (entry === null || !pendingIs(entry, node, port) || entry.value === value) return state;
+      return { pending: { ...entry, value } };
+    }),
+  endDrag: (node, port) => {
+    set((state) => (pendingIs(state.pending, node, port) ? { pending: null } : state));
+    const state = get();
+    if (canWrite(state)) state.send({ type: "end_drag", payload: { node, port } });
+  },
 
   addNotice: (level, message) =>
     set((state) => ({
@@ -562,6 +702,16 @@ export function nodeByName(graph: GraphView, name: string) {
 /** Node view by ref (frames name nodes by ref). */
 export function nodeByRef(graph: GraphView, ref: number) {
   return graph.nodes.find((n) => n.ref === ref);
+}
+
+/** This param's compute-on-release entry, or undefined when it is not the pending param. */
+export function pendingFor(
+  state: Pick<CicadaState, "pending">,
+  node: string,
+  port: string | null | undefined,
+): PendingParam | undefined {
+  const { pending } = state;
+  return pending !== null && pendingIs(pending, node, port) ? pending : undefined;
 }
 
 /** Am I the writer? (Display only — every write is gated by `canWrite`.) */

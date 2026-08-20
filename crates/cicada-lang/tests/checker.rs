@@ -74,6 +74,7 @@ const fn node(
         tier: Tier::S,
         version: 1,
         pure: true,
+        volatile: false,
         uses_tolerance: false,
         panics: None,
         gh: None,

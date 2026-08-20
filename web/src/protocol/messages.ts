@@ -296,6 +296,57 @@ export interface ProbeCatalogEntry {
   ports: [string, "ok" | "lift"][];
 }
 
+/**
+ * How a drag's previews are handled (`protocol::PreviewMode`):
+ * `compute_on_release` is the only mode the server ever announces — a
+ * cheap cone gets no message at all and previews latest-wins as before.
+ */
+export type PreviewMode = "compute_on_release";
+
+/**
+ * The `preview_policy` payload (docs/13 §Slider drags, DECISIONS.md row
+ * 39): broadcast ONCE per server-side drag, on its first withheld
+ * `param_preview` tick — a cone the cost model predicts at or above
+ * `COMPUTE_ON_RELEASE_MS` (1 s) is not previewed; the slider shows the
+ * pending value and the estimate, and the value solves once, on release.
+ * A drag ends on any write attempt, an Esc, a reload, the pointer's release
+ * on the committed value (`end_drag`) or a 300 ms pause, and the next one
+ * is announced AGAIN — every arrival is the current verdict: replace the
+ * pending state, never stack it. An announced drag's end is announced too
+ * (`drag_ended`), except the pause's.
+ */
+export interface PreviewPolicyPayload {
+  /** The param's binding. */
+  node: string;
+  /** Its kwarg — ABSENT (never `null`) for a bare literal. */
+  port?: string;
+  mode: PreviewMode;
+  /** Predicted wall ms of a live preview (rounded to 0.1); a floor when `rough`. */
+  estimate_ms: number;
+  /** Some node in the cone has no cost evidence yet — render with `~`, like the ETA. */
+  rough: boolean;
+  /** The withheld tick's literal; the client tracks later ticks itself. */
+  pending_value: string;
+}
+
+/**
+ * The `drag_ended` payload (docs/13 §Slider drags, contract item 3): an
+ * ANNOUNCED drag — one a `preview_policy` went out for — has ended. It
+ * follows whatever ended the drag answered with (the delta of a landed
+ * write, the snapshot of a reload — a no-op by then), and stands alone for
+ * the ends nothing else tells every client about: the pointer released on
+ * the committed value (`end_drag`), Esc, a refused write (its `error` is
+ * unicast), the writer's departure, a lease handover. A pause longer than
+ * the drag gap is NOT announced — the pointer may still be down. Never sent
+ * for a drag that stayed live. Clear the pending entry when it names it.
+ */
+export interface DragEndedPayload {
+  /** The param's binding. */
+  node: string;
+  /** Its kwarg — ABSENT (never `null`) for a bare literal. */
+  port?: string;
+}
+
 export type ServerMessage =
   | {
       type: "hello";
@@ -360,7 +411,9 @@ export type ServerMessage =
   | { type: "screenshot_request"; payload: { id: number; target: string } }
   | { type: "notice"; payload: { level: "info" | "warning" | "error"; message: string } }
   | { type: "display_reset"; payload: { generation: number } }
-  | { type: "run_finished"; payload: { node: string; ok: boolean; message: string } };
+  | { type: "run_finished"; payload: { node: string; ok: boolean; message: string } }
+  | { type: "preview_policy"; payload: PreviewPolicyPayload }
+  | { type: "drag_ended"; payload: DragEndedPayload };
 
 export type ServerEnvelope = { v: number; seq: number } & ServerMessage;
 
@@ -404,6 +457,16 @@ export type ClientMessage =
   | { type: "hello"; payload: { v: number } }
   | GestureMessage
   | { type: "param_preview"; payload: { node: string; port?: string | null; value: string } }
+  /**
+   * The pointer came up on the committed value — no `set_param` follows,
+   * and this is the drag's end (docs/13 §Slider drags): the server ends its
+   * drag for this param (a `drag_ended` follows if it was announced) so the
+   * next tick is a fresh drag, announced afresh. Both sliders send it on
+   * every release that writes nothing; a stale one (the drag already ended
+   * by a write, an Esc, a reload) is a no-op server-side, never an error.
+   * A write like the ticks (the lease).
+   */
+  | { type: "end_drag"; payload: { node: string; port: string | null } }
   | { type: "cancel"; payload: Record<string, never> }
   /** Restore the last op's `before` snapshot (a write; the delta is labelled `undo: <label>`). */
   | { type: "undo"; payload: Record<string, never> }
@@ -435,6 +498,7 @@ export function isWrite(message: ClientMessage): boolean {
   if (isGesture(message)) return true;
   switch (message.type) {
     case "param_preview":
+    case "end_drag":
     case "cancel":
     case "undo":
     case "redo":

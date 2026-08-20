@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, test } from "vitest";
-import type { GraphView, HistoryView, NodeView, ServerEnvelope } from "../protocol/messages";
+import type { ClientMessage, GraphView, HistoryView, NodeView, ServerEnvelope } from "../protocol/messages";
 import {
   EMPTY_HISTORY,
   canWrite,
   errorNoticeLevel,
   lastErrorOf,
+  pendingFor,
   pruneKeys,
   roleChangeNotice,
   useCicada,
@@ -379,5 +380,250 @@ describe("history (docs/13 §Undo/redo)", () => {
       message: "p",
       diagnostics,
     });
+  });
+});
+
+describe("compute-on-release (docs/13 §Slider drags — the frozen client contract)", () => {
+  const summary = {
+    generation: 1,
+    running: false,
+    cancelled: false,
+    computed: 0,
+    cached: 0,
+    pending: 0,
+    red: 0,
+    blocked: 0,
+    elapsed_ms: 0,
+    eta_rough: false,
+  };
+  /** The wire shape the server's `preview_policy_encodes_the_documented_shape` test pins. */
+  const policy = (
+    seq: number,
+    payload: { node: string; port?: string; estimate_ms: number; rough: boolean; pending_value: string },
+  ): ServerEnvelope => ({
+    v: 1,
+    seq,
+    type: "preview_policy",
+    payload: { mode: "compute_on_release", ...payload },
+  });
+  const delta = (seq: number, label: string): ServerEnvelope => ({
+    v: 1,
+    seq,
+    type: "delta",
+    payload: {
+      source: { client: 7, intent_id: "r", label },
+      graph: graph("deboss", "x"),
+      text: "",
+      dirty: ["deboss"],
+      history: after(label, 1),
+    },
+  });
+  const status = (seq: number): ServerEnvelope => ({
+    v: 1,
+    seq,
+    type: "status",
+    payload: { generation: 3, nodes: { carved: { state: "cached", generation: 3, nanos: 4.39e10 } }, summary },
+  });
+
+  beforeEach(() => {
+    useCicada.setState({ pending: null, notices: [], lastError: null, statuses: {} });
+    useCicada.getState().applyServerMessage(hello);
+  });
+
+  it("a cheap cone never hears of the policy: no message, no pending state", () => {
+    const s = useCicada.getState();
+    expect(s.pending).toBeNull();
+    expect(pendingFor(s, "size", "value")).toBeUndefined();
+    // Previews, frames and statuses on their own leave it that way.
+    s.applyServerMessage(status(1));
+    expect(useCicada.getState().pending).toBeNull();
+  });
+
+  it("the message sets the pending param field for field (an absent port is a bare literal: null)", () => {
+    const apply = useCicada.getState().applyServerMessage;
+    apply(policy(5, { node: "deboss", port: "value", estimate_ms: 3990.9, rough: false, pending_value: "0.875" }));
+    const s = useCicada.getState();
+    expect(s.pending).toEqual({
+      node: "deboss",
+      port: "value",
+      mode: "compute_on_release",
+      value: "0.875",
+      estimateMs: 3990.9,
+      rough: false,
+      seq: 5,
+    });
+    expect(pendingFor(s, "deboss", "value")).toBe(s.pending);
+    expect(pendingFor(s, "deboss", null), "another port of the same binding is not pending").toBeUndefined();
+    expect(pendingFor(s, "amps", "value")).toBeUndefined();
+    apply(policy(6, { node: "x", estimate_ms: 1000, rough: true, pending_value: "2.0" }));
+    expect(useCicada.getState().pending).toMatchObject({ node: "x", port: null, rough: true, estimateMs: 1000 });
+    expect(pendingFor(useCicada.getState(), "x", undefined)).toBeDefined();
+  });
+
+  it("every arrival REPLACES the pending state, never stacks it — the server holds one drag at a time", () => {
+    const apply = useCicada.getState().applyServerMessage;
+    apply(policy(5, { node: "deboss", port: "value", estimate_ms: 3990.9, rough: false, pending_value: "0.875" }));
+    // The same param, announced again after a pause / an Esc: the new verdict.
+    apply(policy(8, { node: "deboss", port: "value", estimate_ms: 4100.0, rough: true, pending_value: "1.3" }));
+    expect(useCicada.getState().pending).toMatchObject({ value: "1.3", estimateMs: 4100, rough: true, seq: 8 });
+    // Another param: the deboss drag has ended (silently, by the gap rule).
+    apply(policy(9, { node: "amps", port: "value", estimate_ms: 2000.0, rough: false, pending_value: "2.5" }));
+    const s = useCicada.getState();
+    expect(s.pending?.node).toBe("amps");
+    expect(pendingFor(s, "deboss", "value")).toBeUndefined();
+  });
+
+  it("the dragging widget's later ticks move the pending value; other params and absent entries are no-ops", () => {
+    const apply = useCicada.getState().applyServerMessage;
+    const untouched = useCicada.getState();
+    useCicada.getState().trackPendingValue("deboss", "value", "0.9");
+    expect(useCicada.getState(), "no pending entry: the state object is unchanged").toBe(untouched);
+    apply(policy(5, { node: "deboss", port: "value", estimate_ms: 3990.9, rough: false, pending_value: "0.875" }));
+    useCicada.getState().trackPendingValue("deboss", "value", "0.9");
+    expect(useCicada.getState().pending).toMatchObject({ value: "0.9", estimateMs: 3990.9, seq: 5 });
+    const before = useCicada.getState();
+    useCicada.getState().trackPendingValue("deboss", "value", "0.9");
+    expect(useCicada.getState(), "same value: no state change").toBe(before);
+    useCicada.getState().trackPendingValue("amps", "value", "3.0");
+    expect(useCicada.getState(), "another param: no state change").toBe(before);
+    expect(useCicada.getState().pending?.value).toBe("0.9");
+  });
+
+  it("frames and statuses are NOT the end of the drag; the release's delta is", () => {
+    const apply = useCicada.getState().applyServerMessage;
+    apply(policy(5, { node: "deboss", port: "value", estimate_ms: 3990.9, rough: false, pending_value: "0.875" }));
+    // A memo-warm tick painted live mid-drag: a status arrives. Still pending.
+    apply(status(6));
+    expect(useCicada.getState().pending?.node).toBe("deboss");
+    // The release's set_param -> its delta: the pending value is now the committed one.
+    apply(delta(7, "set deboss = 0.9"));
+    expect(useCicada.getState().pending).toBeNull();
+  });
+
+  it("any write's delta clears it (undo, another client's edit): every write ends the drag server-side", () => {
+    const apply = useCicada.getState().applyServerMessage;
+    apply(policy(5, { node: "deboss", port: "value", estimate_ms: 3990.9, rough: false, pending_value: "0.875" }));
+    apply({
+      v: 1,
+      seq: 6,
+      type: "delta",
+      payload: {
+        source: { client: 9, intent_id: "p", label: "place add" },
+        graph: graph("deboss", "add_1"),
+        text: "",
+        dirty: ["add_1"],
+        history: after("place add", 2),
+      },
+    });
+    expect(useCicada.getState().pending).toBeNull();
+  });
+
+  it("a refused write ends the drag like a landed one — except a lease refusal, decided before the door", () => {
+    const apply = useCicada.getState().applyServerMessage;
+    apply(policy(5, { node: "deboss", port: "value", estimate_ms: 3990.9, rough: false, pending_value: "0.875" }));
+    apply({ v: 1, seq: 6, type: "error", payload: { intent_id: "9", kind: "lease", message: "read-only observer" } });
+    expect(useCicada.getState().pending?.node, "lease: the drag stands").toBe("deboss");
+    apply({
+      v: 1,
+      seq: 7,
+      type: "error",
+      payload: { intent_id: "10", kind: "refused", message: "no node named deboss" },
+    });
+    expect(useCicada.getState().pending).toBeNull();
+    apply(policy(8, { node: "deboss", port: "value", estimate_ms: 3990.9, rough: false, pending_value: "0.875" }));
+    apply({ v: 1, seq: 9, type: "error", payload: { intent_id: "11", kind: "nothing_to_undo", message: "nothing" } });
+    expect(useCicada.getState().pending, "undo mid-drag ends it, landed or refused").toBeNull();
+  });
+
+  it("the widget's release without a write clears it at once AND tells the server (`end_drag`) — when it can write", () => {
+    const apply = useCicada.getState().applyServerMessage;
+    const sent: ClientMessage[] = [];
+    useCicada.getState().installSender((message) => {
+      sent.push(message);
+      return "";
+    });
+    useCicada.setState({ connection: "open", role: "writer" });
+    apply(policy(5, { node: "deboss", port: "value", estimate_ms: 3990.9, rough: false, pending_value: "0.875" }));
+    // Another param's release: this entry stands, but the server still hears
+    // of THAT release (its drag — cheap, live — ends now, not by the gap).
+    useCicada.getState().endDrag("amps", "value");
+    expect(useCicada.getState().pending?.node, "another param: the entry stands").toBe("deboss");
+    expect(sent).toEqual([{ type: "end_drag", payload: { node: "amps", port: "value" } }]);
+    useCicada.getState().endDrag("deboss", "value");
+    expect(useCicada.getState().pending, "cleared optimistically, ahead of the drag_ended").toBeNull();
+    expect(sent.at(-1)).toEqual({ type: "end_drag", payload: { node: "deboss", port: "value" } });
+    // A bare literal's port travels as null.
+    useCicada.getState().endDrag("x", null);
+    expect(sent.at(-1)).toEqual({ type: "end_drag", payload: { node: "x", port: null } });
+    // The drag_ended the intent earns finds nothing to do.
+    apply({ v: 1, seq: 5, type: "drag_ended", payload: { node: "deboss", port: "value" } });
+    expect(useCicada.getState().pending).toBeNull();
+
+    // Not the writer (the lease moved mid-drag) or no socket: the entry is
+    // still cleared here — the release happened — but nothing is sent; the
+    // server's drag is not this client's to end (the handover ended it).
+    sent.length = 0;
+    apply(policy(6, { node: "deboss", port: "value", estimate_ms: 3990.9, rough: false, pending_value: "0.875" }));
+    useCicada.setState({ role: "observer" });
+    useCicada.getState().endDrag("deboss", "value");
+    expect(useCicada.getState().pending).toBeNull();
+    expect(sent, "no lease: nothing sent").toEqual([]);
+    useCicada.setState({ role: "writer", connection: "reconnecting" });
+    useCicada.getState().endDrag("deboss", "value");
+    expect(sent, "no socket: nothing sent").toEqual([]);
+    useCicada.setState({ connection: "open" });
+  });
+
+  it("`drag_ended` clears the entry it names — the observer's and the twin widget's only signal for a release that wrote nothing, an Esc, a refused write, a handover", () => {
+    const apply = useCicada.getState().applyServerMessage;
+    apply(policy(5, { node: "deboss", port: "value", estimate_ms: 3990.9, rough: false, pending_value: "0.875" }));
+    const before = useCicada.getState();
+    apply({ v: 1, seq: 5, type: "drag_ended", payload: { node: "amps", port: "value" } });
+    expect(useCicada.getState(), "another param: no state change").toBe(before);
+    apply({ v: 1, seq: 5, type: "drag_ended", payload: { node: "deboss" } });
+    expect(useCicada.getState(), "deboss's bare literal is not deboss.value").toBe(before);
+    apply({ v: 1, seq: 5, type: "drag_ended", payload: { node: "deboss", port: "value" } });
+    expect(useCicada.getState().pending).toBeNull();
+    // A bare literal's end has no port key; it names the null-port entry.
+    apply(policy(6, { node: "x", estimate_ms: 1000, rough: true, pending_value: "2.0" }));
+    apply({ v: 1, seq: 6, type: "drag_ended", payload: { node: "x" } });
+    expect(useCicada.getState().pending).toBeNull();
+    // After a landed write the delta has already cleared it: a no-op.
+    apply(policy(7, { node: "deboss", port: "value", estimate_ms: 3990.9, rough: false, pending_value: "0.9" }));
+    apply(delta(8, "set deboss = 0.9"));
+    const cleared = useCicada.getState();
+    apply({ v: 1, seq: 8, type: "drag_ended", payload: { node: "deboss", port: "value" } });
+    expect(useCicada.getState()).toBe(cleared);
+    // A newer policy for another param has replaced the entry: the late end
+    // of the old drag leaves the new one standing.
+    apply(policy(9, { node: "deboss", port: "value", estimate_ms: 3990.9, rough: false, pending_value: "0.9" }));
+    apply(policy(9, { node: "amps", port: "value", estimate_ms: 2000, rough: false, pending_value: "2.5" }));
+    apply({ v: 1, seq: 9, type: "drag_ended", payload: { node: "deboss", port: "value" } });
+    expect(useCicada.getState().pending?.node).toBe("amps");
+  });
+
+  it("a reload barrier and a disconnect clear it too", () => {
+    const apply = useCicada.getState().applyServerMessage;
+    apply(policy(6, { node: "deboss", port: "value", estimate_ms: 3990.9, rough: false, pending_value: "0.875" }));
+    apply({
+      v: 1,
+      seq: 7,
+      type: "snapshot",
+      payload: {
+        graph: graph("deboss"),
+        text: "",
+        statuses: {},
+        summary,
+        lease: { writer: 7, clients: [[7, "writer"]] },
+        barrier: true,
+        reason: "external change",
+        history: EMPTY_HISTORY,
+      },
+    });
+    expect(useCicada.getState().pending, "the watcher's reload ends the drag").toBeNull();
+
+    apply(policy(8, { node: "deboss", port: "value", estimate_ms: 3990.9, rough: false, pending_value: "0.875" }));
+    useCicada.getState().markDisconnected("socket closed", { attempt: 1, nextAt: null });
+    expect(useCicada.getState().pending, "the drag died with the socket").toBeNull();
   });
 });

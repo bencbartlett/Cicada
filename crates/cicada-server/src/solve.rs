@@ -3,19 +3,33 @@
 //! shared scheduler. A submission replaces whatever is pending; each
 //! completed generation immediately starts the next with the newest job.
 //! Two policies, per docs/12: **structural** submissions (edits, reloads)
-//! cancel and supersede the in-flight generation (its `CancelToken` and
-//! the script host's kill switch); **preview** submissions (slider
-//! streams) let the in-flight generation COMPLETE — its work lands in the
-//! store, and killing Python per tick would mean a cone through a script
-//! node never produces a preview at all. Esc (`cancel`) cancels + kills
+//! cancel and supersede the in-flight generation; **preview** submissions
+//! (slider streams) let the in-flight generation COMPLETE — its work lands
+//! in the store, and killing Python per tick would mean a cone through a
+//! script node never produces a preview at all. Esc (`cancel`) cancels
 //! whatever is running.
+//!
+//! Every generation owns its `CancelToken` (v0.1 item 3b): cancelling it is
+//! the whole of cancelling the generation — the executor checks it between
+//! nodes and chunks, and the script bridge's per-call kill switches are
+//! hooked to it (`CancelToken::on_cancel`), so there is no separate "kill
+//! the scripts" step for any cancel site to forget. Explicit effectful runs
+//! (`POST /api/run/{node}`) do NOT go through this loop: they solve on the
+//! same scheduler with their own token, so a slider drag never cancels an
+//! export half-written (see [`crate::session`]) — by construction.
+//!
+//! **Idle class** ([`SolveLoop::run_idle`]): a hypothetical solve — the
+//! substrate of scrub caching and `cycle` warming (docs/12 §Speculative
+//! warming) — waits until the loop is idle, solves on the caller's thread
+//! with its own token, and is pre-empted (cancelled) by ANY real submission
+//! or Esc. It is never "in flight" as far as `wait_idle`/`is_busy` are
+//! concerned, and it reports through the caller's observer only — the
+//! session paints nothing for it. Its completed work lands in the ordinary
+//! memo, which is the point.
 //!
 //! Wall-clock policy (the ~30 ms structural debounce) is the session's, not
 //! this loop's — `param_preview` streams submit immediately, structural
-//! edits arrive here after the session's timer. Explicit effectful runs
-//! (`POST /api/run/{node}`) do NOT go through this loop: they solve on the
-//! same scheduler with their own token so a slider drag never cancels an
-//! export half-written (see [`crate::session`]).
+//! edits arrive here after the session's timer.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -25,7 +39,6 @@ use std::time::{Duration, Instant};
 use cicada_sched::{CancelToken, Event, NodeId, Observer, Scheduler, SolveError, SolveReport};
 
 use crate::lower::Lowered;
-use crate::scripts::ScriptCancel;
 
 /// Why a generation ran.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,15 +96,45 @@ struct State {
     /// The first explicit `cancel()` during the in-flight generation.
     cancel_at: Option<Instant>,
     shutdown: bool,
+    /// Tokens of idle-class solves running right now ([`SolveLoop::
+    /// run_idle`]); every real submission and every Esc cancels them all.
+    idle: Vec<CancelToken>,
+    /// Idle-class solves waiting for the loop to go idle (registered
+    /// under the lock before they wait, deregistered before they run or
+    /// return): the state tests assert "it has not started" by, instead
+    /// of by elapsed time.
+    idle_waiting: usize,
 }
 
 struct Shared {
     scheduler: Arc<Scheduler>,
-    scripts: Arc<ScriptCancel>,
     sink: Arc<dyn SolveSink>,
     state: Mutex<State>,
     wake: Condvar,
     generation: AtomicU64,
+}
+
+/// Why an idle-class solve returned no report.
+#[derive(Debug, thiserror::Error)]
+pub enum IdleError {
+    /// The loop shut down while the idle solve waited for its turn.
+    #[error("the solve loop shut down before the idle solve could start")]
+    Shutdown,
+    /// The scheduler refused (store I/O, engine panic) — same as for any
+    /// generation.
+    #[error(transparent)]
+    Solve(#[from] SolveError),
+}
+
+/// An idle-class solve's result: its generation number (unique per
+/// session, from the shared counter) and the report — `cancelled` when a
+/// real generation pre-empted it.
+#[derive(Debug)]
+pub struct IdleRun {
+    /// The generation number the solve ran under.
+    pub generation: u64,
+    /// The scheduler's report.
+    pub report: SolveReport,
 }
 
 /// The latest-wins generation loop.
@@ -119,14 +162,9 @@ impl SolveLoop {
     /// When the worker thread cannot spawn — a loop without its worker
     /// would swallow every submit silently.
     #[must_use]
-    pub fn new(
-        scheduler: Arc<Scheduler>,
-        scripts: Arc<ScriptCancel>,
-        sink: Arc<dyn SolveSink>,
-    ) -> Self {
+    pub fn new(scheduler: Arc<Scheduler>, sink: Arc<dyn SolveSink>) -> Self {
         let shared = Arc::new(Shared {
             scheduler,
-            scripts,
             sink,
             state: Mutex::new(State {
                 pending: None,
@@ -134,6 +172,8 @@ impl SolveLoop {
                 in_flight: false,
                 cancel_at: None,
                 shutdown: false,
+                idle: Vec::new(),
+                idle_waiting: 0,
             }),
             wake: Condvar::new(),
             generation: AtomicU64::new(0),
@@ -150,17 +190,17 @@ impl SolveLoop {
     }
 
     /// Submit the newest job: replaces any pending job. A structural job
-    /// also cancels the in-flight generation (token + script kill switch);
-    /// a preview job lets it finish (latest-wins over COMPLETED
-    /// generations, docs/12).
+    /// also cancels the in-flight generation; a preview job lets it finish
+    /// (latest-wins over COMPLETED generations, docs/12). Any real job
+    /// pre-empts every idle-class solve.
     pub fn submit(&self, job: Job) {
         let mut state = self.lock();
         let structural = job.kind == JobKind::Structural;
         state.pending = Some(job);
         if structural && let Some(token) = &state.current {
             token.cancel();
-            self.shared.scripts.kill();
         }
+        preempt_idle(&mut state);
         drop(state);
         self.shared.wake.notify_all();
     }
@@ -168,19 +208,91 @@ impl SolveLoop {
     /// Cancel (Esc): the in-flight generation is cancelled AND a pending
     /// job is dropped — from the user's seat "Esc" means "stop solving",
     /// not "stop this one and start the next"; the next edit (or a
-    /// preview tick) resubmits. Returns true when a pending job was dropped.
+    /// preview tick) resubmits. Idle-class solves stop too. Returns true
+    /// when a pending job was dropped.
     #[must_use]
     pub fn cancel(&self) -> bool {
         let mut state = self.lock();
         if let Some(token) = &state.current {
             token.cancel();
-            self.shared.scripts.kill();
             // The first Esc during this generation starts the
             // cancel-to-idle clock (a second Esc is the user hammering the
             // key — the honest latency is from the first).
             state.cancel_at.get_or_insert_with(Instant::now);
         }
+        preempt_idle(&mut state);
         state.pending.take().is_some()
+    }
+
+    /// Run an idle-class solve on the CALLING thread (docs/12 §Speculative
+    /// warming — "always at the lowest priority, preempted by any real
+    /// work"): blocks until the loop has nothing pending or in flight,
+    /// then solves `targets` of `lowered` under a fresh token that every
+    /// later [`Self::submit`] / [`Self::cancel`] cancels. Events go to
+    /// `observer` and nowhere else — the session's sink never hears of it,
+    /// `wait_idle` and `is_busy` ignore it, and its generation number comes
+    /// from the shared counter so timings stay unique. Completed work is in
+    /// the memo when this returns, pre-empted or not.
+    ///
+    /// # Errors
+    ///
+    /// [`IdleError::Shutdown`] when the loop shuts down while the solve
+    /// waits; [`IdleError::Solve`] on an engine-level failure.
+    pub fn run_idle(
+        &self,
+        lowered: &Lowered,
+        targets: &[NodeId],
+        observer: &dyn Observer,
+    ) -> Result<IdleRun, IdleError> {
+        let (token, generation) = {
+            let mut state = self.lock();
+            state.idle_waiting += 1;
+            let mut state = self
+                .shared
+                .wake
+                .wait_while(state, |state| {
+                    (state.in_flight || state.pending.is_some()) && !state.shutdown
+                })
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.idle_waiting -= 1;
+            if state.shutdown {
+                return Err(IdleError::Shutdown);
+            }
+            // Registered under the same lock hold that observed "idle": a
+            // submit cannot slip between the check and the registration.
+            let token = CancelToken::new();
+            state.idle.push(token.clone());
+            let generation = self.shared.generation.fetch_add(1, Ordering::SeqCst) + 1;
+            (token, generation)
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.shared
+                .scheduler
+                .solve(&lowered.graph, targets, generation, &token, observer)
+        }))
+        .unwrap_or_else(|payload| {
+            Err(SolveError::EnginePanic {
+                message: cicada_sched::exec::panic_message(payload.as_ref()),
+            })
+        });
+        {
+            let mut state = self.lock();
+            state.idle.retain(|idle| !idle.same(&token));
+        }
+        let report = result?;
+        Ok(IdleRun { generation, report })
+    }
+
+    /// Idle-class solves running right now (tests; diagnostics).
+    #[must_use]
+    pub fn idle_in_flight(&self) -> usize {
+        self.lock().idle.len()
+    }
+
+    /// Idle-class solves waiting for their turn (tests; diagnostics).
+    #[must_use]
+    pub fn idle_waiting(&self) -> usize {
+        self.lock().idle_waiting
     }
 
     /// Is a generation in flight (or queued)?
@@ -221,20 +333,39 @@ impl SolveLoop {
     }
 }
 
-impl Drop for SolveLoop {
-    fn drop(&mut self) {
+impl SolveLoop {
+    /// The shutdown half that needs no ownership: flag it, cancel whatever
+    /// runs (the in-flight generation and every idle-class solve), wake
+    /// every waiter — idle solves waiting for their turn return
+    /// [`IdleError::Shutdown`]. `Drop` calls this and then joins the worker.
+    fn begin_shutdown(&self) {
         {
             let mut state = self.lock();
             state.shutdown = true;
             if let Some(token) = &state.current {
                 token.cancel();
-                self.shared.scripts.kill();
             }
+            preempt_idle(&mut state);
         }
         self.shared.wake.notify_all();
+    }
+}
+
+impl Drop for SolveLoop {
+    fn drop(&mut self) {
+        self.begin_shutdown();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
+    }
+}
+
+/// Cancel every idle-class solve in flight: real work arrived (or Esc).
+/// The tokens stay registered until their solves return and deregister
+/// themselves — cancelling twice is harmless.
+fn preempt_idle(state: &mut State) {
+    for token in &state.idle {
+        token.cancel();
     }
 }
 
@@ -261,8 +392,6 @@ fn worker_loop(shared: &Shared) {
             let generation = shared.generation.fetch_add(1, Ordering::SeqCst) + 1;
             (job, token, generation)
         };
-        // A fresh kill switch for this generation's script calls.
-        let _switch = shared.scripts.begin();
         shared.sink.on_start(generation, &job);
         let observer = GenerationObserver {
             generation,
@@ -355,7 +484,7 @@ mod tests {
     }
 
     fn graph(x: f64) -> Arc<Lowered> {
-        let run: cicada_sched::NodeFn = Arc::new(|inputs: &[Option<Arc<HashedValue>>]| {
+        let run: cicada_sched::NodeFn = Arc::new(|_ctx, inputs: &[Option<Arc<HashedValue>>]| {
             let a = inputs[0].as_ref().unwrap();
             let ValueData::Number(a) = a.data() else {
                 panic!()
@@ -374,6 +503,7 @@ mod tests {
             fan: vec![0],
             output_count: 1,
             effectful: false,
+            volatile: false,
             run,
         };
         Arc::new(Lowered {
@@ -405,7 +535,7 @@ mod tests {
             events: AtomicUsize::new(0),
             settled: AtomicUsize::new(0),
         });
-        let solve = SolveLoop::new(scheduler, ScriptCancel::new(), recorder.clone());
+        let solve = SolveLoop::new(scheduler, recorder.clone());
         for x in 0..20 {
             solve.submit(Job {
                 lowered: graph(f64::from(x)),
@@ -494,10 +624,10 @@ mod tests {
         );
         let last = Last::new();
         let runs = Arc::new(AtomicUsize::new(0));
-        let solve = SolveLoop::new(scheduler, ScriptCancel::new(), last.clone());
+        let solve = SolveLoop::new(scheduler, last.clone());
         let slow = |x: f64, runs: Arc<AtomicUsize>| -> Arc<Lowered> {
             let run: cicada_sched::NodeFn =
-                Arc::new(move |inputs: &[Option<Arc<HashedValue>>]| {
+                Arc::new(move |_ctx, inputs: &[Option<Arc<HashedValue>>]| {
                     runs.fetch_add(1, Ordering::SeqCst);
                     std::thread::sleep(std::time::Duration::from_millis(40));
                     let a = inputs[0].as_ref().unwrap();
@@ -518,6 +648,7 @@ mod tests {
                 fan: vec![0],
                 output_count: 1,
                 effectful: false,
+                volatile: false,
                 run,
             };
             Arc::new(Lowered {
@@ -567,7 +698,7 @@ mod tests {
             .unwrap(),
         );
         let last = Last::new();
-        let solve = SolveLoop::new(scheduler, ScriptCancel::new(), last.clone());
+        let solve = SolveLoop::new(scheduler, last.clone());
         solve.submit(Job {
             lowered: graph(1.0),
             targets: vec![NodeId(0)],
@@ -612,15 +743,16 @@ mod tests {
             .unwrap(),
         );
         let last = Last::new();
-        let solve = SolveLoop::new(scheduler, ScriptCancel::new(), last.clone());
+        let solve = SolveLoop::new(scheduler, last.clone());
         let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
         let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
         let release_rx = Mutex::new(release_rx);
-        let run: cicada_sched::NodeFn = Arc::new(move |_inputs: &[Option<Arc<HashedValue>>]| {
-            started_tx.send(()).unwrap();
-            release_rx.lock().unwrap().recv().unwrap();
-            Ok(vec![HashedValue::new(ValueData::Number(1.0)).unwrap()])
-        });
+        let run: cicada_sched::NodeFn =
+            Arc::new(move |_ctx, _inputs: &[Option<Arc<HashedValue>>]| {
+                started_tx.send(()).unwrap();
+                release_rx.lock().unwrap().recv().unwrap();
+                Ok(vec![HashedValue::new(ValueData::Number(1.0)).unwrap()])
+            });
         let decl = NodeDecl {
             name: "gate".to_owned(),
             op: "gate".to_owned(),
@@ -631,6 +763,7 @@ mod tests {
             fan: vec![],
             output_count: 1,
             effectful: false,
+            volatile: false,
             run,
         };
         let lowered = Arc::new(Lowered {
@@ -675,5 +808,222 @@ mod tests {
         solve.wait_idle();
         assert_eq!(last.settled.lock().unwrap().len(), 1);
         assert!(!last.report.lock().unwrap().clone().unwrap().cancelled);
+    }
+    // ------------------------------------------------------- idle class --
+
+    /// A gated one-node graph: the node signals `started` and holds until
+    /// `release` fires OR its generation's token is cancelled (polled, the
+    /// way a host bridge would) — the deterministic way to hold a
+    /// generation open without ever wedging a shutdown.
+    fn gated(
+        name: &str,
+        x: f64,
+    ) -> (
+        Arc<Lowered>,
+        std::sync::mpsc::Receiver<()>,
+        std::sync::mpsc::Sender<()>,
+    ) {
+        let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let release_rx = Mutex::new(release_rx);
+        let run: cicada_sched::NodeFn =
+            Arc::new(move |ctx, _inputs: &[Option<Arc<HashedValue>>]| {
+                started_tx.send(()).unwrap();
+                let release = release_rx.lock().unwrap();
+                while !ctx.cancel.is_cancelled() {
+                    if release.recv_timeout(Duration::from_millis(1)).is_ok() {
+                        break;
+                    }
+                }
+                Ok(vec![HashedValue::new(ValueData::Number(x)).unwrap()])
+            });
+        let decl = NodeDecl {
+            name: name.to_owned(),
+            op: name.to_owned(),
+            version: 1,
+            body_hash: None,
+            tolerance: None,
+            inputs: vec![Input::Value(
+                HashedValue::new(ValueData::Number(x)).unwrap(),
+            )],
+            fan: vec![0],
+            output_count: 1,
+            effectful: false,
+            volatile: false,
+            run,
+        };
+        let lowered = Arc::new(Lowered {
+            graph: SolveGraph::new(vec![decl]).unwrap(),
+            bindings: HashMap::new(),
+            output_names: vec![vec!["out".to_owned()]],
+            excluded: BTreeMap::new(),
+        });
+        (lowered, started_rx, release_tx)
+    }
+
+    fn fresh_loop(sink: Arc<dyn SolveSink>) -> SolveLoop {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = DiskStore::open(dir.path()).unwrap();
+        // The store outlives the loop through the scheduler's Arc; the
+        // directory is leaked on purpose for the test's lifetime.
+        std::mem::forget(dir);
+        let scheduler = Arc::new(
+            Scheduler::new(
+                Arc::new(store),
+                Arc::new(MonotonicClock::new()),
+                SchedulerConfig {
+                    threads: 2,
+                    ..SchedulerConfig::default()
+                },
+            )
+            .unwrap(),
+        );
+        SolveLoop::new(scheduler, sink)
+    }
+
+    #[test]
+    fn idle_solve_waits_for_the_loop_then_is_preempted_by_real_work() {
+        // Deterministic (channels, no sleeps): a structural generation is
+        // held open; an idle solve submitted meanwhile must not start until
+        // it completes; once running, it is invisible to is_busy/wait_idle;
+        // a preview submission pre-empts it (its token is cancelled), and
+        // the loop's own generation still runs clean.
+        let last = Last::new();
+        let solve = Arc::new(fresh_loop(last.clone()));
+        let (held, held_started, held_release) = gated("held", 1.0);
+        solve.submit(Job {
+            lowered: held,
+            targets: vec![NodeId(0)],
+            kind: JobKind::Structural,
+            submitted: Instant::now(),
+        });
+        held_started.recv().unwrap();
+        assert!(solve.is_busy());
+
+        let (idle_graph, idle_started, idle_release) = gated("idle", 2.0);
+        let idle = {
+            let solve = Arc::clone(&solve);
+            std::thread::spawn(move || {
+                solve
+                    .run_idle(&idle_graph, &[NodeId(0)], &cicada_sched::NoopObserver)
+                    .unwrap()
+            })
+        };
+        // While the real generation is held, the idle solve has not begun.
+        // Asserted by STATE, not by elapsed time: the idle solve registers
+        // as waiting under the loop's lock and only then waits (releasing
+        // the lock) — so observing `idle_waiting() == 1` means it is parked
+        // on the condvar, with nothing idle registered and its node silent.
+        // A loop that did not wait (or waited on the wrong predicate)
+        // would never show 1 from outside (increment and decrement under
+        // one lock hold) and would signal `started` instead — the loop
+        // below fails on that signal rather than spinning.
+        loop {
+            if solve.idle_waiting() == 1 {
+                break;
+            }
+            assert!(
+                idle_started.try_recv().is_err(),
+                "the idle solve must not start while a generation is in flight"
+            );
+            std::thread::yield_now();
+        }
+        assert!(idle_started.try_recv().is_err());
+        assert_eq!(solve.idle_in_flight(), 0);
+
+        // Release the real generation: the loop goes idle, the idle solve
+        // starts — and is NOT "busy".
+        held_release.send(()).unwrap();
+        idle_started.recv().unwrap();
+        assert_eq!(solve.idle_in_flight(), 1);
+        assert_eq!(solve.idle_waiting(), 0, "it left the waiting room");
+        solve.wait_idle();
+        assert!(
+            !solve.is_busy(),
+            "an idle-class solve is invisible to is_busy/wait_idle"
+        );
+
+        // Real work arrives: the idle solve is pre-empted.
+        solve.submit(Job {
+            lowered: graph(3.0),
+            targets: vec![NodeId(0)],
+            kind: JobKind::Preview,
+            submitted: Instant::now(),
+        });
+        idle_release.send(()).unwrap();
+        let run = idle.join().unwrap();
+        assert!(run.report.cancelled, "pre-empted: its token was cancelled");
+        assert_eq!(solve.idle_in_flight(), 0, "it deregistered itself");
+        solve.wait_idle();
+        let report = last.report.lock().unwrap().clone().unwrap();
+        assert!(!report.cancelled, "the real generation ran clean");
+        assert!(run.generation > 0);
+        assert_ne!(
+            run.generation, report.generation,
+            "generation numbers stay unique"
+        );
+    }
+
+    #[test]
+    fn idle_solve_results_are_cache_hits_for_the_next_real_generation() {
+        let last = Last::new();
+        let solve = fresh_loop(last.clone());
+        let warm = graph(5.0);
+        let run = solve
+            .run_idle(&warm, &[NodeId(0)], &cicada_sched::NoopObserver)
+            .unwrap();
+        assert!(!run.report.cancelled);
+        assert!(matches!(
+            run.report.outcome(NodeId(0)),
+            NodeOutcome::Computed { .. }
+        ));
+        assert!(
+            last.report.lock().unwrap().is_none(),
+            "the sink never hears of an idle solve"
+        );
+        solve.submit(Job {
+            lowered: graph(5.0),
+            targets: vec![NodeId(0)],
+            kind: JobKind::Structural,
+            submitted: Instant::now(),
+        });
+        solve.wait_idle();
+        let report = last.report.lock().unwrap().clone().unwrap();
+        assert!(
+            matches!(report.outcome(NodeId(0)), NodeOutcome::CacheHit { .. }),
+            "the idle solve's work is in the ordinary memo: {:?}",
+            report.outcome(NodeId(0))
+        );
+    }
+
+    #[test]
+    fn idle_solve_refuses_loudly_when_the_loop_shuts_down_first() {
+        let last = Last::new();
+        let solve = Arc::new(fresh_loop(last.clone()));
+        let (held, held_started, held_release) = gated("held", 1.0);
+        solve.submit(Job {
+            lowered: held,
+            targets: vec![NodeId(0)],
+            kind: JobKind::Structural,
+            submitted: Instant::now(),
+        });
+        held_started.recv().unwrap();
+        let waiting = {
+            let solve = Arc::clone(&solve);
+            std::thread::spawn(move || {
+                solve.run_idle(&graph(9.0), &[NodeId(0)], &cicada_sched::NoopObserver)
+            })
+        };
+        // Shut the loop down while the generation is still held and the
+        // idle solve waits for its turn: the waiter wakes with Shutdown
+        // instead of hanging forever (the held node sees its token
+        // cancelled by the shutdown and returns, so the worker can join).
+        // `begin_shutdown` is what Drop runs first; calling it directly
+        // lets the waiter keep its Arc without keeping the loop alive.
+        solve.begin_shutdown();
+        let result = waiting.join().unwrap();
+        drop(held_release);
+        drop(solve);
+        assert!(matches!(result, Err(IdleError::Shutdown)), "{result:?}");
     }
 }

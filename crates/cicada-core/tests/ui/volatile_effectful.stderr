@@ -1,0 +1,5 @@
+error: `volatile` and `effectful` are exclusive: an effectful node already bypasses the memo and runs only on explicit action (POST /api/run), a volatile node recomputes in every generation — pick one
+  --> tests/ui/volatile_effectful.rs:17:82
+   |
+17 | #[node(category = "Maths & logic", tier = "S", version = 1, gh = none, volatile, effectful)]
+   |                                                                                  ^^^^^^^^^

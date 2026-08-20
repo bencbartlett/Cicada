@@ -15,6 +15,8 @@ use std::sync::Arc;
 use cicada_core::hash::ValueHash;
 use cicada_core::value::HashedValue;
 
+use crate::cancel::NodeCtx;
+
 /// A node's index in its [`SolveGraph`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NodeId(pub usize);
@@ -27,25 +29,50 @@ pub struct NodeId(pub usize);
 pub struct NodeError {
     /// What went wrong, in domain terms.
     pub message: String,
+    /// The node stopped because its generation was cancelled — it polled
+    /// `ctx.cancel` at a safe point and bailed, or a host bridge killed
+    /// its worker (docs/12 §Cancellation). The executor lands such an
+    /// error `cancelled`, not red, when the generation's token is indeed
+    /// cancelled. Every OTHER error stays red even under a cancelled
+    /// token: a genuine failure that coincides with an Esc is never hidden
+    /// behind the word "cancelled".
+    pub cancelled: bool,
 }
 
 impl NodeError {
-    /// A new error from any message.
+    /// A new error from any message — a red node.
     #[must_use]
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            cancelled: false,
+        }
+    }
+
+    /// The sanctioned way out of a long node at a safe point once
+    /// `ctx.cancel` reports cancellation (and the bridge's verdict for a
+    /// worker killed by the generation's token): lands `cancelled`, never
+    /// red.
+    #[must_use]
+    pub fn cancelled(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            cancelled: true,
         }
     }
 }
 
-/// The type-erased run function of one node: per-port inputs in spec order
-/// (`None` = use the port default), per-port outputs. For `each()` nodes
-/// this is the **element-level** function — the executor owns iteration,
-/// chunking, and slot assembly. Panics are caught by the executor and
-/// become red nodes (docs/12).
+/// The type-erased run function of one node: the generation's [`NodeCtx`]
+/// (its cancel handle — a long call polls it at safe points, a host bridge
+/// hooks it), per-port inputs in spec order (`None` = use the port
+/// default), per-port outputs. For `each()` nodes this is the
+/// **element-level** function — the executor owns iteration, chunking, and
+/// slot assembly. Panics are caught by the executor and become red nodes
+/// (docs/12).
 pub type NodeFn = Arc<
-    dyn Fn(&[Option<Arc<HashedValue>>]) -> Result<Vec<Arc<HashedValue>>, NodeError> + Send + Sync,
+    dyn Fn(&NodeCtx<'_>, &[Option<Arc<HashedValue>>]) -> Result<Vec<Arc<HashedValue>>, NodeError>
+        + Send
+        + Sync,
 >;
 
 /// One input slot of a node, in spec port order.
@@ -93,6 +120,16 @@ pub struct NodeDecl {
     /// the memo table — a "cache hit" that skipped writing the file would
     /// be a silent lie. Effectful nodes run every time they are targeted.
     pub effectful: bool,
+    /// Volatile (DECISIONS.md time row: `Clock` is "uncached by design"):
+    /// the memo is neither read nor written for this node's outputs, at
+    /// node AND element granularity, so it executes in every generation
+    /// whose cone holds it — and inside an `each()` fan-out, once per
+    /// element. Downstream nodes are ordinary: their keys include the
+    /// volatile output's fresh value hash, so they recompute exactly when
+    /// that value changed and hit the memo when it did not (docs/12
+    /// §Volatile nodes). Exclusive with `effectful` (the macro refuses
+    /// both).
+    pub volatile: bool,
     /// The run function.
     pub run: NodeFn,
 }
@@ -384,7 +421,7 @@ mod tests {
     use super::*;
 
     fn noop_fn() -> NodeFn {
-        Arc::new(|_inputs| Ok(vec![]))
+        Arc::new(|_ctx, _inputs| Ok(vec![]))
     }
 
     fn decl(name: &str, inputs: Vec<Input>) -> NodeDecl {
@@ -399,6 +436,7 @@ mod tests {
             fan,
             output_count: 1,
             effectful: false,
+            volatile: false,
             run: noop_fn(),
         }
     }
