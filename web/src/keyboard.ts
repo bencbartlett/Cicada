@@ -184,6 +184,12 @@ export function handleHotkey(event: KeyboardEvent): boolean {
     for (const name of selected) {
       const node = nodeByName(state.graph, name);
       if (node === undefined) continue;
+      if (node.kind === "disabled") {
+        // A ghost displays nothing: the toggle would be an undo step with
+        // no visible effect.
+        notice("info", `\`${name}\` is disabled (#off) — enable it to preview`);
+        continue;
+      }
       if (!node.outputs.some((o) => o.displayable)) {
         notice("info", `\`${name}\` has no displayable output`);
         continue;

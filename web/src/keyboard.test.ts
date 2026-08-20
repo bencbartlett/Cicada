@@ -191,11 +191,17 @@ describe("handleHotkey", () => {
     expect(useCicada.getState().selection.nodes).toEqual(["a", "b"]);
   });
 
-  it("P toggles preview only on displayable outputs", () => {
+  it("P toggles preview only on displayable outputs, never on a #off ghost", () => {
     useCicada.getState().selectNodes(["a", "b"]);
     expect(handleHotkey(key("p"))).toBe(true);
     expect(sent).toEqual([{ type: "set_preview", payload: { node: "a", on: true } }]);
     expect(useCicada.getState().notices.at(-1)?.message).toMatch(/no displayable output/);
+    sent = [];
+    useCicada.setState({ graph: { ...useCicada.getState().graph, nodes: [fakeNode("a", { kind: "disabled" })] } });
+    useCicada.getState().selectNodes(["a"]);
+    expect(handleHotkey(key("p"))).toBe(true);
+    expect(sent).toEqual([]);
+    expect(useCicada.getState().notices.at(-1)?.message).toMatch(/`a` is disabled \(#off\) — enable it to preview/);
   });
 
   it("P on several displayable nodes is one batch", () => {
