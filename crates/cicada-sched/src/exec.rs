@@ -1073,22 +1073,22 @@ impl Ctx<'_> {
 
         let ctx = NodeCtx { cancel: self.token };
         let run_result = catch_unwind(AssertUnwindSafe(|| (decl.run)(&ctx, &element_inputs)));
+        // Bailed at a safe point because THIS generation was cancelled
+        // (`NodeError::cancelled` under a cancelled token): not a verdict
+        // on the element — no slot, no cost evidence.
+        if let Ok(Err(error)) = &run_result
+            && error.cancelled
+            && self.token.is_cancelled()
+        {
+            return None;
+        }
+        // Everything else is a verdict the run reached: it counts.
+        executed.fetch_add(1, Ordering::Relaxed);
         let outputs = match run_result {
-            Err(payload) => {
-                executed.fetch_add(1, Ordering::Relaxed);
-                return Some(Err((index, panic_message(payload.as_ref()))));
-            }
-            // Bailed at a safe point because THIS generation was
-            // cancelled (`NodeError::cancelled` under a cancelled token):
-            // not a verdict on the element — no slot, no cost evidence.
-            Ok(Err(error)) if error.cancelled && self.token.is_cancelled() => return None,
-            Ok(Err(error)) => {
-                executed.fetch_add(1, Ordering::Relaxed);
-                return Some(Err((index, error.message)));
-            }
+            Err(payload) => return Some(Err((index, panic_message(payload.as_ref())))),
+            Ok(Err(error)) => return Some(Err((index, error.message))),
             Ok(Ok(outputs)) => outputs,
         };
-        executed.fetch_add(1, Ordering::Relaxed);
         if outputs.len() != decl.output_count {
             return Some(Err((
                 index,
