@@ -107,6 +107,17 @@ mod tests {
         });
     }
 
+    // A LONGER later row is ragged too: a `<` check would silently drop its
+    // tail (the 5 below) — the exact silent fallback the rules forbid (C1
+    // review: the shorter-row case alone let that mutation pass).
+    #[test]
+    #[should_panic(expected = "group 1 has 3 slots, group 0 has 2")]
+    fn transpose_longer_later_row_is_red() {
+        let _ = transpose(TransposeIn {
+            list: vec![numbers(&[1.0, 2.0]), numbers(&[3.0, 4.0, 5.0])],
+        });
+    }
+
     proptest::proptest! {
         // Shape swaps (rows × cols → cols × rows), out[j][i] == in[i][j], and
         // transpose is an involution on non-empty rectangles.

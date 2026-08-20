@@ -4,7 +4,7 @@ use cicada_macros::node;
 
 use super::UnaryIn;
 /// Exponential — `e^x` (`power(a=e, b=x)` with the dedicated, more accurate
-/// libm routine; the inverse of `ln`).
+/// libm routine; the inverse of `ln`; GH's Maths › Util › Power of E).
 ///
 /// # Returns
 ///
@@ -15,7 +15,7 @@ use super::UnaryIn;
 /// ```cic
 /// growth = exp(x=2.0)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = none)]
+#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Power of E")]
 #[must_use]
 pub fn exp(input: UnaryIn) -> f64 {
     input.x.exp()

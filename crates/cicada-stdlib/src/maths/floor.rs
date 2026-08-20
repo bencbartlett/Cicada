@@ -4,7 +4,8 @@ use cicada_macros::node;
 
 use super::UnaryIn;
 /// Floor — the largest integer value not above `x` (`2.7` → `2`, `-2.2`
-/// → `-3`).
+/// → `-3`; Grasshopper's Round component's `Floor` output — there is no
+/// Floor component, so the GH tag is `Round`).
 ///
 /// # Returns
 ///
@@ -15,7 +16,7 @@ use super::UnaryIn;
 /// ```cic
 /// whole = floor(x=2.7)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Floor")]
+#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Round")]
 #[must_use]
 pub fn floor(input: UnaryIn) -> f64 {
     input.x.floor()

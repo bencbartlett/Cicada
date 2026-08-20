@@ -106,7 +106,10 @@ mod tests { /* table, property, golden hash */ }
 1. **Input struct** with `#[derive(Ports)]` — one named field per input
    port; field names ARE the port names everywhere (Rust, catalog, canvas,
    dialect kwargs). Field doc comments become port docs (required; units
-   where relevant). `#[port(default = 1.0)]` makes the port optional
+   where relevant): the FIRST PARAGRAPH, its source lines joined — wrap
+   at 80 columns freely, and end it like a sentence (`.`, `)` or a
+   closing backtick; the conformance test reads a doc that ends on a bare
+   word as truncated). `#[port(default = 1.0)]` makes the port optional
    (non-literal defaults carry `default_doc = "…"`, their catalog
    rendering); `#[port(dimension = length)]`/`angle` tags unit-sensitive
    ports (DECISIONS.md units row). Multi-output nodes return a second

@@ -39,7 +39,7 @@ pub struct PadLastIn {
 /// padded = pad_last(list=few, count=n)
 /// sums = add(a=each(padded), b=each(many))
 /// ```
-#[node(category = "List & axis", tier = "S", version = 1, gh = none)]
+#[node(category = "List & axis", tier = "S", version = 1, gh = "Longest List")]
 #[must_use]
 pub fn pad_last(input: PadLastIn) -> Vec<ElemSlot> {
     let mut list = input.list;

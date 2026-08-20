@@ -44,8 +44,8 @@ touching the committed examples — the app writes what you do.
   / `dispatch` / `group_by` with their index maps, the reducers
   (`mass_addition`, `average`), maths lifted with `each()` (`larger`,
   `floor`), and the strict-zip adapters made visible (`repeat`,
-  `pad_last`, `cull`) feeding a sphere per kept column. Pure throughout —
-  the second `--time` run is fully cached.
+  `pad_last`) feeding `cull` and a sphere per kept column. Pure
+  throughout — the second `--time` run is fully cached.
 
 Notes that save a first-timer some head-scratching:
 

@@ -4,7 +4,8 @@ use cicada_macros::node;
 
 use super::UnaryIn;
 /// Ceiling — the smallest integer value not below `x` (`2.2` → `3`,
-/// `-2.7` → `-2`).
+/// `-2.7` → `-2`; Grasshopper's Round component's `Ceiling` output — there
+/// is no Ceiling component, so the GH tag is `Round`).
 ///
 /// # Returns
 ///
@@ -15,7 +16,7 @@ use super::UnaryIn;
 /// ```cic
 /// whole = ceiling(x=2.2)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Ceiling")]
+#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Round")]
 #[must_use]
 pub fn ceiling(input: UnaryIn) -> f64 {
     input.x.ceil()

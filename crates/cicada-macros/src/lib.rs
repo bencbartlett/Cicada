@@ -2,8 +2,8 @@
 //! docs/08 §The node registry):
 //!
 //! - `#[derive(Ports)]` reflects a struct's named fields into typed ports —
-//!   a field with `#[port(default = …)]` is an optional port; field doc
-//!   comments become port docs.
+//!   a field with `#[port(default = …)]` is an optional port; a field's doc
+//!   comment (its first paragraph, source lines joined) becomes the port doc.
 //! - `#[node(category = "…", tier = "S", version = 1, gh = "…" | none)]`
 //!   assembles the `NodeSpec` from the function — name (trailing
 //!   keyword-dodging `_` stripped), title/description from the doc comment's
@@ -99,7 +99,7 @@ fn expand_ports(input: &DeriveInput) -> syn::Result<TokenStream2> {
         // (docs/08 Pick needs literally-named `true`/`false` ports).
         let name = ident.unraw().to_string();
         let ty = &field.ty;
-        let doc = doc_first_line(&field.attrs);
+        let doc = doc_first_paragraph(&field.attrs);
         if doc.is_empty() {
             return Err(syn::Error::new(
                 field.span(),
@@ -345,12 +345,18 @@ fn lit_text(lit: &Lit) -> String {
     }
 }
 
-/// First non-empty line of the doc comment, trimmed.
-fn doc_first_line(attrs: &[Attribute]) -> String {
+/// First paragraph of the doc comment — its source lines joined with single
+/// spaces ("" when there is none). A port doc wraps at rustdoc's 80 columns
+/// like any prose; taking only the first physical line truncated 28 port
+/// docs mid-sentence in `catalog.json` (regression: adversarial review, C1
+/// — the same defect the node title line had in stage 4).
+fn doc_first_paragraph(attrs: &[Attribute]) -> String {
     doc_lines(attrs)
         .into_iter()
-        .find(|line| !line.is_empty())
-        .unwrap_or_default()
+        .skip_while(String::is_empty)
+        .take_while(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The body of a `# <name>` rustdoc section, joined to one line ("" if the

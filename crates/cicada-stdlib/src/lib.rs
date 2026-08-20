@@ -171,6 +171,28 @@ mod tests {
         assert_eq!(count.default, None);
     }
 
+    // A wrapped field doc is ONE port doc: the macro joins the first
+    // paragraph's source lines (C1 review: it once kept the first line only,
+    // truncating 28 port docs mid-sentence in catalog.json).
+    #[test]
+    fn wrapped_port_docs_keep_their_whole_first_paragraph() {
+        let specs = registry();
+        let jitter = specs
+            .iter()
+            .find(|s| s.name == "jitter")
+            .expect("jitter registered");
+        let strength = jitter
+            .inputs
+            .iter()
+            .find(|p| p.name == "strength")
+            .expect("jitter has a strength port");
+        assert_eq!(
+            strength.doc,
+            "How far from the original order to stray, `0.0` (unchanged) to `1.0` (a fully \
+             random order)."
+        );
+    }
+
     // C1: the first optional-element VARIABLE port (`Vec<Option<ElemSlot>>`
     // → `[E?]`) renders the documented `compact` signature — the port takes
     // the holes, the outputs are the bare `[E]` plus the IndexMap.

@@ -37,7 +37,12 @@ pub struct TruncateIn {
 /// clipped = truncate(list=many, count=n)
 /// sums = add(a=each(few), b=each(clipped))
 /// ```
-#[node(category = "List & axis", tier = "S", version = 1, gh = none)]
+#[node(
+    category = "List & axis",
+    tier = "S",
+    version = 1,
+    gh = "Shortest List"
+)]
 #[must_use]
 pub fn truncate(input: TruncateIn) -> Vec<ElemSlot> {
     let mut list = input.list;

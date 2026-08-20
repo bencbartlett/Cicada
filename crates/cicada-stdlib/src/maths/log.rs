@@ -66,15 +66,22 @@ mod tests {
             0.0,
             "IEEE pins log 1 = +0"
         );
-        assert!(
-            (log(LogIn {
+        // The dedicated routines are the contract, not a nicety: `ln x / ln
+        // base` gives 2.9999999999999996 for both of these (C1 review: a
+        // tolerance here let the fast path be deleted unnoticed).
+        assert_eq!(
+            log(LogIn {
                 x: 1000.0,
                 base: 10.0
-            }) - 3.0)
-                .abs()
-                < 1.0e-15
+            }),
+            3.0,
+            "log10 is exact on powers of ten"
         );
-        assert!((log(LogIn { x: 8.0, base: 2.0 }) - 3.0).abs() < 1.0e-15);
+        assert_eq!(
+            log(LogIn { x: 8.0, base: 2.0 }),
+            3.0,
+            "log2 is exact on powers of two"
+        );
         assert!((log(LogIn { x: 27.0, base: 3.0 }) - 3.0).abs() < 1.0e-14);
         assert_eq!(log(LogIn { x: 0.0, base: 10.0 }), f64::NEG_INFINITY);
         assert!(
@@ -121,6 +128,9 @@ mod tests {
             hex(log(LogIn { x: 1.0, base: 10.0 })),
             "16340e1e9e25c58d84305492ff4bb2c5ee526619316dc4e2026f425e69fb333c"
         );
+        // log2 of a power of two is the exact integer (the exponent), so its
+        // hash is the literal's hash — what the cache key sees.
+        assert_eq!(hex(log(LogIn { x: 8.0, base: 2.0 })), hex(3.0));
         assert_eq!(
             log(LogIn { x: 7.5, base: 3.0 }).to_bits(),
             log(LogIn { x: 7.5, base: 3.0 }).to_bits()
