@@ -13,9 +13,12 @@ import type {
   ClientMessage,
   ErrorKind,
   ErrorPayload,
+  GitErrorBody,
+  GitStatusResponse,
   GraphView,
   HistoryView,
   LeaseView,
+  NodeChange,
   NodeStatus,
   ProbeCatalogEntry,
   ProbeVerdict,
@@ -168,6 +171,30 @@ const EMPTY_SUMMARY: SolveSummary = {
   eta_rough: false,
 };
 
+/** A git write in flight (the buttons disable; one at a time). */
+export type GitBusy = "commit" | "revert" | null;
+
+/**
+ * The git panel's read cache (docs/17 item 2): the last `GET
+ * /api/git/status` answer — or its typed refusal — for THIS pipeline. Not
+ * authoritative mirror state (git is): re-read by the policy in
+ * `state/git.ts` (on connect, ≤1/s after writes, on focus), never by a
+ * timer while idle.
+ */
+export interface GitSlice {
+  /** The last good answer; null before the first one arrives. */
+  status: GitStatusResponse | null;
+  /** The last refused read (`no_such_pipeline`, `git_failed`, …); cleared by the next good answer. */
+  error: GitErrorBody | null;
+  /** A read is in flight. */
+  loading: boolean;
+  busy: GitBusy;
+  /** Reads that answered, good or refused (tests: the refresh policy). */
+  answers: number;
+}
+
+const EMPTY_GIT: GitSlice = { status: null, error: null, loading: false, busy: null, answers: 0 };
+
 export interface CicadaState {
   // ---- connection / identity
   connection: Connection;
@@ -206,6 +233,13 @@ export interface CicadaState {
   nodeValues: Record<string, NodeValues>;
   wireValues: Record<string, WireValues>;
   probe: ProbeState | null;
+  git: GitSlice;
+  /**
+   * `git.status.pipeline.nodes` by name — the canvas badges read one entry
+   * per node so a status answer never rebuilds the graph. `removed` nodes
+   * are not here (nothing on the canvas to badge; the Git tab lists them).
+   */
+  gitMarkers: Record<string, NodeChange>;
 
   // ---- ui
   selection: Selection;
@@ -215,6 +249,8 @@ export interface CicadaState {
   /** Search-to-place box: null = closed; else its anchor + optional wire source filter. */
   search: { x: number; y: number; cell: [number, number] | null; from: WireEnd | null } | null;
   runNotice: { node: string; ok: boolean; message: string } | null;
+  /** The Ctrl+S commit dialog (docs/16: there is no save — every op is already on disk). */
+  commitDialog: boolean;
 
   // ---- actions
   /** Installed by the connection module. */
@@ -245,6 +281,14 @@ export interface CicadaState {
   openSearch: (anchor: { x: number; y: number; cell: [number, number] | null; from: WireEnd | null }) => void;
   closeSearch: () => void;
   clearRunNotice: () => void;
+  /** A status read answered: replace the cache (a byte-identical answer — same `text_hash`, same facts — changes nothing). */
+  setGitStatus: (status: GitStatusResponse) => void;
+  /** A status read was refused: keep the last good answer for display, show the refusal. */
+  setGitError: (error: GitErrorBody) => void;
+  setGitLoading: (loading: boolean) => void;
+  setGitBusy: (busy: GitBusy) => void;
+  openCommitDialog: () => void;
+  closeCommitDialog: () => void;
 }
 
 let noticeCounter = 0;
@@ -276,6 +320,8 @@ export const useCicada = create<CicadaState>((set, get) => ({
   nodeValues: {},
   wireValues: {},
   probe: null,
+  git: EMPTY_GIT,
+  gitMarkers: {},
 
   selection: { nodes: [], wire: null, element: null },
   hoverPick: null,
@@ -283,6 +329,7 @@ export const useCicada = create<CicadaState>((set, get) => ({
   settings: loadSettings(),
   search: null,
   runNotice: null,
+  commitDialog: false,
 
   send: (message) => {
     console.warn("cicada: no connection yet — dropped", message.type);
@@ -519,7 +566,40 @@ export const useCicada = create<CicadaState>((set, get) => ({
   openSearch: (anchor) => set({ search: anchor }),
   closeSearch: () => set({ search: null }),
   clearRunNotice: () => set({ runNotice: null }),
+
+  setGitStatus: (status) =>
+    set((state) => {
+      const answers = state.git.answers + 1;
+      // Dedupe on `text_hash` (+ the facts computed alongside it): the same
+      // answer again re-renders nothing — the chip, the badges and the tab
+      // keep their identity.
+      if (state.git.status !== null && sameGitStatus(state.git.status, status)) {
+        return { git: { ...state.git, loading: false, error: null, answers } };
+      }
+      return {
+        git: { ...state.git, status, error: null, loading: false, answers },
+        gitMarkers: markersByName(status),
+      };
+    }),
+  setGitError: (error) =>
+    set((state) => ({ git: { ...state.git, error, loading: false, answers: state.git.answers + 1 } })),
+  setGitLoading: (loading) => set((state) => ({ git: { ...state.git, loading } })),
+  setGitBusy: (busy) => set((state) => ({ git: { ...state.git, busy } })),
+  openCommitDialog: () => set({ commitDialog: true }),
+  closeCommitDialog: () => set({ commitDialog: false }),
 }));
+
+/** Same `text_hash` and the same facts around it (state, scope, markers)? */
+export function sameGitStatus(a: GitStatusResponse, b: GitStatusResponse): boolean {
+  return a.text_hash === b.text_hash && JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** The canvas-facing index of a status answer: working-tree markers by node name. */
+export function markersByName(status: GitStatusResponse): Record<string, NodeChange> {
+  const out: Record<string, NodeChange> = {};
+  for (const change of status.pipeline.nodes) out[change.name] = change;
+  return out;
+}
 
 /** The store's record of an `error` payload (flattened details named). */
 export function lastErrorOf(p: ErrorPayload): LastError {

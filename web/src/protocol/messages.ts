@@ -282,6 +282,194 @@ export interface Catalog {
   nodes: CatalogNode[];
 }
 
+// ------------------------------------------------------------------- git --
+//
+// The git panel's HTTP shapes (docs/13 §HTTP surface `/api/git/*`, doc 10
+// §Git integration; `protocol.rs` `// --- git --`). HTTP-only — no WS
+// message: the client reads `GET /api/git/status` (on connect, ≤1/s after
+// writes, on window focus — `state/git.ts`) and dedupes on `text_hash`.
+
+/** A multi-step git operation the shell left unfinished (`protocol::Operation`). */
+export type GitOperation = "merge" | "rebase" | "cherry_pick" | "revert";
+
+/** A branch's upstream and the ahead/behind counts (`protocol::Upstream`). */
+export interface GitUpstream {
+  name: string;
+  ahead: number;
+  behind: number;
+}
+
+/** The facts of the repository the project lives in (`protocol::RepoInfo`). */
+export interface RepoInfo {
+  /** As git reports it — informational only, never joined with paths (the server's cwd view). */
+  root: string;
+  /** The project dir relative to `root` (`""` when the project IS the root). */
+  prefix: string;
+  /** `null` = detached HEAD. */
+  branch: string | null;
+  /** `null` on an unborn branch. */
+  head_short: string | null;
+  upstream: GitUpstream | null;
+  /** `git init` without a commit: everything is `added`, the first commit works. */
+  unborn: boolean;
+  /** Present only while one is in progress — commit and revert refuse until it is done. */
+  operation?: GitOperation;
+}
+
+/**
+ * Where the project stands in git (`protocol::GitState`, tagged `kind`):
+ * `repo` is the normal case; `locked` is the SAME repository with
+ * `index.lock` held (status still answers, writes wait — the facts stay so
+ * the chip never blanks during the app's own commit); the other two are
+ * typed refusals, never strings.
+ */
+export type GitState =
+  | ({ kind: "repo" } & RepoInfo)
+  | ({ kind: "locked" } & RepoInfo)
+  | { kind: "not_a_repo" }
+  | { kind: "git_not_found" };
+
+/** The repository facts of `repo` and `locked` (mirrors `GitState::repo`). */
+export function gitRepoInfo(state: GitState): RepoInfo | null {
+  return state.kind === "repo" || state.kind === "locked" ? state : null;
+}
+
+/** How a node's binding line differs from HEAD (`protocol::ChangeKind`). */
+export type ChangeKind = "added" | "modified" | "removed" | "renamed";
+
+/** One node's change marker (`protocol::NodeChange`). */
+export interface NodeChange {
+  name: string;
+  change: ChangeKind;
+  /** `renamed`: the name the binding had in HEAD. */
+  from?: string;
+}
+
+/** A binding HEAD has that the working tree lost (`protocol::RemovedNode`). */
+export interface RemovedNode {
+  name: string;
+  /** 1-based line in `HEAD:<path>`. */
+  line_in_head: number;
+}
+
+/** A file's git status in the commit scope (`protocol::FileStatus`). */
+export type FileStatus = "modified" | "added" | "deleted" | "untracked" | "renamed";
+
+/** One dirty file of the commit scope, project-relative (`protocol::ScopeFile`). */
+export interface ScopeFile {
+  path: string;
+  status: FileStatus;
+}
+
+/** The pipeline file's git view (`protocol::PipelineGitStatus`). */
+export interface PipelineGitStatus {
+  path: string;
+  /** Known to git (HEAD or index). Untracked → every node `added`. */
+  tracked: boolean;
+  /** Matched by `.gitignore`: git refuses to add it — commit refuses `ignored`, the scope leaves it out. */
+  ignored: boolean;
+  dirty: boolean;
+  nodes: NodeChange[];
+  removed: RemovedNode[];
+}
+
+/** `GET /api/git/status` (`protocol::GitStatusResponse`). */
+export interface GitStatusResponse {
+  state: GitState;
+  pipeline: PipelineGitStatus;
+  /** The dirty files of the commit scope — what `commit` would stage. */
+  scope: ScopeFile[];
+  /** blake3 hex of the working file the markers were computed against. */
+  text_hash: string;
+}
+
+/** `POST /api/git/commit` body (`protocol::CommitRequest`). */
+export interface CommitRequest {
+  /** Verbatim (`--cleanup=verbatim`); blank → `empty_message`. */
+  message: string;
+  /** The writer's WS client id (or the `X-Cicada-Client` header). */
+  client?: number;
+}
+
+/** `POST /api/git/commit` → the commit that landed (`protocol::CommitResponse`). */
+export interface CommitResponse {
+  hash: string;
+  short: string;
+  summary: string;
+  files: string[];
+}
+
+/** `POST /api/git/revert` body (`protocol::RevertRequest`). */
+export interface RevertRequest {
+  /** A subset of the scope; absent = the whole dirty scope. */
+  paths?: string[];
+  client?: number;
+}
+
+/** `POST /api/git/revert` → what went back to HEAD (`protocol::RevertResponse`). */
+export interface RevertResponse {
+  reverted: string[];
+  /** Dirty scope files with no HEAD version, left exactly as they were. */
+  untracked: string[];
+  /** The session reloaded (one barrier snapshot, `reason: "git revert"`). */
+  reloaded: boolean;
+}
+
+/**
+ * The `kind` of a refused git route (`protocol::GitErrorKind`, snake_case)
+ * — the tag of every git-route failure body except the token middleware's
+ * text 401. Status codes: docs/13 §HTTP surface.
+ */
+export type GitErrorKind =
+  | "protocol"
+  | "no_such_pipeline"
+  | "lease"
+  | "not_a_repo"
+  | "git_not_found"
+  | "locked"
+  | "nothing_to_commit"
+  | "nothing_to_revert"
+  | "untracked"
+  | "ignored"
+  | "operation_in_progress"
+  | "empty_message"
+  | "path_not_allowed"
+  | "git_failed"
+  | "git_timeout"
+  | "io_error"
+  | "reload_failed"
+  | "internal"
+  /** Client-side only: no JSON body came back (the token middleware's text 401, a network failure). */
+  | "transport"
+  | (string & {});
+
+/**
+ * A git route's refusal body: `{kind, message}` plus the kind-specific facts
+ * (`GitRefusal::body`): `path` on `no_such_pipeline` / `lease` (nobody has
+ * the pipeline open) / `untracked` / `ignored` / `path_not_allowed`,
+ * `operation` on `operation_in_progress`, `command` + `code` + `stderr` on
+ * `git_failed`, `command` on `git_timeout`.
+ */
+export interface GitErrorBody {
+  kind: GitErrorKind;
+  message: string;
+  path?: string;
+  operation?: GitOperation;
+  command?: string;
+  /** `null` = killed by a signal. */
+  code?: number | null;
+  stderr?: string;
+}
+
+/** The git summary on `GET /api/project` (`protocol::ProjectGit`; `kind` = the state's tag, or `error`). */
+export interface ProjectGit {
+  kind: string;
+  branch: string | null;
+  /** `git status` entries under the project dir; 0 outside a repo. */
+  dirty_count: number;
+  error?: string;
+}
+
 // ------------------------------------------------------- server messages --
 
 export interface ProbeVerdict {
