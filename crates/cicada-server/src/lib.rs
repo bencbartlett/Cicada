@@ -15,15 +15,18 @@
 //! Stage-5 slice plus the v0.1 undo/redo (doc 17 item 1): one project
 //! directory, one session per pipeline, single writer + read-only
 //! observers, a snapshot op log with `undo` / `redo` / `batch` /
-//! `apply_text` (+ `GET /api/edit/text`, `POST /api/edit/apply_text`); no
-//! transport, no git panel yet; the byte-exact frame format is documented
-//! in [`frames`] and docs/13.
+//! `apply_text` (+ `GET /api/edit/text`, `POST /api/edit/apply_text`), and
+//! the git panel's server half (doc 17 item 2: [`git`] over the git
+//! binary — `GET /api/git/status`, `POST /api/git/commit`, `POST
+//! /api/git/revert`); no transport yet; the byte-exact frame format is
+//! documented in [`frames`] and docs/13.
 
 mod atomic;
 pub mod catalog;
 pub mod compile;
 pub mod display;
 pub mod frames;
+pub mod git;
 pub mod http;
 pub mod layout;
 pub mod lower;

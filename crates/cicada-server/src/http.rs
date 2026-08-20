@@ -28,8 +28,10 @@ use cicada_core::config::ProjectConfig;
 use futures_util::{SinkExt as _, StreamExt as _};
 use tokio::sync::mpsc::unbounded_channel;
 
+use crate::git::{Git, GitRefusal, Scope};
 use crate::protocol::{
-    ApplyTextRequest, DeltaSource, IntentEnvelope, PROTOCOL_VERSION, Role, ServerMessage, encode,
+    ApplyTextRequest, CommitRequest, DeltaSource, GitErrorKind, IntentEnvelope, PROTOCOL_VERSION,
+    RevertRequest, Role, ServerMessage, encode,
 };
 use crate::session::{IntentError, Outgoing, Session, SessionConfig};
 
@@ -133,6 +135,9 @@ struct AppState {
     token: String,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    /// The project's git handle (doc 17 item 2): every git route runs
+    /// through it, with the project dir as cwd.
+    git: Git,
 }
 
 /// A running server.
@@ -200,6 +205,7 @@ pub async fn serve(mut config: ServeConfig) -> Result<ServerHandle, ServeError> 
         token: token.clone(),
         sessions: Mutex::new(HashMap::new()),
         watcher: Mutex::new(None),
+        git: Git::new(&config.project_dir),
         config,
     });
     if let Some(pipeline) = state.config.pipeline.clone() {
@@ -443,6 +449,9 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/run/{node}", post(api_run))
         .route("/api/edit/text", get(api_edit_text))
         .route("/api/edit/apply_text", post(api_edit_apply_text))
+        .route("/api/git/status", get(api_git_status))
+        .route("/api/git/commit", post(api_git_commit))
+        .route("/api/git/revert", post(api_git_revert))
         .route("/ws", get(ws_upgrade))
         .route("/debug/state", get(debug_state))
         .route("/debug/screenshot", get(debug_screenshot))
@@ -561,13 +570,16 @@ async fn api_catalog(
 
 async fn api_project(State(state): State<Arc<AppState>>) -> Response {
     let mut pipelines = Vec::new();
+    let mut scripts = Vec::new();
     collect_pipelines(
         &state.config.project_dir,
         &state.config.project_dir,
         &mut pipelines,
+        &mut scripts,
         0,
     );
     pipelines.sort();
+    scripts.sort();
     let open: Vec<String> = state
         .sessions
         .lock()
@@ -575,24 +587,49 @@ async fn api_project(State(state): State<Arc<AppState>>) -> Response {
         .keys()
         .cloned()
         .collect();
+    // The git summary shells out (two short reads): off the async runtime.
+    let summary = {
+        let state = Arc::clone(&state);
+        match tokio::task::spawn_blocking(move || state.git.summary()).await {
+            Ok(summary) => serde_json::to_value(summary).unwrap_or_default(),
+            Err(error) => serde_json::json!({
+                "kind": "error",
+                "branch": null,
+                "dirty_count": 0,
+                "error": error.to_string(),
+            }),
+        }
+    };
     axum::Json(serde_json::json!({
         "project": crate::session::display_path(&state.config.project_dir),
         "pipelines": pipelines,
+        "scripts": scripts,
         "default": state.config.pipeline,
         "open": open,
+        "git": summary,
         "engine": format!("cicada {}", env!("CARGO_PKG_VERSION")),
         "protocol": PROTOCOL_VERSION,
     }))
     .into_response()
 }
 
-fn collect_pipelines(root: &Path, dir: &Path, out: &mut Vec<String>, depth: usize) {
+/// Walk the project for `*.cic` pipelines and the `scripts/*.py` beside
+/// them (project-relative, `/`-separated); shallow, skipping the usual
+/// non-project directories.
+fn collect_pipelines(
+    root: &Path,
+    dir: &Path,
+    pipelines: &mut Vec<String>,
+    scripts: &mut Vec<String>,
+    depth: usize,
+) {
     if depth > 4 {
         return;
     }
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
+    let in_scripts_dir = dir.file_name().is_some_and(|n| n == "scripts");
     for entry in entries.flatten() {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -600,11 +637,14 @@ fn collect_pipelines(root: &Path, dir: &Path, out: &mut Vec<String>, depth: usiz
             if name.starts_with('.') || name == "node_modules" || name == "target" {
                 continue;
             }
-            collect_pipelines(root, &path, out, depth + 1);
-        } else if path.extension().is_some_and(|e| e == "cic")
-            && let Ok(relative) = path.strip_prefix(root)
-        {
-            out.push(relative.to_string_lossy().replace('\\', "/"));
+            collect_pipelines(root, &path, pipelines, scripts, depth + 1);
+        } else if let Ok(relative) = path.strip_prefix(root) {
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            if path.extension().is_some_and(|e| e == "cic") {
+                pipelines.push(relative);
+            } else if in_scripts_dir && path.extension().is_some_and(|e| e == "py") {
+                scripts.push(relative);
+            }
         }
     }
 }
@@ -727,6 +767,153 @@ async fn api_run(
     match tokio::task::spawn_blocking(move || session.run_effectful(&node)).await {
         Ok(Ok(value)) => axum::Json(value).into_response(),
         Ok(Err(message)) => (StatusCode::CONFLICT, message).into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+/// The writer gate for HTTP actions that are not document edits (`POST
+/// /api/run/{node}` set the pattern): the caller names its WS client id —
+/// `X-Cicada-Client`, or `client` in the body — and the session checks it
+/// holds the lease. `apply_text` deliberately bypasses this (an agent acts
+/// FOR the user on the document); committing and reverting are git actions
+/// on the project, so they need the writer.
+fn writer_client(headers: &HeaderMap, body_client: Option<u32>) -> Option<u32> {
+    body_client.or_else(|| {
+        headers
+            .get("x-cicada-client")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u32>().ok())
+    })
+}
+
+/// The HTTP status of a refused git route — one per [`GitErrorKind`].
+fn git_status(refusal: &GitRefusal) -> StatusCode {
+    match refusal.kind() {
+        GitErrorKind::Protocol => StatusCode::BAD_REQUEST,
+        GitErrorKind::Lease => StatusCode::FORBIDDEN,
+        GitErrorKind::NotARepo
+        | GitErrorKind::GitNotFound
+        | GitErrorKind::NothingToCommit
+        | GitErrorKind::NothingToRevert
+        | GitErrorKind::Untracked => StatusCode::CONFLICT,
+        GitErrorKind::EmptyMessage | GitErrorKind::PathNotAllowed => {
+            StatusCode::UNPROCESSABLE_ENTITY
+        }
+        GitErrorKind::Locked => StatusCode::LOCKED,
+        GitErrorKind::GitFailed
+        | GitErrorKind::GitTimeout
+        | GitErrorKind::IoError
+        | GitErrorKind::ReloadFailed => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+fn git_refused(refusal: &GitRefusal) -> Response {
+    (git_status(refusal), axum::Json(refusal.body())).into_response()
+}
+
+/// `GET /api/git/status?pipeline=` → the git state, this pipeline's node
+/// markers (working tree vs HEAD), and the dirty files of its commit scope.
+/// Reads only — `--no-optional-locks` on every call, so a refresh never
+/// touches the project and never wakes the watcher.
+async fn api_git_status(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<PipelineQuery>,
+) -> Response {
+    let session = match session_for(&state, &query) {
+        Ok(session) => session,
+        Err(response) => return *response,
+    };
+    let scope = Scope::for_pipeline(session.relative());
+    let git_state = Arc::clone(&state);
+    match tokio::task::spawn_blocking(move || git_state.git.status(&scope)).await {
+        Ok(Ok(status)) => axum::Json(status).into_response(),
+        Ok(Err(refusal)) => git_refused(&refusal),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+/// `POST /api/git/commit` `{message, client?}` (writer-gated): stage the
+/// dirty scope files and commit exactly them, the message verbatim →
+/// `{hash, short, summary, files}`. 422 `empty_message`, 409
+/// `nothing_to_commit` / `not_a_repo` / `git_not_found`, 423 `locked`, 403
+/// `lease`, 500 `git_failed` (with `command`, `code`, `stderr`).
+async fn api_git_commit(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<PipelineQuery>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let session = match session_for(&state, &query) {
+        Ok(session) => session,
+        Err(response) => return *response,
+    };
+    let request: CommitRequest = match serde_json::from_slice(&body) {
+        Ok(request) => request,
+        Err(error) => {
+            return git_refused(&GitRefusal::Protocol(format!(
+                "unreadable commit body (expected {{message, client?}}): {error}"
+            )));
+        }
+    };
+    let client = writer_client(&headers, request.client);
+    if !client.is_some_and(|id| session.is_writer(id)) {
+        return git_refused(&GitRefusal::Lease);
+    }
+    let scope = Scope::for_pipeline(session.relative());
+    let git_state = Arc::clone(&state);
+    match tokio::task::spawn_blocking(move || git_state.git.commit(&scope, &request.message)).await
+    {
+        Ok(Ok(committed)) => axum::Json(committed).into_response(),
+        Ok(Err(refusal)) => git_refused(&refusal),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+/// `POST /api/git/revert` `{paths?, client?}` (writer-gated): `git checkout
+/// HEAD --` the dirty scope files (or the given subset, validated against
+/// the scope), then reload the session through the external-change path —
+/// `reload_from_disk` → ONE barrier snapshot (the watcher's later echo
+/// finds disk == memory and does nothing; should the watcher win the race,
+/// this call is the no-op — either way exactly one barrier reaches
+/// clients). → `{reverted, untracked, reloaded}`. 409 `untracked` for a
+/// pipeline with no HEAD version, 409 `nothing_to_revert`, 422
+/// `path_not_allowed`, 500 `reload_failed` when the files are back but the
+/// session could not load them.
+async fn api_git_revert(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<PipelineQuery>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let session = match session_for(&state, &query) {
+        Ok(session) => session,
+        Err(response) => return *response,
+    };
+    let request: RevertRequest = match serde_json::from_slice(&body) {
+        Ok(request) => request,
+        Err(error) => {
+            return git_refused(&GitRefusal::Protocol(format!(
+                "unreadable revert body (expected {{paths?, client?}}): {error}"
+            )));
+        }
+    };
+    let client = writer_client(&headers, request.client);
+    if !client.is_some_and(|id| session.is_writer(id)) {
+        return git_refused(&GitRefusal::Lease);
+    }
+    let scope = Scope::for_pipeline(session.relative());
+    let git_state = Arc::clone(&state);
+    let outcome = tokio::task::spawn_blocking(move || {
+        let reverted = git_state.git.revert(&scope, request.paths.as_deref())?;
+        let reloaded = session
+            .reload_from_disk("git revert", reverted.touched_scripts)
+            .map_err(|error| GitRefusal::Reload(error.to_string()))?;
+        Ok::<_, GitRefusal>(reverted.into_response(reloaded))
+    })
+    .await;
+    match outcome {
+        Ok(Ok(response)) => axum::Json(response).into_response(),
+        Ok(Err(refusal)) => git_refused(&refusal),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
     }
 }
@@ -1011,10 +1198,12 @@ async fn spa_fallback(uri: Uri) -> Response {
 async fn spa_fallback(State(state): State<Arc<AppState>>, uri: Uri) -> Response {
     let _ = uri;
     let mut pipelines = Vec::new();
+    let mut scripts = Vec::new();
     collect_pipelines(
         &state.config.project_dir,
         &state.config.project_dir,
         &mut pipelines,
+        &mut scripts,
         0,
     );
     pipelines.sort();
