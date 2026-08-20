@@ -285,10 +285,17 @@ format, doc 08.
   theirs; sphere gained a transcendental-free topology golden) and the
   conformance test reads the source to enforce the layout
   (`src/<category>/<node>.rs`, one `#[node]` per file) and the three
-  tests. **Pending (web lane)**: `gh` and `examples` are served by
-  `/api/catalog` but the client's `CatalogNode` mirror and
-  search-to-place do not read them yet; output-port docs likewise stop
-  at the catalog (the view-model's `OutputView` carries no `doc`).
+  tests. **Web lane (2026-08-20)**: the client's `CatalogNode` mirror
+  reads format 2 (`gh`, `examples`, per-port `doc`; a vitest pins it to
+  the committed `catalog.json`); search-to-place — the double-click box
+  and the wire-to-empty-canvas box — matches name, title AND `gh`,
+  ranked name exact > gh exact > title exact > prefix > substring
+  (`Addition` → `add` above `mass_addition`), and shows `GH <name>` on a
+  row whose GH name differs from its title; port hovers on the canvas
+  and in the inspector read `name: type — doc`, output docs looked up
+  in the catalog by func (the view-model's `OutputView` still carries
+  no `doc` — deliberately: the catalog is the source either way).
+  `web/e2e/search.spec.ts` drives it through the real app.
 - **C1**: the nodes our diagnostics already cite — `compact`,
   `pad_last`/`repeat`/`truncate` policies — plus duplicate / reverse /
   sort / dispatch / group_by and the maths tail (min/max/abs/round/

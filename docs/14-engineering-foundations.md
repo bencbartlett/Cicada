@@ -206,8 +206,8 @@ their own doc lines, so every port is documented either way),
 snippet CI solves — REQUIRED); the `#[node(category, tier, version,
 gh = "Move" | none)]` function (`gh` = the Grasshopper component it
 replaces, carried in the catalog and `/api/catalog` for the docs and
-for search-to-place — the client-side search wiring is a pending web
-follow-up, tracked in doc 17 Track C); and the
+for search-to-place, which matches it beside the name and title and
+shows it on the row — doc 17 Track C, web lane); and the
 three tests — table cases, a property test, a determinism test — IN
 THAT FILE (a test spanning two nodes, like a construct/deconstruct
 round-trip, may live with the primary node in addition, never
