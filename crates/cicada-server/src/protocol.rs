@@ -259,36 +259,99 @@ pub struct ProbeCatalogEntry {
 // `text_hash`. [`crate::git`] produces them over the git binary.
 
 /// Where the project stands in git — the tagged state every git route
-/// starts from. `Repo` is the normal case; the other three are typed
-/// refusals, never strings.
+/// starts from. `Repo` is the normal case; `Locked` is the same
+/// repository with `index.lock` held (the facts stay visible — the branch
+/// chip must not blank out during the app's own commit); the other two
+/// are typed refusals, never strings. Serialized with the tag `kind` and
+/// the [`RepoInfo`] fields flattened beside it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum GitState {
     /// The project lives inside a git work tree.
-    Repo {
-        /// The repository root (as git reports it: absolute, `/`-separated).
-        root: String,
-        /// The project directory relative to `root` (`""` when the project
-        /// IS the root; `examples/wall` otherwise — no trailing slash).
-        prefix: String,
-        /// The checked-out branch; `None` when HEAD is detached.
-        branch: Option<String>,
-        /// HEAD's abbreviated commit id; `None` on an unborn branch (the
-        /// thing to show when `branch` is `None`).
-        head_short: Option<String>,
-        /// The branch's upstream and how far apart they are, when set.
-        upstream: Option<Upstream>,
-        /// HEAD points at a branch with no commits yet (`git init` without
-        /// a commit): everything is `added`, and the first commit works.
-        unborn: bool,
-    },
+    Repo(RepoInfo),
     /// The project directory is not inside a git work tree.
     NotARepo,
     /// No `git` binary on PATH.
     GitNotFound,
     /// Another git process holds `index.lock` — status still answers
-    /// (nothing here takes the lock), but commit / revert wait.
-    Locked,
+    /// (nothing here takes the lock), but commit / revert wait. Carries
+    /// the same facts as `Repo`.
+    Locked(RepoInfo),
+}
+
+impl GitState {
+    /// The repository facts of `Repo` and `Locked`.
+    #[must_use]
+    pub fn repo(&self) -> Option<&RepoInfo> {
+        match self {
+            Self::Repo(info) | Self::Locked(info) => Some(info),
+            Self::NotARepo | Self::GitNotFound => None,
+        }
+    }
+
+    /// The `kind` tag as serialized.
+    #[must_use]
+    pub fn tag(&self) -> &'static str {
+        match self {
+            Self::Repo(_) => "repo",
+            Self::NotARepo => "not_a_repo",
+            Self::GitNotFound => "git_not_found",
+            Self::Locked(_) => "locked",
+        }
+    }
+}
+
+/// The facts of a repository the project lives in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepoInfo {
+    /// The repository root (as git reports it: absolute, `/`-separated).
+    pub root: String,
+    /// The project directory relative to `root` (`""` when the project
+    /// IS the root; `examples/wall` otherwise — no trailing slash).
+    pub prefix: String,
+    /// The checked-out branch; `None` when HEAD is detached.
+    pub branch: Option<String>,
+    /// HEAD's abbreviated commit id; `None` on an unborn branch (the
+    /// thing to show when `branch` is `None`).
+    pub head_short: Option<String>,
+    /// The branch's upstream and how far apart they are, when set.
+    pub upstream: Option<Upstream>,
+    /// HEAD points at a branch with no commits yet (`git init` without
+    /// a commit): everything is `added`, and the first commit works.
+    pub unborn: bool,
+    /// A merge / rebase / cherry-pick / revert the user started in a
+    /// shell and has not finished. Commit and revert refuse
+    /// (`operation_in_progress`) — finishing it is the shell's job (doc
+    /// 10: branching and merging stay in the shell for v0.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<Operation>,
+}
+
+/// A multi-step git operation left in progress (`.git/MERGE_HEAD` etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Operation {
+    /// `MERGE_HEAD` exists.
+    Merge,
+    /// `rebase-merge/` or `rebase-apply/` exists.
+    Rebase,
+    /// `CHERRY_PICK_HEAD` exists.
+    CherryPick,
+    /// `REVERT_HEAD` exists (a `git revert` of a commit, not ours).
+    Revert,
+}
+
+impl Operation {
+    /// The wire name (`merge`, `rebase`, `cherry_pick`, `revert`).
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Merge => "merge",
+            Self::Rebase => "rebase",
+            Self::CherryPick => "cherry_pick",
+            Self::Revert => "revert",
+        }
+    }
 }
 
 /// A branch's upstream and the ahead/behind counts against it.
@@ -350,7 +413,9 @@ pub enum FileStatus {
     Added,
     /// Deleted (index or working tree).
     Deleted,
-    /// Not known to git (also: ignored — git would refuse to add it).
+    /// Not known to git. (Ignored files never appear in the scope: git
+    /// itself does not list them and `git add` refuses them — an ignored
+    /// pipeline is reported through `PipelineGitStatus::ignored`.)
     Untracked,
     /// Renamed in the index.
     Renamed,
@@ -375,6 +440,11 @@ pub struct PipelineGitStatus {
     pub path: String,
     /// Known to git (in HEAD or the index). Untracked → every node `added`.
     pub tracked: bool,
+    /// Matched by a `.gitignore` rule (and not tracked): git would refuse
+    /// to add it, so the scope leaves it out and `commit` refuses
+    /// `ignored`. Every node is `added` (there is no HEAD version).
+    #[serde(default)]
+    pub ignored: bool,
     /// Differs from HEAD (or untracked).
     pub dirty: bool,
     /// Markers for nodes in the working tree (added / modified / renamed).
@@ -454,9 +524,12 @@ pub struct RevertResponse {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GitErrorKind {
-    /// Malformed request body (400).
+    /// Malformed request body or pipeline reference (400).
     Protocol,
-    /// The caller is not the lease holder (403).
+    /// `?pipeline=` names no pipeline of the project (404).
+    NoSuchPipeline,
+    /// The caller is not the lease holder — or nobody is: no client has
+    /// the pipeline open (403).
     Lease,
     /// The project is not in a git work tree (409).
     NotARepo,
@@ -470,6 +543,12 @@ pub enum GitErrorKind {
     NothingToRevert,
     /// The pipeline (or a requested path) has no HEAD version (409).
     Untracked,
+    /// The pipeline is matched by `.gitignore`: git refuses to add it (409).
+    Ignored,
+    /// A merge / rebase / cherry-pick / revert is in progress in the
+    /// repository — the body carries `operation`; finish it in the shell
+    /// (409).
+    OperationInProgress,
     /// The commit message is empty (422).
     EmptyMessage,
     /// A requested path is outside the commit scope (422).
@@ -484,6 +563,9 @@ pub enum GitErrorKind {
     /// The files were restored but the session could not reload them — the
     /// previous state stays live; the message says why (500).
     ReloadFailed,
+    /// The server itself failed around the git call (a blocking task that
+    /// panicked, an unresolvable project dir) (500).
+    Internal,
 }
 
 /// The git summary on `GET /api/project` (additive).

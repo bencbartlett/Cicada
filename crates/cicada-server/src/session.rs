@@ -641,6 +641,19 @@ pub struct Session {
     ticker: Option<std::thread::JoinHandle<()>>,
 }
 
+/// The session's writes held off ([`Session::hold_writes`]): the document
+/// lock, owned by the caller until [`Session::reload_from_disk_held`]
+/// consumes it (or it is dropped — on the error path of whatever the
+/// caller was doing to the files, which then simply never reloads).
+#[must_use = "dropping the hold lets writes through again; pass it to reload_from_disk_held"]
+pub struct WriteHold<'a>(std::sync::MutexGuard<'a, Inner>);
+
+impl std::fmt::Debug for WriteHold<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("WriteHold")
+    }
+}
+
 impl Session {
     /// Open a session: read + check + lower the pipeline, open the store,
     /// start the scheduler and the solve loop, run the first generation.
@@ -1904,12 +1917,42 @@ impl Session {
         reason: &str,
         rescan_scripts: bool,
     ) -> Result<bool, SessionError> {
+        let hold = self.hold_writes();
+        self.reload_from_disk_held(hold, reason, rescan_scripts)
+    }
+
+    /// Exclude the session's own writes while a caller changes the files
+    /// on disk (git revert: `checkout HEAD -- <paths>`), then hand the
+    /// hold to [`Self::reload_from_disk_held`]. While the hold lives, no
+    /// intent, `apply_text`, undo/redo, or watcher reload can touch the
+    /// document — a slider drag that arrives during a revert applies to
+    /// the REVERTED text afterwards instead of overwriting the restored
+    /// file between the checkout and the reload (which would have made
+    /// the reload a no-op and the revert silently lost). Keep it short:
+    /// the whole session waits on it.
+    pub fn hold_writes(&self) -> WriteHold<'_> {
+        WriteHold(self.core.lock_inner())
+    }
+
+    /// [`Self::reload_from_disk`] under a hold taken before the files were
+    /// changed: the reload sees exactly the caller's bytes, and the hold
+    /// ends with the reload. Returns `Ok(false)` when disk equals memory.
+    ///
+    /// # Errors
+    ///
+    /// [`SessionError`] as for [`Self::reload_from_disk`].
+    pub fn reload_from_disk_held(
+        &self,
+        hold: WriteHold<'_>,
+        reason: &str,
+        rescan_scripts: bool,
+    ) -> Result<bool, SessionError> {
         {
             // Read UNDER the lock: a read racing a commit (two quick writes,
             // the watcher's read between them) would otherwise compare a
             // stale text against the newer hash and reload the old text
             // over the new one.
-            let mut inner = self.core.lock_inner();
+            let WriteHold(mut inner) = hold;
             let text = std::fs::read_to_string(&self.core.config.pipeline).map_err(|source| {
                 SessionError::Read {
                     path: self.core.config.pipeline.clone(),
@@ -1947,11 +1990,12 @@ impl Session {
             inner.oplog.clear_by_barrier();
             self.core.rebuild(&mut inner);
             inner.seq += 1;
-        }
-        // Barrier snapshot to everyone.
-        let snapshot = self.snapshot(true, reason);
-        {
-            let inner = self.core.lock_inner();
+            // Barrier snapshot to everyone — UNDER the same lock, so it
+            // describes the reloaded state and precedes on the wire any
+            // edit that was waiting on the hold (otherwise that edit's
+            // delta could go out first and the "barrier" would carry the
+            // post-edit text).
+            let snapshot = self.core.snapshot_locked(&inner, true, reason);
             for client in inner.clients.values() {
                 let _ = client.tx.send(Outgoing::Text(snapshot.clone()));
             }
@@ -4236,6 +4280,102 @@ mod tests {
             !session.reload_from_disk("again", false).unwrap(),
             "unchanged → no-op"
         );
+    }
+
+    #[test]
+    fn a_write_hold_keeps_intents_out_until_the_held_reload_lands() {
+        // The git-revert shape (http.rs `api_git_revert`): hold writes,
+        // put HEAD's bytes on disk, reload under the same hold. An intent
+        // arriving in the window must wait and then apply to the REVERTED
+        // text — without the hold it would persist its own text over the
+        // restored file, the reload would find disk == memory and do
+        // nothing, and the revert would be silently lost.
+        let head = "# cicada 1\nsize = slider(value=2.0, min=0.5, max=5.0)\n";
+        let (_dir, config) = project(head);
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        session.handle(
+            id,
+            Some("s1".into()),
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "3.0".into(),
+            },
+        );
+        session.wait_idle();
+        assert!(
+            std::fs::read_to_string(&pipeline)
+                .unwrap()
+                .contains("value=3.0")
+        );
+        let _ = drain(&mut rx);
+
+        let hold = session.hold_writes();
+        std::fs::write(&pipeline, head).unwrap();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let racer = {
+            let session = Arc::clone(&session);
+            std::thread::spawn(move || {
+                session.handle(
+                    id,
+                    Some("s2".into()),
+                    ClientMessage::SetParam {
+                        node: "size".into(),
+                        port: Some("value".into()),
+                        value: "4.0".into(),
+                    },
+                );
+                let _ = done_tx.send(());
+            })
+        };
+        // Bounded wait in the safe direction: under the hold the intent
+        // CANNOT complete, whatever the scheduling — the timeout only
+        // bounds how long this test looks.
+        assert!(
+            done_rx
+                .recv_timeout(std::time::Duration::from_millis(300))
+                .is_err(),
+            "an intent landed while writes were held"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&pipeline).unwrap(),
+            head,
+            "the restored bytes are untouched under the hold"
+        );
+        let reloaded = session
+            .reload_from_disk_held(hold, "git revert", false)
+            .unwrap();
+        assert!(
+            reloaded,
+            "the reload saw the restored bytes, not an echo of the session's own write"
+        );
+        racer.join().unwrap();
+        session.wait_idle();
+        // The late intent applied to the reverted text: one op on top of
+        // the barrier, and on the wire the barrier precedes its delta.
+        assert!(
+            std::fs::read_to_string(&pipeline)
+                .unwrap()
+                .contains("value=4.0")
+        );
+        let state = session.debug_state(false);
+        assert_eq!(state["history"]["depth"], 1);
+        let msgs = texts(&drain(&mut rx));
+        let barrier_at = msgs
+            .iter()
+            .position(|m| m["type"] == "snapshot" && m["payload"]["barrier"] == true)
+            .expect("the barrier snapshot");
+        let delta_at = msgs
+            .iter()
+            .position(|m| m["type"] == "delta" && m["payload"]["source"]["intent_id"] == "s2")
+            .expect("the late intent's delta");
+        assert!(barrier_at < delta_at, "{msgs:?}");
+        assert_eq!(msgs[barrier_at]["payload"]["reason"], "git revert");
+        assert_eq!(msgs[barrier_at]["payload"]["text"], head);
     }
 
     #[test]

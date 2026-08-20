@@ -12,10 +12,10 @@
 //! changed line is `modified` when HEAD binds the name and `added` when it
 //! does not; a HEAD binding on a removed line that the working tree no
 //! longer binds is `removed`; a removed + added pair with a byte-identical
-//! right-hand side is `renamed`. The sidecar never produces markers — it
-//! is layout, not pipeline. Working tree vs HEAD only; other refs, the
-//! graph-diff overlay and per-node history follow once the markers have
-//! had weeks of use.
+//! right-hand side within one hunk is `renamed`. The sidecar never
+//! produces markers — it is layout, not pipeline. Working tree vs HEAD
+//! only; other refs, the graph-diff overlay and per-node history follow
+//! once the markers have had weeks of use.
 //!
 //! **Reading never writes** (the 82df8a3 lesson: a status refresh that
 //! touched the project would re-trigger the watcher). Every invocation
@@ -23,17 +23,24 @@
 //! never refreshes the index on disk; `diff`/`show`/`rev-parse` are reads.
 //! Commit and revert DO write — commit to `.git/` only (the watcher
 //! ignores it), revert to the scope files, which the session then reloads
-//! through the ordinary external-change path (barrier snapshot).
+//! through the ordinary external-change path (barrier snapshot) — under
+//! the session's write hold, so no edit can land between the checkout
+//! and the reload (`http.rs`). A merge / rebase / cherry-pick / revert the
+//! shell left unfinished is a state, and both writes refuse until it is
+//! done: a partial commit mid-merge is what git itself refuses.
 //!
 //! **Scope**: this pipeline's `.cic`, its `.cic.layout.json`, and the
-//! `scripts/*.py` beside it — exactly the set `apply_text` may write.
-//! Never `git add -A`; `commit -- <paths>` commits only those paths, so
-//! whatever else the user staged in a shell stays staged and uncommitted.
+//! `scripts/*.py` beside it — exactly the set `apply_text` may write —
+//! minus whatever `.gitignore` excludes (git does not list ignored files,
+//! and `git add` refuses a whole list over one; an ignored PIPELINE is a
+//! typed refusal). Never `git add -A`; `commit -- <paths>` commits only
+//! those paths, so whatever else the user staged in a shell stays staged
+//! and uncommitted.
 //! The project directory need not be the repository root (`examples/wall`
 //! is the normal case): git runs with the project dir as cwd, status
 //! paths come back root-relative and are mapped through the prefix.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -45,7 +52,8 @@ use cicada_lang::{Document, Line};
 
 use crate::protocol::{
     ChangeKind, CommitResponse, FileStatus, GitErrorKind, GitState, GitStatusResponse, NodeChange,
-    PipelineGitStatus, ProjectGit, RemovedNode, RevertResponse, ScopeFile, Upstream,
+    Operation, PipelineGitStatus, ProjectGit, RemovedNode, RepoInfo, RevertResponse, ScopeFile,
+    Upstream,
 };
 
 /// How long one git command may take before it is killed (a hook or a
@@ -125,6 +133,15 @@ pub enum GitRefusal {
          X-Cicada-Client)"
     )]
     Lease,
+    /// Nobody holds the write lease: no client has the pipeline open.
+    #[error(
+        "the write lease is required and nobody holds it: no client has `{0}` open — open it in \
+         the app first"
+    )]
+    NoWriter(String),
+    /// `?pipeline=` names no pipeline of the project.
+    #[error("no pipeline `{0}` in the project (see /api/project)")]
+    NoSuchPipeline(String),
     /// Not inside a git work tree.
     #[error("the project directory is not inside a git repository — `git init` it first")]
     NotARepo,
@@ -143,6 +160,19 @@ pub enum GitRefusal {
     /// A path has no HEAD version.
     #[error("`{0}` has no HEAD version to revert to (untracked or not yet committed)")]
     Untracked(String),
+    /// The pipeline is matched by `.gitignore`.
+    #[error(
+        "`{0}` is ignored by a .gitignore rule — git refuses to add it; un-ignore it (or \
+         `git add -f` it once in a shell) to commit from the app"
+    )]
+    Ignored(String),
+    /// A multi-step git operation is in progress.
+    #[error(
+        "a {} is in progress in the repository — finish or abort it in your shell first \
+         (committing or reverting part of it from the app would be a partial step)",
+        .0.name()
+    )]
+    OperationInProgress(Operation),
     /// Empty commit message.
     #[error("the commit message is empty")]
     EmptyMessage,
@@ -160,6 +190,9 @@ pub enum GitRefusal {
     /// The files were restored but the session could not reload them.
     #[error("the files were restored to HEAD but the session could not reload them: {0}")]
     Reload(String),
+    /// The server failed around the git call.
+    #[error("internal failure around the git call: {0}")]
+    Internal(String),
 }
 
 impl GitRefusal {
@@ -168,24 +201,29 @@ impl GitRefusal {
     pub fn kind(&self) -> GitErrorKind {
         match self {
             Self::Protocol(_) => GitErrorKind::Protocol,
-            Self::Lease => GitErrorKind::Lease,
+            Self::NoSuchPipeline(_) => GitErrorKind::NoSuchPipeline,
+            Self::Lease | Self::NoWriter(_) => GitErrorKind::Lease,
             Self::NotARepo => GitErrorKind::NotARepo,
             Self::GitNotFound | Self::Git(GitError::NotFound { .. }) => GitErrorKind::GitNotFound,
             Self::Locked => GitErrorKind::Locked,
             Self::NothingToCommit => GitErrorKind::NothingToCommit,
             Self::NothingToRevert => GitErrorKind::NothingToRevert,
             Self::Untracked(_) => GitErrorKind::Untracked,
+            Self::Ignored(_) => GitErrorKind::Ignored,
+            Self::OperationInProgress(_) => GitErrorKind::OperationInProgress,
             Self::EmptyMessage => GitErrorKind::EmptyMessage,
             Self::PathNotAllowed { .. } => GitErrorKind::PathNotAllowed,
             Self::Git(GitError::Timeout { .. }) => GitErrorKind::GitTimeout,
             Self::Git(GitError::Read { .. }) => GitErrorKind::IoError,
             Self::Git(_) => GitErrorKind::GitFailed,
             Self::Reload(_) => GitErrorKind::ReloadFailed,
+            Self::Internal(_) => GitErrorKind::Internal,
         }
     }
 
     /// The `{kind, message, …details}` body: a failed command carries
-    /// `command`, `code`, `stderr`; a refused path carries `path`.
+    /// `command`, `code`, `stderr`; a refused path carries `path`; an
+    /// operation in progress carries `operation`.
     #[must_use]
     pub fn body(&self) -> serde_json::Value {
         let mut body = serde_json::Map::new();
@@ -210,8 +248,15 @@ impl GitRefusal {
             Self::Git(GitError::Timeout { command, .. } | GitError::Spawn { command, .. }) => {
                 body.insert("command".to_owned(), command.as_str().into());
             }
-            Self::PathNotAllowed { path, .. } | Self::Untracked(path) => {
+            Self::PathNotAllowed { path, .. }
+            | Self::Untracked(path)
+            | Self::Ignored(path)
+            | Self::NoSuchPipeline(path)
+            | Self::NoWriter(path) => {
                 body.insert("path".to_owned(), path.as_str().into());
+            }
+            Self::OperationInProgress(operation) => {
+                body.insert("operation".to_owned(), operation.name().into());
             }
             _ => {}
         }
@@ -431,8 +476,13 @@ impl Git {
         command
     }
 
-    /// Run with captured output and the timeout; `stdin` is written and
-    /// closed before waiting. Non-zero exits are NOT errors here — callers
+    /// Run with captured output and the timeout; `stdin`, when given, is
+    /// written on its own thread (a pipe holds ~4 KB: a commit message
+    /// longer than that against a git that exits early — a failing hook —
+    /// would otherwise block the write, and a hook that never exits would
+    /// block it forever, ahead of the timeout loop). A broken pipe on
+    /// stdin is not an error of ours: git stopped reading, and its exit
+    /// code + stderr say why. Non-zero exits are NOT errors here — callers
     /// decide (`status` exits 128 outside a repo, which is a state).
     fn run(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<Output, GitError> {
         let command_text = format!("git {}", args.join(" "));
@@ -460,20 +510,17 @@ impl Git {
         let stderr = child.stderr.take();
         let out_reader = std::thread::spawn(move || drain(stdout));
         let err_reader = std::thread::spawn(move || drain(stderr));
-        if let Some(bytes) = stdin
-            && let Some(mut pipe) = child.stdin.take()
-        {
-            let written = pipe.write_all(bytes).and_then(|()| pipe.flush());
-            drop(pipe);
-            if let Err(source) = written {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(GitError::Spawn {
-                    command: command_text,
-                    source,
-                });
+        let writer = match (stdin, child.stdin.take()) {
+            (Some(bytes), Some(mut pipe)) => {
+                let bytes = bytes.to_vec();
+                Some(std::thread::spawn(move || {
+                    let written = pipe.write_all(&bytes).and_then(|()| pipe.flush());
+                    drop(pipe);
+                    written
+                }))
             }
-        }
+            _ => None,
+        };
         let deadline = Instant::now() + self.timeout;
         let status = loop {
             match child.try_wait() {
@@ -499,6 +546,12 @@ impl Git {
         };
         let stdout = out_reader.join().unwrap_or_default();
         let stderr = err_reader.join().unwrap_or_default();
+        if let Some(writer) = writer {
+            // The child has exited, so the write has ended one way or the
+            // other: complete, or refused with a broken pipe — which git's
+            // own exit status explains better than the OS error would.
+            let _ = writer.join();
+        }
         Ok(Output {
             status,
             stdout,
@@ -621,10 +674,13 @@ impl Git {
                 message,
             })?;
         let locked = layout.git_dir.join("index.lock").exists();
+        let info = parsed
+            .headers
+            .info(&layout, operation_in_progress(&layout.git_dir));
         let state = if locked {
-            GitState::Locked
+            GitState::Locked(info)
         } else {
-            parsed.headers.state(&layout)
+            GitState::Repo(info)
         };
         Ok(Survey {
             state,
@@ -657,6 +713,7 @@ impl Git {
                 pipeline: PipelineGitStatus {
                     path: scope.pipeline.clone(),
                     tracked: false,
+                    ignored: false,
                     dirty: false,
                     nodes: Vec::new(),
                     removed: Vec::new(),
@@ -668,8 +725,9 @@ impl Git {
         let files = survey.scope_files(scope);
         let pipeline_entry = survey.entry_for(&layout.to_root(&scope.pipeline));
         let tracked = pipeline_entry.is_none_or(Entry::tracked);
+        let ignored = pipeline_entry.is_some_and(Entry::ignored);
         let dirty = pipeline_entry.is_some();
-        let in_head = !survey.unborn && pipeline_entry.is_none_or(Entry::in_head);
+        let in_head = survey.pipeline_in_head(scope);
         let work = Document::parse(&work_text);
         let (nodes, removed) = if !in_head {
             // No HEAD version to diff against: every node is new.
@@ -719,6 +777,7 @@ impl Git {
             pipeline: PipelineGitStatus {
                 path: scope.pipeline.clone(),
                 tracked,
+                ignored,
                 dirty,
                 nodes,
                 removed,
@@ -730,12 +789,15 @@ impl Git {
 
     /// `POST /api/git/commit`: stage the dirty scope files and commit
     /// exactly them (`commit -- <paths>`: other staged paths stay staged),
-    /// the message verbatim on stdin.
+    /// the message verbatim on stdin. Ignored files are not in the scope
+    /// (`git add` would refuse the whole list over one of them); an
+    /// ignored PIPELINE is a refusal of its own.
     ///
     /// # Errors
     ///
     /// [`GitRefusal::EmptyMessage`], the state refusals (`NotARepo`,
-    /// `GitNotFound`, `Locked`), [`GitRefusal::NothingToCommit`], or an
+    /// `GitNotFound`, `Locked`, `OperationInProgress`),
+    /// [`GitRefusal::Ignored`], [`GitRefusal::NothingToCommit`], or an
     /// unexpected git failure.
     pub fn commit(&self, scope: &Scope, message: &str) -> Result<CommitResponse, GitRefusal> {
         if message.trim().is_empty() {
@@ -743,6 +805,12 @@ impl Git {
         }
         let survey = self.survey(&scope.pathspecs(), true).map_err(refuse)?;
         let layout = survey.repo_or_refuse()?;
+        if survey
+            .entry_for(&layout.to_root(&scope.pipeline))
+            .is_some_and(Entry::ignored)
+        {
+            return Err(GitRefusal::Ignored(scope.pipeline.clone()));
+        }
         let files = survey.scope_files(scope);
         if files.is_empty() {
             return Err(GitRefusal::NothingToCommit);
@@ -828,6 +896,12 @@ impl Git {
         }
         let survey = self.survey(&scope.pathspecs(), true).map_err(refuse)?;
         let layout = survey.repo_or_refuse()?;
+        // The pipeline itself without a HEAD version (untracked, ignored,
+        // index-only, unborn branch): there is nothing to put back —
+        // refuse, whether asked explicitly or by omission.
+        if !survey.pipeline_in_head(scope) {
+            return Err(GitRefusal::Untracked(scope.pipeline.clone()));
+        }
         let dirty = survey.scope_files(scope);
         let wanted = |path: &str| paths.is_none_or(|set| set.iter().any(|p| p == path));
         let mut restore = Vec::new();
@@ -840,11 +914,6 @@ impl Git {
             } else {
                 untracked.push(file.path.clone());
             }
-        }
-        // The pipeline itself without a HEAD version: there is nothing to
-        // put back — refuse, whether asked explicitly or by omission.
-        if let Some(path) = untracked.iter().find(|p| **p == scope.pipeline) {
-            return Err(GitRefusal::Untracked(path.clone()));
         }
         // An explicit ask for a file we would have to delete: refuse.
         if let Some(requested) = paths
@@ -875,22 +944,12 @@ impl Git {
     #[must_use]
     pub fn summary(&self) -> ProjectGit {
         match self.survey(&[".".to_owned()], false) {
-            Ok(survey) => {
-                let branch = match &survey.state {
-                    GitState::Repo { branch, .. } => branch.clone(),
-                    _ => None,
-                };
-                let kind = serde_json::to_value(&survey.state)
-                    .ok()
-                    .and_then(|v| v["kind"].as_str().map(str::to_owned))
-                    .unwrap_or_else(|| "error".to_owned());
-                ProjectGit {
-                    kind,
-                    branch,
-                    dirty_count: survey.entries.len(),
-                    error: None,
-                }
-            }
+            Ok(survey) => ProjectGit {
+                kind: survey.state.tag().to_owned(),
+                branch: survey.state.repo().and_then(|info| info.branch.clone()),
+                dirty_count: survey.entries.len(),
+                error: None,
+            },
             Err(error) => ProjectGit {
                 kind: "error".to_owned(),
                 branch: None,
@@ -931,6 +990,23 @@ fn drain(pipe: Option<impl std::io::Read>) -> Vec<u8> {
         let _ = pipe.read_to_end(&mut buffer);
     }
     buffer
+}
+
+/// The multi-step operation the repository is in the middle of, by the
+/// files git leaves in its directory while one is unfinished (the same
+/// tests `git status` and shell prompts use).
+fn operation_in_progress(git_dir: &Path) -> Option<Operation> {
+    if git_dir.join("MERGE_HEAD").exists() {
+        Some(Operation::Merge)
+    } else if git_dir.join("rebase-merge").exists() || git_dir.join("rebase-apply").exists() {
+        Some(Operation::Rebase)
+    } else if git_dir.join("CHERRY_PICK_HEAD").exists() {
+        Some(Operation::CherryPick)
+    } else if git_dir.join("REVERT_HEAD").exists() {
+        Some(Operation::Revert)
+    } else {
+        None
+    }
 }
 
 /// Windows' `\\?\` verbatim prefix off a canonical path: as a process cwd
@@ -978,6 +1054,11 @@ impl Entry {
         !matches!(self.kind, EntryKind::Untracked | EntryKind::Ignored)
     }
 
+    /// Matched by `.gitignore` (and not tracked).
+    fn ignored(&self) -> bool {
+        self.kind == EntryKind::Ignored
+    }
+
     /// HEAD has this path: tracked, not an index addition, not the new
     /// side of a rename.
     fn in_head(&self) -> bool {
@@ -1018,7 +1099,7 @@ impl Headers {
         self.oid.as_deref() == Some("(initial)")
     }
 
-    fn state(&self, layout: &Layout) -> GitState {
+    fn info(&self, layout: &Layout, operation: Option<Operation>) -> RepoInfo {
         let unborn = self.unborn();
         let branch = match self.head.as_deref() {
             None | Some("(detached)") => None,
@@ -1039,13 +1120,14 @@ impl Headers {
                 behind,
             }
         });
-        GitState::Repo {
+        RepoInfo {
             root: layout.root.clone(),
             prefix: layout.prefix.clone(),
             branch,
             head_short,
             upstream,
             unborn,
+            operation,
         }
     }
 }
@@ -1185,13 +1267,18 @@ impl Survey {
         }
     }
 
-    /// The layout, or the refusal the state means for a write.
+    /// The layout, or the refusal the state means for a write: locked,
+    /// not a repo, no git, or a merge/rebase/cherry-pick/revert the shell
+    /// has not finished.
     fn repo_or_refuse(&self) -> Result<&Layout, GitRefusal> {
         match (&self.state, &self.layout) {
-            (GitState::Repo { .. }, Some(layout)) => Ok(layout),
-            (GitState::Locked, _) => Err(GitRefusal::Locked),
+            (GitState::Repo(info), Some(layout)) => match info.operation {
+                Some(operation) => Err(GitRefusal::OperationInProgress(operation)),
+                None => Ok(layout),
+            },
+            (GitState::Locked(_), _) => Err(GitRefusal::Locked),
             (GitState::GitNotFound, _) => Err(GitRefusal::GitNotFound),
-            (GitState::NotARepo, _) | (GitState::Repo { .. }, None) => Err(GitRefusal::NotARepo),
+            (GitState::NotARepo, _) | (GitState::Repo(_), None) => Err(GitRefusal::NotARepo),
         }
     }
 
@@ -1199,7 +1286,23 @@ impl Survey {
         self.entries.iter().find(|e| e.path == root_relative)
     }
 
+    /// HEAD has a version of the pipeline: not on an unborn branch, and
+    /// either clean (no entry) or an entry that is in HEAD.
+    fn pipeline_in_head(&self, scope: &Scope) -> bool {
+        let Some(layout) = &self.layout else {
+            return false;
+        };
+        !self.unborn
+            && self
+                .entry_for(&layout.to_root(&scope.pipeline))
+                .is_none_or(Entry::in_head)
+    }
+
     /// The dirty files of the scope, project-relative, in scope order.
+    /// Ignored files are left out: git does not list them and `git add`
+    /// refuses a list that contains one — they are the user's explicit
+    /// choice not to commit. (`--ignored=matching` is asked for so that
+    /// the PIPELINE can be told apart from a clean tracked one.)
     fn scope_files(&self, scope: &Scope) -> Vec<ScopeFile> {
         let Some(layout) = &self.layout else {
             return Vec::new();
@@ -1207,6 +1310,7 @@ impl Survey {
         let mut files: Vec<ScopeFile> = self
             .entries
             .iter()
+            .filter(|entry| !entry.ignored())
             .filter_map(|entry| {
                 let path = layout.to_project(&entry.path)?;
                 scope.contains(path).then(|| ScopeFile {
@@ -1315,17 +1419,25 @@ fn line_nodes(doc: &Document) -> Vec<LineNode> {
 /// The markers for a working document against its HEAD version, given
 /// the hunks of `git diff -U0 HEAD -- <path>`. Pure; by construction a
 /// node is marked exactly when a hunk touches its line.
+///
+/// A rename is a removed + added pair with a byte-identical right-hand
+/// side **within the same hunk**: the writer's `rename` gesture rewrites
+/// the binding line in place (one line → one hunk, its old and new sides
+/// together), whereas a binding deleted here and an unrelated one with
+/// the same literal added elsewhere are two edits — two hunks — and are
+/// reported as exactly that, `removed` + `added`.
 #[must_use]
 pub fn markers(
     head: &Document,
     work: &Document,
     hunks: &[Hunk],
 ) -> (Vec<NodeChange>, Vec<RemovedNode>) {
-    let mut new_changed: HashSet<usize> = HashSet::new();
-    let mut old_changed: HashSet<usize> = HashSet::new();
-    for hunk in hunks {
-        new_changed.extend(hunk.new_start..hunk.new_start + hunk.new_count);
-        old_changed.extend(hunk.old_start..hunk.old_start + hunk.old_count);
+    // Line (1-based) → the index of the hunk that touches it.
+    let mut new_changed: HashMap<usize, usize> = HashMap::new();
+    let mut old_changed: HashMap<usize, usize> = HashMap::new();
+    for (index, hunk) in hunks.iter().enumerate() {
+        new_changed.extend((hunk.new_start..hunk.new_start + hunk.new_count).map(|l| (l, index)));
+        old_changed.extend((hunk.old_start..hunk.old_start + hunk.old_count).map(|l| (l, index)));
     }
     let head_nodes = line_nodes(head);
     let work_nodes = line_nodes(work);
@@ -1333,20 +1445,20 @@ pub fn markers(
     let work_names: HashSet<&str> = work_nodes.iter().map(|n| n.name.as_str()).collect();
 
     // Removed candidates: HEAD bindings on removed lines whose name the
-    // working tree no longer binds.
-    let mut removed: Vec<(&LineNode, bool)> = head_nodes
+    // working tree no longer binds — with their hunk, unpaired so far.
+    let mut removed: Vec<(&LineNode, usize, bool)> = head_nodes
         .iter()
-        .filter(|node| {
-            old_changed.contains(&(node.line + 1)) && !work_names.contains(node.name.as_str())
+        .filter_map(|node| {
+            let hunk = *old_changed.get(&(node.line + 1))?;
+            (!work_names.contains(node.name.as_str())).then_some((node, hunk, false))
         })
-        .map(|node| (node, false))
         .collect();
 
     let mut nodes = Vec::new();
     for node in &work_nodes {
-        if !new_changed.contains(&(node.line + 1)) {
+        let Some(hunk) = new_changed.get(&(node.line + 1)).copied() else {
             continue;
-        }
+        };
         if head_names.contains(node.name.as_str()) {
             nodes.push(NodeChange {
                 name: node.name.clone(),
@@ -1355,14 +1467,15 @@ pub fn markers(
             });
             continue;
         }
-        // New name: a removed binding with the identical right-hand side
-        // makes it a rename (first unpaired match, in HEAD order).
+        // New name: a removed binding of the SAME hunk with the identical
+        // right-hand side makes it a rename (first unpaired match, in
+        // HEAD order).
         let pair = node.rhs.as_ref().and_then(|rhs| {
-            removed
-                .iter_mut()
-                .find(|(gone, paired)| !*paired && gone.rhs.as_ref() == Some(rhs))
+            removed.iter_mut().find(|(gone, gone_hunk, paired)| {
+                !*paired && *gone_hunk == hunk && gone.rhs.as_ref() == Some(rhs)
+            })
         });
-        if let Some((gone, paired)) = pair {
+        if let Some((gone, _, paired)) = pair {
             *paired = true;
             nodes.push(NodeChange {
                 name: node.name.clone(),
@@ -1379,8 +1492,8 @@ pub fn markers(
     }
     let removed = removed
         .into_iter()
-        .filter(|(_, paired)| !*paired)
-        .map(|(gone, _)| RemovedNode {
+        .filter(|(_, _, paired)| !*paired)
+        .map(|(gone, _, _)| RemovedNode {
             name: gone.name.clone(),
             line_in_head: gone.line + 1,
         })
@@ -1489,6 +1602,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one record of every kind, then the shapes they become
     fn porcelain_v2_records_parse() {
         let raw = b"# branch.oid 0123456789abcdef0123456789abcdef01234567\0\
                     # branch.head main\0\
@@ -1500,7 +1614,8 @@ mod tests {
                     2 R. N... 100644 100644 100644 abc abc R100 examples/b.cic\0examples/a.cic\0\
                     u UU N... 100644 100644 100644 100644 a b c examples/scripts/merge.py\0\
                     ? examples/p.cic.layout.json\0\
-                    ! examples/scripts/__pycache__/x.pyc\0";
+                    ! examples/scripts/__pycache__/x.pyc\0\
+                    ! examples/scripts/local_probe.py\0";
         let parsed = parse_porcelain_v2(raw).unwrap();
         assert_eq!(parsed.headers.head.as_deref(), Some("main"));
         assert_eq!(parsed.headers.upstream.as_deref(), Some("origin/main"));
@@ -1511,10 +1626,10 @@ mod tests {
             prefix: "examples".into(),
             git_dir: "/r/.git".into(),
         };
-        let state = parsed.headers.state(&layout);
+        let info = parsed.headers.info(&layout, Some(Operation::Merge));
         assert_eq!(
-            state,
-            GitState::Repo {
+            info,
+            RepoInfo {
                 root: "/r".into(),
                 prefix: "examples".into(),
                 branch: Some("main".into()),
@@ -1525,8 +1640,31 @@ mod tests {
                     behind: 1
                 }),
                 unborn: false,
+                operation: Some(Operation::Merge),
             }
         );
+        // The wire shape: the tag beside the flattened facts, for `repo`
+        // and `locked` alike (the branch chip never blanks under a lock).
+        let repo = serde_json::to_value(GitState::Repo(info.clone())).unwrap();
+        assert_eq!(repo["kind"], "repo");
+        assert_eq!(repo["branch"], "main");
+        assert_eq!(repo["operation"], "merge");
+        let locked = serde_json::to_value(GitState::Locked(info.clone())).unwrap();
+        assert_eq!(locked["kind"], "locked");
+        assert_eq!(locked["prefix"], "examples");
+        assert_eq!(locked["upstream"]["ahead"], 2);
+        assert_eq!(
+            serde_json::from_value::<GitState>(locked).unwrap(),
+            GitState::Locked(info.clone())
+        );
+        assert_eq!(
+            serde_json::to_value(GitState::NotARepo).unwrap(),
+            serde_json::json!({"kind": "not_a_repo"})
+        );
+        let state = GitState::Repo(RepoInfo {
+            operation: None,
+            ..info
+        });
         let statuses: Vec<(String, FileStatus, bool, bool)> = parsed
             .entries
             .iter()
@@ -1567,10 +1705,17 @@ mod tests {
                     false,
                     false
                 ),
+                (
+                    "examples/scripts/local_probe.py".into(),
+                    FileStatus::Untracked,
+                    false,
+                    false
+                ),
             ]
         );
         // The scope filter: root-relative → project-relative, `.py` only,
-        // scope order.
+        // scope order — and the IGNORED script left out (`git add` would
+        // refuse the whole list over it).
         let survey = Survey {
             state,
             layout: Some(layout),
@@ -1589,6 +1734,49 @@ mod tests {
                 "scripts/old.py"
             ]
         );
+        assert!(survey.pipeline_in_head(&Scope::for_pipeline("p.cic")));
+        assert!(
+            !survey.pipeline_in_head(&Scope::for_pipeline("b.cic")),
+            "the new side of a rename has no HEAD version"
+        );
+        assert!(
+            !survey.pipeline_in_head(&Scope::for_pipeline("scripts/new.py")),
+            "index-only"
+        );
+        // A write under an operation in progress is refused before any
+        // command runs.
+        let merging = Survey {
+            state: GitState::Repo(RepoInfo {
+                operation: Some(Operation::CherryPick),
+                ..survey.state.repo().unwrap().clone()
+            }),
+            layout: survey.layout.clone(),
+            unborn: false,
+            entries: Vec::new(),
+        };
+        assert!(matches!(
+            merging.repo_or_refuse(),
+            Err(GitRefusal::OperationInProgress(Operation::CherryPick))
+        ));
+        assert_eq!(
+            merging.repo_or_refuse().unwrap_err().body()["operation"],
+            "cherry_pick"
+        );
+    }
+
+    #[test]
+    fn operations_in_progress_are_read_from_the_git_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let git_dir = dir.path();
+        assert_eq!(operation_in_progress(git_dir), None);
+        std::fs::write(git_dir.join("REVERT_HEAD"), "x").unwrap();
+        assert_eq!(operation_in_progress(git_dir), Some(Operation::Revert));
+        std::fs::write(git_dir.join("CHERRY_PICK_HEAD"), "x").unwrap();
+        assert_eq!(operation_in_progress(git_dir), Some(Operation::CherryPick));
+        std::fs::create_dir(git_dir.join("rebase-apply")).unwrap();
+        assert_eq!(operation_in_progress(git_dir), Some(Operation::Rebase));
+        std::fs::write(git_dir.join("MERGE_HEAD"), "x").unwrap();
+        assert_eq!(operation_in_progress(git_dir), Some(Operation::Merge));
     }
 
     #[test]
@@ -1600,27 +1788,21 @@ mod tests {
             prefix: String::new(),
             git_dir: "/r/.git".into(),
         };
-        let GitState::Repo {
+        let RepoInfo {
             branch,
             head_short,
             unborn,
             ..
-        } = parsed.headers.state(&layout)
-        else {
-            panic!()
-        };
+        } = parsed.headers.info(&layout, None);
         assert_eq!(
             (branch.as_deref(), head_short, unborn),
             (Some("main"), None, true)
         );
         let parsed =
             parse_porcelain_v2(b"# branch.oid abcdef1234567\0# branch.head (detached)\0").unwrap();
-        let GitState::Repo {
+        let RepoInfo {
             branch, head_short, ..
-        } = parsed.headers.state(&layout)
-        else {
-            panic!()
-        };
+        } = parsed.headers.info(&layout, None);
         assert_eq!((branch, head_short.as_deref()), (None, Some("abcdef1")));
         assert!(parse_porcelain_v2(b"9 what\0").is_err());
         assert!(parse_porcelain_v2(b"2 R. N... 100644 100644 100644 a b R100 new\0").is_err());
@@ -1774,6 +1956,55 @@ mod tests {
     }
 
     #[test]
+    fn a_rename_pairs_within_one_hunk_only() {
+        // Delete `span` at line 3 and add an unrelated `later` with the
+        // same right-hand side at the end: two edits, two hunks (what
+        // `git diff -U0` emits for them) — removed + added, NOT a rename.
+        let work = HEAD.replace("span = construct_domain(start=0.0, end=size)\n", "")
+            + "later = construct_domain(start=0.0, end=size)\n";
+        let hunks = vec![
+            Hunk {
+                old_start: 3,
+                old_count: 1,
+                new_start: 2,
+                new_count: 0,
+            },
+            Hunk {
+                old_start: 6,
+                old_count: 0,
+                new_start: 6,
+                new_count: 1,
+            },
+        ];
+        let (nodes, removed) = markers(&Document::parse(HEAD), &Document::parse(&work), &hunks);
+        assert_eq!(
+            nodes,
+            vec![NodeChange {
+                name: "later".into(),
+                change: ChangeKind::Added,
+                from: None
+            }]
+        );
+        assert_eq!(
+            removed,
+            vec![RemovedNode {
+                name: "span".into(),
+                line_in_head: 3
+            }]
+        );
+        // The same two lines as ONE hunk (adjacent edits) pair up: the
+        // rule is per hunk, not per file.
+        let work = HEAD.replace(
+            "span = construct_domain(start=0.0, end=size)\n",
+            "later = construct_domain(start=0.0, end=size)\n",
+        );
+        let (nodes, removed) = diff_markers(&work);
+        assert_eq!(nodes[0].change, ChangeKind::Renamed);
+        assert_eq!(nodes[0].from.as_deref(), Some("span"));
+        assert!(removed.is_empty());
+    }
+
+    #[test]
     fn off_toggle_and_broken_lines_name_their_nodes() {
         // Disabling a live line: same name both sides → modified.
         let work = HEAD.replace("span = construct", "#off span = construct");
@@ -1833,6 +2064,20 @@ mod tests {
             "p.cic"
         );
         assert_eq!(GitRefusal::Locked.body()["kind"], "locked");
+        let ignored = GitRefusal::Ignored("p.cic".into()).body();
+        assert_eq!(
+            (ignored["kind"].as_str(), ignored["path"].as_str()),
+            (Some("ignored"), Some("p.cic"))
+        );
+        assert_eq!(GitRefusal::NoWriter("p.cic".into()).body()["kind"], "lease");
+        assert_eq!(
+            GitRefusal::NoSuchPipeline("q.cic".into()).body()["kind"],
+            "no_such_pipeline"
+        );
+        assert_eq!(
+            GitRefusal::Internal("join".into()).body()["kind"],
+            "internal"
+        );
         assert_eq!(
             refuse(GitError::Failed {
                 command: "git add".into(),

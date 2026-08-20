@@ -790,12 +790,15 @@ fn writer_client(headers: &HeaderMap, body_client: Option<u32>) -> Option<u32> {
 fn git_status(refusal: &GitRefusal) -> StatusCode {
     match refusal.kind() {
         GitErrorKind::Protocol => StatusCode::BAD_REQUEST,
+        GitErrorKind::NoSuchPipeline => StatusCode::NOT_FOUND,
         GitErrorKind::Lease => StatusCode::FORBIDDEN,
         GitErrorKind::NotARepo
         | GitErrorKind::GitNotFound
         | GitErrorKind::NothingToCommit
         | GitErrorKind::NothingToRevert
-        | GitErrorKind::Untracked => StatusCode::CONFLICT,
+        | GitErrorKind::Untracked
+        | GitErrorKind::Ignored
+        | GitErrorKind::OperationInProgress => StatusCode::CONFLICT,
         GitErrorKind::EmptyMessage | GitErrorKind::PathNotAllowed => {
             StatusCode::UNPROCESSABLE_ENTITY
         }
@@ -803,7 +806,8 @@ fn git_status(refusal: &GitRefusal) -> StatusCode {
         GitErrorKind::GitFailed
         | GitErrorKind::GitTimeout
         | GitErrorKind::IoError
-        | GitErrorKind::ReloadFailed => StatusCode::INTERNAL_SERVER_ERROR,
+        | GitErrorKind::ReloadFailed
+        | GitErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
@@ -811,25 +815,82 @@ fn git_refused(refusal: &GitRefusal) -> Response {
     (git_status(refusal), axum::Json(refusal.body())).into_response()
 }
 
+/// The pipeline a git route is about, as the project-relative key every
+/// session uses — validated and resolved exactly like `open_session`
+/// (traversal, `.cic`, inside the project, exists) but WITHOUT opening a
+/// session: status is a read about a file, and polling it for a pipeline
+/// nobody has open must not start hydrating (and solving) one. Failures
+/// are git-route JSON (`protocol` 400 / `no_such_pipeline` 404), not the
+/// text of the other routes.
+fn git_pipeline_key(state: &AppState, query: &PipelineQuery) -> Result<String, GitRefusal> {
+    let relative = query
+        .pipeline
+        .clone()
+        .or_else(|| state.config.pipeline.clone())
+        .ok_or_else(|| {
+            GitRefusal::Protocol(
+                "no pipeline: pass ?pipeline=<relative .cic path> (see /api/project)".to_owned(),
+            )
+        })?;
+    match resolve_in_project(&state.config.project_dir, &relative) {
+        Ok((_, key)) => Ok(key),
+        Err(ServeError::NoSuchPipeline(path)) => Err(GitRefusal::NoSuchPipeline(path)),
+        Err(error @ (ServeError::BadPipelineRef(_) | ServeError::OutsideProject { .. })) => {
+            Err(GitRefusal::Protocol(format!("{relative}: {error}")))
+        }
+        Err(error) => Err(GitRefusal::Internal(format!(
+            "resolving `{relative}` in the project: {error}"
+        ))),
+    }
+}
+
+/// The OPEN session of the pipeline a writer-gated git route is about.
+/// Commit and revert need the lease holder, and a lease exists only on an
+/// open session — so a pipeline nobody has open is refused `lease` (with
+/// the reason) rather than opened on the caller's behalf.
+fn git_session(state: &AppState, query: &PipelineQuery) -> Result<Arc<Session>, GitRefusal> {
+    let key = git_pipeline_key(state, query)?;
+    state
+        .sessions
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&key)
+        .cloned()
+        .ok_or(GitRefusal::NoWriter(key))
+}
+
+/// A blocking git task's outcome as the route's response: the join error
+/// (a panic inside) is JSON too — every git-route failure is `{kind,
+/// message, …}` with the route's status code (the token middleware's 401
+/// is the one exception, shared with every route).
+fn git_response<T: serde::Serialize>(
+    outcome: Result<Result<T, GitRefusal>, tokio::task::JoinError>,
+) -> Response {
+    match outcome {
+        Ok(Ok(value)) => axum::Json(value).into_response(),
+        Ok(Err(refusal)) => git_refused(&refusal),
+        Err(error) => git_refused(&GitRefusal::Internal(format!(
+            "the git task did not complete: {error}"
+        ))),
+    }
+}
+
 /// `GET /api/git/status?pipeline=` → the git state, this pipeline's node
 /// markers (working tree vs HEAD), and the dirty files of its commit scope.
 /// Reads only — `--no-optional-locks` on every call, so a refresh never
-/// touches the project and never wakes the watcher.
+/// touches the project and never wakes the watcher; and no session is
+/// opened for it.
 async fn api_git_status(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PipelineQuery>,
 ) -> Response {
-    let session = match session_for(&state, &query) {
-        Ok(session) => session,
-        Err(response) => return *response,
+    let key = match git_pipeline_key(&state, &query) {
+        Ok(key) => key,
+        Err(refusal) => return git_refused(&refusal),
     };
-    let scope = Scope::for_pipeline(session.relative());
+    let scope = Scope::for_pipeline(&key);
     let git_state = Arc::clone(&state);
-    match tokio::task::spawn_blocking(move || git_state.git.status(&scope)).await {
-        Ok(Ok(status)) => axum::Json(status).into_response(),
-        Ok(Err(refusal)) => git_refused(&refusal),
-        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
-    }
+    git_response(tokio::task::spawn_blocking(move || git_state.git.status(&scope)).await)
 }
 
 /// `POST /api/git/commit` `{message, client?}` (writer-gated): stage the
@@ -843,9 +904,9 @@ async fn api_git_commit(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    let session = match session_for(&state, &query) {
+    let session = match git_session(&state, &query) {
         Ok(session) => session,
-        Err(response) => return *response,
+        Err(refusal) => return git_refused(&refusal),
     };
     let request: CommitRequest = match serde_json::from_slice(&body) {
         Ok(request) => request,
@@ -861,33 +922,32 @@ async fn api_git_commit(
     }
     let scope = Scope::for_pipeline(session.relative());
     let git_state = Arc::clone(&state);
-    match tokio::task::spawn_blocking(move || git_state.git.commit(&scope, &request.message)).await
-    {
-        Ok(Ok(committed)) => axum::Json(committed).into_response(),
-        Ok(Err(refusal)) => git_refused(&refusal),
-        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
-    }
+    git_response(
+        tokio::task::spawn_blocking(move || git_state.git.commit(&scope, &request.message)).await,
+    )
 }
 
 /// `POST /api/git/revert` `{paths?, client?}` (writer-gated): `git checkout
 /// HEAD --` the dirty scope files (or the given subset, validated against
 /// the scope), then reload the session through the external-change path —
-/// `reload_from_disk` → ONE barrier snapshot (the watcher's later echo
-/// finds disk == memory and does nothing; should the watcher win the race,
-/// this call is the no-op — either way exactly one barrier reaches
-/// clients). → `{reverted, untracked, reloaded}`. 409 `untracked` for a
-/// pipeline with no HEAD version, 409 `nothing_to_revert`, 422
-/// `path_not_allowed`, 500 `reload_failed` when the files are back but the
-/// session could not load them.
+/// `reload_from_disk` → ONE barrier snapshot, `reason: "git revert"`. Both
+/// happen under the session's write hold (`Session::hold_writes`): no
+/// intent can persist between the checkout and the reload (it would
+/// overwrite the restored file and turn the reload into a no-op — a
+/// silently lost revert), and the watcher's later wake finds disk ==
+/// memory and does nothing. → `{reverted, untracked, reloaded}`. 409
+/// `untracked` for a pipeline with no HEAD version, 409
+/// `nothing_to_revert`, 422 `path_not_allowed`, 500 `reload_failed` when
+/// the files are back but the session could not load them.
 async fn api_git_revert(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PipelineQuery>,
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    let session = match session_for(&state, &query) {
+    let session = match git_session(&state, &query) {
         Ok(session) => session,
-        Err(response) => return *response,
+        Err(refusal) => return git_refused(&refusal),
     };
     let request: RevertRequest = match serde_json::from_slice(&body) {
         Ok(request) => request,
@@ -903,19 +963,19 @@ async fn api_git_revert(
     }
     let scope = Scope::for_pipeline(session.relative());
     let git_state = Arc::clone(&state);
-    let outcome = tokio::task::spawn_blocking(move || {
-        let reverted = git_state.git.revert(&scope, request.paths.as_deref())?;
-        let reloaded = session
-            .reload_from_disk("git revert", reverted.touched_scripts)
-            .map_err(|error| GitRefusal::Reload(error.to_string()))?;
-        Ok::<_, GitRefusal>(reverted.into_response(reloaded))
-    })
-    .await;
-    match outcome {
-        Ok(Ok(response)) => axum::Json(response).into_response(),
-        Ok(Err(refusal)) => git_refused(&refusal),
-        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
-    }
+    git_response(
+        tokio::task::spawn_blocking(move || {
+            // The hold spans the checkout and the reload; a refused revert
+            // drops it on the way out.
+            let hold = session.hold_writes();
+            let reverted = git_state.git.revert(&scope, request.paths.as_deref())?;
+            let reloaded = session
+                .reload_from_disk_held(hold, "git revert", reverted.touched_scripts)
+                .map_err(|error| GitRefusal::Reload(error.to_string()))?;
+            Ok::<_, GitRefusal>(reverted.into_response(reloaded))
+        })
+        .await,
+    )
 }
 
 async fn debug_state(

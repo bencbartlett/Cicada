@@ -20,8 +20,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use cicada_server::git::{Git, GitRefusal, Scope};
-use cicada_server::protocol::{ChangeKind, FileStatus, GitState, PROTOCOL_VERSION};
+use cicada_server::git::{Git, GitError, GitRefusal, Scope};
+use cicada_server::protocol::{
+    ChangeKind, FileStatus, GitState, Operation, PROTOCOL_VERSION, RepoInfo,
+};
 use cicada_server::sidecar::Sidecar;
 use cicada_server::{ServeConfig, serve};
 use futures_util::{SinkExt as _, StreamExt as _};
@@ -53,6 +55,18 @@ fn git_available() -> bool {
 /// Run git in `dir` with a hygienic environment (no global/system config,
 /// no prompts), panicking on failure — the fixture's plumbing.
 fn sh_git(dir: &Path, args: &[&str]) -> String {
+    let (success, stdout, stderr) = sh_git_raw(dir, args);
+    assert!(
+        success,
+        "git {args:?} in {} failed: {stderr}",
+        dir.display()
+    );
+    stdout
+}
+
+/// `sh_git` that reports instead of panicking: `(success, stdout, stderr)`
+/// — for the commands the fixture EXPECTS to fail (a conflicting merge).
+fn sh_git_raw(dir: &Path, args: &[&str]) -> (bool, String, String) {
     let output = Command::new("git")
         .args(args)
         .current_dir(dir)
@@ -65,13 +79,11 @@ fn sh_git(dir: &Path, args: &[&str]) -> String {
         .env_remove("GIT_INDEX_FILE")
         .output()
         .expect("spawn git");
-    assert!(
+    (
         output.status.success(),
-        "git {args:?} in {} failed: {}",
-        dir.display(),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).into_owned()
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
 }
 
 /// A repository whose project directory is `examples/wall`, holding a
@@ -83,6 +95,8 @@ struct Fixture {
     _dir: tempfile::TempDir,
     root: PathBuf,
     project: PathBuf,
+    /// `core.hooksPath` — empty, so a test that wants a hook writes it here.
+    hooks: PathBuf,
 }
 
 impl Fixture {
@@ -121,11 +135,31 @@ impl Fixture {
             _dir: dir,
             root,
             project,
+            hooks,
         }
     }
 
     fn git(&self) -> Git {
         Git::new(&self.project)
+    }
+
+    /// Install a hook (`pre-commit`, …) with the given shell body.
+    fn hook(&self, name: &str, body: &str) {
+        let path = self.hooks.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+
+    /// The repository facts of a `repo` state (panics on any other).
+    fn repo_info(state: &GitState) -> &RepoInfo {
+        match state {
+            GitState::Repo(info) => info,
+            other => panic!("expected a repo state, got {other:?}"),
+        }
     }
 
     fn write(&self, relative: &str, text: &str) {
@@ -176,28 +210,28 @@ fn status_reports_state_and_every_marker_kind() {
 
     // Clean: a repo with a prefix, on main, tracked, no markers, no scope.
     let status = git.status(&scope()).unwrap();
-    let GitState::Repo {
+    let RepoInfo {
         prefix,
         branch,
         head_short,
         upstream,
         unborn,
         root,
-    } = &status.state
-    else {
-        panic!("{:?}", status.state)
-    };
+        operation,
+    } = Fixture::repo_info(&status.state);
     assert_eq!(prefix, "examples/wall");
     assert_eq!(branch.as_deref(), Some("main"));
     assert_eq!(head_short.as_deref().map(str::len), Some(7));
     assert!(upstream.is_none());
     assert!(!unborn);
+    assert!(operation.is_none());
     assert!(
         Path::new(root).join("examples/wall/p.cic").is_file(),
         "root is the repository root: {root}"
     );
     assert_eq!(status.pipeline.path, "p.cic");
     assert!(status.pipeline.tracked);
+    assert!(!status.pipeline.ignored);
     assert!(!status.pipeline.dirty);
     assert!(status.pipeline.nodes.is_empty());
     assert!(status.pipeline.removed.is_empty());
@@ -394,11 +428,16 @@ fn commit_stages_exactly_the_scope_with_the_message_verbatim() {
     std::fs::write(fx.root.join("other.txt"), "changed outside\n").unwrap();
     sh_git(&fx.root, &["add", "other.txt"]);
 
-    let message = "Größe auf 3.0 — 尺寸\n\nSecond paragraph with a trailing newline.\n";
+    // A message git's default cleanup (`whitespace` for a piped message)
+    // WOULD alter: trailing spaces on the subject, three blank lines run
+    // together, trailing blank lines — so this test fails if
+    // `--cleanup=verbatim` is ever dropped.
+    let message =
+        "Größe auf 3.0 — 尺寸  \n\n\n\nSecond paragraph, then trailing blank lines.  \n\n\n";
     let committed = git.commit(&scope(), message).unwrap();
     assert_eq!(committed.hash.len(), 40);
     assert!(committed.hash.starts_with(&committed.short));
-    assert_eq!(committed.summary, "Größe auf 3.0 — 尺寸");
+    assert_eq!(committed.summary.trim_end(), "Größe auf 3.0 — 尺寸");
     assert_eq!(
         committed.files,
         ["p.cic", "p.cic.layout.json", "scripts/helper.py"]
@@ -525,6 +564,36 @@ fn revert_restores_head_bytes_for_the_scope_and_validates_paths() {
     );
     assert!(fx.project.join("scripts/new.py").is_file());
     assert_eq!(fx.read("notes.txt"), "not in scope\n");
+    // Staged ≠ HEAD ≠ working tree: the revert restores HEAD's bytes, not
+    // the index's (`checkout HEAD --`, not `checkout --`), and the index
+    // follows HEAD for the path.
+    fx.write("p.cic", &PIPELINE.replace("value=2.0", "value=7.0"));
+    sh_git(&fx.root, &["add", "examples/wall/p.cic"]);
+    fx.write("p.cic", &PIPELINE.replace("value=2.0", "value=8.0"));
+    let status = git.status(&scope()).unwrap();
+    assert_eq!(
+        node_changes(&status),
+        vec![("size".to_owned(), ChangeKind::Modified, None)],
+        "markers are working tree vs HEAD, whatever the index holds"
+    );
+    let done = git.revert(&scope(), Some(&["p.cic".to_owned()])).unwrap();
+    assert_eq!(done.reverted, ["p.cic"]);
+    assert_eq!(fx.read("p.cic"), fx.head_text("examples/wall/p.cic"));
+    assert_eq!(
+        sh_git(
+            &fx.root,
+            &[
+                "diff",
+                "--cached",
+                "--name-only",
+                "--",
+                "examples/wall/p.cic"
+            ]
+        )
+        .trim(),
+        "",
+        "the staged version is gone too"
+    );
     // A deleted tracked file comes back too.
     std::fs::remove_file(fx.project.join("p.cic.layout.json")).unwrap();
     let status = git.status(&scope()).unwrap();
@@ -551,7 +620,19 @@ fn index_lock_is_the_locked_state_and_refuses_writes() {
     let lock = fx.root.join(".git").join("index.lock");
     std::fs::write(&lock, "").unwrap();
     let status = git.status(&scope()).unwrap();
-    assert_eq!(status.state, GitState::Locked);
+    // `locked` carries the same facts as `repo`: the branch chip must not
+    // blank out while another git (or our own commit) holds the index.
+    let GitState::Locked(info) = &status.state else {
+        panic!("{:?}", status.state)
+    };
+    assert_eq!(info.branch.as_deref(), Some("main"));
+    assert_eq!(info.prefix, "examples/wall");
+    assert_eq!(info.head_short.as_deref().map(str::len), Some(7));
+    let summary = git.summary();
+    assert_eq!(
+        (summary.kind.as_str(), summary.branch.as_deref()),
+        ("locked", Some("main"))
+    );
     // Reads still answer under the lock: the markers are there.
     assert_eq!(
         node_changes(&status),
@@ -566,8 +647,157 @@ fn index_lock_is_the_locked_state_and_refuses_writes() {
     std::fs::remove_file(&lock).unwrap();
     assert!(matches!(
         git.status(&scope()).unwrap().state,
-        GitState::Repo { .. }
+        GitState::Repo(_)
     ));
+}
+
+#[test]
+fn ignored_files_stay_out_of_the_scope_and_an_ignored_pipeline_is_refused() {
+    if !git_available() {
+        return;
+    }
+    let fx = Fixture::new(true);
+    let git = fx.git();
+    // The user's .gitignore: local probe scripts and a scratch pipeline.
+    std::fs::write(fx.root.join(".gitignore"), "local_*.py\nscratch.cic\n").unwrap();
+    sh_git(&fx.root, &["add", ".gitignore"]);
+    sh_git(&fx.root, &["commit", "-q", "-m", "ignore local probes"]);
+    fx.write("scripts/local_probe.py", "print('probe')\n");
+    fx.write("p.cic", &PIPELINE.replace("value=2.0", "value=3.0"));
+    // The ignored script is not in the scope (git itself does not list
+    // it, and `git add` would refuse the whole list over it).
+    let status = git.status(&scope()).unwrap();
+    assert_eq!(
+        scope_paths(&status),
+        vec![("p.cic".to_owned(), FileStatus::Modified)]
+    );
+    // Commit succeeds with exactly the pipeline — the case that used to
+    // fail the WHOLE commit with `git_failed` ("The following paths are
+    // ignored by one of your .gitignore files").
+    let committed = git.commit(&scope(), "size 3, probe left alone").unwrap();
+    assert_eq!(committed.files, ["p.cic"]);
+    assert!(fx.project.join("scripts/local_probe.py").is_file());
+    assert!(
+        !sh_git(&fx.root, &["ls-files", "examples/wall/scripts"]).contains("local_probe"),
+        "the ignored script was not added"
+    );
+    // An ignored PIPELINE: reported as such, every node `added` (no HEAD
+    // version), nothing in the scope, and a typed refusal to commit or
+    // revert it — never a 500 from `git add`.
+    fx.write("scratch.cic", PIPELINE);
+    let scratch = Scope::for_pipeline("scratch.cic");
+    let status = git.status(&scratch).unwrap();
+    assert!(status.pipeline.ignored);
+    assert!(!status.pipeline.tracked);
+    assert!(status.pipeline.dirty);
+    assert_eq!(status.pipeline.nodes.len(), 4);
+    assert!(
+        status
+            .pipeline
+            .nodes
+            .iter()
+            .all(|n| n.change == ChangeKind::Added)
+    );
+    assert!(status.scope.is_empty());
+    let refused = git.commit(&scratch, "scratch").unwrap_err();
+    assert!(
+        matches!(refused, GitRefusal::Ignored(ref p) if p == "scratch.cic"),
+        "{refused:?}"
+    );
+    assert_eq!(refused.body()["kind"], "ignored");
+    assert!(matches!(
+        git.revert(&scratch, None),
+        Err(GitRefusal::Untracked(_))
+    ));
+    assert_eq!(
+        sh_git(&fx.root, &["rev-parse", "HEAD"]).trim(),
+        committed.hash,
+        "nothing else was committed"
+    );
+}
+
+#[test]
+fn a_failing_hook_reports_its_exit_code_and_stderr_even_for_a_long_message() {
+    if !git_available() {
+        return;
+    }
+    let fx = Fixture::new(true);
+    let git = fx.git();
+    fx.hook("pre-commit", "echo HOOK SAYS NO >&2\nexit 1\n");
+    fx.write("p.cic", &PIPELINE.replace("value=2.0", "value=3.0"));
+    // A message far beyond a pipe's buffer (~4 KB): git exits before it
+    // reads stdin. The refusal must still be git's — exit code + stderr —
+    // not our broken-pipe error (which would also have hidden an
+    // `index.lock` message behind it).
+    let long = format!("long\n\n{}", "x".repeat(100 * 1024));
+    for message in ["short", long.as_str()] {
+        let refused = git.commit(&scope(), message).unwrap_err();
+        let GitRefusal::Git(GitError::Failed {
+            command,
+            code,
+            stderr,
+        }) = &refused
+        else {
+            panic!("expected the hook's failure, got {refused:?}");
+        };
+        assert!(command.starts_with("git commit"), "{command}");
+        assert_eq!(*code, Some(1), "{refused:?}");
+        assert!(stderr.contains("HOOK SAYS NO"), "{stderr:?}");
+        let body = refused.body();
+        assert_eq!(body["kind"], "git_failed");
+        assert_eq!(body["code"], 1);
+    }
+    // Nothing was committed; the file is staged (the `add` ran) and the
+    // working tree untouched.
+    assert_eq!(sh_git(&fx.root, &["log", "--oneline"]).lines().count(), 1);
+    assert!(fx.read("p.cic").contains("value=3.0"));
+}
+
+#[test]
+fn an_unfinished_merge_is_a_state_and_refuses_writes() {
+    if !git_available() {
+        return;
+    }
+    let fx = Fixture::new(true);
+    let git = fx.git();
+    // A branch with a conflicting edit, and a different edit on main.
+    sh_git(&fx.root, &["checkout", "-q", "-b", "b"]);
+    fx.write("p.cic", &PIPELINE.replace("value=2.0", "value=9.0"));
+    sh_git(&fx.root, &["commit", "-q", "-am", "nine"]);
+    sh_git(&fx.root, &["checkout", "-q", "main"]);
+    fx.write("p.cic", &PIPELINE.replace("value=2.0", "value=3.0"));
+    sh_git(&fx.root, &["commit", "-q", "-am", "three"]);
+    let (merged, _, _) = sh_git_raw(&fx.root, &["merge", "b"]);
+    assert!(!merged, "the merge must conflict");
+    assert!(fx.read("p.cic").contains("<<<<<<<"));
+
+    let status = git.status(&scope()).unwrap();
+    let info = Fixture::repo_info(&status.state);
+    assert_eq!(info.operation, Some(Operation::Merge));
+    assert_eq!(info.branch.as_deref(), Some("main"));
+    assert_eq!(
+        scope_paths(&status),
+        vec![("p.cic".to_owned(), FileStatus::Modified)]
+    );
+    // Writes: a typed refusal naming the operation, not `git_failed` 500
+    // ("cannot do a partial commit during a merge") — and the revert does
+    // not quietly resolve the conflict to HEAD behind the merge's back.
+    let refused = git.commit(&scope(), "resolve?").unwrap_err();
+    assert!(
+        matches!(refused, GitRefusal::OperationInProgress(Operation::Merge)),
+        "{refused:?}"
+    );
+    assert_eq!(refused.body()["operation"], "merge");
+    assert!(matches!(
+        git.revert(&scope(), None),
+        Err(GitRefusal::OperationInProgress(Operation::Merge))
+    ));
+    assert!(fx.read("p.cic").contains("<<<<<<<"), "untouched");
+    // The shell finishes (here: aborts) the merge; the state clears.
+    sh_git(&fx.root, &["merge", "--abort"]);
+    let status = git.status(&scope()).unwrap();
+    assert!(Fixture::repo_info(&status.state).operation.is_none());
+    assert!(status.scope.is_empty());
 }
 
 #[test]
@@ -595,27 +825,24 @@ fn detached_head_has_no_branch_and_upstream_counts_ahead() {
     );
     sh_git(&fx.root, &["fetch", "-q", "origin"]);
     sh_git(&fx.root, &["branch", "-u", "origin/main", "main"]);
-    let GitState::Repo { upstream, .. } = git.status(&scope()).unwrap().state else {
-        panic!()
-    };
-    let upstream = upstream.expect("upstream set");
+    let upstream = Fixture::repo_info(&git.status(&scope()).unwrap().state)
+        .upstream
+        .clone()
+        .expect("upstream set");
     assert_eq!(upstream.name, "origin/main");
     assert_eq!((upstream.ahead, upstream.behind), (0, 0));
     fx.write("p.cic", &PIPELINE.replace("value=2.0", "value=3.0"));
     git.commit(&scope(), "ahead by one").unwrap();
-    let GitState::Repo { upstream, .. } = git.status(&scope()).unwrap().state else {
-        panic!()
-    };
+    let status = git.status(&scope()).unwrap();
+    let upstream = Fixture::repo_info(&status.state).upstream.as_ref();
     assert_eq!(upstream.map(|u| (u.ahead, u.behind)), Some((1, 0)));
 
     // Detached: no branch, the short hash to show instead.
     sh_git(&fx.root, &["checkout", "-q", "--detach"]);
-    let GitState::Repo {
+    let status = git.status(&scope()).unwrap();
+    let RepoInfo {
         branch, head_short, ..
-    } = git.status(&scope()).unwrap().state
-    else {
-        panic!()
-    };
+    } = Fixture::repo_info(&status.state);
     assert!(branch.is_none());
     assert_eq!(
         head_short.as_deref(),
@@ -631,15 +858,12 @@ fn unborn_repo_is_all_added_and_the_first_commit_works() {
     let fx = Fixture::new(false);
     let git = fx.git();
     let status = git.status(&scope()).unwrap();
-    let GitState::Repo {
+    let RepoInfo {
         unborn,
         branch,
         head_short,
         ..
-    } = &status.state
-    else {
-        panic!("{:?}", status.state)
-    };
+    } = Fixture::repo_info(&status.state);
     assert!(unborn);
     assert_eq!(branch.as_deref(), Some("main"));
     assert!(head_short.is_none());
@@ -682,10 +906,7 @@ fn unborn_repo_is_all_added_and_the_first_commit_works() {
         ["p.cic", "p.cic.layout.json", "scripts/helper.py"]
     );
     let status = git.status(&scope()).unwrap();
-    let GitState::Repo { unborn, .. } = status.state else {
-        panic!()
-    };
-    assert!(!unborn);
+    assert!(!Fixture::repo_info(&status.state).unborn);
     assert!(status.pipeline.nodes.is_empty() && status.scope.is_empty());
     assert!(
         !fx.root.join("other.txt").exists()
@@ -886,12 +1107,19 @@ async fn git_routes_over_a_served_project_under_the_watcher() {
         },
     );
     fx.write("p.cic.layout.json", &sidecar.render());
+    // A second pipeline nobody opens: status about it must not open it.
+    fx.write("q.cic", PIPELINE);
     sh_git(&fx.root, &["add", "-A"]);
     sh_git(
         &fx.root,
         &["commit", "-q", "-m", "no scripts for the served fixture"],
     );
     let head_text = fx.head_text("examples/wall/p.cic");
+    let index_file = fx.root.join(".git").join("index");
+    let index_meta = |path: &Path| {
+        let meta = std::fs::metadata(path).unwrap();
+        (meta.len(), meta.modified().unwrap())
+    };
 
     let mut config = ServeConfig::new(fx.project.clone());
     config.pipeline = Some("p.cic".to_owned());
@@ -908,7 +1136,7 @@ async fn git_routes_over_a_served_project_under_the_watcher() {
     assert_eq!(project["git"]["kind"], "repo");
     assert_eq!(project["git"]["branch"], "main");
     assert_eq!(project["scripts"], serde_json::json!([]));
-    assert_eq!(project["pipelines"], serde_json::json!(["p.cic"]));
+    assert_eq!(project["pipelines"], serde_json::json!(["p.cic", "q.cic"]));
 
     // A client: the writer.
     let url = format!("ws://{addr}/ws?token=t&pipeline=p.cic");
@@ -988,6 +1216,44 @@ async fn git_routes_over_a_served_project_under_the_watcher() {
     );
     let (_, project) = get(addr, "/api/project").await;
     assert_eq!(project["git"]["dirty_count"], 1);
+    // What `--no-optional-locks` buys, observably: the working file's
+    // stat now differs from the index, so a status WITHOUT the flag would
+    // refresh and rewrite `.git/index`. Three refreshes: untouched.
+    let index_before = index_meta(&index_file);
+    for _ in 0..3 {
+        let (status, _) = get(addr, "/api/git/status").await;
+        assert_eq!(status, 200);
+    }
+    assert_eq!(
+        index_meta(&index_file),
+        index_before,
+        ".git/index was rewritten by a status refresh"
+    );
+
+    // ---- Status about a pipeline nobody has open: a read about a file,
+    // no session hydrated (and no solve started) for it; the writer-gated
+    // routes refuse it `lease` — nobody holds one — rather than open it.
+    let (status, body) = get(addr, "/api/git/status?pipeline=q.cic").await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["pipeline"]["path"], "q.cic");
+    assert_eq!(body["pipeline"]["dirty"], false);
+    let (_, project) = get(addr, "/api/project").await;
+    assert_eq!(project["open"], serde_json::json!(["p.cic"]));
+    let (status, body) = post(
+        addr,
+        "/api/git/commit?pipeline=q.cic",
+        &format!(r#"{{"message":"q","client":{client_id}}}"#),
+        &[],
+    )
+    .await;
+    assert_eq!(
+        (status, body["kind"].as_str()),
+        (403, Some("lease")),
+        "{body}"
+    );
+    assert_eq!(body["path"], "q.cic");
+    let (_, project) = get(addr, "/api/project").await;
+    assert_eq!(project["open"], serde_json::json!(["p.cic"]));
 
     // ---- Commit: writer-gated, message verbatim, exactly the scope.
     let (status, body) = post(addr, "/api/git/commit", r#"{"message":"size 3"}"#, &[]).await;
@@ -1121,6 +1387,7 @@ async fn git_routes_over_a_served_project_under_the_watcher() {
         fx.read("p.cic").contains("value=4.0"),
         "refused before moving"
     );
+    let revert_started = std::time::Instant::now();
     let (status, body) = post(
         addr,
         "/api/git/revert",
@@ -1128,12 +1395,14 @@ async fn git_routes_over_a_served_project_under_the_watcher() {
         &[],
     )
     .await;
+    let revert_answered = revert_started.elapsed();
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["reverted"], serde_json::json!(["p.cic"]));
     assert_eq!(body["untracked"], serde_json::json!([]));
-    assert!(
-        body["reloaded"].is_boolean(),
-        "true when this call reloaded, false when the watcher won the race: {body}"
+    assert_eq!(
+        body["reloaded"], true,
+        "the checkout and the reload run under the session's write hold, so the watcher \
+         cannot win the race and this call always is the reload: {body}"
     );
     assert_eq!(fx.read("p.cic"), new_head, "bytes == HEAD");
     let (_, state) = get(addr, "/debug/state?wait=true").await;
@@ -1152,8 +1421,16 @@ async fn git_routes_over_a_served_project_under_the_watcher() {
         1,
         "exactly one barrier snapshot: {messages:?}"
     );
+    // Deterministic under the hold (see above): the barrier is ours.
     assert_eq!(barriers[0]["payload"]["reason"], "git revert");
     assert_eq!(barriers[0]["payload"]["text"], new_head);
+    // The docs/17 item-2 number: the barrier snapshot had been sent to
+    // the socket before the POST answered (the reload broadcasts, then
+    // returns), so POST → answer bounds POST → barrier on the wire.
+    eprintln!(
+        "MEASURED revert: POST /api/git/revert → barrier snapshot sent ≤ {:.1} ms",
+        revert_answered.as_secs_f64() * 1e3
+    );
     assert_eq!(
         count(&messages, "snapshot"),
         1,
@@ -1168,7 +1445,16 @@ async fn git_routes_over_a_served_project_under_the_watcher() {
     std::fs::write(&lock, "").unwrap();
     let (status, body) = get(addr, "/api/git/status").await;
     assert_eq!(status, 200);
-    assert_eq!(body["state"], serde_json::json!({"kind": "locked"}));
+    assert_eq!(body["state"]["kind"], "locked");
+    assert_eq!(
+        body["state"]["branch"], "main",
+        "locked keeps the facts: {}",
+        body["state"]
+    );
+    assert_eq!(body["state"]["prefix"], "examples/wall");
+    let (_, project) = get(addr, "/api/project").await;
+    assert_eq!(project["git"]["kind"], "locked");
+    assert_eq!(project["git"]["branch"], "main");
     let (status, body) = post(
         addr,
         "/api/git/commit",
@@ -1189,12 +1475,33 @@ async fn git_routes_over_a_served_project_under_the_watcher() {
     let (_, project) = get(addr, "/api/project").await;
     assert_eq!(project["git"]["kind"], "repo");
 
-    // Unknown pipeline and traversal go through the same gate as every
-    // route.
-    let (status, _) = get(addr, "/api/git/status?pipeline=nope.cic").await;
-    assert_eq!(status, 404);
-    let (status, _) = get(addr, "/api/git/status?pipeline=../p.cic").await;
-    assert_eq!(status, 400);
+    // Unknown pipeline and traversal: the same validation as every route,
+    // answered as git-route JSON (`{kind, message, path}`), not text.
+    let (status, body) = get(addr, "/api/git/status?pipeline=nope.cic").await;
+    assert_eq!(
+        (status, body["kind"].as_str()),
+        (404, Some("no_such_pipeline")),
+        "{body}"
+    );
+    assert_eq!(body["path"], "nope.cic");
+    assert!(body["message"].is_string());
+    let (status, body) = get(addr, "/api/git/status?pipeline=../p.cic").await;
+    assert_eq!(
+        (status, body["kind"].as_str()),
+        (400, Some("protocol")),
+        "{body}"
+    );
+    let (status, body) = post(
+        addr,
+        "/api/git/revert?pipeline=nope.cic",
+        &format!(r#"{{"client":{client_id}}}"#),
+        &[],
+    )
+    .await;
+    assert_eq!(
+        (status, body["kind"].as_str()),
+        (404, Some("no_such_pipeline"))
+    );
 
     socket.close(None).await.ok();
     handle.shutdown().await;

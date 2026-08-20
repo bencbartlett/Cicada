@@ -305,14 +305,22 @@ surface `/api/git/*`): the status strip's data (branch / detached /
 unborn / upstream ahead-behind / `index.lock`), per-node markers for
 **working tree vs HEAD only** — computed FROM `git diff -U0 HEAD --
 <pipeline>` (hunks → binding lines → names: `added` / `modified` /
-`removed` / `renamed` when a removed+added pair has a byte-identical
-right-hand side), so they are the text diff by construction — commit from
-the app (scope = this pipeline's `.cic` + sidecar + `scripts/*.py`,
+`removed` / `renamed` when a removed+added pair **within one hunk** has a
+byte-identical right-hand side — the writer's `rename` gesture rewrites
+one line, so a rename is always one hunk; a binding deleted here and an
+unrelated one with the same literal added elsewhere are two hunks and
+read as `removed` + `added`), so they are the text diff by construction —
+commit from the app (scope = this pipeline's `.cic` + sidecar +
+`scripts/*.py`, ignored files left out as git itself leaves them out,
 message verbatim, never `add -A`), and revert-to-HEAD through the reload
-barrier. Everything runs through the `git` binary with
-`--no-optional-locks` (a status refresh never touches the project). Not
-yet: other refs, the visual graph-diff overlay, per-node history — they
-follow once the markers have had weeks of use.*
+barrier, under the session's write hold so an edit racing the revert
+lands on the reverted text. Everything runs through the `git` binary with
+`--no-optional-locks` (a status refresh never touches the project). A
+merge / rebase / cherry-pick / revert the shell left unfinished is a
+state (`operation`) and refuses commit and revert from the app — finish
+it where you started it. Not yet: other refs, the visual graph-diff
+overlay, per-node history — they follow once the markers have had weeks
+of use.*
 
 Determinism (doc 02) is what makes this worth surfacing: if a diff is
 empty, the artifacts are identical; if artifacts differ, some diff
