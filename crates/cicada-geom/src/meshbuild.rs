@@ -238,8 +238,10 @@ pub fn loft(start: &Curve, end: &Curve, segments: i64, tolerance: f64) -> Result
     if volume < 0.0 {
         let flipped: Vec<u32> = mesh
             .indices()
-            .chunks_exact(3)
-            .flat_map(|tri| [tri[0], tri[2], tri[1]])
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|&[a, b, c]| [a, c, b])
             .collect();
         mesh = Mesh::new(mesh.positions().to_vec(), flipped).map_err(GeomError::from)?;
     }
@@ -492,7 +494,8 @@ pub fn sphere_mesh(
 pub fn signed_volume(mesh: &Mesh) -> f64 {
     let positions = mesh.positions();
     let mut six_volumes = 0.0;
-    for tri in mesh.indices().chunks_exact(3) {
+    let (triangles, _) = mesh.indices().as_chunks::<3>();
+    for tri in triangles {
         let vertex = |index: u32| {
             let at = index as usize * 3;
             glam::DVec3::new(positions[at], positions[at + 1], positions[at + 2])

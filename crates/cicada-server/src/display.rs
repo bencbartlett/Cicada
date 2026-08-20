@@ -76,8 +76,9 @@ pub struct DisplayStats {
 
 impl DisplayStats {
     fn grow(&mut self, positions: &[f64]) {
-        for xyz in positions.chunks_exact(3) {
-            let point = [xyz[0], xyz[1], xyz[2]];
+        // A trailing partial triple is ignored, as `chunks_exact(3)` did.
+        let (triples, _) = positions.as_chunks::<3>();
+        for &point in triples {
             match &mut self.bounds {
                 None => self.bounds = Some([point, point]),
                 Some([lo, hi]) => {

@@ -95,8 +95,9 @@ pub(crate) mod testing {
     pub(crate) fn bbox(mesh: &Mesh) -> (DVec3, DVec3) {
         let mut lo = DVec3::splat(f64::INFINITY);
         let mut hi = DVec3::splat(f64::NEG_INFINITY);
-        for p in mesh.positions().chunks_exact(3) {
-            let v = DVec3::new(p[0], p[1], p[2]);
+        let (points, _) = mesh.positions().as_chunks::<3>();
+        for &[x, y, z] in points {
+            let v = DVec3::new(x, y, z);
             lo = lo.min(v);
             hi = hi.max(v);
         }
@@ -145,7 +146,9 @@ pub(crate) mod testing {
         };
         let p = glam::DVec2::new(x, y);
         mesh.indices()
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .filter(|t| {
                 let (va, vb, vc) = (at(t[0]), at(t[1]), at(t[2]));
                 let normal = (vb - va).cross(vc - va);

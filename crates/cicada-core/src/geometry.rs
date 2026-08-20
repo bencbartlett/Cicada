@@ -171,8 +171,9 @@ impl Mesh {
             return Err(MeshError::RaggedIndices { len: indices.len() });
         }
         let vertices = positions.len() / 3;
-        for (triangle, tri) in indices.chunks_exact(3).enumerate() {
-            let [a, b, c] = [tri[0], tri[1], tri[2]];
+        // Ragged input was refused above, so the remainder is empty.
+        let (triangles, _) = indices.as_chunks::<3>();
+        for (triangle, &[a, b, c]) in triangles.iter().enumerate() {
             for &index in &[a, b, c] {
                 if index as usize >= vertices {
                     return Err(MeshError::IndexOutOfRange { index, vertices });
@@ -223,8 +224,10 @@ impl Mesh {
     pub fn is_watertight(&self) -> bool {
         let mut directed: std::collections::HashMap<(u32, u32), u32> =
             std::collections::HashMap::with_capacity(self.indices.len());
-        for tri in self.indices.chunks_exact(3) {
-            for (from, to) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+        // A constructed mesh has a whole number of triangles; the remainder is empty.
+        let (triangles, _) = self.indices.as_chunks::<3>();
+        for &[a, b, c] in triangles {
+            for (from, to) in [(a, b), (b, c), (c, a)] {
                 *directed.entry((from, to)).or_insert(0) += 1;
             }
         }

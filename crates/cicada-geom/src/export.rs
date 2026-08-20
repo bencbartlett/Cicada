@@ -19,16 +19,18 @@ pub fn to_obj(meshes: &[(String, &Mesh)]) -> String {
             .map(|c| if c.is_whitespace() { '_' } else { c })
             .collect();
         let _ = writeln!(out, "o {clean}");
-        for vertex in mesh.positions().chunks_exact(3) {
-            let _ = writeln!(out, "v {} {} {}", vertex[0], vertex[1], vertex[2]);
+        let (vertices, _) = mesh.positions().as_chunks::<3>();
+        for [x, y, z] in vertices {
+            let _ = writeln!(out, "v {x} {y} {z}");
         }
-        for tri in mesh.indices().chunks_exact(3) {
+        let (triangles, _) = mesh.indices().as_chunks::<3>();
+        for &[a, b, c] in triangles {
             let _ = writeln!(
                 out,
                 "f {} {} {}",
-                offset + tri[0] as usize,
-                offset + tri[1] as usize,
-                offset + tri[2] as usize
+                offset + a as usize,
+                offset + b as usize,
+                offset + c as usize
             );
         }
         offset += mesh.vertex_count();

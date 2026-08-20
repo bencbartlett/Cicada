@@ -141,14 +141,17 @@ impl Similarity {
     #[must_use]
     pub fn apply_mesh(&self, mesh: &Mesh) -> Mesh {
         let mut positions = Vec::with_capacity(mesh.positions().len());
-        for vertex in mesh.positions().chunks_exact(3) {
-            let p = self.linear * DVec3::new(vertex[0], vertex[1], vertex[2]) + self.translation;
+        let (vertices, _) = mesh.positions().as_chunks::<3>();
+        for &[x, y, z] in vertices {
+            let p = self.linear * DVec3::new(x, y, z) + self.translation;
             positions.extend_from_slice(&[p.x, p.y, p.z]);
         }
         let indices = if self.flips {
             mesh.indices()
-                .chunks_exact(3)
-                .flat_map(|t| [t[0], t[2], t[1]])
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .flat_map(|&[a, b, c]| [a, c, b])
                 .collect()
         } else {
             mesh.indices().to_vec()

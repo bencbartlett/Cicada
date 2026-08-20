@@ -164,6 +164,15 @@ Python 3 on PATH (or `CICADA_PYTHON`); worker protocol is dependency-free
   CI runners have cmake preinstalled (and Windows images ship
   `core.longpaths` enabled); ci.yml still primes the kernel build with
   one retry as a belt.
+- **Rust stable moves under CI.** `rust-toolchain.toml` says `stable`, and CI's
+  `dtolnay/rust-toolchain@stable` picks a new release the day it ships —
+  Rust 1.98.0 (2026-08-18) turned CI red with a new clippy lint while local
+  `stable` was still 1.97.1 (fixed 2026-08-20 — `chunks_exact(N)` with a
+  constant → `as_chunks::<N>()`). When CI's Linux fmt·clippy job goes red on
+  a lint you do not see locally, first `rustup update stable` (or install the
+  new version side by side: `rustup toolchain install 1.98.0 --profile
+  minimal --component clippy --component rustfmt` and `rustup run 1.98.0
+  cargo clippy …`) before touching code.
 - **PowerShell execution policy blocks `npm`/`npx`** in an interactive PS
   5.1 shell (`npm.ps1 cannot be loaded because running scripts is
   disabled`). Use `npm.cmd` / `npx.cmd`, or once per user:

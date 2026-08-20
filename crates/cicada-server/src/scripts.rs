@@ -473,8 +473,9 @@ fn conforms(value: &HashedValue, base: &str, depth: u8, optional: bool) -> Resul
 /// predicate itself is core's `Mesh::is_watertight`.
 fn leaky_edge_count(mesh: &Mesh) -> usize {
     let mut directed: HashMap<(u32, u32), u32> = HashMap::with_capacity(mesh.indices().len());
-    for tri in mesh.indices().chunks_exact(3) {
-        for (from, to) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+    let (triangles, _) = mesh.indices().as_chunks::<3>();
+    for &[a, b, c] in triangles {
+        for (from, to) in [(a, b), (b, c), (c, a)] {
             *directed.entry((from, to)).or_insert(0) += 1;
         }
     }

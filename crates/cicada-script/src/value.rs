@@ -282,7 +282,9 @@ fn bin_f64(value: &Wire, what: &str) -> Result<Vec<f64>, ScriptError> {
         )));
     }
     Ok(bytes
-        .chunks_exact(8)
+        .as_chunks::<8>()
+        .0
+        .iter()
         .map(|chunk| {
             let mut raw = [0_u8; 8];
             raw.copy_from_slice(chunk);
@@ -301,7 +303,9 @@ fn bin_u32(value: &Wire, what: &str) -> Result<Vec<u32>, ScriptError> {
         )));
     }
     Ok(bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|chunk| {
             let mut raw = [0_u8; 4];
             raw.copy_from_slice(chunk);
@@ -350,8 +354,10 @@ fn wire_curve(map: &[(Wire, Wire)]) -> Result<Curve, ScriptError> {
                 )));
             }
             let vertices = flat
-                .chunks_exact(3)
-                .map(|xyz| Point::new(xyz[0], xyz[1], xyz[2]))
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|&[x, y, z]| Point::new(x, y, z))
                 .collect();
             Curve::Polyline(Polyline {
                 vertices,
