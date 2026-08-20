@@ -157,21 +157,31 @@ mod tests { /* table, property, golden hash */ }
      shape). If proptest ever finds a failure it writes
      `proptest-regressions/<category>/<node>.txt`: **commit it with the
      fix**.
-   - *Determinism*: golden blake3 hash of the output built as a
-     `HashedValue` (lists via `ValueData::List`). Bless by running once
-     with a placeholder, copying the actual from the failure message, and
-     saying so in the commit — that IS the blessed path for blake3
-     constants (insta covers checker-diagnostic snapshots only). Golden
-     inputs stay transcendental-free (no sin/cos-fed values — platform
-     libms differ in the last ulp; see each category's `support.rs`).
+   - *Determinism*: a test fn named `<node>_determinism_…` holding the
+     golden blake3 hash of the output built as a `HashedValue` (lists via
+     `ValueData::List`). Bless by running once with a placeholder, copying
+     the actual from the failure message, and saying so in the commit —
+     that IS the blessed path for blake3 constants (insta covers
+     checker-diagnostic snapshots only). Golden inputs stay
+     transcendental-free (no sin/cos-fed values — platform libms differ in
+     the last ulp; see each category's `support.rs`); a node whose output
+     is inherently sin/cos-fed hashes its transcendental-free part (the
+     sphere hashes its index buffer) and asserts run-to-run identity for
+     the rest. An exporter's determinism is its written bytes; a
+     pass-through node's is hash identity; a sink returning `()` has
+     nothing to hash and needs no determinism test.
    - Float comparison: geometry values ALWAYS use tolerance-aware asserts
      (doc 14's sanctioned API), never raw `==`. Exact `==` (under
      `#[allow(clippy::float_cmp)]`) is sanctioned in determinism/hash
      tests, and in table/property tests only where the node's contract is
      exact IEEE arithmetic — pure maths, as in the worked examples.
-   - A test that inherently exercises two nodes (a construct/deconstruct
-     round-trip) lives with the primary node and says so in a comment;
-     the other file's tests say where its coverage lives.
+   - All three live IN THE NODE'S FILE — the conformance test reads the
+     source and fails when a `#[test]`, a `proptest! {` block, or a
+     `fn …determinism…` is missing. A test that inherently exercises two
+     nodes (a construct/deconstruct round-trip) may live with the primary
+     node in addition and say so; it never replaces the other node's own
+     three (the C0 review found four files covered only by a sibling's
+     joint test).
 5. **Spec round-trip test** in `src/lib.rs` tests when the node exercises
    a new macro feature (first default, first multi-output, first
    dimension tag …): assert the registered spec's signature string.
@@ -186,7 +196,10 @@ mod tests { /* table, property, golden hash */ }
    fails the build when any registered node lacks a title line, a
    description, a doc line on ANY port (inputs, named outputs, and the
    bare `out` via `# Returns`), a `gh` answer, or an example that calls it
-   (as a whole identifier — `polyline(` is not a call of `line`).
+   (as a whole identifier — `polyline(` is not a call of `line`); and
+   when its file is not `src/<category>/<node>.rs` with exactly one
+   `#[node]`, or lacks any of the three tests. Its `category_dir` table
+   maps category strings to directories — a new category adds a row.
    The runner (`crates/cicada-cli/tests/node_examples.rs`) parses,
    checks (zero diagnostics), lowers and solves every example with a
    fresh cache and reports all failing snippets in one list — it lives in

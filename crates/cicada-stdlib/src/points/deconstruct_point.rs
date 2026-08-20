@@ -46,12 +46,48 @@ pub fn deconstruct_point(input: DeconstructPointIn) -> DeconstructPointOut {
 
 // Table and property coverage: the construct/deconstruct round-trip tests
 // in `construct_point.rs` exercise this node.
+// The construct ∘ deconstruct round-trip also lives in `construct_point.rs`
+// with the primary node; the three tests below are this node's own.
 #[cfg(test)]
 #[allow(clippy::float_cmp)] // exact coordinate pass-through is the contract
 mod tests {
     use cicada_core::value::{HashedValue, ValueData};
 
     use super::*;
+    use crate::points::construct_point::{ConstructPointIn, construct_point};
+
+    #[test]
+    fn deconstruct_point_table_cases() {
+        let coords = |point| {
+            let out = deconstruct_point(DeconstructPointIn { point });
+            (out.x, out.y, out.z)
+        };
+        assert_eq!(coords(Point::origin()), (0.0, 0.0, 0.0));
+        assert_eq!(coords(Point::new(1.5, -2.0, 0.25)), (1.5, -2.0, 0.25));
+        assert_eq!(
+            coords(Point::new(-1.0e9, 3.0e-9, 7.0)),
+            (-1.0e9, 3.0e-9, 7.0),
+            "coordinates pass through exactly, whatever their magnitude"
+        );
+    }
+
+    proptest::proptest! {
+        // Deconstruct then construct is the identity on the point — the
+        // inverse direction of the round-trip in `construct_point.rs`.
+        #[test]
+        fn deconstruct_point_property_roundtrip(
+            x in -1.0e9..1.0e9_f64,
+            y in -1.0e9..1.0e9_f64,
+            z in -1.0e9..1.0e9_f64,
+        ) {
+            let point = Point::new(x, y, z);
+            let out = deconstruct_point(DeconstructPointIn { point });
+            proptest::prop_assert_eq!(
+                construct_point(ConstructPointIn { x: out.x, y: out.y, z: out.z }),
+                point
+            );
+        }
+    }
 
     // Golden hashes: each output through the value model, arithmetic-exact
     // inputs only (blessed via run-once).

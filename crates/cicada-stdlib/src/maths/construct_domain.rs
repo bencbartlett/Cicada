@@ -34,8 +34,9 @@ pub fn construct_domain(input: ConstructDomainIn) -> Domain {
     Domain::new(input.start, input.end)
 }
 
-// The construct/deconstruct round-trip tests exercise both domain nodes and
-// live here; `deconstruct_domain.rs` has no tests of its own.
+// The construct ∘ deconstruct round-trip exercises both domain nodes and
+// lives here with the primary node; `deconstruct_domain.rs` carries its
+// own three tests as well.
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {

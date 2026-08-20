@@ -3,7 +3,7 @@
 use cicada_core::marshal::ElemSlot;
 use cicada_macros::{Ports, node};
 
-/// Inputs for [`concat`].
+/// Inputs for [`concat()`].
 #[derive(Ports, Clone, Debug)]
 pub struct ConcatIn {
     /// The leading list.

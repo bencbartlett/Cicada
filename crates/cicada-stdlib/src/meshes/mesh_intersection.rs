@@ -50,6 +50,8 @@ pub fn mesh_intersection(input: MeshIntersectionIn) -> Watertight<Mesh> {
 
 // Property coverage: the inclusion–exclusion property in `mesh_union.rs`
 // exercises this node.
+// The three-boolean inclusion–exclusion property in `mesh_union.rs`
+// exercises this node as well; the property below is the intersection's own.
 #[cfg(test)]
 mod tests {
     use cicada_core::scalar::Domain;
@@ -58,6 +60,7 @@ mod tests {
     use cicada_geom::meshbuild::signed_volume;
 
     use super::*;
+    use crate::meshes::support::{aligned_box, overlap_volume};
     use crate::solids::r#box::{BoxIn, box_};
     use crate::solids::support::config;
 
@@ -82,6 +85,52 @@ mod tests {
             b: unit(0.5),
         });
         assert!((signed_volume(&overlap.0) - 0.125).abs() < 1e-9);
+    }
+
+    proptest::proptest! {
+        // The intersection's volume is the analytic overlap of the two
+        // boxes (zero when they are apart — the empty solid), it is
+        // symmetric in its operands, and a solid intersected with itself
+        // is itself.
+        #[test]
+        fn mesh_intersection_property_volume_is_the_overlap(
+            ax in 0.5..3.0_f64, ay in 0.5..3.0_f64, az in 0.5..3.0_f64,
+            ox in -1.5..3.5_f64, oy in -1.5..3.5_f64, oz in -1.5..3.5_f64,
+            other in 0.5..2.0_f64,
+        ) {
+            let extents = [ax, ay, az];
+            let origin = [ox, oy, oz];
+            let size = [other, other, other];
+            let volume_a = ax * ay * az;
+            let tolerance = 1e-8 * (volume_a + 1.0);
+
+            let expected = overlap_volume([0.0; 3], extents, origin, size);
+            let ab = signed_volume(
+                &mesh_intersection(MeshIntersectionIn {
+                    a: aligned_box([0.0; 3], extents),
+                    b: aligned_box(origin, size),
+                })
+                .0,
+            );
+            let ba = signed_volume(
+                &mesh_intersection(MeshIntersectionIn {
+                    a: aligned_box(origin, size),
+                    b: aligned_box([0.0; 3], extents),
+                })
+                .0,
+            );
+            proptest::prop_assert!((ab - expected).abs() <= tolerance, "{ab} vs {expected}");
+            proptest::prop_assert!((ab - ba).abs() <= tolerance, "not symmetric: {ab} vs {ba}");
+
+            let with_itself = signed_volume(
+                &mesh_intersection(MeshIntersectionIn {
+                    a: aligned_box([0.0; 3], extents),
+                    b: aligned_box([0.0; 3], extents),
+                })
+                .0,
+            );
+            proptest::prop_assert!((with_itself - volume_a).abs() <= tolerance);
+        }
     }
 
     #[test]

@@ -4,7 +4,7 @@ use cicada_core::geometry::{Curve, Line};
 use cicada_core::spatial::Point;
 use cicada_macros::{Ports, node};
 
-/// Inputs for [`line`].
+/// Inputs for [`line()`].
 #[derive(Ports, Clone, Copy, Debug)]
 pub struct LineIn {
     /// Start point.

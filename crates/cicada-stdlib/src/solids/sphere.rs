@@ -55,11 +55,14 @@ pub fn sphere(config: &ProjectConfig, input: SphereIn) -> Watertight<Mesh> {
     )))
 }
 
-// No mesh golden for `sphere`, deliberately: its vertices come from sin/cos
-// (see `support.rs`); the watertight + volume-bound property is its
-// determinism-adjacent contract.
+// No golden hash of the whole mesh for `sphere`, deliberately: its
+// vertices come from sin/cos (see `support.rs`). Its determinism test
+// below hashes what IS transcendental-free — the topology — and asserts
+// run-to-run byte identity of the rest.
 #[cfg(test)]
 mod tests {
+    use cicada_core::marshal::IntoValue;
+    use cicada_core::value::{HashedValue, ValueData};
     use cicada_geom::meshbuild::signed_volume;
 
     use super::*;
@@ -101,5 +104,39 @@ mod tests {
             proptest::prop_assert!(vol > 0.8 * ball, "volume {} vs ball {}", vol, ball);
             proptest::prop_assert!(vol < ball * (1.0 + 1e-12));
         }
+    }
+
+    // Determinism: the index buffer is integer arithmetic (a golden hash,
+    // cross-platform — blessed via run-once), the UV layout has exact
+    // vertex and triangle counts, and the same inputs give byte-identical
+    // positions run to run (a constant for those would be libm-dependent).
+    #[test]
+    fn sphere_determinism_topology_golden_hash() {
+        let make = || {
+            sphere(
+                &config(),
+                SphereIn {
+                    plane: Plane::world_xy(),
+                    radius: 1.5,
+                    segments: 24,
+                },
+            )
+        };
+        let ball = make().0;
+        // segments = 24 → 12 rings: 2 poles + 11 × 24 ring vertices; 2 × 24
+        // cap triangles + 10 bands × 24 quads × 2.
+        assert_eq!(ball.vertex_count(), 266);
+        assert_eq!(ball.triangle_count(), 528);
+        let topology: Vec<i64> = ball.indices().iter().map(|&i| i64::from(i)).collect();
+        assert_eq!(
+            topology.into_value().unwrap().hash().to_hex(),
+            "7b0a6519a9d3036e0da265a5e90a6ff01f850a641edddbbd60317bbd41e56335"
+        );
+        let again = make().0;
+        assert_eq!(
+            HashedValue::new(ValueData::Mesh(ball)).unwrap().hash(),
+            HashedValue::new(ValueData::Mesh(again)).unwrap().hash(),
+            "same inputs, same bytes"
+        );
     }
 }

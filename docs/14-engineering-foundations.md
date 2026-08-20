@@ -207,9 +207,19 @@ gh = "Move" | none)]` function (`gh` = the Grasshopper component it
 replaces, carried in the catalog and `/api/catalog` for the docs and
 for search-to-place — the client-side search wiring is a pending web
 follow-up, tracked in doc 17 Track C); and the
-three tests (table cases, property test, golden hash). A conformance
-test in the crate fails the build when any registered node lacks a
-piece. One source renders every view: `CATALOG.md`, `catalog.json`,
+three tests — table cases, a property test, a determinism test — IN
+THAT FILE (a test spanning two nodes, like a construct/deconstruct
+round-trip, may live with the primary node in addition, never
+instead). The determinism test is a golden blake3 hash of the output
+value; golden bytes for a file exporter; hash identity for a
+pass-through like `item`; a node whose golden would be fed by sin/cos
+hashes its transcendental-free part (the sphere's topology) and
+asserts run-to-run identity for the rest; a sink returning `()` has
+nothing to hash and is exempt. A conformance test in the crate fails
+the build when any registered node lacks a piece — the doc pieces from
+the registry, the layout (`src/<category>/<node>.rs`, one `#[node]`
+per file) and the three tests from the source. One source renders
+every view: `CATALOG.md`, `catalog.json`,
 `/api/catalog`, `cicada mcp` (catalog search + node docs + the checker
 for agents, v0.1), and `cicada docs`. Node icons are generated assets in the
 same spirit (doc 16): produced by the AI icon pipeline from

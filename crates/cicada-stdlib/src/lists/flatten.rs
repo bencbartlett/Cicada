@@ -39,15 +39,15 @@ pub fn flatten(input: FlattenIn) -> Vec<ElemSlot> {
     input.list.into_iter().flatten().collect()
 }
 
-// Property coverage: the chunk ∘ flatten and partition ∘ flatten round-trip
-// properties live with `chunk` and `partition`.
+// The chunk ∘ flatten and partition ∘ flatten round-trip properties live
+// with `chunk` and `partition` as well; the property below is flatten's own.
 #[cfg(test)]
 mod tests {
     use cicada_core::value::ValueData;
 
     use super::*;
     use crate::lists::chunk::{ChunkIn, chunk};
-    use crate::lists::support::{data, hex, numbers, slots};
+    use crate::lists::support::{data, hex, holed_list, numbers, slots};
 
     #[test]
     fn flatten_table_cases() {
@@ -68,6 +68,27 @@ mod tests {
             })
             .is_empty()
         );
+    }
+
+    proptest::proptest! {
+        // Flatten is ordered concatenation: as many slots as the inner
+        // lists together, in order, holes in place — and flattening
+        // singletons is the identity.
+        #[test]
+        fn flatten_property_is_ordered_concatenation(
+            inner in proptest::collection::vec(holed_list(8), 0..8),
+        ) {
+            let lists: Vec<Vec<ElemSlot>> = inner.iter().map(|v| slots(v)).collect();
+            let flat = flatten(FlattenIn { list: lists });
+            let expected: Vec<Option<f64>> = inner.iter().flatten().copied().collect();
+            proptest::prop_assert_eq!(flat.len(), expected.len());
+            for (slot, want) in flat.iter().zip(&expected) {
+                proptest::prop_assert_eq!(data(slot).cloned(), want.map(ValueData::Number));
+            }
+            let singletons: Vec<Vec<ElemSlot>> =
+                flat.iter().map(|slot| vec![slot.clone()]).collect();
+            proptest::prop_assert_eq!(flatten(FlattenIn { list: singletons }), flat);
+        }
     }
 
     // The combinators reshape without re-sealing: the sealed output is a

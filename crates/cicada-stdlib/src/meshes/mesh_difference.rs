@@ -53,8 +53,8 @@ pub fn mesh_difference(input: MeshDifferenceIn) -> Watertight<Mesh> {
     )))
 }
 
-// Property coverage: the inclusion–exclusion property in `mesh_union.rs`
-// exercises this node.
+// The three-boolean inclusion–exclusion property in `mesh_union.rs`
+// exercises this node as well; the property below is the carve's own.
 #[cfg(test)]
 mod tests {
     use cicada_core::scalar::Domain;
@@ -63,6 +63,7 @@ mod tests {
     use cicada_geom::meshbuild::signed_volume;
 
     use super::*;
+    use crate::meshes::support::{aligned_box, overlap_volume};
     use crate::solids::r#box::{BoxIn, box_};
     use crate::solids::support::config;
 
@@ -87,6 +88,52 @@ mod tests {
             cutters: vec![unit(0.5)],
         });
         assert!((signed_volume(&carved.0) - 0.875).abs() < 1e-9);
+    }
+
+    proptest::proptest! {
+        // The carve is measure-theoretic subtraction: the carved volume is
+        // the mesh volume minus the analytic overlap with the cutter (a
+        // cutter clear of the mesh leaves the volume unchanged, one that
+        // contains it empties it), and two cutters subtract like their
+        // union — no double counting where they overlap each other.
+        #[test]
+        fn mesh_difference_property_volume_is_mesh_minus_overlap(
+            ax in 0.5..3.0_f64, ay in 0.5..3.0_f64, az in 0.5..3.0_f64,
+            ox in -1.5..3.5_f64, oy in -1.5..3.5_f64, oz in -1.5..3.5_f64,
+            cutter in 0.5..2.0_f64,
+        ) {
+            let extents = [ax, ay, az];
+            let origin = [ox, oy, oz];
+            let size = [cutter, cutter, cutter];
+            let mesh_volume = ax * ay * az;
+            let tolerance = 1e-8 * (mesh_volume + 1.0);
+
+            let carved = mesh_difference(MeshDifferenceIn {
+                mesh: aligned_box([0.0; 3], extents),
+                cutters: vec![aligned_box(origin, size)],
+            });
+            let expected = mesh_volume - overlap_volume([0.0; 3], extents, origin, size);
+            proptest::prop_assert!(
+                (signed_volume(&carved.0) - expected).abs() <= tolerance,
+                "carved {} vs expected {}", signed_volume(&carved.0), expected
+            );
+
+            // The same cutter twice carves exactly once.
+            let twice = mesh_difference(MeshDifferenceIn {
+                mesh: aligned_box([0.0; 3], extents),
+                cutters: vec![aligned_box(origin, size), aligned_box(origin, size)],
+            });
+            proptest::prop_assert!((signed_volume(&twice.0) - expected).abs() <= tolerance);
+
+            // A cutter far away changes nothing.
+            let untouched = mesh_difference(MeshDifferenceIn {
+                mesh: aligned_box([0.0; 3], extents),
+                cutters: vec![aligned_box([10.0, 10.0, 10.0], size)],
+            });
+            proptest::prop_assert!(
+                (signed_volume(&untouched.0) - mesh_volume).abs() <= tolerance
+            );
+        }
     }
 
     // The carve's determinism is a golden hash: same inputs → the same
