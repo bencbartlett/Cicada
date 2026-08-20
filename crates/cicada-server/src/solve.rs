@@ -99,6 +99,11 @@ struct State {
     /// Tokens of idle-class solves running right now ([`SolveLoop::
     /// run_idle`]); every real submission and every Esc cancels them all.
     idle: Vec<CancelToken>,
+    /// Idle-class solves waiting for the loop to go idle (registered
+    /// under the lock before they wait, deregistered before they run or
+    /// return): the state tests assert "it has not started" by, instead
+    /// of by elapsed time.
+    idle_waiting: usize,
 }
 
 struct Shared {
@@ -168,6 +173,7 @@ impl SolveLoop {
                 cancel_at: None,
                 shutdown: false,
                 idle: Vec::new(),
+                idle_waiting: 0,
             }),
             wake: Condvar::new(),
             generation: AtomicU64::new(0),
@@ -239,7 +245,8 @@ impl SolveLoop {
         observer: &dyn Observer,
     ) -> Result<IdleRun, IdleError> {
         let (token, generation) = {
-            let state = self.lock();
+            let mut state = self.lock();
+            state.idle_waiting += 1;
             let mut state = self
                 .shared
                 .wake
@@ -247,6 +254,7 @@ impl SolveLoop {
                     (state.in_flight || state.pending.is_some()) && !state.shutdown
                 })
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.idle_waiting -= 1;
             if state.shutdown {
                 return Err(IdleError::Shutdown);
             }
@@ -279,6 +287,12 @@ impl SolveLoop {
     #[must_use]
     pub fn idle_in_flight(&self) -> usize {
         self.lock().idle.len()
+    }
+
+    /// Idle-class solves waiting for their turn (tests; diagnostics).
+    #[must_use]
+    pub fn idle_waiting(&self) -> usize {
+        self.lock().idle_waiting
     }
 
     /// Is a generation in flight (or queued)?
@@ -895,14 +909,26 @@ mod tests {
                     .unwrap()
             })
         };
-        // While the real generation is held, the idle solve has not begun:
-        // its node never signals, and nothing idle is registered.
-        assert!(
-            idle_started
-                .recv_timeout(Duration::from_millis(50))
-                .is_err(),
-            "the idle solve must not start while a generation is in flight"
-        );
+        // While the real generation is held, the idle solve has not begun.
+        // Asserted by STATE, not by elapsed time: the idle solve registers
+        // as waiting under the loop's lock and only then waits (releasing
+        // the lock) — so observing `idle_waiting() == 1` means it is parked
+        // on the condvar, with nothing idle registered and its node silent.
+        // A loop that did not wait (or waited on the wrong predicate)
+        // would never show 1 from outside (increment and decrement under
+        // one lock hold) and would signal `started` instead — the loop
+        // below fails on that signal rather than spinning.
+        loop {
+            if solve.idle_waiting() == 1 {
+                break;
+            }
+            assert!(
+                idle_started.try_recv().is_err(),
+                "the idle solve must not start while a generation is in flight"
+            );
+            std::thread::yield_now();
+        }
+        assert!(idle_started.try_recv().is_err());
         assert_eq!(solve.idle_in_flight(), 0);
 
         // Release the real generation: the loop goes idle, the idle solve
@@ -910,6 +936,7 @@ mod tests {
         held_release.send(()).unwrap();
         idle_started.recv().unwrap();
         assert_eq!(solve.idle_in_flight(), 1);
+        assert_eq!(solve.idle_waiting(), 0, "it left the waiting room");
         solve.wait_idle();
         assert!(
             !solve.is_busy(),
