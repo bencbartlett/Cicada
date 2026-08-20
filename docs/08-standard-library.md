@@ -174,7 +174,7 @@ variants ("/") compress sibling nodes.
 
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
-| Number Slider | `slider(value: Number, min = 0, max = 10, step = 0) → Number` | S | the GH workhorse; out-of-range value = red, never a silent clamp |
+| Number Slider | `slider(value: Number, min = 0, max = 10, step = 0) → Number` | S | the GH workhorse; out-of-range value = red, never a silent clamp; scrub caching (doc 12) is a per-slider opt-in offered only when the step-quantized range has a bounded position count (2026-08-19) |
 | Boolean Toggle | `toggle(value: Boolean) → Boolean` | S | |
 | Literals: Number, Integer, Boolean, Text, Color, Point, Vector, Plane | `() → T` | S | bare literal bindings in the dialect ARE the constant params (doc 10 §3); no zero-input literal nodes exist |
 | Value List | `() → T` | 1 | dropdown enum param |
@@ -302,6 +302,7 @@ it (doc 09).
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
 | Mesh Box / Sphere / Plane | `(…) → Mesh` | 1 | parameterized density |
+| Mesh Box / Mesh Sphere / Mesh Extrude / Mesh Loft | `mesh_box`, `mesh_sphere`, `mesh_extrude`, `mesh_loft` — the §7 S-tier signatures `→ Watertight<Mesh>` | S | the spike's mesh-backed implementations of Box/Sphere/Extrude/Loft, renamed in the SAME commit that lands the OCCT-backed `→ Solid` nodes under the bare names (DECISIONS.md 2026-08-19: B-rep is the default working mode; the wall example stays on these) |
 | Construct Mesh | `(vertices: [Point], faces: [Face]) → Mesh` | 1 | faces = index triples/quads |
 | Deconstruct Mesh | `(mesh: Mesh) → (vertices: [Point], faces: [Face], normals: [Vector])` | 1 | |
 | Tessellate | `(solid: Solid, density…) → Watertight<Mesh>` | 1 | the explicit analytic/B-rep → mesh bridge |

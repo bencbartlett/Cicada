@@ -182,13 +182,26 @@ not rendered), per-element frame ranges, and an auto-layout beyond
 ## Undo/redo (formalizing the ledger row)
 
 - The engine keeps a **linear op log per pipeline**: `{id, label,
-  actor: human | agent(prompt), inverse edit, timestamp}`.
+  actor: human | agent(prompt), state snapshot, timestamp}` — the
+  snapshot is the pipeline text + sidecar BEFORE the op (revised
+  2026-08-19: snapshots, not per-gesture inverse edits; any change from
+  any source is one op, so new gestures are undoable for free).
+  Sidecar-only ops (node moves, preview toggles) are undo steps;
+  effectful runs are non-undoable and say so.
 - Continuous gestures coalesce: a slider drag or node drag is one op,
   created on release.
 - An agent inference's graph edits apply as **one atomic labeled op**
-  (rebased onto current text; order-independence + single assignment
-  make conflicts rare, and a conflict aborts the batch with
-  diagnostics rather than half-applying).
+  through the `batch` operation (intent + HTTP route): the whole new
+  text (+ optional sidecar and script files), a label, the actor, and
+  the **base** text hash the caller read. Stale base or a text that
+  does not parse → refused with diagnostics (red wires are a valid
+  state); otherwise applied under the session lock as one persist
+  (temp + rename), one op, one delta — never a partial state on disk
+  or in any client. Multi-node canvas gestures use the same path. An
+  external agent (MCP) MUST use this route; a direct disk write is the
+  external-change path below (barrier, stack cleared). Rebase onto a
+  moved base is a later refinement — v0.1 refuses and the agent
+  re-reads.
 - `undo`/`redo` are ordinary intents; the engine applies the inverse
   edit and broadcasts the delta like any other change.
 - **Undo never recomputes** — the restored state's node keys are warm

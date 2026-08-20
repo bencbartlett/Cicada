@@ -18,11 +18,12 @@ system; the current work order is the vertical-slice spike
    from its rustdoc `# Panics` section) and the type-variable legend
    (`T` = kind-preserving transformable, `E` = any element kind, `Any` =
    display-sink catch-all).
-3. The stage you are working in, from
-   [docs/15-spike-plan.md](docs/15-spike-plan.md), and the docs it lists for
-   that stage.
+3. The item you are working in, from
+   [docs/17-v01-plan.md](docs/17-v01-plan.md) (the v0.1 work order —
+   items, work packages, definitions of done, status), and the docs it
+   lists for that item. docs/15 is the closed spike record.
 
-**Current status: the spike is COMPLETE — all six stages shipped, the gate PASSED (docs/15 §Stage-6 results). Current work: v0.1 (docs/15 §After the spike; docs/05 roadmap): OCCT-backed Solid, the full docs/08 catalog, WASM script host, undo/redo, git panel, scrub caching, time transport — ordering decided with Ben at kickoff.**
+**Current status: v0.1 is UNDERWAY (work order: docs/17; order decided with Ben 2026-08-19 — DECISIONS.md row of that date): (0) fold `corpus/` into `examples/wall/` + `tools/`; (1) undo/redo with the atomic `batch` path; (2) git panel slice 1; OCCT probe in week 1 then (3) OCCT-backed Solid as the main geometry track — B-rep is the DEFAULT working mode, the bare `box`/`extrude`/`loft`/`sphere` become `Solid` and the mesh tier continues as `mesh_*` in the same commit; (3b) scheduler foundations + compute-on-release in parallel; (4) time transport; (5) scrub caching; (6) WASM host last; track C (catalog: one-node-per-file restructure, node-format conformance, the full docs/08 S+1 list, `cicada mcp`) runs in parallel throughout. docs/17 §Scope carries the live status table — update it when an item moves.**
 Live: the value model + `#[node]` registry (stage 1), the `.cic` toolchain
 (stage 2: lossless parser, minimal-edit writer — place / wire / unwire /
 lift / set-param / delete / rename — checker-lite with type variables

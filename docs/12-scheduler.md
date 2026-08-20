@@ -190,7 +190,9 @@ Idle compute is spent making future interactions instant — always at
 the lowest priority, preempted by any real work.
 
 - **Slider ranges**: a slider with scrub caching enabled (per-param
-  toggle) warms the dirty cone for its step-quantized range during
+  toggle, off by default, offered only when the step-quantized range
+  has a bounded position count — 0…1 by 0.1 qualifies, by 0.01 does
+  not; threshold set when the item lands, 2026-08-19) warms the dirty cone for its step-quantized range during
   idle time — nearest the current value first, walking outward (the
   values you're most likely to scrub to). Content addressing makes
   warming trivially incremental: it evaluates NodeKeys for

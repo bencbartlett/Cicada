@@ -43,6 +43,8 @@ done, and the measurement protocol: doc 15.)
   by default, Python 3 subprocess available; signature→ports, re-parse
   on save, stale-wire type errors, prompt provenance, `@contract`
   property tests.
+- **Undo/redo**: the snapshot op log (doc 13) with the atomic `batch`
+  path for multi-node gestures and external agents.
 - **Git in the UI**: status strip with per-node change markers,
   node-level visual graph diff, commit from the app, per-node history
   (doc 10).
@@ -53,7 +55,13 @@ done, and the measurement protocol: doc 15.)
   materializing as dialect text edits; wire inspection, per-node preview
   toggles, **backward picking**.
 - Fabrication exporters ported: Bambu 3MF, DXF, manifests.
-- Test corpus: the full wall pipeline reproduced end-to-end under CI.
+- Test corpus: the full wall pipeline reproduced end-to-end under CI
+  (`examples/wall/`; every example with golden outputs joins the
+  nightly corpus).
+- `cicada mcp`: the catalog, node docs and the checker for agents.
+
+Order and work packages: [docs/17-v01-plan.md](17-v01-plan.md)
+(decided with Ben 2026-08-19 — DECISIONS.md row of that date).
 
 ## v0.2 — the CAD tier + beauty
 

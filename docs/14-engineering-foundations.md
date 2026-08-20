@@ -188,7 +188,24 @@ from it, and nothing is hand-maintained in parallel:
 Standards that keep this alive: every node's doc comment has a title
 line, a description, and at least one example; `add-stdlib-node` and
 script-authoring flows regenerate the catalog in the same commit; a
-stale CATALOG.md fails CI. Node icons are generated assets in the
+stale CATALOG.md fails CI.
+
+**The node file format (v0.1, decided 2026-08-19).** One node per
+file: `crates/cicada-stdlib/src/<category>/<node>.rs`, categories =
+the ribbon tabs (docs/08), a `mod.rs` per category listing the files.
+Each file holds, in this order: the input struct (`#[derive(Ports)]`,
+one doc line per field — units where relevant — `#[port(default)]`
+for optional ports); the node doc comment with fixed sections — line 1
+`Title — one-sentence description`, an optional paragraph of
+semantics, `# Panics` (rendered as "Red when"), `# Examples` (a
+runnable `.cic` snippet CI solves — REQUIRED); the `#[node(category,
+tier, version, gh = "Move" | none)]` function (`gh` = the Grasshopper
+component it replaces, fed to search-to-place and the docs); and the
+three tests (table cases, property test, golden hash). A conformance
+test in the crate fails the build when any registered node lacks a
+piece. One source renders every view: `CATALOG.md`, `catalog.json`,
+`/api/catalog`, `cicada mcp` (catalog search + node docs + the checker
+for agents, v0.1), and `cicada docs`. Node icons are generated assets in the
 same spirit (doc 16): produced by the AI icon pipeline from
 NodeSpecs, committed, CI-warned when missing.
 

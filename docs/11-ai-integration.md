@@ -97,7 +97,11 @@ uses, and agents invoke them by name:
   generated script node, rewired.
 - `delete_with_reroute(binding)` — remove a pass-through stage.
 
-Raw text edits remain the surface for creative changes; primitives are
+The landing pad for every agent edit is the engine's atomic `batch`
+operation (doc 13, v0.1): whole new text + base hash + label + actor,
+refused when stale or unparsable, otherwise one op / one delta — an
+agent never produces a partial state. Raw text edits remain the
+surface for creative changes; primitives are
 guaranteed-correct for the tedious ones. ("Rename cells → regions
 everywhere" is one primitive call, not an editing session.)
 
