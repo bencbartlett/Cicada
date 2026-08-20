@@ -191,7 +191,7 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
-      "panics": "`count` is negative.",
+      "panics": "`count` is negative or above the 2^24 slot ceiling (16,777,216 slots).",
       "gh": "Random",
       "examples": [
         "span = construct_domain(start=0.0, end=10.0)\ndraws = random(domain=span, count=5, seed=7)"
@@ -242,7 +242,7 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
-      "panics": "`steps < 1` — a domain cannot be divided into no steps.",
+      "panics": "`steps < 1` — a domain cannot be divided into no steps — or when `steps` is above the 2^24 slot ceiling (16,777,216 slots).",
       "gh": "Range",
       "examples": [
         "span = construct_domain(start=0.0, end=1.0)\nticks = range(domain=span, steps=4)"
@@ -285,7 +285,7 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
-      "panics": "`count` is negative, or when the pattern is empty and `count` is positive (nothing to repeat).",
+      "panics": "`count` is negative or above the 2^24 slot ceiling (16,777,216 slots), or when the pattern is empty and `count` is positive (nothing to repeat).",
       "gh": "Repeat Data",
       "examples": [
         "on_off = [True, False]\nmask = repeat(pattern=on_off, count=5)"
@@ -328,7 +328,7 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
-      "panics": "`count` is negative — loud refusal, never a silent empty list (the scheduler turns node panics into red nodes, stage 3).",
+      "panics": "`count` is negative — loud refusal, never a silent empty list (the scheduler turns node panics into red nodes, stage 3) — or above the 2^24 slot ceiling (16,777,216 slots — an unbounded count once aborted the engine on allocation failure instead of going red).",
       "gh": "Series",
       "examples": [
         "xs = series(start=0.0, step=2.5, count=4)"
@@ -2194,7 +2194,7 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
-      "panics": "`count` is negative (`0` is the empty list).",
+      "panics": "`count` is negative (`0` is the empty list) or above the 2^24 slot ceiling (16,777,216 slots).",
       "gh": "Duplicate Data",
       "examples": [
         "dot = construct_point(x=1.0, y=2.0, z=0.0)\ndots = duplicate(item=dot, count=3)"
@@ -2494,7 +2494,7 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
-      "panics": "`count` is below the list's slot count (`pad_last` only lengthens — `truncate` shortens), or when the list is empty and `count` is positive (no last slot to repeat).",
+      "panics": "`count` is below the list's slot count (`pad_last` only lengthens — `truncate` shortens) or above the 2^24 slot ceiling (16,777,216 slots), or when the list is empty and `count` is positive (no last slot to repeat).",
       "gh": "Longest List",
       "examples": [
         "few = [1.0, 2.0]\nmany = [10.0, 20.0, 30.0, 40.0]\nn = length(list=many)\npadded = pad_last(list=few, count=n)\nsums = add(a=each(padded), b=each(many))"
@@ -3406,7 +3406,7 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": true,
-      "panics": "`count < 1` or the curve is degenerate at tolerance (no usable length, zero radius, collapsed frame).",
+      "panics": "`count < 1`, when `count` is above the 2^24 slot ceiling (16,777,216 slots), or when the curve is degenerate at tolerance (no usable length, zero radius, collapsed frame).",
       "gh": "Divide Curve",
       "examples": [
         "ring = circle(radius=2.0)\npoints, tangents, params = divide_curve(curve=ring, count=12)"
@@ -4072,7 +4072,7 @@
       "version": 1,
       "pure": true,
       "uses_tolerance": false,
-      "panics": "`count < 1`.",
+      "panics": "`count < 1` or `count` is above the 2^24 slot ceiling (16,777,216 slots).",
       "gh": "Linear Array",
       "examples": [
         "ring = circle(radius=1.0)\nstep = unit_x(factor=3.0)\nrow = linear_array(geometry=ring, direction=step, count=4)"

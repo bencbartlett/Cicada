@@ -2,6 +2,8 @@
 
 use cicada_macros::{Ports, node};
 
+use crate::slot_count;
+
 /// Inputs for [`series`].
 #[derive(Ports, Clone, Copy, Debug)]
 pub struct SeriesIn {
@@ -24,7 +26,9 @@ pub struct SeriesIn {
 /// # Panics
 ///
 /// Panics when `count` is negative — loud refusal, never a silent empty
-/// list (the scheduler turns node panics into red nodes, stage 3).
+/// list (the scheduler turns node panics into red nodes, stage 3) — or
+/// above the 2^24 slot ceiling (16,777,216 slots — an unbounded count once
+/// aborted the engine on allocation failure instead of going red).
 ///
 /// # Examples
 ///
@@ -39,16 +43,12 @@ pub struct SeriesIn {
 )]
 #[must_use]
 pub fn series(input: SeriesIn) -> Vec<f64> {
-    assert!(
-        input.count >= 0,
-        "series: count must be >= 0, got {}",
-        input.count
-    );
+    let count = slot_count("series", "count", input.count, 0);
     // Per-element multiply (not accumulation) keeps results exact-of-form
-    // start + step·i and independent of evaluation order. Counts beyond
-    // 2^53 are unrepresentable in practice; the cast is loss-free there.
+    // start + step·i and independent of evaluation order. Counts stay below
+    // 2^24 (the slot ceiling), so the cast is loss-free.
     #[allow(clippy::cast_precision_loss)]
-    (0..input.count)
+    (0..count)
         .map(|i| input.start + input.step * i as f64)
         .collect()
 }
@@ -97,6 +97,18 @@ mod tests {
             start: 0.0,
             step: 1.0,
             count: -1,
+        });
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "series: count is 100000000000 — above the 16777216 (2^24) slot ceiling"
+    )]
+    fn absurd_count_is_refused_not_allocated() {
+        let _ = series(SeriesIn {
+            start: 0.0,
+            step: 1.0,
+            count: 100_000_000_000,
         });
     }
 

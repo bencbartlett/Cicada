@@ -37,7 +37,15 @@ long tail stays a non-goal.
    combinator; removal only via explicit `compact`/`Cull`-family nodes
    that also return an `IndexMap` (wall lesson 2).
 7. **Loud refusal.** A node missing required inputs or shown invalid data
-   is red with a reason and IDs; it never guesses (wall lesson 13).
+   is red with a reason and IDs; it never guesses (wall lesson 13). Every
+   count port (`series`, `random`, `range`, `repeat`, `duplicate`,
+   `pad_last`, `linear_array`, `divide_curve`) shares one **slot ceiling**,
+   2^24 = 16,777,216 slots (`cicada_stdlib::MAX_SLOTS`): a larger count is
+   red with the count in the message, never an allocation attempt — an
+   unbounded `count` once aborted the whole engine on allocation failure,
+   which is not a panic and so could not go red (C1 review). It is a slot
+   ceiling, not a memory bound; geometry `segments` ports are mesh
+   resolution and keep their own contracts.
 8. **Conversions are explicit, costed nodes** (`Tessellate`, `As Closed`,
    `As Solid`) — never silent coercions. Only total, lossless upcasts
    (Circle → Curve) are implicit.

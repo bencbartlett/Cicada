@@ -3,6 +3,8 @@
 use cicada_core::marshal::ElemSlot;
 use cicada_macros::{Ports, node};
 
+use crate::slot_count;
+
 /// Inputs for [`duplicate`].
 #[derive(Ports, Clone, Debug)]
 pub struct DuplicateIn {
@@ -23,7 +25,8 @@ pub struct DuplicateIn {
 ///
 /// # Panics
 ///
-/// Panics when `count` is negative (`0` is the empty list).
+/// Panics when `count` is negative (`0` is the empty list) or above the
+/// 2^24 slot ceiling (16,777,216 slots).
 ///
 /// # Examples
 ///
@@ -39,8 +42,7 @@ pub struct DuplicateIn {
 )]
 #[must_use]
 pub fn duplicate(input: DuplicateIn) -> Vec<ElemSlot> {
-    let count = usize::try_from(input.count)
-        .unwrap_or_else(|_| panic!("duplicate: count must be >= 0, got {}", input.count));
+    let count = slot_count("duplicate", "count", input.count, 0);
     vec![input.item; count]
 }
 
@@ -94,6 +96,17 @@ mod tests {
         let _ = duplicate(DuplicateIn {
             item: number(1.0),
             count: -1,
+        });
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "duplicate: count is 16777217 — above the 16777216 (2^24) slot ceiling"
+    )]
+    fn duplicate_absurd_count_is_refused_not_allocated() {
+        let _ = duplicate(DuplicateIn {
+            item: number(1.0),
+            count: crate::MAX_SLOTS + 1,
         });
     }
 

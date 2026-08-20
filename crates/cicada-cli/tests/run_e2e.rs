@@ -365,3 +365,36 @@ fn red_nodes_exit_nonzero_with_element_ids_and_name_their_blast_radius() {
     );
     assert!(err.contains("1 blocked downstream"), "{err}");
 }
+
+// An absurd count is a RED NODE, never an allocation attempt: before the
+// slot ceiling, `series(count=100000000000)` asked for an 800 GB Vec and
+// the process aborted with "memory allocation of 800000000000 bytes
+// failed" — an abort is not a panic, so the scheduler could not turn it
+// red, and under `cicada serve` the whole engine died (C1 review).
+#[test]
+fn an_absurd_count_is_a_red_node_not_an_abort() {
+    let dir = tempfile::tempdir().unwrap();
+    write_demo(
+        dir.path(),
+        "# cicada 1
+nums = series(count=100000000000)
+n = length(list=nums)
+",
+    );
+    let output = cicada(
+        dir.path(),
+        &["run", "demo.cic", "--cache-dir", "cache", "--node", "n"],
+    );
+    assert!(!output.status.success(), "a red node fails the run");
+    let err = stderr(&output);
+    assert!(
+        !err.contains("memory allocation"),
+        "the engine must refuse, not try to allocate: {err}"
+    );
+    assert!(err.contains("red: `nums`"), "{err}");
+    assert!(
+        err.contains("count is 100000000000 — above the 16777216 (2^24) slot ceiling"),
+        "the ceiling and the count are in the message: {err}"
+    );
+    assert!(err.contains("blocked: `n` — fed by red `nums`"), "{err}");
+}

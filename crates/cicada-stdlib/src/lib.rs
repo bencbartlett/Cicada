@@ -38,6 +38,37 @@ pub(crate) fn red<T>(result: Result<T, cicada_geom::GeomError>) -> T {
     }
 }
 
+/// The most slots one count port may ask a node to produce: 2^24
+/// (16,777,216). A count above it is a red node, never an attempt to
+/// allocate it — an unbounded `count` once aborted the whole engine on
+/// allocation failure (`series(count=100000000000)`: "memory allocation of
+/// 800000000000 bytes failed", which is not a panic, so the scheduler could
+/// not turn it red and `cicada serve` would have died with it; C1 review).
+/// This is a SLOT ceiling — it keeps absurd counts loud, it does not bound
+/// memory: a million copies of a mesh are a million meshes.
+pub const MAX_SLOTS: i64 = 1 << 24;
+
+/// A count port as the `usize` a node may allocate: red below `least` (`0`
+/// for a count, `1` for a step count) and red above [`MAX_SLOTS`], the
+/// port's name and value in the message either way. Every node whose output
+/// length is a port goes through here (`series` is the original pattern; the
+/// geometry `segments` ports are mesh resolution, not slot counts, and keep
+/// their own contracts).
+pub(crate) fn slot_count(node: &str, port: &str, value: i64, least: i64) -> usize {
+    assert!(
+        value >= least,
+        "{node}: {port} must be >= {least}, got {value}"
+    );
+    assert!(
+        value <= MAX_SLOTS,
+        "{node}: {port} is {value} — above the {MAX_SLOTS} (2^24) slot ceiling of one node \
+         output"
+    );
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)] // 0 <= value <= 2^24
+    let count = value as usize;
+    count
+}
+
 /// Every node registered in this binary, in canonical catalog order
 /// (docs/08 category order, then dialect name within a category — the
 /// order never depends on the source layout).
@@ -93,6 +124,31 @@ mod naming_fixtures {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The slot ceiling every count port shares: both bounds inclusive, the
+    // refusals name the port and the value.
+    #[test]
+    fn slot_count_accepts_the_bounds_and_refuses_beyond_them() {
+        assert_eq!(slot_count("series", "count", 0, 0), 0);
+        assert_eq!(slot_count("range", "steps", 1, 1), 1);
+        assert_eq!(
+            slot_count("duplicate", "count", MAX_SLOTS, 0),
+            16_777_216,
+            "the ceiling itself is allowed"
+        );
+        let below = std::panic::catch_unwind(|| slot_count("series", "count", -1, 0))
+            .expect_err("below least refuses");
+        let below = below.downcast_ref::<String>().expect("message");
+        assert_eq!(below, "series: count must be >= 0, got -1");
+        let above = std::panic::catch_unwind(|| slot_count("repeat", "count", MAX_SLOTS + 1, 0))
+            .expect_err("above the ceiling refuses");
+        let above = above.downcast_ref::<String>().expect("message");
+        assert_eq!(
+            above,
+            "repeat: count is 16777217 — above the 16777216 (2^24) slot ceiling of one node \
+             output"
+        );
+    }
 
     #[test]
     fn registry_is_nonempty_and_names_unique() {

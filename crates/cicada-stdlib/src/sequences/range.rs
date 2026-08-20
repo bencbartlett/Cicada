@@ -3,6 +3,8 @@
 use cicada_core::scalar::Domain;
 use cicada_macros::{Ports, node};
 
+use crate::slot_count;
+
 /// Inputs for [`range`].
 #[derive(Ports, Clone, Copy, Debug)]
 pub struct RangeIn {
@@ -21,7 +23,8 @@ pub struct RangeIn {
 ///
 /// # Panics
 ///
-/// Panics when `steps < 1` — a domain cannot be divided into no steps.
+/// Panics when `steps < 1` — a domain cannot be divided into no steps — or
+/// when `steps` is above the 2^24 slot ceiling (16,777,216 slots).
 ///
 /// # Examples
 ///
@@ -32,22 +35,18 @@ pub struct RangeIn {
 #[node(category = "Sequences & random", tier = "1", version = 1, gh = "Range")]
 #[must_use]
 pub fn range(input: RangeIn) -> Vec<f64> {
-    assert!(
-        input.steps >= 1,
-        "range: steps must be >= 1, got {}",
-        input.steps
-    );
+    let count = slot_count("range", "steps", input.steps, 1);
     let Domain { start, end } = input.domain;
     let span = end - start;
     // Per-element form (never accumulation) keeps every value independent
     // of evaluation order; the ends are the domain's own numbers, exactly.
-    #[allow(clippy::cast_precision_loss)] // step counts are far below 2^53
-    let steps = input.steps as f64;
-    (0..=input.steps)
+    #[allow(clippy::cast_precision_loss)] // step counts stay below 2^24
+    let steps = count as f64;
+    (0..=count)
         .map(|i| {
             if i == 0 {
                 start
-            } else if i == input.steps {
+            } else if i == count {
                 end
             } else {
                 #[allow(clippy::cast_precision_loss)]
@@ -106,6 +105,15 @@ mod tests {
         let _ = range(RangeIn {
             domain: Domain::new(0.0, 1.0),
             steps: 0,
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "range: steps is 16777217 — above the 16777216 (2^24) slot ceiling")]
+    fn range_absurd_steps_is_refused_not_allocated() {
+        let _ = range(RangeIn {
+            domain: Domain::new(0.0, 1.0),
+            steps: crate::MAX_SLOTS + 1,
         });
     }
 

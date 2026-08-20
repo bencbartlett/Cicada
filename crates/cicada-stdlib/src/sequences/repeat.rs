@@ -3,6 +3,8 @@
 use cicada_core::marshal::ElemSlot;
 use cicada_macros::{Ports, node};
 
+use crate::slot_count;
+
 /// Inputs for [`repeat`].
 #[derive(Ports, Clone, Debug)]
 pub struct RepeatIn {
@@ -24,8 +26,9 @@ pub struct RepeatIn {
 ///
 /// # Panics
 ///
-/// Panics when `count` is negative, or when the pattern is empty and
-/// `count` is positive (nothing to repeat).
+/// Panics when `count` is negative or above the 2^24 slot ceiling
+/// (16,777,216 slots), or when the pattern is empty and `count` is positive
+/// (nothing to repeat).
 ///
 /// # Examples
 ///
@@ -41,8 +44,7 @@ pub struct RepeatIn {
 )]
 #[must_use]
 pub fn repeat(input: RepeatIn) -> Vec<ElemSlot> {
-    let count = usize::try_from(input.count)
-        .unwrap_or_else(|_| panic!("repeat: count must be >= 0, got {}", input.count));
+    let count = slot_count("repeat", "count", input.count, 0);
     if count == 0 {
         return Vec::new();
     }
@@ -110,6 +112,15 @@ mod tests {
         let _ = repeat(RepeatIn {
             pattern: numbers(&[1.0]),
             count: -1,
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "repeat: count is 16777217 — above the 16777216 (2^24) slot ceiling")]
+    fn repeat_absurd_count_is_refused_not_allocated() {
+        let _ = repeat(RepeatIn {
+            pattern: numbers(&[1.0]),
+            count: crate::MAX_SLOTS + 1,
         });
     }
 

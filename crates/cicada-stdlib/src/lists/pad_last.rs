@@ -3,6 +3,8 @@
 use cicada_core::marshal::ElemSlot;
 use cicada_macros::{Ports, node};
 
+use crate::slot_count;
+
 /// Inputs for [`pad_last`].
 #[derive(Ports, Clone, Debug)]
 pub struct PadLastIn {
@@ -27,8 +29,9 @@ pub struct PadLastIn {
 /// # Panics
 ///
 /// Panics when `count` is below the list's slot count (`pad_last` only
-/// lengthens — `truncate` shortens), or when the list is empty and `count`
-/// is positive (no last slot to repeat).
+/// lengthens — `truncate` shortens) or above the 2^24 slot ceiling
+/// (16,777,216 slots), or when the list is empty and `count` is positive (no
+/// last slot to repeat).
 ///
 /// # Examples
 ///
@@ -43,8 +46,7 @@ pub struct PadLastIn {
 #[must_use]
 pub fn pad_last(input: PadLastIn) -> Vec<ElemSlot> {
     let mut list = input.list;
-    let count = usize::try_from(input.count)
-        .unwrap_or_else(|_| panic!("pad_last: count must be >= 0, got {}", input.count));
+    let count = slot_count("pad_last", "count", input.count, 0);
     assert!(
         count >= list.len(),
         "pad_last: count {count} is below the list's {} slots — pad_last only lengthens \
@@ -118,6 +120,17 @@ mod tests {
         let _ = pad_last(PadLastIn {
             list: vec![],
             count: 2,
+        });
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "pad_last: count is 16777217 — above the 16777216 (2^24) slot ceiling"
+    )]
+    fn pad_last_absurd_count_is_refused_not_allocated() {
+        let _ = pad_last(PadLastIn {
+            list: numbers(&[1.0]),
+            count: crate::MAX_SLOTS + 1,
         });
     }
 

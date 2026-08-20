@@ -3,6 +3,7 @@
 use cicada_macros::{Ports, node};
 
 use super::support::{seed_state, unit_draw};
+use crate::slot_count;
 
 /// Inputs for [`random`].
 #[derive(Ports, Clone, Copy, Debug)]
@@ -29,7 +30,8 @@ pub struct RandomIn {
 ///
 /// # Panics
 ///
-/// Panics when `count` is negative.
+/// Panics when `count` is negative or above the 2^24 slot ceiling
+/// (16,777,216 slots).
 ///
 /// # Examples
 ///
@@ -45,14 +47,10 @@ pub struct RandomIn {
 )]
 #[must_use]
 pub fn random(input: RandomIn) -> Vec<f64> {
-    assert!(
-        input.count >= 0,
-        "random: count must be >= 0, got {}",
-        input.count
-    );
+    let count = slot_count("random", "count", input.count, 0);
     let mut state = seed_state(input.seed);
     let span = input.domain.end - input.domain.start;
-    (0..input.count)
+    (0..count)
         .map(|_| span.mul_add(unit_draw(&mut state), input.domain.start))
         .collect()
 }
@@ -104,6 +102,16 @@ mod tests {
         let _ = random(RandomIn {
             domain: cicada_core::scalar::Domain::new(0.0, 1.0),
             count: -1,
+            seed: 0,
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "random: count is 16777217 — above the 16777216 (2^24) slot ceiling")]
+    fn random_absurd_count_is_refused_not_allocated() {
+        let _ = random(RandomIn {
+            domain: cicada_core::scalar::Domain::new(0.0, 1.0),
+            count: crate::MAX_SLOTS + 1,
             seed: 0,
         });
     }

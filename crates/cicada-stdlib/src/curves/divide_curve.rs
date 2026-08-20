@@ -5,7 +5,7 @@ use cicada_core::geometry::Curve;
 use cicada_core::spatial::{Point, Vector};
 use cicada_macros::{Ports, node};
 
-use crate::red;
+use crate::{red, slot_count};
 
 /// Inputs for [`divide_curve`].
 #[derive(Ports, Clone, Debug)]
@@ -34,8 +34,9 @@ pub struct DivideCurveOut {
 ///
 /// # Panics
 ///
-/// Panics when `count < 1` or the curve is degenerate at tolerance (no
-/// usable length, zero radius, collapsed frame).
+/// Panics when `count < 1`, when `count` is above the 2^24 slot ceiling
+/// (16,777,216 slots), or when the curve is degenerate at tolerance (no usable
+/// length, zero radius, collapsed frame).
 ///
 /// # Examples
 ///
@@ -52,6 +53,9 @@ pub struct DivideCurveOut {
 )]
 #[must_use]
 pub fn divide_curve(config: &ProjectConfig, input: DivideCurveIn) -> DivideCurveOut {
+    // The kernel refuses `count < 1` itself; the slot ceiling is the node
+    // layer's contract (an open curve yields `count + 1` samples).
+    let _ = slot_count("divide_curve", "count", input.count, 1);
     let divided = red(cicada_geom::curve::divide(
         &input.curve,
         input.count,
@@ -108,6 +112,39 @@ mod tests {
             },
         );
         assert_eq!(out.points.len(), 4, "closed: count");
+    }
+
+    fn unit_line() -> cicada_core::geometry::Curve {
+        line(LineIn {
+            a: Point::new(0.0, 0.0, 0.0),
+            b: Point::new(1.0, 0.0, 0.0),
+        })
+    }
+
+    #[test]
+    #[should_panic(expected = "divide_curve: count must be >= 1, got 0")]
+    fn divide_curve_zero_count_is_red() {
+        let _ = divide_curve(
+            &config(),
+            DivideCurveIn {
+                curve: unit_line(),
+                count: 0,
+            },
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "divide_curve: count is 16777217 — above the 16777216 (2^24) slot ceiling"
+    )]
+    fn divide_curve_absurd_count_is_refused_not_allocated() {
+        let _ = divide_curve(
+            &config(),
+            DivideCurveIn {
+                curve: unit_line(),
+                count: crate::MAX_SLOTS + 1,
+            },
+        );
     }
 
     proptest::proptest! {
