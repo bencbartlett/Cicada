@@ -907,7 +907,8 @@ impl<'a> Checker<'a> {
                                 line_span_to_file(line, kwarg.value.span()),
                                 format!(
                                     "zip is strict: {first_len} vs {len} elements — \
-                                     pad_last / cycle / truncate are the opt-in policies"
+                                     `pad_last` / `repeat` / `truncate` are the opt-in \
+                                     adapter nodes"
                                 ),
                             )
                             .with_node(node),
