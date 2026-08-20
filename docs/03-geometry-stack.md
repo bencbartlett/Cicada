@@ -22,7 +22,7 @@ Conversions are explicit, costed nodes (`tessellate: Solid → Mesh`,
 | **Manifold** (via `manifold3d` bindings) | Mesh booleans, offsets, hulls | Guaranteed-watertight, parallel, milliseconds; would eat the wall's 1,961-part carve (a half-hour Rhino ordeal) in seconds. The mesh workhorse |
 | **spade / delaunator / kiddo** | Voronoi, Delaunay, spatial indices | Rust-native; the wall's numpy/scipy field+cell stages keep running as Python script nodes until promoted |
 | **glam / curvo / lyon / cavalier_contours / i_overlay** | Vector math, NURBS curves+surfaces, 2D paths, offsets, planar booleans | The math tier under the stdlib; analytic primitives (lines, arcs, frusta) are Cicada's own easy math |
-| **OCCT via `opencascade-rs`** | Procedural B-rep: extrude/revolve/loft/sweep, booleans, chamfers, modest fillets; **STEP import/export** (from v0.1 — Solid is B-rep-backed) | The only serious open B-rep kernel; its STEP support is the best open implementation. Bindings are young — fallback is a thin C++ shim; build123d/CadQuery remain the API prior art to imitate. Known ceilings: pathological booleans, ambitious fillets, big-model perf |
+| **OCCT via `opencascade-rs`** (Ben's fork, pinned rev; see §The OCCT seam as built) | Procedural B-rep: extrude/revolve/loft/sweep, booleans, chamfers, modest fillets; **STEP import/export** (from v0.1 — Solid is B-rep-backed) | The only serious open B-rep kernel; its STEP support is the best open implementation. Bindings are young — the fork carries reviewed patches and a Cicada-specific, exception-safe glue layer (the "thin C++ shim" in practice); build123d/CadQuery remain the API prior art to imitate. Known ceilings: pathological booleans, ambitious fillets, big-model perf |
 | **fidget** (implicits/SDFs) | Blends, lattices, organic forms; JIT-compiled evaluation | Pure-Rust successor to libfive by the same author. The operations that are nightmares in B-rep are one-liners here — a fillet is a smooth-minimum. Pairs naturally with mesh output; no STEP |
 | **ttf-parser / rustybuzz** | Text → outlines (+ shaping) | Rust-native; replaces the wall's DimStyle-fighting glyph pipeline |
 | **wasmtime** | Sandboxed WASM host for script nodes | Near-native compute; epoch preemption gives hard cancellation; a crashing script costs one node, never the engine |
@@ -30,6 +30,80 @@ Conversions are explicit, costed nodes (`tessellate: Solid → Mesh`,
 | **planegcs or SolveSpace's libslvs** | 2D constraint solving (deferred sketcher) | The solver is rentable; the sketcher work is UI |
 | **Rhino.Compute** | Optional rescue backend | A kernel seat already owned; use only if OCCT's robustness ceiling is hit on real geometry. Demoted from "the middle path" to an escape hatch |
 | **Blender (bpy)** | Photorealistic rendering | See doc 04 |
+
+## The OCCT seam as built (2026-08-20, docs/17 Item 3 WP-A)
+
+The probe (`docs/probes/occt-2026-08.md`) decided the shape; this is what
+shipped. Everything below lives behind the `occt` Cargo feature of
+`cicada-geom` (default OFF — default builds compile no C++ and link no
+OCCT) in `crates/cicada-geom/src/occt/`.
+
+- **Prebuilt, never the source build.** The binding links a prebuilt
+  OpenCASCADE 7.8.1 found through `DEP_OCCT_ROOT`: conda-forge's `occt`
+  build 103 ("novtk") for win-64 / linux-64 / osx-64 / osx-arm64, plus
+  the run-time packages its shared libraries load (conda builds OCCT
+  with FreeType/FreeImage on, and `TKDESTEP → TKXCAF → TKV3d → TKService
+  → freetype + FreeImage + codecs`; every test binary links the STEP
+  toolkits, so the closure is needed from day one). `tools/fetch_occt.py`
+  fetches it, pinned file by file by sha256 in
+  `tools/fetch_occt_manifest.json`, into the user cache dir (never a
+  repo), verifies the extracted version is exactly 7.8.1 (the binding's
+  own check accepts any 7.x ≥ 7.8), checks the import closure statically
+  (PE/ELF/Mach-O), and prints the environment: `DEP_OCCT_ROOT`
+  (`<prefix>/Library` on Windows, `<prefix>` elsewhere), the loader path
+  (`PATH` / `LD_LIBRARY_PATH` / `DYLD_LIBRARY_PATH`), and
+  `CMAKE_POLICY_VERSION_MINIMUM=3.5` for cmake-4 hosts. The shipped
+  binary's own-built OCCT (FreeType/FreeImage off) is WP-C's work and a
+  fetch-table change here, not a redesign.
+- **The binding is Ben's fork**, `github.com/bencbartlett/opencascade-rs`
+  branch `cicada`, pinned by rev in the workspace `Cargo.toml`: upstream
+  `d114250` plus exactly the reviewed commits — the MSVC handle aliases
+  (the source part of upstream PR #230, closed unmerged), the honest
+  `BinTools`/`BRepTools` writers (the binary writer used to be the text
+  writer through a cxx symbol collision; the path-only overloads
+  defaulted to `theWithTriangles = TRUE`) with explicit flags and pinned
+  format versions, in-memory serialization, the exception boundary, and
+  the `cicada` glue the seam calls. Cicada depends on `opencascade-sys`
+  only (not the high-level crate, so `kicad-parser` and a second `glam`
+  stay out of the graph). Patches are read line by line and carry their
+  provenance in the commit message; blind merges of upstream PRs never.
+- **What is wrapped (WP-A's set).** `occt::Solid` — a `TopoDS_Shape` that
+  IS one solid; single-solid compounds (what `BRepAlgoAPI_Cut` returns)
+  are unwrapped at construction and anything else refused — with
+  `box_at`, `extrude_polygon` (validated with the mesh tier's planarity
+  and simplicity rules and the explicit tolerance, because OCCT accepts
+  collinear points and returns a zero-volume solid), `difference` (a cut
+  that splits or empties the solid is refused, not returned as a
+  compound), `tessellate → Watertight<Mesh>` (absolute linear + angular
+  deflection; per-face nodes welded on bit-identical positions, `-0.0 →
+  0.0`; zero-area triangles dropped; `is_watertight` required), and
+  `canonical_bytes` / `from_canonical_bytes`. Errors are `GeomError`
+  (+ `Serialization`, `NotWatertight`). WP-C adds the rest of the node
+  set on the same pattern: one glue function per kernel operation,
+  declared `Result`.
+- **Exception policy.** OCCT's `Standard_Failure` does not derive from
+  `std::exception`; cxx's default handler lets it unwind into Rust and
+  the process dies (`0xC0000409`, probe `throw`). The fork's
+  `bindings_common.hxx` defines the `rust::behavior::trycatch` hook that
+  catches it, so every bridge function declared `Result` returns
+  `Err(cxx::Exception)` with `<DynamicType>: <message>`; failures OCCT
+  reports by status (boolean error reports, an unfinished mesher, a face
+  without triangulation) are thrown on the C++ side. The seam calls only
+  `Result`-declared functions. Tested: a real `Standard_DomainError`
+  (0×0×0 box) arrives as an error in this build.
+- **Canonical bytes.** `BinTools` at the PINNED format version 4 (never
+  `_CURRENT`), `theWithTriangles = false`, `theWithNormals = false`, and
+  the per-shape `Free` / `Modified` / `Checked` flags normalized (they
+  are history, not geometry: one mesh pass flips a box's faces to
+  `Checked = 0` and changes the "without triangles" bytes — found while
+  building this) on a snapshot restored afterwards. Byte-stable across
+  processes and two independent OCCT builds (probe Q2), a fixed point
+  under read → write, unaffected by tessellation; golden blake3 hashes
+  for the transcendental-free box and prism are in the seam's tests.
+  Cross-OS identity is measured by the nightly `occt (<os>)` jobs; until
+  the three agree the goldens are per-OS (DECISIONS.md).
+- **Threads.** `occt::Solid` is `Send`, not `Sync`: OCCT attaches
+  tessellation to shared `TShape`s. WP-B decides the sharing model.
 
 ## Build (Cicada's actual code)
 

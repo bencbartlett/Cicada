@@ -18,7 +18,7 @@ runs in parallel from day 1:
 | 1 | Undo/redo — snapshot op log + atomic `batch`/`apply_text` path; riders `#off`, Backspace-no-delete | foreground (server/web) | days | **done** 2026-08-20 (merged) |
 | 2 | Git panel slice 1 — status strip, per-node change markers, commit, revert-to-HEAD | foreground (server/web) | ~1 week | pending |
 | P | OCCT probe — prebuilt 7.8.x build/link on win/mac/linux, determinism, timings, license, CI shape | parallel worktree | hours, cap 1 day | **done** 2026-08-20 — GREEN on win-64 with one rename patch, byte-deterministic, ~3 ms/boolean; Linux/macOS measured by item 3 WP-A's CI job; memo `docs/probes/occt-2026-08.md` |
-| 3 | OCCT-backed Solid — the `Solid` kind, primitives/extrude/loft/revolve/sweep, booleans, `tessellate`, STEP; `mesh_*` renames in the same commit | main geometry track from week 3 | weeks | **unblocked** (probe GREEN) — WP-A next: own fork with the recorded patches, `occt` feature, `tools/fetch_occt.py`, the per-OS CI job |
+| 3 | OCCT-backed Solid — the `Solid` kind, primitives/extrude/loft/revolve/sweep, booleans, `tessellate`, STEP; `mesh_*` renames in the same commit | main geometry track from week 3 | weeks | **WP-A done** 2026-08-20 (fork `bencbartlett/opencascade-rs@38ed25e`, `occt` feature + seam in `cicada-geom`, `tools/fetch_occt.py`, CI jobs `occt (ubuntu)` per PR and `occt (<os>)` nightly — the non-Windows jobs await their first run); WP-B next |
 | 3b | Scheduler foundations — per-solve cancel handle, `volatile`, idle-class hypothetical solve — plus compute-on-release | parallel (sched/server) | ~1 week | pending |
 | 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | pending |
 | 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | pending |
@@ -162,9 +162,28 @@ the fallback options.
 
 Design: DECISIONS.md rows 16 and 42 (revised 2026-08-19), doc 03, doc 08
 §7–8. B-rep is the default working mode; the wall stays on the mesh tier.
-- **WP-A seam + build + CI**: feature-gated `occt` in `cicada-geom`, the
-  prebuilt-OCCT fetch script (`tools/fetch_occt.py`, cache dir outside
-  the repo, exports `DEP_OCCT_ROOT`), deny rows, the dedicated CI job.
+- **WP-A seam + build + CI** — **done 2026-08-20** (docs/03 §The OCCT
+  seam as built): feature-gated `occt` in `cicada-geom` over Ben's fork
+  `github.com/bencbartlett/opencascade-rs` branch `cicada` @
+  `38ed25e1dd61b5798f257269397571f7b6f8ba48` (upstream `d114250` + the
+  MSVC handle aliases, the honest `BinTools`/`BRepTools` writers, in-memory
+  serialization, the `Standard_Failure` → `Err` boundary, the `cicada`
+  glue); `tools/fetch_occt.py` + `tools/fetch_occt_manifest.json`
+  (conda-forge 7.8.1 build 103 for win-64/linux-64/osx-64/osx-arm64 + the
+  run-time closure, sha256-pinned, user cache dir, static closure check,
+  `--print-env`); deny rows for `opencascade-sys` + the fork source; CI
+  jobs `occt (ubuntu)` (ci.yml, per PR) and `occt (<os>)` (nightly.yml,
+  three OSes). Seam surface: `occt::Solid` with `box_at`,
+  `extrude_polygon`, `difference`, `tessellate → Watertight<Mesh>`,
+  `canonical_bytes`/`from_canonical_bytes`; 14 tests incl. golden blake3
+  hashes of the canonical bytes. Measured on Windows; the Linux/macOS
+  jobs are unverified until they run. Left for WP-B: the `Solid` value
+  kind over `occt::Solid` (Send, not Sync — decide the handle-cache
+  sharing model), per-OS goldens until the nightly shows agreement;
+  for WP-C: the own-built OCCT with FreeType/FreeImage off (the fetch
+  table takes a second source), `Message_Printer` redirection for the
+  STEP writer, the patches for the static path (PR #216's system libs,
+  cmake-rs `/O2`) if it is ever taken.
 - **WP-B the `Solid` kind**: canonical serialized bytes + blake3 at
   construction, geom-side handle cache, append-only `StoredValue`
   variant, script-boundary refusal (Python gets a typed "not
