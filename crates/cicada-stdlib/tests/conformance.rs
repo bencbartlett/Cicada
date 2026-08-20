@@ -33,6 +33,21 @@ fn collect_failures(check: impl Fn(&cicada_core::spec::NodeSpec) -> Vec<String>)
     failures
 }
 
+/// Does the snippet call `name(`, as a whole identifier? A raw substring
+/// match would let `polyline(` satisfy `line` and `bounding_box(` satisfy
+/// `box` (adversarial review of C0): the character before the call must
+/// not be an identifier character.
+fn calls_node(example: &str, name: &str) -> bool {
+    let call = format!("{name}(");
+    example.match_indices(&call).any(|(at, _)| {
+        at == 0
+            || !example[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
 fn assert_no_failures(what: &str, failures: &[String]) {
     assert!(
         failures.is_empty(),
@@ -126,12 +141,11 @@ fn every_node_has_a_runnable_example_that_calls_it() {
         if spec.examples.is_empty() {
             problems.push("no `# Examples` ```cic fence".to_owned());
         }
-        let call = format!("{}(", spec.name);
         for (index, example) in spec.examples.iter().enumerate() {
             if example.trim().is_empty() {
                 problems.push(format!("example {index} is empty"));
             }
-            if !example.contains(&call) {
+            if !calls_node(example, spec.name) {
                 problems.push(format!(
                     "example {index} never calls `{}` — it must exercise the node it documents",
                     spec.name
@@ -166,4 +180,21 @@ fn every_node_with_a_refusal_states_its_contract() {
         _ => Vec::new(),
     });
     assert_no_failures("contract", &failures);
+}
+
+// The helper's own contract: a sibling name that CONTAINS the node's name
+// is not a call of the node.
+#[test]
+fn calls_node_needs_an_identifier_boundary() {
+    assert!(calls_node("segment = line(a=start, b=end)", "line"));
+    assert!(calls_node("line(a=start, b=end)", "line"));
+    assert!(!calls_node(
+        "outline = polyline(vertices=corners, closed=True)",
+        "line"
+    ));
+    assert!(!calls_node("bb = bounding_box(geometry=g)", "box"));
+    assert!(calls_node(
+        "outline = polyline(vertices=corners)\nseg = line(a=p, b=q)",
+        "line"
+    ));
 }
