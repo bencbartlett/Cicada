@@ -402,6 +402,43 @@ pub enum ServerMessage {
         /// Message.
         message: String,
     },
+    /// The server's drag policy for one param (DECISIONS.md interactive
+    /// param row; docs/13 §Slider drags; v0.1 item 3b, additive): sent ONCE
+    /// per drag — on the first `param_preview` of a drag whose dirty cone
+    /// the cost model predicts at or above the compute-on-release threshold
+    /// — and never for a cheap cone (those preview live, no message). While
+    /// it stands, the session solves NO preview for that param: the client
+    /// shows the pending value and the estimate, and the one real
+    /// `set_param` on release solves as usual. The decision holds for the
+    /// whole drag (no mid-drag flip-flop); a new drag re-predicts with
+    /// fresher samples.
+    PreviewPolicy {
+        /// The param's binding.
+        node: String,
+        /// Its kwarg (`None` for a bare literal) — as the intent spelled it.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        port: Option<String>,
+        /// `compute_on_release` — the only mode that is ever announced.
+        mode: PreviewMode,
+        /// Predicted wall milliseconds of the dirty cone (what a live
+        /// preview would cost); a lower bound when `rough`.
+        estimate_ms: f64,
+        /// Some node in the cone has no cost evidence yet (no sample for
+        /// its op, or no element count) and contributed nothing — the
+        /// estimate is a floor, shown with a `~` like the ETA.
+        rough: bool,
+        /// The first tick's literal — the value the slider will land on
+        /// unless the drag moves on; the client tracks later ticks itself.
+        pending_value: String,
+    },
+}
+
+/// How a drag's previews are handled (`preview_policy.mode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewMode {
+    /// Previews are withheld; the value solves once, on release.
+    ComputeOnRelease,
 }
 
 /// The wire envelope around a [`ServerMessage`].
@@ -671,6 +708,49 @@ pub fn encode(seq: u64, message: &ServerMessage) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The frozen wire shape of the compute-on-release announcement (v0.1
+    // item 3b; the web client mirrors exactly this in messages.ts).
+    #[test]
+    fn preview_policy_encodes_the_documented_shape() {
+        let text = encode(
+            9,
+            &ServerMessage::PreviewPolicy {
+                node: "deboss".into(),
+                port: Some("value".into()),
+                mode: PreviewMode::ComputeOnRelease,
+                estimate_ms: 6512.5,
+                rough: false,
+                pending_value: "1.3".into(),
+            },
+        );
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "v": PROTOCOL_VERSION, "seq": 9, "type": "preview_policy",
+                "payload": {
+                    "node": "deboss", "port": "value", "mode": "compute_on_release",
+                    "estimate_ms": 6512.5, "rough": false, "pending_value": "1.3"
+                }
+            })
+        );
+        // A bare literal has no port key at all (not `null`).
+        let bare = encode(
+            10,
+            &ServerMessage::PreviewPolicy {
+                node: "x".into(),
+                port: None,
+                mode: PreviewMode::ComputeOnRelease,
+                estimate_ms: 1000.0,
+                rough: true,
+                pending_value: "2.0".into(),
+            },
+        );
+        let bare: serde_json::Value = serde_json::from_str(&bare).unwrap();
+        assert!(bare["payload"].get("port").is_none(), "{bare}");
+        assert_eq!(bare["payload"]["rough"], true);
+    }
 
     #[test]
     fn intents_round_trip_and_tag_by_type() {

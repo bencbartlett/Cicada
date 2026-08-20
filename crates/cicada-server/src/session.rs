@@ -40,8 +40,9 @@ use cicada_lang::check::BindingType;
 use cicada_lang::diag::{Diagnostic, DiagnosticKind};
 use cicada_lang::{Catalog, Document, Line, resolve, writer};
 use cicada_sched::{
-    CancelToken, Clock, DiskStore, Event, LogRecovery, MonotonicClock, NodeId, NodeOutcome,
-    NoopObserver, Observer, Scheduler, SchedulerConfig, SolveError, SolveReport, project_cache_dir,
+    CancelToken, Clock, DiskStore, Event, Input, KeyInputs, LogRecovery, MonotonicClock, NodeId,
+    NodeOutcome, NoopObserver, Observer, Scheduler, SchedulerConfig, SolveError, SolveReport,
+    node_key, project_cache_dir,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -51,8 +52,8 @@ use crate::display::{self, DisplayStats, PickTable};
 use crate::lower::{Lowered, LoweredBinding, lower, lower_partial};
 use crate::protocol::{
     Actor, ApplyTextRequest, ClientMessage, DeltaSource, HistoryView, LeaseView, NodeState,
-    NodeStatus, ProbeCatalogEntry, ProbeVerdict, Role, ServerMessage, SolveSummary, ValueSummary,
-    encode, is_gesture, is_write, type_tag,
+    NodeStatus, PreviewMode, ProbeCatalogEntry, ProbeVerdict, Role, ServerMessage, SolveSummary,
+    ValueSummary, encode, is_gesture, is_write, type_tag,
 };
 use crate::scripts::ScriptCancel;
 use crate::sidecar::Sidecar;
@@ -74,6 +75,16 @@ pub const STRUCTURAL_DEBOUNCE: Duration = Duration::from_millis(30);
 pub const STATUS_PERIOD: Duration = Duration::from_millis(100);
 /// Grid unit hint sent to clients (px per unit).
 pub const UNIT_PX: u32 = 24;
+
+/// Compute-on-release threshold (DECISIONS.md interactive param row: "the
+/// cost model degrades expensive cones (≥ ~1 s) to compute-on-release
+/// automatically"): a drag whose dirty cone is PREDICTED to cost at least
+/// this many wall milliseconds solves no previews — the client shows the
+/// pending value and the estimate, and the release's `set_param` solves
+/// once. Below it, previews run latest-wins as always. A constant, not a
+/// `ProjectConfig` field: it is a feel threshold of the app, not a property
+/// of the model, and `ProjectConfig` hashes into cache keys.
+pub const COMPUTE_ON_RELEASE_MS: f64 = 1000.0;
 
 /// Session construction options.
 #[derive(Clone)]
@@ -550,6 +561,40 @@ struct Inner {
     /// watcher's echo guard for script writes (`apply_text`): a rescan
     /// whose files hash to exactly these is our own write, not a barrier.
     scripts_fingerprint: BTreeMap<String, [u8; 32]>,
+    /// The drag in progress and its preview decision (compute-on-release,
+    /// DECISIONS.md row 39). A drag is the run of `param_preview`s on one
+    /// param between writes: any write (the release's `set_param`, an
+    /// edit, a reload) or an Esc ends it, so the decision is made once per
+    /// drag and never flips mid-drag. Protected by the `Inner` lock like
+    /// every write site that clears it.
+    drag: Option<Drag>,
+    /// Preview ticks withheld under compute-on-release, total (the
+    /// measurement harness reads it from `/debug/state`).
+    previews_deferred: u64,
+}
+
+/// One drag's decision ([`Inner::drag`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Drag {
+    node: String,
+    port: Option<String>,
+    /// Previews solve live (latest-wins); false = compute-on-release.
+    live: bool,
+}
+
+/// The cost model's verdict on one param's dirty cone
+/// ([`Core::predict_cone`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ConeCost {
+    /// Predicted wall milliseconds: Σ over the cone's nodes the dry run
+    /// predicts to COMPUTE (memo misses) of `per-element nanos (op sample)
+    /// × last element count ÷ min(threads, elements)`; memo hits cost 0.
+    ms: f64,
+    /// Some predicted-to-compute node had no evidence and contributed 0 —
+    /// `ms` is a floor.
+    rough: bool,
+    /// Nodes in the cone (hits and misses, exporters excluded).
+    nodes: usize,
 }
 
 /// The per-node status board — written by observer events on worker
@@ -785,6 +830,8 @@ impl Session {
                 text_hash,
                 oplog: OpLog::default(),
                 scripts_fingerprint,
+                drag: None,
+                previews_deferred: 0,
             }),
             status: Mutex::new(StatusBoard {
                 nodes: BTreeMap::new(),
@@ -1120,7 +1167,7 @@ impl Session {
                 // of what the user waits for after moving the slider.
                 let accepted = Instant::now();
                 let job = {
-                    let inner = self.core.lock_inner();
+                    let mut inner = self.core.lock_inner();
                     let mut scratch = inner.loaded.document.clone();
                     apply_param(&mut scratch, &node, port.as_deref(), &value)?;
                     let resolution = resolve(&scratch, &Catalog::new(&inner.loaded.specs));
@@ -1132,6 +1179,18 @@ impl Session {
                         &inner.loaded.scripts,
                     )
                     .map_err(|e| IntentError::Protocol(e.to_string()))?;
+                    if !self.core.preview_is_live(
+                        &mut inner,
+                        &lowered,
+                        &node,
+                        port.as_deref(),
+                        &value,
+                    ) {
+                        // Compute-on-release: this tick is withheld; the
+                        // release's set_param solves once.
+                        inner.previews_deferred += 1;
+                        return Ok(());
+                    }
                     let targets = all_targets(&lowered);
                     Job {
                         lowered: Arc::new(lowered),
@@ -1552,6 +1611,7 @@ impl Session {
         }
         self.core.rebuild(inner);
         inner.seq += 1;
+        inner.drag = None;
         if let OpEffect::Push { actor } = effect {
             let after = StateSnapshot {
                 text: text.clone(),
@@ -1819,6 +1879,7 @@ impl Session {
         }
         self.core.rebuild(&mut inner);
         inner.seq += 1;
+        inner.drag = None;
         let after = state_snapshot(&inner);
         if after != before {
             // An apply that left text and sidecar as they were (a
@@ -1976,6 +2037,7 @@ impl Session {
             inner.oplog.clear_by_barrier();
             self.core.rebuild(&mut inner);
             inner.seq += 1;
+            inner.drag = None;
         }
         // Barrier snapshot to everyone.
         let snapshot = self.snapshot(true, reason);
@@ -2041,6 +2103,8 @@ impl Session {
     /// solve is dropped; the summary says so and the next edit resubmits.
     pub fn cancel(&self) {
         let dropped_pending = self.solve.cancel();
+        // Esc ends the drag's decision too: the next tick re-predicts.
+        self.core.lock_inner().drag = None;
         if dropped_pending {
             let inner = self.core.lock_inner();
             broadcast(
@@ -2389,6 +2453,10 @@ impl Session {
             "solve": {
                 "busy": self.solve.is_busy(),
                 "last_complete_generation": inner.last_complete.as_ref().map(|k| k.generation),
+                "previews_deferred": inner.previews_deferred,
+                "drag": inner.drag.as_ref().map(|d| serde_json::json!({
+                    "node": d.node, "port": d.port, "live": d.live,
+                })),
             },
             "display": display,
             "lease": lease_view(&inner),
@@ -3120,6 +3188,192 @@ impl Core {
         }
     }
 
+    /// The compute-on-release decision for one `param_preview` tick
+    /// (DECISIONS.md row 39, docs/13 §Slider drags): true = solve it live.
+    /// Decided ONCE per drag — the first tick on a param predicts its dirty
+    /// cone's cost and, at or above [`COMPUTE_ON_RELEASE_MS`], broadcasts
+    /// `preview_policy` once and withholds every tick until a write or Esc
+    /// ends the drag. Later ticks of the same drag reuse the decision, so
+    /// it never flips mid-drag; a different param starts a new drag.
+    /// `scratch` is the tick's lowered graph (the one the preview would
+    /// solve) — the prediction dry-runs its keys against the memo.
+    fn preview_is_live(
+        &self,
+        inner: &mut Inner,
+        scratch: &Lowered,
+        node: &str,
+        port: Option<&str>,
+        value: &str,
+    ) -> bool {
+        if let Some(drag) = &inner.drag
+            && drag.node == node
+            && drag.port.as_deref() == port
+        {
+            return drag.live;
+        }
+        let cost = self.predict_cone(inner, scratch, node, port);
+        // No cone, or a cone the model cannot see at all (no node with any
+        // evidence): preview live — the first drag measures it, the next
+        // one knows. A cone predicted slow from PARTIAL evidence still
+        // switches: the floor already clears the bar.
+        let live = cost.is_none_or(|cost| cost.ms < COMPUTE_ON_RELEASE_MS);
+        inner.drag = Some(Drag {
+            node: node.to_owned(),
+            port: port.map(str::to_owned),
+            live,
+        });
+        if !live && let Some(cost) = cost {
+            broadcast(
+                inner,
+                &ServerMessage::PreviewPolicy {
+                    node: node.to_owned(),
+                    port: port.map(str::to_owned),
+                    mode: PreviewMode::ComputeOnRelease,
+                    estimate_ms: (cost.ms * 10.0).round() / 10.0,
+                    rough: cost.rough,
+                    pending_value: value.to_owned(),
+                },
+            );
+        }
+        live
+    }
+
+    /// Predict what a live preview of `node`/`port` would cost, as a
+    /// **hash-only dry run** of the tick's `scratch` graph against the memo
+    /// (docs/12 §Cost prediction): the param's dirty cone is the downstream
+    /// cone of the node holding the literal (for a bare literal: of every
+    /// node referencing it), exporters excluded. Walking the cone in
+    /// topological order, a node whose inputs are all known builds its
+    /// `NodeKey` exactly as the executor would; a memo hit costs nothing and
+    /// its recorded outputs feed downstream keys — so a value the slider
+    /// has visited before (or scrub caching has warmed) predicts as what it
+    /// is: a cache read. A miss — or a node fed by a miss, or a volatile
+    /// node — is predicted to compute, at the op's persisted per-element
+    /// sample × the node's LAST element count (its last outcome: computed
+    /// this session, or the cost its memo entry recorded — a warm reopen
+    /// still knows), scaled by `1 ÷ min(threads, elements)` for the
+    /// fan-out's parallelism. A predicted-to-compute node without a sample
+    /// or a count contributes 0 and marks the estimate rough (a floor).
+    /// Inputs from outside the cone take their hashes from the last
+    /// complete generation by name; an unknown one makes its consumers
+    /// misses (conservative). `None` when the param feeds no node of the
+    /// graph, or when nodes are predicted to compute and none of them has
+    /// evidence — then there is nothing to predict from (a cone of pure
+    /// hits is `Some(0 ms)`). Same evidence as the ETA; the
+    /// regression estimator of docs/12 replaces the mean when it lands.
+    #[allow(clippy::too_many_lines)] // the dry run IS the executor's key phase, in one place
+    fn predict_cone(
+        &self,
+        inner: &Inner,
+        scratch: &Lowered,
+        node: &str,
+        port: Option<&str>,
+    ) -> Option<ConeCost> {
+        let graph = &scratch.graph;
+        let seeds: Vec<NodeId> = match port {
+            Some(_) => graph.find(node).into_iter().collect(),
+            None => dependents_of(&inner.loaded.document, node)
+                .iter()
+                .filter_map(|name| graph.find(name))
+                .collect(),
+        };
+        if seeds.is_empty() {
+            return None;
+        }
+        let cone = graph.downstream_cone(&seeds);
+        let store = self.scheduler.store();
+        let kept = inner.last_complete.as_ref();
+        let last_outcome = |name: &str| -> Option<&NodeOutcome> {
+            let kept = kept?;
+            let id = kept.lowered.graph.find(name)?;
+            Some(kept.report.outcome(id))
+        };
+        let last_elements = |name: &str| -> Option<u64> {
+            match last_outcome(name)? {
+                NodeOutcome::Computed { elements, .. } => Some(*elements),
+                NodeOutcome::CacheHit { cost, .. } => cost.map(|c| c.elements),
+                _ => None,
+            }
+        };
+        // Output hashes per node as the dry run learns them: outside the
+        // cone from the last complete generation, inside it from memo hits.
+        let mut known: Vec<Option<Vec<ValueHash>>> = vec![None; graph.len()];
+        let mut total_nanos = 0.0_f64;
+        let mut rough = false;
+        let mut evidence = 0_usize;
+        let mut misses = 0_usize;
+        let mut nodes = 0_usize;
+        for &id in graph.topo_order() {
+            let decl = graph.node(id);
+            if !cone[id.0] {
+                known[id.0] = last_outcome(&decl.name)
+                    .and_then(NodeOutcome::output_hashes)
+                    .map(<[ValueHash]>::to_vec);
+                continue;
+            }
+            if decl.effectful {
+                continue;
+            }
+            nodes += 1;
+            // The executor's key phase, hash-only.
+            let inputs: Option<Vec<Option<ValueHash>>> = decl
+                .inputs
+                .iter()
+                .map(|input| match input {
+                    Input::Value(value) => Some(Some(value.hash())),
+                    Input::Absent => Some(None),
+                    Input::Port { node, output } => known[node.0]
+                        .as_ref()
+                        .and_then(|outputs| outputs.get(*output).copied())
+                        .map(Some),
+                })
+                .collect();
+            if !decl.volatile
+                && let Some(inputs) = inputs
+            {
+                let key = node_key(&KeyInputs {
+                    op: &decl.op,
+                    version: decl.version,
+                    body_hash: decl.body_hash.as_ref(),
+                    tolerance: decl.tolerance.as_ref(),
+                    inputs: &inputs,
+                    fan: &decl.fan,
+                });
+                if let Some(entry) = store.memo(&key)
+                    && entry.outputs.len() == decl.output_count
+                {
+                    known[id.0] = Some(entry.outputs);
+                    continue;
+                }
+            }
+            // A miss: predicted to compute.
+            misses += 1;
+            let per_element = store
+                .stats(&decl.op)
+                .and_then(|stats| stats.per_element_nanos());
+            match (per_element, last_elements(&decl.name)) {
+                (Some(per), Some(elements)) if elements > 0 => {
+                    evidence += 1;
+                    #[allow(clippy::cast_precision_loss)]
+                    let parallel = elements.min(self.threads.max(1) as u64) as f64;
+                    #[allow(clippy::cast_precision_loss)]
+                    let cpu = per as f64 * elements as f64;
+                    total_nanos += cpu / parallel;
+                }
+                _ => rough = true,
+            }
+        }
+        if misses > 0 && evidence == 0 {
+            return None;
+        }
+        // Every node a memo hit: a cache read, predicted as exactly that.
+        Some(ConeCost {
+            ms: total_nanos / 1_000_000.0,
+            rough,
+            nodes,
+        })
+    }
+
     /// Submit a structural generation over the current lowered graph.
     fn submit_structural(&self) {
         let job = {
@@ -3426,7 +3680,19 @@ impl Core {
             let name = lowered.graph.node(NodeId(index)).name.clone();
             let entry = match outcome {
                 NodeOutcome::Skipped => continue,
-                NodeOutcome::CacheHit { .. } => NodeStatus::new(NodeState::Cached, generation),
+                NodeOutcome::CacheHit { cost, .. } => {
+                    // A hit whose memo entry recorded its cost shows the
+                    // last compute time and element count (docs/12
+                    // §Progress: "last compute time" per node) — and the
+                    // ETA's `last_elements` knows the count after a warm
+                    // reopen, where nothing computes.
+                    let mut s = NodeStatus::new(NodeState::Cached, generation);
+                    if let Some(cost) = cost {
+                        s.elements = Some(cost.elements);
+                        s.nanos = Some(cost.nanos);
+                    }
+                    s
+                }
                 NodeOutcome::Computed {
                     elements, nanos, ..
                 } => {
@@ -5077,6 +5343,369 @@ size = slider(value=4.0, min=0.5, max=5.0)
             .solve_hypothetical("nope", Some("value"), "1.0")
             .expect_err("an unknown node is refused");
         assert!(matches!(error, HypotheticalError::Override(_)), "{error:?}");
+    }
+
+    // ------------------------------------------------ compute-on-release --
+
+    /// The tick's scratch graph, exactly as the preview path lowers it.
+    fn scratch_lowered(inner: &Inner, node: &str, port: Option<&str>, value: &str) -> Lowered {
+        let mut scratch = inner.loaded.document.clone();
+        apply_param(&mut scratch, node, port, value).unwrap();
+        let resolution = resolve(&scratch, &Catalog::new(&inner.loaded.specs));
+        lower_partial(
+            &scratch,
+            &resolution,
+            &inner.loaded.specs,
+            &ProjectConfig::default(),
+            &inner.loaded.scripts,
+        )
+        .unwrap()
+    }
+
+    /// Preview generations recorded so far (the harness's currency).
+    fn preview_generations(session: &Session) -> usize {
+        session.debug_state(false)["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|t| t["kind"] == "preview")
+            .count()
+    }
+
+    fn structural_generations(session: &Session) -> usize {
+        session.debug_state(false)["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|t| t["kind"] == "structural")
+            .count()
+    }
+
+    fn preview(session: &Session, id: u32, value: &str) {
+        session.handle(
+            id,
+            None,
+            ClientMessage::ParamPreview {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: value.into(),
+            },
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // one drag story: predict → withhold → release → re-decide
+    fn a_cone_predicted_slow_switches_to_compute_on_release_once_per_drag() {
+        // DECISIONS.md row 39 / docs/13 §Slider drags: a drag whose dirty
+        // cone the cost model predicts at ≥ 1 s solves NO previews — one
+        // `preview_policy` per drag, the release solves once.
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let _ = drain(&mut rx);
+
+        // The model's evidence: the load computed every node (element
+        // counts known); teach the store that a `box` costs 5 s.
+        session
+            .core
+            .scheduler
+            .store()
+            .record_sample("box", 1, 5_000_000_000)
+            .unwrap();
+        let predicted = {
+            let inner = session.core.lock_inner();
+            let scratch = scratch_lowered(&inner, "size", Some("value"), "2.05");
+            session
+                .core
+                .predict_cone(&inner, &scratch, "size", Some("value"))
+                .expect("the cone is predictable")
+        };
+        assert_eq!(predicted.nodes, 3, "size → span → block: {predicted:?}");
+        assert!(!predicted.rough, "every node in the cone has evidence");
+        // The estimator is the per-op MEAN: the load's sub-ms box sample
+        // and the 5 s one average to ≈ 2.5 s — well past the bar.
+        assert!(
+            predicted.ms > 2000.0 && predicted.ms <= 5000.0,
+            "dominated by the box's mean: {predicted:?}"
+        );
+
+        // A drag: ten ticks, zero preview generations, one policy message.
+        let baseline_previews = preview_generations(&session);
+        for tenth in 1..=10 {
+            preview(&session, id, &format!("2.{tenth}"));
+        }
+        session.wait_idle();
+        assert_eq!(
+            preview_generations(&session),
+            baseline_previews,
+            "no preview solved"
+        );
+        let msgs = texts(&drain(&mut rx));
+        let policies: Vec<&serde_json::Value> = msgs
+            .iter()
+            .filter(|m| m["type"] == "preview_policy")
+            .collect();
+        assert_eq!(policies.len(), 1, "exactly one policy per drag: {msgs:?}");
+        let payload = &policies[0]["payload"];
+        assert_eq!(payload["node"], "size");
+        assert_eq!(payload["port"], "value");
+        assert_eq!(payload["mode"], "compute_on_release");
+        assert_eq!(payload["rough"], false);
+        assert!(
+            (payload["estimate_ms"].as_f64().unwrap() - predicted.ms).abs() < 1.0,
+            "{payload}"
+        );
+        assert_eq!(payload["pending_value"], "2.1", "the first tick's value");
+        assert!(
+            !msgs
+                .iter()
+                .any(|m| m["type"] == "status" && m["payload"]["summary"]["running"] == true),
+            "nothing ran: {msgs:?}"
+        );
+        let state = session.debug_state(false);
+        assert_eq!(state["solve"]["previews_deferred"], 10);
+        assert_eq!(state["solve"]["drag"]["live"], false);
+
+        // The release: one real op, one structural generation, drag over.
+        let baseline_structural = structural_generations(&session);
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "3.0".into(),
+            },
+        );
+        session.wait_idle();
+        assert_eq!(structural_generations(&session), baseline_structural + 1);
+        assert_eq!(preview_generations(&session), baseline_previews);
+        let msgs = texts(&drain(&mut rx));
+        assert_eq!(msgs.iter().filter(|m| m["type"] == "delta").count(), 1);
+        assert_eq!(
+            history_of(&session)["depth"],
+            1,
+            "the release is the one op"
+        );
+        assert!(session.debug_state(false)["solve"]["drag"].is_null());
+
+        // A second drag decides again (same evidence → same verdict) and
+        // announces itself again — once.
+        preview(&session, id, "3.1");
+        preview(&session, id, "3.2");
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        assert_eq!(
+            msgs.iter()
+                .filter(|m| m["type"] == "preview_policy")
+                .count(),
+            1
+        );
+        assert_eq!(preview_generations(&session), baseline_previews);
+        // Esc ends a drag too: the next tick re-decides and re-announces.
+        session.cancel();
+        preview(&session, id, "3.3");
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        assert_eq!(
+            msgs.iter()
+                .filter(|m| m["type"] == "preview_policy")
+                .count(),
+            1
+        );
+        assert_eq!(session.debug_state(false)["solve"]["previews_deferred"], 13);
+    }
+
+    #[test]
+    fn a_value_already_in_the_memo_previews_live_even_on_a_slow_cone() {
+        // The prediction is a dry run of the tick's keys against the memo:
+        // a value the cone has been solved for (here by a hypothetical
+        // solve — scrub caching's move) predicts as the cache read it is,
+        // so the slider stays live there; a cold value on the same cone
+        // still switches.
+        let (_dir, config) = project(
+            "# cicada 1
+             size = slider(value=2.0, min=0.5, max=5.0)
+             span = construct_domain(start=0.0, end=size)
+             block = box(x=span, y=span, z=span)
+",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        session
+            .core
+            .scheduler
+            .store()
+            .record_sample("box", 1, 5_000_000_000)
+            .unwrap();
+        let warmed = session
+            .solve_hypothetical("size", Some("value"), "4.0")
+            .unwrap();
+        assert!(!warmed.cancelled && warmed.computed >= 2, "{warmed:?}");
+        {
+            let inner = session.core.lock_inner();
+            let warm = scratch_lowered(&inner, "size", Some("value"), "4.0");
+            let cost = session
+                .core
+                .predict_cone(&inner, &warm, "size", Some("value"))
+                .expect("a cone of hits is a prediction");
+            assert!(cost.ms.abs() < f64::EPSILON, "every key hits: {cost:?}");
+            assert!(!cost.rough);
+            let cold = scratch_lowered(&inner, "size", Some("value"), "4.1");
+            let cost = session
+                .core
+                .predict_cone(&inner, &cold, "size", Some("value"))
+                .unwrap();
+            assert!(cost.ms >= COMPUTE_ON_RELEASE_MS, "{cost:?}");
+        }
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let _ = drain(&mut rx);
+        let baseline = preview_generations(&session);
+        preview(&session, id, "4.0");
+        session.wait_idle();
+        assert_eq!(
+            preview_generations(&session),
+            baseline + 1,
+            "the warm tick previews"
+        );
+        let msgs = texts(&drain(&mut rx));
+        assert!(
+            !msgs.iter().any(|m| m["type"] == "preview_policy"),
+            "{msgs:?}"
+        );
+        let state = session.debug_state(false);
+        let last = state["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rfind(|t| t["kind"] == "preview")
+            .unwrap();
+        assert_eq!(last["computed"], 0, "a pure cache read: {last}");
+        // End the drag (Esc), then a cold value: compute-on-release.
+        session.cancel();
+        preview(&session, id, "4.1");
+        session.wait_idle();
+        assert_eq!(preview_generations(&session), baseline + 1);
+        let msgs = texts(&drain(&mut rx));
+        assert_eq!(
+            msgs.iter()
+                .filter(|m| m["type"] == "preview_policy")
+                .count(),
+            1,
+            "{msgs:?}"
+        );
+    }
+
+    #[test]
+    fn a_cheap_cone_still_previews_every_tick() {
+        // The 02-solids shape: sub-millisecond cone, latest-wins previews
+        // exactly as before — no policy message, nothing deferred.
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let _ = drain(&mut rx);
+        let predicted = {
+            let inner = session.core.lock_inner();
+            let scratch = scratch_lowered(&inner, "size", Some("value"), "2.05");
+            session
+                .core
+                .predict_cone(&inner, &scratch, "size", Some("value"))
+                .expect("predictable: the load measured every node")
+        };
+        assert!(predicted.ms < COMPUTE_ON_RELEASE_MS, "{predicted:?}");
+        let baseline = preview_generations(&session);
+        // Settle between ticks so none is superseded: five ticks, five
+        // generations.
+        for tenth in 1..=5 {
+            preview(&session, id, &format!("2.{tenth}"));
+            session.wait_idle();
+        }
+        assert_eq!(preview_generations(&session), baseline + 5);
+        let msgs = texts(&drain(&mut rx));
+        assert!(
+            !msgs.iter().any(|m| m["type"] == "preview_policy"),
+            "a cheap cone never hears of the policy: {msgs:?}"
+        );
+        let state = session.debug_state(false);
+        assert_eq!(state["solve"]["previews_deferred"], 0);
+        assert_eq!(state["solve"]["drag"]["live"], true);
+        assert!(
+            frames(&drain(&mut rx)).is_empty(),
+            "(frames were drained with the texts above — sanity)"
+        );
+    }
+
+    #[test]
+    fn cone_prediction_follows_the_literal_to_its_consumers() {
+        // A bare literal is no graph node: its dirty cone is that of every
+        // node referencing it. An unknown param, or a param feeding no node,
+        // has no cone — the decision falls back to live.
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             x = 2.0\n\
+             y = x * 2.0\n\
+             z = y + 1.0\n\
+             lonely = 5.0\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let inner = session.core.lock_inner();
+        let scratch = scratch_lowered(&inner, "x", None, "3.0");
+        let cone = session
+            .core
+            .predict_cone(&inner, &scratch, "x", None)
+            .expect("x feeds y, which feeds z");
+        assert_eq!(cone.nodes, 2, "{cone:?}");
+        assert!(!cone.rough);
+        let scratch = scratch_lowered(&inner, "lonely", None, "6.0");
+        assert!(
+            session
+                .core
+                .predict_cone(&inner, &scratch, "lonely", None)
+                .is_none()
+        );
+        assert!(
+            session
+                .core
+                .predict_cone(&inner, &scratch, "nope", Some("value"))
+                .is_none()
+        );
+        drop(inner);
+        // And a live decision for them: no policy message, previews solve.
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let _ = drain(&mut rx);
+        session.handle(
+            id,
+            None,
+            ClientMessage::ParamPreview {
+                node: "lonely".into(),
+                port: None,
+                value: "6.0".into(),
+            },
+        );
+        session.wait_idle();
+        assert!(
+            !texts(&drain(&mut rx))
+                .iter()
+                .any(|m| m["type"] == "preview_policy")
+        );
+        assert_eq!(session.debug_state(false)["solve"]["previews_deferred"], 0);
     }
 
     #[test]
