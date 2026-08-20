@@ -12,7 +12,7 @@ use super::BinaryIn;
 /// # Examples
 ///
 /// ```cic
-/// pick = min(a=1.5, b=2.5)
+/// lower = min(a=1.5, b=2.5)
 /// ```
 #[node(category = "Maths & logic", tier = "1", version = 1, gh = "Minimum")]
 #[must_use]

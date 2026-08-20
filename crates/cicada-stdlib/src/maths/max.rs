@@ -12,7 +12,7 @@ use super::BinaryIn;
 /// # Examples
 ///
 /// ```cic
-/// pick = max(a=1.5, b=2.5)
+/// upper = max(a=1.5, b=2.5)
 /// ```
 #[node(category = "Maths & logic", tier = "1", version = 1, gh = "Maximum")]
 #[must_use]

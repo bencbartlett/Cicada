@@ -1230,7 +1230,7 @@
       "uses_tolerance": false,
       "gh": "Maximum",
       "examples": [
-        "pick = max(a=1.5, b=2.5)"
+        "upper = max(a=1.5, b=2.5)"
       ],
       "inputs": [
         {
@@ -1272,7 +1272,7 @@
       "uses_tolerance": false,
       "gh": "Minimum",
       "examples": [
-        "pick = min(a=1.5, b=2.5)"
+        "lower = min(a=1.5, b=2.5)"
       ],
       "inputs": [
         {
@@ -2608,7 +2608,7 @@
     {
       "name": "shift_list",
       "title": "Shift List",
-      "description": "rotate a list by an offset (wrapping, the default) or slide it and drop what falls off (`wrap=false`, GH Shift List). Slot-preserving either way: absent slots move with the rest. A dropped tail or head shifts no surviving index relative to its neighbours, so no index map is returned — `cull` when provenance matters.",
+      "description": "rotate a list by an offset (wrapping, the default) or slide it and drop what falls off (`wrap=false`, GH Shift List). Slot-preserving either way: absent slots move with the rest. A dropped tail or head shifts no surviving index relative to its neighbours, so no index map is returned — `cull` when provenance matters. Sliding past the end is not an error: everything falls off and the list is empty, as GH's Shift List does (stated here so the contract is true, not a hidden clamp).",
       "category": "List & axis",
       "tier": "1",
       "version": 1,
@@ -2652,7 +2652,7 @@
           "base": "E",
           "list_depth": 1,
           "optional": false,
-          "doc": "The shifted list — the same slot count when wrapping, `|offset|` fewer otherwise."
+          "doc": "The shifted list — the same slot count when wrapping; otherwise `|offset|` fewer, and empty once `|offset|` reaches the slot count."
         }
       ]
     },
@@ -2847,7 +2847,7 @@
     {
       "name": "weave",
       "title": "Weave",
-      "description": "merge two lists by a repeating turn pattern (`[0, 1]` over `[a0, a1]` and `[b0, b1]` → `[a0, b0, a1, b1]`; GH Weave, two streams). The pattern repeats until both streams are used up, so an unequal pair ends on the longer stream's turns only when the pattern still asks for it — a turn that asks a stream with nothing left while the other still has slots is red (GH pads with nulls there; docs/09 retires silent matching). Slot-preserving: absent slots take their turn like any other.",
+      "description": "merge two lists by a repeating turn pattern (`[0, 1]` over `[a0, a1]` and `[b0, b1]` → `[a0, b0, a1, b1]`; GH Weave, two streams). The rule, independent of the lengths: the output IS the repeated pattern realized on the streams, cut where both are used up — so the two lengths must be the turn counts of some prefix of the repeated pattern (`[0, 1]` fits 3 + 2 or 2 + 2, never 4 + 2). A pair that does not fit is red at the first turn that asks an exhausted stream while the other still has slots (GH pads with nulls there; docs/09 retires silent matching). Slot-preserving: absent slots take their turn like any other.",
       "category": "List & axis",
       "tier": "1",
       "version": 1,

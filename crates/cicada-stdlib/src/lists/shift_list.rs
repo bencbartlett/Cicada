@@ -21,12 +21,14 @@ pub struct ShiftListIn {
 /// it and drop what falls off (`wrap=false`, GH Shift List). Slot-preserving
 /// either way: absent slots move with the rest. A dropped tail or head
 /// shifts no surviving index relative to its neighbours, so no index map is
-/// returned — `cull` when provenance matters.
+/// returned — `cull` when provenance matters. Sliding past the end is not
+/// an error: everything falls off and the list is empty, as GH's Shift List
+/// does (stated here so the contract is true, not a hidden clamp).
 ///
 /// # Returns
 ///
-/// The shifted list — the same slot count when wrapping, `|offset|` fewer
-/// otherwise.
+/// The shifted list — the same slot count when wrapping; otherwise `|offset|`
+/// fewer, and empty once `|offset|` reaches the slot count.
 ///
 /// # Examples
 ///
@@ -82,7 +84,15 @@ mod tests {
         assert_eq!(shift(0, true), xs, "zero is the identity");
         assert_eq!(shift(1, false), numbers(&[2.0, 3.0, 4.0]), "head dropped");
         assert_eq!(shift(-1, false), numbers(&[1.0, 2.0, 3.0]), "tail dropped");
-        assert!(shift(9, false).is_empty(), "over-shifting drops everything");
+        assert!(
+            shift(9, false).is_empty(),
+            "over-shifting drops everything — the `# Returns` contract's stated outcome"
+        );
+        assert!(
+            shift(-4, false).is_empty(),
+            "|offset| equal to the slot count empties the list either way"
+        );
+        assert_eq!(shift(-3, false), numbers(&[1.0]));
         // Holes move with the rest; the empty list shifts to itself.
         let holed = shift_list(ShiftListIn {
             list: slots(&[Some(1.0), None, Some(3.0)]),

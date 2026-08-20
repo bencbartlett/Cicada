@@ -18,12 +18,13 @@ pub struct WeaveIn {
 
 /// Weave — merge two lists by a repeating turn pattern (`[0, 1]` over
 /// `[a0, a1]` and `[b0, b1]` → `[a0, b0, a1, b1]`; GH Weave, two streams).
-/// The pattern repeats until both streams are used up, so an unequal pair
-/// ends on the longer stream's turns only when the pattern still asks for
-/// it — a turn that asks a stream with nothing left while the other still
-/// has slots is red (GH pads with nulls there; docs/09 retires silent
-/// matching). Slot-preserving: absent slots take their turn like any
-/// other.
+/// The rule, independent of the lengths: the output IS the repeated pattern
+/// realized on the streams, cut where both are used up — so the two lengths
+/// must be the turn counts of some prefix of the repeated pattern (`[0, 1]`
+/// fits 3 + 2 or 2 + 2, never 4 + 2). A pair that does not fit is red at the
+/// first turn that asks an exhausted stream while the other still has
+/// slots (GH pads with nulls there; docs/09 retires silent matching).
+/// Slot-preserving: absent slots take their turn like any other.
 ///
 /// # Returns
 ///
