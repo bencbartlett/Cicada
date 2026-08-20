@@ -1,0 +1,18 @@
+diff --git a/crates/opencascade-sys/build.rs b/crates/opencascade-sys/build.rs
+index b65c313..c859751 100644
+--- a/crates/opencascade-sys/build.rs
++++ b/crates/opencascade-sys/build.rs
+@@ -47,6 +47,13 @@ fn main() {
+ 
+     if is_windows {
+         println!("cargo:rustc-link-lib=dylib=user32");
++        // Static OCCT (the `builtin` feature or a static prebuilt) needs the
++        // Win32 security/registry imports that OSD_* pull in; harmless for
++        // the shared build (system import libs). Upstream PR #216.
++        println!("cargo:rustc-link-lib=dylib=advapi32");
++        println!("cargo:rustc-link-lib=dylib=gdi32");
++        println!("cargo:rustc-link-lib=dylib=shell32");
++        println!("cargo:rustc-link-lib=dylib=comdlg32");
+     }
+ 
+     // TODO(bschwind) - Iterate over the src/ directory to populate this.
