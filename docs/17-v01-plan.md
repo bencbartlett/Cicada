@@ -232,9 +232,15 @@ Design: DECISIONS.md rows 16 and 42 (revised 2026-08-19), doc 03, doc 08
   policy message (estimate 3.9 s), 1 generation on release (3.7 s);
   after a warm reopen the estimate is 4.1 s from memo costs alone and
   the released value previews live at 0.2 ms. `slider_loop.mjs` gained
-  the compute-on-release mode and `--expect`. Pending (web lane): the
-  slider shows `pending_value` + `estimate_ms` (`~` when `rough`) and
-  clears on its release delta; observers render the same.
+  the compute-on-release mode and `--expect`. Re-measured after the
+  review fixes (per-tick prediction on every tick): 02-solids `size`
+  warm 0.24/0.84 ms server, 0.45/1.47 ms client; wall `deboss` 301
+  ticks → 301 withheld, 0 preview generations, exactly one policy for
+  the stream (estimate 3.9 s), one 3.5 s generation on the step-snapped
+  release. Pending (web lane): the slider shows `pending_value` +
+  `estimate_ms` (`~` when `rough`), replaces it on every arrival, and
+  clears on its release delta or on a release without a write;
+  observers render the same.
 
 ## Item 4 — time transport, Cycle thin slice (~1 week)
 
