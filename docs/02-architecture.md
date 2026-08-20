@@ -67,7 +67,8 @@ bugs that matter are **shape errors**, and GH resolves them silently
   text and worn by the port as a persistent iteration badge (`map`,
   `×2` when nested). Scalars close over a map (one `motion` against
   1,500 geometries); two lists pair only by `zip`, and length mismatch
-  is an error with opt-in policies (`pad_last`, `cycle`, `truncate`).
+  is an error with opt-in policies — the adapter nodes `pad_last`,
+  `repeat`, `truncate` (DECISIONS.md, revised 2026-08-20).
 - **Incompatible wires cannot be drawn**: during drag, incompatible
   ports are blocked with a reason; liftable ones connect only through
   the recorded adapter chip. The wrong wire never exists, even

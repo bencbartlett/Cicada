@@ -80,8 +80,11 @@ failures:
     geometries is the common case and needs no list semantics at all.
   - **Two lists pair by strict `zip`.** Length mismatch is a red wire
     with the counts in the error ("1,499 vs 1,500"), not a guess.
-  - **GH-style behaviors exist only as opt-in, visible adapters**:
-    `pad_last` (the longest-list emulation), `cycle`, `truncate`.
+  - **GH-style behaviors exist only as opt-in, visible adapters** — the
+    nodes `pad_last(list, count)` (the longest-list emulation),
+    `repeat(pattern, count)` (the cyclic policy; named `cycle` until it
+    shipped on 2026-08-20 — the §1 time param owns that name),
+    `truncate(list, count)` (the shortest-list emulation).
   - **All-pairs is `cross`**, never inferred.
 - **Empties and nulls are values.** `[]` is data, not a pruned branch;
   `T?` slots are preserved by every combinator; removal happens only
@@ -97,7 +100,7 @@ failures:
 |---|---|---|---|
 | `map` | `(T → U) over [T] → [U]` | implicit iteration | offered as chip; port badge |
 | `zip` | pairing semantics: multiple `each()` on one call (doc 10) | longest-list matching | strict lengths; mismatch = error with counts |
-| `pad_last` / `cycle` / `truncate` | length-policy adapters | longest/shortest list | explicit, visible, recorded |
+| `pad_last` / `repeat` / `truncate` | length-policy adapters: `(list, count) → [E]` / `(pattern, count) → [E]` | Longest List / Repeat Data / Shortest List | explicit, visible, recorded; shipped C1 (the cyclic one was `cycle` until 2026-08-20) |
 | `cross` | `(a: [A], b: [B]) → (a: [[A]], b: [[B]])` | Cross Reference | two aligned outputs — no tuple wires |
 | `flatten` | `[[T]] → [T]` | Flatten | one level; `flatten_all` for all, and says so |
 | `nest` | `[T] → [[T]]` | Graft | each element its own singleton |
@@ -149,9 +152,9 @@ silently remapping.
 Chip vocabulary, precisely: a **chip** is a compact UI element on a
 wire or port, smaller than a node box. A **lift chip** is the visual
 form of `each()` — pure syntax, no node created; it persists as the
-port's iteration badge. An **adapter chip** is a real, single-use,
-unary adapter node (`as_closed`, `pad_last`, `tessellate`, …) rendered
-compactly on the wire; it has a binding in the text, can be promoted to
+port's iteration badge. An **adapter chip** is a real, single-use
+adapter node (`as_closed`, `pad_last` with its `count`, `tessellate`, …)
+rendered compactly on the wire; it has a binding in the text, can be promoted to
 a full box, and carries cost and status like any node. The line between
 them: lift chips change the *pairing semantics* of an existing call;
 adapter chips are *data transformations*, and data transformations are
