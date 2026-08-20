@@ -22,7 +22,7 @@ system; the current work order is the vertical-slice spike
    [docs/15-spike-plan.md](docs/15-spike-plan.md), and the docs it lists for
    that stage.
 
-**Current status: stage 6 complete — the wall slice, measured; the spike gate PASSED.**
+**Current status: the spike is COMPLETE — all six stages shipped, the gate PASSED (docs/15 §Stage-6 results). Current work: v0.1 (docs/15 §After the spike; docs/05 roadmap): OCCT-backed Solid, the full docs/08 catalog, WASM script host, undo/redo, git panel, scrub caching, time transport — ordering decided with Ben at kickoff.**
 Live: the value model + `#[node]` registry (stage 1), the `.cic` toolchain
 (stage 2: lossless parser, minimal-edit writer — place / wire / unwire /
 lift / set-param / delete / rename — checker-lite with type variables
@@ -46,7 +46,7 @@ with search-to-place, typed ports, server-probed live wire compatibility,
 lift chips, red wires, sliders on canvas; three.js viewport with merged
 draws + instancing, ID-buffer backward picking, Rhino-style navigation;
 ribbon, inspector, params + read-only text panels, keyboard map;
-Playwright smoke), and stage 6: the wall corpus (`corpus/wall.cic` — the 1,200-part production wall on the engine, reproducing the shipped 3MF/DXF modulo declared noise), the ported Python script nodes (`corpus/scripts/`; the script host now marshals Mesh/Plane/Curve with msgpack bin, multi-output dict returns, and effectful `-> None` exporters), the new nodes `loft` / `text_outlines` / `text_solids` (bundled DejaVu Sans Bold) / `area` / `flatten` / `partition` / `chunk` / `concat` / `cull` / `construct_plane`, the measurement harness (`corpus/measure/`) and normalizer (`corpus/tools/normalize.py`) — all five doc-15 criteria PASSED (docs/15 §Stage-6 results: cold carve 6.5 s, cheap slider 0.5 ms p50, Esc 170 ms, canvas round-trip ~100 ms). Live subcommands: `cicada catalog`, `cicada run` (always pass `--cache-dir` in tests; effectful bindings run only via `--node`; `CICADA_TRACE=1` prints per-node phase timings), `cicada serve`. `examples/` is the runnable playground — also
+Playwright smoke), and stage 6: the wall corpus (`corpus/wall.cic` — the 1,200-part production wall on the engine, reproducing the shipped 3MF/DXF modulo declared noise), the ported Python script nodes (`corpus/scripts/`; the script host now marshals Mesh/Plane/Curve with msgpack bin, multi-output dict returns, and effectful `-> None` exporters), the new nodes `loft` / `text_outlines` / `text_solids` (bundled DejaVu Sans Bold) / `area` / `flatten` / `partition` / `chunk` / `concat` / `cull` / `construct_plane`, the measurement harness (`corpus/measure/`) and normalizer (`corpus/tools/normalize.py`) — all five doc-15 criteria PASSED (docs/15 §Stage-6 results: cold carve 6.5 s, cheap slider 0.5 ms p50, Esc 170 ms, canvas round-trip ~100 ms). Live subcommands: `cicada catalog`, `cicada run` (always pass `--cache-dir` in tests; effectful bindings run only via `--node`; `CICADA_TRACE=1` prints per-node phase timings), `cicada serve`. `examples/wall/` is the committed wall playground — open it in the app, edit freely, `git checkout -- examples/wall` reverts. `examples/` is the runnable playground — also
 for the app (`cicada serve examples/02-solids.cic` — the canvas WRITES
 the served files, so for throwaway experiments serve a scratch copy;
 serving the committed examples is fine when you mean to change them).
