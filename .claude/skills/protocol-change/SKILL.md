@@ -22,6 +22,7 @@ IS the byte-exact frame spec.
 | Intents → text edits, statuses, display set | `crates/cicada-server/src/session.rs` | `web/src/state/store.ts` (`applyServerMessage`) |
 | Undo/redo op log (`undo`, `redo`, `batch`, `apply_text`; `history` on delta/snapshot; `error` details `current_text_hash` / `diagnostics` / `index`) | `session.rs` (`OpLog`, `apply_gesture` → `commit`, `apply_text`), `protocol.rs` (`Actor`, `HistoryView`, `ApplyTextRequest`) | `store.ts` (history state), the toolbar/keymap consumers |
 | Routes, auth, WS loop, debug endpoints (`/api/edit/text`, `/api/edit/apply_text` included) | `crates/cicada-server/src/http.rs` | `web/src/state/connection.ts` |
+| Git panel (HTTP-only, no WS message): `GET /api/git/status`, `POST /api/git/commit`, `POST /api/git/revert`; `GET /api/project`'s `git` summary; the shapes `GitState`, `ChangeKind`, `NodeChange`, `RemovedNode`, `FileStatus`, `ScopeFile`, `GitStatusResponse`, `CommitRequest`/`Response`, `RevertRequest`/`Response`, `GitErrorKind`, `ProjectGit` | `crates/cicada-server/src/git.rs` (the git binary, markers from `git diff`), `protocol.rs` (the shapes), `http.rs` (routes + status codes), `tests/git_routes.rs` (real git, fixture repos) | `web/src/protocol/messages.ts` (the mirror), the git panel's fetch layer |
 
 ## Checklist
 

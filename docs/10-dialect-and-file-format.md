@@ -300,6 +300,20 @@ directly:
   from any shell or tool. Branching/merging stay in your shell for
   v0.1.
 
+*Slice 1 (v0.1 item 2, server half shipped 2026-08-20 — doc 13 §HTTP
+surface `/api/git/*`): the status strip's data (branch / detached /
+unborn / upstream ahead-behind / `index.lock`), per-node markers for
+**working tree vs HEAD only** — computed FROM `git diff -U0 HEAD --
+<pipeline>` (hunks → binding lines → names: `added` / `modified` /
+`removed` / `renamed` when a removed+added pair has a byte-identical
+right-hand side), so they are the text diff by construction — commit from
+the app (scope = this pipeline's `.cic` + sidecar + `scripts/*.py`,
+message verbatim, never `add -A`), and revert-to-HEAD through the reload
+barrier. Everything runs through the `git` binary with
+`--no-optional-locks` (a status refresh never touches the project). Not
+yet: other refs, the visual graph-diff overlay, per-node history — they
+follow once the markers have had weeks of use.*
+
 Determinism (doc 02) is what makes this worth surfacing: if a diff is
 empty, the artifacts are identical; if artifacts differ, some diff
 explains it.
