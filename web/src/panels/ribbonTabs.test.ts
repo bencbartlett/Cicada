@@ -12,6 +12,8 @@ function node(name: string, category: string, title = name): CatalogNode {
     version: 1,
     pure: true,
     uses_tolerance: false,
+    gh: null,
+    examples: [],
     inputs: [],
     outputs: [],
   };

@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { Catalog, CatalogNode } from "../protocol/messages";
 import {
+  catalogEntry,
   cellToPx,
   filterCatalog,
   firstLine,
+  ghHint,
   isRefinement,
   lodTier,
+  outputDoc,
   paramValueText,
+  portTitle,
   pxToCell,
+  searchRank,
   sliderStep,
   snapToStep,
   statusBadge,
@@ -76,7 +81,13 @@ describe("lodTier", () => {
   });
 });
 
-const node = (name: string, title: string, category = "Maths & logic"): CatalogNode => ({
+const node = (
+  name: string,
+  title: string,
+  gh: string | null = null,
+  outputs: CatalogNode["outputs"] = [],
+  category = "Maths & logic",
+): CatalogNode => ({
   name,
   title,
   description: "",
@@ -85,13 +96,39 @@ const node = (name: string, title: string, category = "Maths & logic"): CatalogN
   version: 1,
   pure: true,
   uses_tolerance: false,
+  gh,
+  examples: [],
   inputs: [],
-  outputs: [],
+  outputs,
 });
 
+const port = (name: string, doc?: string): CatalogNode["outputs"][number] => ({
+  name,
+  type: "Number",
+  base: "Number",
+  list_depth: 0,
+  optional: false,
+  ...(doc === undefined ? {} : { doc }),
+});
+
+// A slice of the real catalog's shape: dialect names, titles and the
+// Grasshopper names the nodes replace (docs/generated/catalog.json).
 const catalog: Catalog = {
-  format: 1,
-  nodes: [node("sphere", "Sphere"), node("box", "Box"), node("mesh_sphere", "Mesh sphere"), node("add", "Add")],
+  format: 2,
+  nodes: [
+    node("sphere", "Sphere", "Sphere", [port("out", "The watertight UV-sphere mesh.")]),
+    node("box", "Box", "Domain Box"),
+    node("mesh_sphere", "Mesh sphere", null),
+    node("add", "Add", "Addition", [port("out", "The sum `a + b`.")]),
+    node("mass_addition", "Mass Addition", "Mass Addition", [port("result", "The sum of the list."), port("partial")]),
+    node("concat", "Concat", "Merge"),
+    node("pick", "Pick", "Pick'n'Choose"),
+    node("round", "Round", "Round"),
+    node("floor", "Floor", "Round"),
+    node("series", "Series", "Series"),
+    node("ln", "Natural Logarithm", "Natural logarithm"),
+    node("as_closed", "As Closed", null),
+  ],
 };
 
 describe("filterCatalog", () => {
@@ -100,8 +137,49 @@ describe("filterCatalog", () => {
     expect(hits).toEqual(["sphere", "mesh_sphere"]);
   });
   it("lists everything on an empty query", () => {
-    expect(filterCatalog(catalog, "", null)).toHaveLength(4);
+    expect(filterCatalog(catalog, "", null)).toHaveLength(catalog.nodes.length);
     expect(filterCatalog(null, "", null)).toEqual([]);
+  });
+  it("matches the Grasshopper name a migrant types, case-insensitively", () => {
+    expect(filterCatalog(catalog, "Merge", null).map((h) => h.node.name)).toEqual(["concat"]);
+    expect(filterCatalog(catalog, "pick'n'choose", null).map((h) => h.node.name)).toEqual(["pick"]);
+    expect(filterCatalog(catalog, "domain", null).map((h) => h.node.name)).toEqual(["box"]);
+    expect(filterCatalog(catalog, "Series", null)[0]?.node.name).toBe("series");
+  });
+  it("ranks an exact gh hit above the substring hits it also lights up", () => {
+    // `Addition` is add's GH name and a substring of mass_addition's everything.
+    expect(filterCatalog(catalog, "Addition", null).map((h) => h.node.name)).toEqual(["add", "mass_addition"]);
+  });
+  it("ranks name exact > gh exact > title exact > name prefix > title/gh prefix > substring", () => {
+    const ranked: Catalog = {
+      format: 2,
+      nodes: [
+        node("emerge", "Emergency", null), // substring
+        node("merge_tree", "Merge", null), // title exact (and name prefix)
+        node("concat", "Concat", "Merge"), // gh exact
+        node("merge", "Join", null), // name exact
+        node("mergers", "Mergers", null), // name prefix
+        node("weave", "Merge Streams", null), // title prefix
+        node("join", "Join", "Merge Faces"), // gh prefix
+      ],
+    };
+    expect(filterCatalog(ranked, "merge", null).map((h) => h.node.name)).toEqual([
+      "merge",
+      "concat",
+      "merge_tree",
+      "mergers",
+      "join",
+      "weave",
+      "emerge",
+    ]);
+    expect(searchRank(ranked.nodes[3]!, "merge")).toBe(0);
+    expect(searchRank(ranked.nodes[2]!, "merge")).toBe(1);
+    expect(searchRank(ranked.nodes[1]!, "merge")).toBe(2);
+    expect(searchRank(ranked.nodes[0]!, "merge")).toBe(5);
+    expect(searchRank(ranked.nodes[0]!, "zzz")).toBeNull();
+  });
+  it("ties go to the node matching on its own name (Round: round before floor)", () => {
+    expect(filterCatalog(catalog, "Round", null).map((h) => h.node.name)).toEqual(["round", "floor"]);
   });
   it("restricts to probe-accepting funcs and carries the ports", () => {
     const hits = filterCatalog(catalog, "", [
@@ -111,6 +189,39 @@ describe("filterCatalog", () => {
     ]);
     expect(hits.map((h) => h.node.name)).toEqual(["add", "box"]);
     expect(hits[0]?.ports).toEqual([["a", "lift"], ["b", "ok"]]);
+  });
+  it("still matches gh under a probe filter", () => {
+    const hits = filterCatalog(catalog, "merge", [{ func: "concat", ports: [["a", "ok"]] }]);
+    expect(hits.map((h) => h.node.name)).toEqual(["concat"]);
+  });
+});
+
+describe("ghHint", () => {
+  it("shows the GH name only when it tells the user something the title does not", () => {
+    expect(ghHint(node("concat", "Concat", "Merge"))).toBe("Merge");
+    expect(ghHint(node("box", "Box", "Domain Box"))).toBe("Domain Box");
+    expect(ghHint(node("sphere", "Sphere", "Sphere"))).toBeNull();
+    expect(ghHint(node("ln", "Natural Logarithm", "Natural logarithm"))).toBeNull();
+    expect(ghHint(node("as_closed", "As Closed", null))).toBeNull();
+  });
+});
+
+describe("port docs from the catalog", () => {
+  it("looks up a func's entry and its output doc (a bare out's # Returns line)", () => {
+    expect(catalogEntry(catalog, "add")?.title).toBe("Add");
+    expect(catalogEntry(catalog, "nope")).toBeUndefined();
+    expect(catalogEntry(catalog, undefined)).toBeUndefined();
+    expect(catalogEntry(null, "add")).toBeUndefined();
+    expect(outputDoc(catalog, "add", "out")).toBe("The sum `a + b`.");
+    expect(outputDoc(catalog, "mass_addition", "result")).toBe("The sum of the list.");
+    expect(outputDoc(catalog, "mass_addition", "partial")).toBeUndefined();
+    expect(outputDoc(catalog, "mass_addition", "nope")).toBeUndefined();
+    expect(outputDoc(null, "add", "out")).toBeUndefined();
+  });
+  it("renders the hover as name: type — doc", () => {
+    expect(portTitle("out", "Number", "The sum `a + b`.")).toBe("out: Number — The sum `a + b`.");
+    expect(portTitle("out", "Number", undefined)).toBe("out: Number");
+    expect(portTitle("out", "Number", "")).toBe("out: Number");
   });
 });
 

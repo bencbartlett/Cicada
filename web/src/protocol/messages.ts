@@ -252,6 +252,12 @@ export interface GraphView {
 
 // --------------------------------------------------------------- catalog --
 
+/**
+ * One port of a catalog entry (`crates/cicada-server/src/catalog.rs::Port`,
+ * catalog format 2). `doc` is the port's one-line doc — for a node that
+ * returns one bare value it is the `# Returns` line (docs/14 §node file
+ * format); the server omits the key when the doc is empty.
+ */
 export interface CatalogPort {
   name: string;
   type: string;
@@ -263,6 +269,14 @@ export interface CatalogPort {
   dimension?: string;
 }
 
+/**
+ * One node of `GET /api/catalog` (`catalog.rs::Node`, format 2). `gh` and
+ * `examples` are ALWAYS written by the server (the `#[node]` attribute
+ * requires `gh = "…" | none`): `gh` is the Grasshopper component this node
+ * replaces — `null` for a Cicada-only node — and feeds search-to-place;
+ * `examples` are runnable `.cic` snippets (no `# cicada 1` header) that CI
+ * solves, empty for the project's script nodes.
+ */
 export interface CatalogNode {
   name: string;
   title: string;
@@ -273,6 +287,8 @@ export interface CatalogNode {
   pure: boolean;
   uses_tolerance: boolean;
   panics?: string;
+  gh: string | null;
+  examples: string[];
   inputs: CatalogPort[];
   outputs: CatalogPort[];
 }

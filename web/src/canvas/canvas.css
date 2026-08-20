@@ -820,7 +820,7 @@
 .cv-search {
   position: absolute;
   z-index: 20;
-  width: 320px;
+  width: 360px;
   max-height: 340px;
   display: flex;
   flex-direction: column;
@@ -874,6 +874,18 @@
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: 11px;
+}
+
+/* The Grasshopper name the node replaces, when it differs from the title
+   (a migrant typed it and should see why this row matched). */
+.cv-search-gh {
+  font-size: 10px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-style: italic;
 }
 
 .cv-search-cat {

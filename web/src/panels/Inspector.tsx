@@ -13,6 +13,7 @@ import type {
   ValueSummary,
   WireView,
 } from "../protocol/messages";
+import { outputDoc, portTitle } from "../canvas/grid";
 import { LiteralWidget } from "../canvas/LiteralWidgets";
 import { literalKindOf } from "../state/literals";
 import { canWrite, nodeByName, useCicada } from "../state/store";
@@ -90,6 +91,7 @@ function NodeInspect({ name, extra }: { name: string; extra: number }) {
   const pipeline = useCicada((s) => s.pipeline);
   const token = useCicada((s) => s.token);
   const selectNodes = useCicada((s) => s.selectNodes);
+  const catalog = useCicada((s) => s.catalog);
   const setTab = useInspectorTab((s) => s.setTab);
   const [runBusy, setRunBusy] = useState(false);
   const inspected = useRef<string>("");
@@ -244,6 +246,7 @@ function NodeInspect({ name, extra }: { name: string; extra: number }) {
           <OutputRow
             key={output.name}
             output={output}
+            doc={outputDoc(catalog, node.func, output.name)}
             value={values?.outputs.find(([n]) => n === output.name)}
             stale={stale}
           />
@@ -349,7 +352,7 @@ function InputRow({
         style={{ color }}
         title={input.required ? "required" : "optional"}
       />
-      <span>
+      <span title={portTitle(input.name, input.type, input.doc)}>
         <span className="port-name">{input.name}</span>
         <span className="port-type" style={{ color }}>
           {input.type}
@@ -401,10 +404,13 @@ function InputRow({
 
 function OutputRow({
   output,
+  doc,
   value,
   stale,
 }: {
   output: OutputView;
+  /** The catalog's one-line doc of the port (the view-model carries none for outputs). */
+  doc: string | undefined;
   value: [string, ValueSummary | null] | undefined;
   stale: boolean;
 }) {
@@ -412,7 +418,7 @@ function OutputRow({
   return (
     <div className="port-row" data-testid={`out-${output.name}`}>
       <span className="port-dot filled" style={{ color }} />
-      <span>
+      <span title={portTitle(output.name, output.resolved ?? output.type, doc)}>
         <span className="port-name">{output.name}</span>
         <span className="port-type" style={{ color }}>
           {output.resolved ?? output.type}

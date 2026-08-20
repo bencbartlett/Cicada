@@ -16,7 +16,7 @@ import type { InputView, NodeView, OutputView, ProbeVerdict, ValueSummary } from
 import { literalKindOf } from "../state/literals";
 import { canWrite, useCicada } from "../state/store";
 import { sendWrite, type CanvasNode } from "./flow";
-import { firstLine, isRefinement, statusBadge } from "./grid";
+import { firstLine, isRefinement, outputDoc, portTitle, statusBadge } from "./grid";
 import { LiteralWidget } from "./LiteralWidgets";
 import { useLodTier } from "./lod";
 import { ParamWidget } from "./ParamWidget";
@@ -55,8 +55,8 @@ function InputRow({
 }) {
   const color = kindColor(input.base);
   const cls = ["cn-port", "cn-in"];
-  let title = `${input.name}: ${input.type}`;
-  if (input.doc) title += ` — ${input.doc}`;
+  // Hover: `name: type — doc` (the catalog's one-line port doc rides on the view-model).
+  let title = portTitle(input.name, input.type, input.doc);
   if (input.unknown) {
     cls.push("unknown");
     title = `${input.name}: unknown kwarg for this node`;
@@ -148,23 +148,24 @@ function summaryText(summary: ValueSummary | null): string {
 
 function OutputRow({
   output,
+  doc,
   value,
 }: {
   output: OutputView;
+  /** The catalog's one-line doc of this port (a bare `out`'s `# Returns` line), if any. */
+  doc: string | undefined;
   /** Closest-zoom preview: `undefined` = not shown, `null` = no value yet. */
   value: ValueSummary | null | undefined;
 }) {
   const color = kindColor(output.base);
   const type = output.resolved ?? output.type;
   const shown = value !== undefined;
+  // Hover: `name: type — doc`, the displayable tag, then the value line at the closest zoom.
+  const tag = output.displayable ? " (displayable)" : "";
+  const valueLine = shown ? `\n${summaryText(value)}` : "";
+  const title = portTitle(output.name, type, doc) + tag + valueLine;
   return (
-    <div
-      className={`cn-port cn-out${shown ? " with-value" : ""}`}
-      title={`${output.name}: ${type}${output.displayable ? " (displayable)" : ""}${
-        shown ? `
-${summaryText(value)}` : ""
-      }`}
-    >
+    <div className={`cn-port cn-out${shown ? " with-value" : ""}`} title={title}>
       <span className="cn-port-label">{output.name}</span>
       {shown && <span className="cn-port-value mono">{summaryText(value)}</span>}
       <Handle
@@ -213,6 +214,10 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
   const picked = useCicada((s) => s.selection.element?.node === name);
   const hovered = useCicada((s) => s.hoverPick?.node === name);
   const writer = useCicada(canWrite);
+  // Output-port docs come from the catalog (the view-model's `OutputView`
+  // carries none); the catalog object is replaced whole, never mutated, so
+  // this subscription only fires once per load.
+  const catalog = useCicada((s) => s.catalog);
   const dragSource = useDragSource();
   const tier = useLodTier();
 
@@ -348,6 +353,7 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
               {output ? (
                 <OutputRow
                   output={output}
+                  doc={outputDoc(catalog, view.func, output.name)}
                   value={outputValues === null ? undefined : (outputValues.get(output.name) ?? null)}
                 />
               ) : (
