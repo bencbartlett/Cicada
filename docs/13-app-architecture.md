@@ -120,8 +120,11 @@ preview tick ends the drag at the dispatcher's door (gestures, undo,
 redo, batch — landed or refused), and `apply_text`, a reload and Esc
 end it at their own entries.
 
-**The frozen contract for the client** (the web half is the next
-package; the committed client ignores the message):
+**The frozen contract for the client** (the web client implements it
+in `web/src/state/store.ts` — one `pending` param, replaced by every
+arrival, cleared by a delta, a non-`lease` error, a snapshot, a
+disconnect, or the widget on a release without a write; both sliders
+render it as `pending · N s`):
 
 1. `preview_policy` may arrive more than once for the same param —
    after a pause longer than the gap, after a release, after an Esc,
@@ -265,12 +268,12 @@ idle-class hypothetical solve (`Session::solve_hypothetical`, doc 12
 kill switches hang off the calling generation's token, so "a slider
 drag never cancels an export" is true by construction; and the
 compute-on-release degrade for expensive cones (§Slider drags above —
-the `preview_policy` message). Still not in: transport, git routes,
+the `preview_policy` message, and both sliders' `pending · N s`
+rendering of it). Still not in: transport, git routes,
 `/api/blob` beyond value summaries, reconnect replay (a reconnect is a
 fresh session join: one hydration path — the client retries with
 backoff and re-hydrates), scrub caching (its substrate — the idle
-class — is in; the warmer and the buffer bar are item 5), the web
-client's rendering of `preview_policy` (next package), groups (their
+class — is in; the warmer and the buffer bar are item 5), groups (their
 keyboard rows notice loudly), the sidecar's `port_order`/`color`/
 `collapsed` keys (carried, not rendered), per-element frame ranges,
 and an auto-layout beyond "layer by dependency depth, stack in

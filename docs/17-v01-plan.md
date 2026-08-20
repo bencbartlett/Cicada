@@ -19,7 +19,7 @@ runs in parallel from day 1:
 | 2 | Git panel slice 1 — status strip, per-node change markers, commit, revert-to-HEAD | foreground (server/web) | ~1 week | pending |
 | P | OCCT probe — prebuilt 7.8.x build/link on win/mac/linux, determinism, timings, license, CI shape | parallel worktree | hours, cap 1 day | **done** 2026-08-20 — GREEN on win-64 with one rename patch, byte-deterministic, ~3 ms/boolean; Linux/macOS measured by item 3 WP-A's CI job; memo `docs/probes/occt-2026-08.md` |
 | 3 | OCCT-backed Solid — the `Solid` kind, primitives/extrude/loft/revolve/sweep, booleans, `tessellate`, STEP; `mesh_*` renames in the same commit | main geometry track from week 3 | weeks | **unblocked** (probe GREEN) — WP-A next: own fork with the recorded patches, `occt` feature, `tools/fetch_occt.py`, the per-OS CI job |
-| 3b | Scheduler foundations — per-solve cancel handle, `volatile`, idle-class hypothetical solve — plus compute-on-release | parallel (sched/server) | ~1 week | **engine half done** 2026-08-20 (`wt/sched`, fifteen commits after two review rounds; web half — the slider's pending value + estimate from `preview_policy` — is the next package) |
+| 3b | Scheduler foundations — per-solve cancel handle, `volatile`, idle-class hypothetical solve — plus compute-on-release | parallel (sched/server) | ~1 week | **done** 2026-08-20 (`wt/sched`, seventeen commits after two review rounds: the engine half, then the web half — both sliders show the pending value + estimate from `preview_policy` — with a Playwright drag of the wall's `deboss` as its evidence) |
 | 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | pending |
 | 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | pending |
 | 6 | WASM script host — load precompiled guests, epoch cancellation, `cicada-guest` SDK | last | weeks | pending |
@@ -248,11 +248,31 @@ Design: DECISIONS.md rows 16 and 42 (revised 2026-08-19), doc 03, doc 08
   absence a mutation had exposed; a `cached` status carrying its last
   compute's `elements`/`nanos` is a decision now (doc 13 §Solve
   streaming), not an open question; the store's format marker is
-  written temp + rename and an empty (torn) one heals. Pending (web
-  lane): the slider shows `pending_value` + `estimate_ms` (`~` when
-  `rough`), replaces it on every arrival, and clears on its release
-  delta or on a release without a write; observers render the same;
-  doc 13 §Slider drags has the frozen four-point contract.
+  written temp + rename and an empty (torn) one heals.
+- **Shipped (web half, 2026-08-20, `wt/sched`)**: both sliders (canvas
+  and params panel) show the pending value — thumb and number in the
+  warn color — and a `pending · N s` chip (`~` when `rough`, the ETA's
+  spelling) from `preview_policy`; the store holds ONE pending param
+  (the server holds one drag), every arrival replaces it, and it
+  clears on the delta of the release's `set_param` (any write ends the
+  drag), on a refused write's `error` (a `lease` refusal excepted — it
+  is decided before the drag-ending door), on a snapshot and on a
+  disconnect; a release on the committed value writes nothing, so the
+  widget clears it itself; frames and statuses never clear it (a
+  memo-warm tick paints live mid-drag by design); observers render the
+  same from the broadcast; `cached` statuses read `cached · last 43.9
+  s`. Evidence: store unit tests for every transition and
+  `web/e2e/compute_on_release.spec.ts` — a real pointer drag of the
+  wall's `deboss` on the debug engine (2 threads): cold open 31 s,
+  estimate 23 s, 9 ticks withheld, 0 computing previews, the hint up
+  while held, one 29.6 s generation on release (1.2 min on the dev
+  machine; it is the suite's slow spec by design and carries its own
+  timeout). Re-measured at the final engine: 02-solids `size` warm
+  0.24/0.89 and 0.24/0.72 ms server p50/p95 (0.44/1.52, 0.43/1.33 ms
+  client); wall `deboss` 301 ticks → 301 withheld, 0 preview
+  generations, 1 policy for the stream (estimate 3.6 s), one 3.6 s
+  generation on release; warm reopen estimate 3.9 s, release 0.22 ms
+  all cached.
 
 ## Item 4 — time transport, Cycle thin slice (~1 week)
 
