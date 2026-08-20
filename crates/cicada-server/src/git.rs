@@ -895,21 +895,22 @@ impl Git {
             }
         }
         let survey = self.survey(&scope.pathspecs(), true).map_err(refuse)?;
-        let layout = survey.repo_or_refuse()?;
+        survey.repo_or_refuse()?;
         // The pipeline itself without a HEAD version (untracked, ignored,
         // index-only, unborn branch): there is nothing to put back —
         // refuse, whether asked explicitly or by omission.
         if !survey.pipeline_in_head(scope) {
             return Err(GitRefusal::Untracked(scope.pipeline.clone()));
         }
+        // One rule for "has a HEAD version": the `in_head` the status
+        // publishes on every scope file — so what a client listed from the
+        // status as revertable is exactly what restores here.
         let dirty = survey.scope_files(scope);
         let wanted = |path: &str| paths.is_none_or(|set| set.iter().any(|p| p == path));
         let mut restore = Vec::new();
         let mut untracked = Vec::new();
         for file in dirty.iter().filter(|f| wanted(&f.path)) {
-            let entry = survey.entry_for(&layout.to_root(&file.path));
-            let has_head = !survey.unborn && entry.is_none_or(Entry::in_head);
-            if has_head {
+            if file.in_head {
                 restore.push(file.path.clone());
             } else {
                 untracked.push(file.path.clone());
@@ -1298,11 +1299,15 @@ impl Survey {
                 .is_none_or(Entry::in_head)
     }
 
-    /// The dirty files of the scope, project-relative, in scope order.
-    /// Ignored files are left out: git does not list them and `git add`
-    /// refuses a list that contains one — they are the user's explicit
-    /// choice not to commit. (`--ignored=matching` is asked for so that
-    /// the PIPELINE can be told apart from a clean tracked one.)
+    /// The dirty files of the scope, project-relative, in scope order,
+    /// each saying whether HEAD has it (`in_head` — the rule [`Git::revert`]
+    /// restores by, published rather than re-derived by clients: a
+    /// `deleted` status can be an `AD` entry with no HEAD version, and
+    /// nothing on an unborn branch has one). Ignored files are left out:
+    /// git does not list them and `git add` refuses a list that contains
+    /// one — they are the user's explicit choice not to commit.
+    /// (`--ignored=matching` is asked for so that the PIPELINE can be told
+    /// apart from a clean tracked one.)
     fn scope_files(&self, scope: &Scope) -> Vec<ScopeFile> {
         let Some(layout) = &self.layout else {
             return Vec::new();
@@ -1316,6 +1321,7 @@ impl Survey {
                 scope.contains(path).then(|| ScopeFile {
                     path: path.to_owned(),
                     status: entry.file_status(),
+                    in_head: !self.unborn && entry.in_head(),
                 })
             })
             .collect();
@@ -1611,6 +1617,7 @@ mod tests {
                     1 .M N... 100644 100644 100644 abc def examples/p.cic\0\
                     1 A. N... 000000 100644 100644 000 abc examples/scripts/new.py\0\
                     1 D. N... 100644 000000 000000 abc 000 examples/scripts/old.py\0\
+                    1 AD N... 000000 100644 000000 000 abc examples/scripts/probe_ad.py\0\
                     2 R. N... 100644 100644 100644 abc abc R100 examples/b.cic\0examples/a.cic\0\
                     u UU N... 100644 100644 100644 100644 a b c examples/scripts/merge.py\0\
                     ? examples/p.cic.layout.json\0\
@@ -1686,6 +1693,16 @@ mod tests {
                     true,
                     true
                 ),
+                // Added to the index, then deleted from disk: `deleted` to
+                // the eye, yet HEAD never had it — the status and the
+                // HEAD-version rule part ways here, which is why the scope
+                // publishes `in_head` instead of letting clients infer it.
+                (
+                    "examples/scripts/probe_ad.py".into(),
+                    FileStatus::Deleted,
+                    true,
+                    false
+                ),
                 ("examples/b.cic".into(), FileStatus::Renamed, true, false),
                 (
                     "examples/scripts/merge.py".into(),
@@ -1723,16 +1740,35 @@ mod tests {
             entries: parsed.entries,
         };
         let files = survey.scope_files(&Scope::for_pipeline("p.cic"));
-        let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+        let published: Vec<(&str, FileStatus, bool)> = files
+            .iter()
+            .map(|f| (f.path.as_str(), f.status, f.in_head))
+            .collect();
         assert_eq!(
-            paths,
+            published,
             [
-                "p.cic",
-                "p.cic.layout.json",
-                "scripts/merge.py",
-                "scripts/new.py",
-                "scripts/old.py"
-            ]
+                ("p.cic", FileStatus::Modified, true),
+                ("p.cic.layout.json", FileStatus::Untracked, false),
+                ("scripts/merge.py", FileStatus::Modified, true),
+                ("scripts/new.py", FileStatus::Added, false),
+                ("scripts/old.py", FileStatus::Deleted, true),
+                ("scripts/probe_ad.py", FileStatus::Deleted, false),
+            ],
+            "`in_head` is the revert rule per file — not a function of `status`"
+        );
+        // On an unborn branch nothing has a HEAD version, whatever the
+        // entry says.
+        let unborn = Survey {
+            state: survey.state.clone(),
+            layout: survey.layout.clone(),
+            unborn: true,
+            entries: survey.entries.clone(),
+        };
+        assert!(
+            unborn
+                .scope_files(&Scope::for_pipeline("p.cic"))
+                .iter()
+                .all(|f| !f.in_head)
         );
         assert!(survey.pipeline_in_head(&Scope::for_pipeline("p.cic")));
         assert!(

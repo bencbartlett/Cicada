@@ -152,17 +152,41 @@ export function markerCount(pipeline: PipelineGitStatus): number {
 }
 
 /**
- * The scope files `revert` can put back: those with a HEAD version —
- * EXACTLY the server's rule (`git.rs` `Entry::in_head`: tracked, not an
- * index addition, not the new side of a rename). An `untracked` or
- * index-only `added` file has none, and neither does a `renamed` one (its
- * path is new; HEAD knows the old name) — the server leaves them alone (it
- * never deletes) and says so in `untracked`. This list is what the confirm
- * step shows AND what the POST names, so a status the server would refuse
- * as an explicit ask (`409 untracked`) must never be in it.
+ * The scope files `revert` can put back: those the server says HEAD has a
+ * version of (`in_head` — ITS rule, read off the status, never re-derived
+ * from `status` here: a `deleted` file can be an index addition that went
+ * missing from disk, porcelain `AD`, with nothing in HEAD to go back to).
+ * The rest — untracked, index-only, a rename's new path — the server
+ * leaves alone (it never deletes) and refuses as an explicit ask (`409
+ * untracked`), so listing one would fail the whole revert.
  */
 export function revertable(scope: ScopeFile[]): ScopeFile[] {
-  return scope.filter((f) => f.status === "modified" || f.status === "deleted");
+  return scope.filter((f) => f.in_head);
+}
+
+/** What the confirm step shows and what the request then names — one object, so they cannot drift. */
+export interface RevertRequestView {
+  /** Listed in the confirm step; restored by the request. */
+  files: ScopeFile[];
+  /** Named in the confirm step as left alone (no HEAD version). */
+  untouched: ScopeFile[];
+  /** The request's `paths`: exactly `files`, in scope order. */
+  paths: string[];
+}
+
+/**
+ * The BINDING confirm list: the revert the user agrees to is exactly the
+ * files shown, and the POST names exactly those `paths` — never the whole
+ * scope — so a file that joined the scope after the last status read is
+ * not reverted unseen (the next read lists it for a second ask).
+ */
+export function revertRequest(scope: ScopeFile[]): RevertRequestView {
+  const files = revertable(scope);
+  return {
+    files,
+    untouched: scope.filter((f) => !f.in_head),
+    paths: files.map((f) => f.path),
+  };
 }
 
 /** The canvas badge for a marker: glyph + tooltip (docs/16 canvas badges; removed nodes are never on the canvas). */

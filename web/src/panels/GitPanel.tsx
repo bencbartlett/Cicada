@@ -15,7 +15,7 @@ import { describeGitError } from "../protocol/git";
 import { commitBlockReason, commitFromApp, gitWriteBlockReason, ignoredReason, refreshGitNow, revertToHead } from "../state/git";
 import { canWrite, useCicada } from "../state/store";
 import { useCommitDraft } from "./commitDraft";
-import { describeHead, groupMarkers, markerBadge, revertable } from "./gitFormat";
+import { describeHead, groupMarkers, markerBadge, revertRequest } from "./gitFormat";
 import "./panels.css";
 
 export function GitPanel() {
@@ -393,25 +393,27 @@ export function CommitForm({
 
 /**
  * Revert to HEAD with an inline confirm step: it discards EVERY uncommitted
- * edit in the scope's files that have a HEAD version (untracked files are
- * left alone — the server never deletes), and the reload barrier clears
- * the undo history — said in so many words before the second click. The
- * confirmation is BINDING: the POST names exactly the files it listed
- * (`paths`), so a file that joined the scope between the last status read
- * and the click is not reverted unseen — the server refuses anything
- * outside the scope and the next read lists the newcomer for a second ask.
+ * edit in the scope's files that HEAD has a version of (`in_head`, the
+ * server's word — files without one are left alone; it never deletes),
+ * and the reload barrier clears the undo history — said in so many words
+ * before the second click. The confirmation is BINDING: the POST names
+ * exactly the files it listed (`revertRequest(scope).paths`), so a file
+ * that joined the scope between the last status read and the click is not
+ * reverted unseen — the server refuses anything outside the scope and the
+ * next read lists the newcomer for a second ask. (`e2e/git.spec.ts` reads
+ * the request body: a two-file scope with one file to leave alone posts
+ * one path.)
  */
 function RevertControl({ scope }: { scope: ScopeFile[] }) {
   const shared = useCicada(gitWriteBlockReason);
   const busy = useCicada((s) => s.git.busy);
   const [confirming, setConfirming] = useState(false);
-  const files = revertable(scope);
-  const untouched = scope.filter((f) => !files.includes(f));
+  const { files, untouched, paths } = revertRequest(scope);
   const blocked =
     shared ?? (files.length === 0 ? "nothing to revert — no file of the scope differs from its HEAD version" : null);
 
   // The scope changed under the confirm step (an edit, a refresh): ask again.
-  const key = files.map((f) => f.path).join("\n");
+  const key = paths.join("\n");
   useEffect(() => {
     setConfirming(false);
   }, [key]);
@@ -450,7 +452,7 @@ function RevertControl({ scope }: { scope: ScopeFile[] }) {
           disabled={blocked !== null || busy !== null}
           onClick={() => {
             setConfirming(false);
-            void revertToHead(files.map((f) => f.path));
+            void revertToHead(paths);
           }}
           data-testid="git-revert-confirm-yes"
         >

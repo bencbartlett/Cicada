@@ -359,6 +359,15 @@ export type FileStatus = "modified" | "added" | "deleted" | "untracked" | "renam
 export interface ScopeFile {
   path: string;
   status: FileStatus;
+  /**
+   * HEAD has a version of this path, so a revert can put it back — the
+   * SERVER's rule, published per file (`git.rs` `Entry::in_head` + the
+   * unborn branch). Never infer it from `status`: porcelain `AD` (added to
+   * the index, then deleted from disk) is `deleted` with no HEAD version.
+   * `false` → a revert leaves the file alone, and an explicit ask for it is
+   * refused `untracked`.
+   */
+  in_head: boolean;
 }
 
 /** The pipeline file's git view (`protocol::PipelineGitStatus`). */

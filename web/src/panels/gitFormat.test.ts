@@ -9,6 +9,7 @@ import {
   markerBadge,
   markerCount,
   projectGitLine,
+  revertRequest,
   revertable,
 } from "./gitFormat";
 
@@ -85,9 +86,9 @@ describe("gitChip", () => {
         operation: "cherry_pick",
       },
       scope: [
-        { path: "p.cic", status: "modified" },
-        { path: "p.cic.layout.json", status: "untracked" },
-        { path: "scripts/helper.py", status: "modified" },
+        { path: "p.cic", status: "modified", in_head: true },
+        { path: "p.cic.layout.json", status: "untracked", in_head: false },
+        { path: "scripts/helper.py", status: "modified", in_head: true },
       ],
     };
     const chip = gitChip(slice(dirty));
@@ -157,20 +158,43 @@ describe("groupMarkers / markerCount / revertable / markerBadge", () => {
     expect(markerCount(pipeline)).toBe(5);
   });
 
-  it("revertable = the scope files with a HEAD version, by the server's own rule (a rename's new path has none)", () => {
-    // Mirrors `git.rs` `Entry::in_head`: tracked, not an index addition,
-    // not the new side of a rename. The list is POSTed as `paths`, and the
-    // server refuses an explicit ask for a file it would have to delete
-    // (`409 untracked`) — so `renamed` here would fail the whole revert.
-    expect(
-      revertable([
-        { path: "p.cic", status: "modified" },
-        { path: "p.cic.layout.json", status: "untracked" },
-        { path: "scripts/new.py", status: "added" },
-        { path: "scripts/old.py", status: "deleted" },
-        { path: "scripts/moved.py", status: "renamed" },
-      ]).map((f) => f.path),
-    ).toEqual(["p.cic", "scripts/old.py"]);
+  it("revertable = the scope files the server says HEAD has (`in_head`) — never inferred from `status`", () => {
+    // The list is POSTed as `paths`, and the server refuses an explicit ask
+    // for a file it would have to delete (`409 untracked`) — so a file
+    // without a HEAD version here would fail the whole revert. `status`
+    // cannot tell: porcelain `AD` (added to the index, then deleted from
+    // disk) is `deleted` with nothing in HEAD, while a deleted tracked
+    // file is `deleted` WITH one — only `in_head` separates them (found in
+    // review: the status-based rule listed the `AD` file and the revert
+    // was refused).
+    const scope = [
+      { path: "p.cic", status: "modified" as const, in_head: true },
+      { path: "p.cic.layout.json", status: "deleted" as const, in_head: true },
+      { path: "scripts/moved.py", status: "renamed" as const, in_head: false },
+      { path: "scripts/new.py", status: "untracked" as const, in_head: false },
+      { path: "scripts/probe_ad.py", status: "deleted" as const, in_head: false },
+      { path: "scripts/staged.py", status: "added" as const, in_head: false },
+      // Not a shape git produces today (an unmerged `AA` is the nearest);
+      // the rule is the field, so it still holds.
+      { path: "scripts/odd.py", status: "modified" as const, in_head: false },
+    ];
+    expect(revertable(scope).map((f) => f.path)).toEqual(["p.cic", "p.cic.layout.json"]);
+  });
+
+  it("revertRequest: the confirm list, the left-alone list and the POST's `paths` come from one object", () => {
+    const pipeline = { path: "p.cic", status: "modified" as const, in_head: true };
+    const sidecar = { path: "p.cic.layout.json", status: "untracked" as const, in_head: false };
+    const probe = { path: "scripts/probe_ad.py", status: "deleted" as const, in_head: false };
+    const scope = [pipeline, sidecar, probe];
+    const request = revertRequest(scope);
+    expect(request.files).toEqual([pipeline]);
+    expect(request.untouched).toEqual([sidecar, probe]);
+    expect(request.paths).toEqual(["p.cic"]);
+    // Every scope file is in exactly one of the two lists.
+    expect([...request.files, ...request.untouched].length).toBe(scope.length);
+    // Nothing to restore → an empty ask (the control disables itself on it).
+    expect(revertRequest([sidecar])).toEqual({ files: [], untouched: [sidecar], paths: [] });
+    expect(revertRequest([])).toEqual({ files: [], untouched: [], paths: [] });
   });
 
   it("badges: glyph + tooltip per kind, the rename naming the HEAD name", () => {

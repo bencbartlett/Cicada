@@ -41,7 +41,7 @@ const REPO: GitStatusResponse = {
     ],
     removed: [{ name: "old", line_in_head: 5 }],
   },
-  scope: [{ path: "p.cic", status: "modified" }],
+  scope: [{ path: "p.cic", status: "modified", in_head: true }],
   text_hash: "11".repeat(32),
 };
 
@@ -254,10 +254,10 @@ describe("the git slice", () => {
     useCicada.getState().setGitStatus(cleaner);
     expect(useCicada.getState().gitMarkers).toEqual({});
     // A node move dirties the sidecar: same pipeline bytes, a longer scope.
-    const moved: GitStatusResponse = { ...cleaner, scope: [{ path: "p.cic.layout.json", status: "untracked" }] };
+    const moved: GitStatusResponse = { ...cleaner, scope: [{ path: "p.cic.layout.json", status: "untracked", in_head: false }] };
     expect(sameGitStatus(cleaner, moved)).toBe(false);
     useCicada.getState().setGitStatus(moved);
-    expect(useCicada.getState().git.status?.scope).toEqual([{ path: "p.cic.layout.json", status: "untracked" }]);
+    expect(useCicada.getState().git.status?.scope).toEqual([{ path: "p.cic.layout.json", status: "untracked", in_head: false }]);
   });
 
   it("a refused read keeps the last good answer beside the error; the next good answer clears it", () => {

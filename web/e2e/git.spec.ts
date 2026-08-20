@@ -6,9 +6,13 @@
  * `modified` on the canvas and the chip `1 dirty`, Ctrl+S opens the commit
  * dialog and Ctrl+Enter commits with the message VERBATIM (`git log`
  * agrees, the badge clears), a second edit is reverted to HEAD through the
- * confirm step (the text panel shows HEAD's line, the reload barrier
- * cleared the undo history, the file on disk equals HEAD), and a read-only
- * observer sees the status but no commit or revert controls.
+ * confirm step — whose list is BINDING: over a two-file scope with one
+ * file the server cannot restore (no HEAD version) the request names
+ * exactly the one file listed, the other is left alone (the text panel
+ * shows HEAD's line, the reload barrier cleared the undo history, the file
+ * on disk equals HEAD, the revert reached the canvas in measured time),
+ * and a read-only observer sees the status but no commit or revert
+ * controls.
  *
  * Runs against the REAL `cicada serve` from `playwright.config.ts` over a
  * SCRATCH copy of `examples/` — the repository is created IN the scratch
@@ -20,15 +24,17 @@
  */
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import config from "../playwright.config";
 
 const meta = config.metadata as { token: string; scratch: string };
 const TOKEN = meta.token;
 const PIPELINE = "git.cic";
+const SIDECAR = `${PIPELINE}.layout.json`;
 const PROJECT = join(meta.scratch, "examples");
 const FILE = join(PROJECT, PIPELINE);
+const SIDECAR_FILE = join(PROJECT, SIDECAR);
 
 const START =
   "# cicada 1\n" +
@@ -66,6 +72,12 @@ interface DebugState {
   history: { can_undo: boolean; can_redo: boolean; depth: number };
 }
 
+/** The debug hooks the page installs (`state/connection.ts` `window.__cicada`). */
+interface CicadaHandle {
+  state: () => StoreView;
+  send: (message: unknown) => string;
+}
+
 async function debugState(page: Page): Promise<DebugState> {
   const response = await page.request.get(`/debug/state?token=${TOKEN}&pipeline=${PIPELINE}&wait=true`);
   expect(response.ok(), await response.text()).toBeTruthy();
@@ -74,6 +86,7 @@ async function debugState(page: Page): Promise<DebugState> {
 
 interface StoreView {
   role: string;
+  text: string;
   commitDialog: boolean;
   selection: { nodes: string[] };
   notices: { level: string; message: string }[];
@@ -82,10 +95,11 @@ interface StoreView {
 
 async function store(page: Page): Promise<StoreView> {
   return page.evaluate(() => {
-    const w = window as unknown as { __cicada: { state: () => StoreView } };
+    const w = window as unknown as { __cicada: CicadaHandle };
     const s = w.__cicada.state();
     return {
       role: s.role,
+      text: s.text,
       commitDialog: s.commitDialog,
       selection: { nodes: s.selection.nodes },
       notices: s.notices.map((n) => ({ level: n.level, message: n.message })),
@@ -96,9 +110,37 @@ async function store(page: Page): Promise<StoreView> {
 
 async function send(page: Page, message: unknown): Promise<void> {
   await page.evaluate((msg) => {
-    const w = window as unknown as { __cicada: { send: (m: unknown) => string } };
+    const w = window as unknown as { __cicada: CicadaHandle };
     w.__cicada.send(msg);
   }, message);
+}
+
+/**
+ * Start a stopwatch IN the page that stops when the store's text becomes
+ * `want` (5 ms resolution): the browser-side half of "revert reaches the
+ * canvas within the measured barrier budget" (docs/17 item 2 — the route
+ * test measures POST → barrier snapshot on the server; this measures the
+ * click → the reloaded text in the store, which is what the canvas and
+ * the text panel render from). Call it BEFORE the click, await it after.
+ */
+function stopwatchUntilText(page: Page, want: string): Promise<number> {
+  return page.evaluate(
+    (target) =>
+      new Promise<number>((resolve, reject) => {
+        const w = window as unknown as { __cicada: CicadaHandle };
+        const t0 = performance.now();
+        const timer = setInterval(() => {
+          if (w.__cicada.state().text === target) {
+            clearInterval(timer);
+            resolve(performance.now() - t0);
+          } else if (performance.now() - t0 > 15_000) {
+            clearInterval(timer);
+            reject(new Error("the store never reached the expected text"));
+          }
+        }, 5);
+      }),
+    want,
+  );
 }
 
 async function open(page: Page): Promise<void> {
@@ -115,19 +157,29 @@ test.describe.configure({ mode: "serial" });
 test.describe("git panel", () => {
   let page: Page;
   const errors: string[] = [];
+  /** Typed git-route refusals Chrome narrated (`Failed to load resource … 4xx/5xx` for `/api/git/*`): by design, toasted by the app — not page errors. */
+  const refusals: string[] = [];
 
   test.beforeAll(async ({ browser }) => {
     writeFileSync(FILE, START);
     page = await browser.newPage();
     page.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
     page.on("console", (message) => {
-      if (message.type() === "error") errors.push(`console: ${message.text()}`);
+      if (message.type() !== "error") return;
+      if (/Failed to load resource/.test(message.text()) && /\/api\/git\//.test(message.location().url)) {
+        refusals.push(`${message.location().url}: ${message.text()}`);
+        return;
+      }
+      errors.push(`console: ${message.text()}`);
     });
   });
 
   test.afterAll(async () => {
     await page.close();
     expect(errors, "no page errors / console errors during the git flow").toEqual([]);
+    // Nothing in this flow asks the server for something it refuses; a
+    // spec that does asserts its toast AND its entry here.
+    expect(refusals, "no git route refused anything in this flow").toEqual([]);
   });
 
   test("outside any repository: the chip says `no repo`, the Git tab says why, Ctrl+S explains and offers no form", async () => {
@@ -300,41 +352,81 @@ test.describe("git panel", () => {
     expect((await debugState(page)).history.can_undo).toBe(true);
   });
 
-  test("edit again → Revert to HEAD through the confirm step: the text panel shows HEAD's line, the barrier cleared the undo log, disk == HEAD", async () => {
+  test("edit again → Revert to HEAD through the confirm step: the list is BINDING over a two-file scope, the text panel shows HEAD's line, the barrier cleared the undo log, disk == HEAD", async () => {
     await send(page, { type: "set_param", payload: { node: "size", port: "value", value: "4.0" } });
     await expect.poll(async () => readFileSync(FILE, "utf8")).toBe(SIZE_4);
     await expect(sizeNode(page)).toHaveAttribute("data-git", "modified");
     expect((await debugState(page)).history.can_undo).toBe(true);
 
+    // A second dirty file the revert must LEAVE ALONE: the first node move
+    // writes the layout sidecar, which the baseline never had — dirty (in
+    // the scope) with no HEAD version. The server says so per file
+    // (`in_head`); the confirm step must list only the pipeline and the
+    // request must name only the pipeline — a request naming the sidecar
+    // would be refused whole (`409 untracked`), and a request naming
+    // nothing would revert "everything dirty" behind the user's back.
+    expect(git(["ls-files", "--", SIDECAR]).out, "the sidecar must have no HEAD version for this test to mean anything").toBe("");
+    await send(page, { type: "move_node", payload: { node: "size", cell: [6, 3] } });
+    await expect.poll(() => existsSync(SIDECAR_FILE)).toBe(true);
+    await expect(page.getByTestId("tb-git-dirty")).toHaveText("2 dirty");
+    expect((await debugState(page)).history.can_undo).toBe(true);
+
     await chip(page).click();
+    await expect(page.getByTestId(`git-file-${SIDECAR}`)).toHaveAttribute("data-status", "untracked");
     await expect(page.getByTestId("git-revert-confirm")).toHaveCount(0);
     await page.getByTestId("git-revert").click();
     const confirm = page.getByTestId("git-revert-confirm");
     await expect(confirm).toBeVisible();
-    await expect(confirm).toContainText(/discards every uncommitted edit/);
+    await expect(confirm).toContainText(/discards every uncommitted edit in this file/);
     await expect(confirm).toContainText(/undo history is cleared/);
     await expect(confirm.getByTestId(`git-file-${PIPELINE}`)).toBeVisible();
+    await expect(confirm.getByTestId(`git-file-${SIDECAR}`)).toHaveCount(0);
+    await expect(confirm).toContainText(`left alone (no HEAD version to go back to): ${SIDECAR}`);
     // Second thoughts first: the `keep my edits` path changes nothing.
     await page.getByTestId("git-revert-confirm-no").click();
     await expect(confirm).toHaveCount(0);
     expect(readFileSync(FILE, "utf8")).toBe(SIZE_4);
 
     await page.getByTestId("git-revert").click();
+    await expect(confirm).toBeVisible();
+    const posted = page.waitForRequest((request) => request.method() === "POST" && request.url().includes("/api/git/revert"));
+    const reached = stopwatchUntilText(page, SIZE_3);
     await page.getByTestId("git-revert-confirm-yes").click();
+    // The binding list on the wire: exactly the one path the step showed.
+    const body = (await posted).postDataJSON() as { paths?: string[]; client?: number };
+    expect(body.paths, "the request names exactly the files the confirm step listed").toEqual([PIPELINE]);
+    expect(typeof body.client).toBe("number");
+    const elapsed = await reached;
+    console.log(`revert → canvas: click to the reloaded text in the store ${elapsed.toFixed(0)} ms`);
+    expect(elapsed, "revert reaches the canvas within the barrier budget (debug build, generous)").toBeLessThan(2000);
 
-    await expect(page.getByTestId("notices")).toContainText(/reverted to HEAD: git\.cic/);
+    const notices = page.getByTestId("notices");
+    await expect(notices).toContainText(/reverted to HEAD: git\.cic/);
+    // Narrowed to the listed path, the server had nothing to report as
+    // left alone — the toast that would name the sidecar is the tell of a
+    // request that named no paths.
+    await expect(notices).not.toContainText(/left alone/);
     await expect.poll(async () => readFileSync(FILE, "utf8")).toBe(SIZE_3);
     // The reload barrier (`reason: "git revert"`) cleared the op log.
     const after = await debugState(page);
     expect(after.text).toBe(SIZE_3);
     expect(after.history).toMatchObject({ can_undo: false, can_redo: false, depth: 0 });
     await expect(page.getByTestId("tb-undo")).toBeDisabled();
-    // The text panel shows HEAD's line; the badge and the dirty count are gone.
+    // The text panel shows HEAD's line; the badge is gone; the sidecar is
+    // untouched and still the one dirty file.
     await page.getByTestId("insp-tab-text").click();
     await expect(page.getByTestId("text-panel")).toContainText("size = slider(value=3.0, min=0.5, max=5.0)");
     await expect(sizeNode(page)).not.toHaveAttribute("data-git", /.+/);
-    await expect(page.getByTestId("tb-git-dirty")).toHaveText("clean");
+    await expect(page.getByTestId("tb-git-dirty")).toHaveText("1 dirty");
+    expect(existsSync(SIDECAR_FILE), "the file without a HEAD version was left alone").toBe(true);
     expect(git(["status", "--porcelain", "--", PIPELINE]).out).toBe("");
+    expect(git(["status", "--porcelain", "--", SIDECAR]).out).toBe(`?? ${SIDECAR}`);
+
+    // Hand the next test a clean tree the way a user would: commit the
+    // sidecar from a shell (the app's status re-reads on connect/focus).
+    git(["add", "--", SIDECAR]);
+    git(["commit", "-q", "-m", "sidecar"]);
+    expect(git(["status", "--porcelain", "--", PIPELINE, SIDECAR]).out).toBe("");
   });
 
   test("a read-only observer sees the status but no commit or revert controls; Ctrl+S says so", async ({ browser }) => {

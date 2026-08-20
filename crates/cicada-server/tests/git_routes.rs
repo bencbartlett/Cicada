@@ -199,6 +199,17 @@ fn scope_paths(status: &cicada_server::protocol::GitStatusResponse) -> Vec<(Stri
         .collect()
 }
 
+/// The scope with the published revert rule: `(path, status, in_head)`.
+fn scope_heads(
+    status: &cicada_server::protocol::GitStatusResponse,
+) -> Vec<(String, FileStatus, bool)> {
+    status
+        .scope
+        .iter()
+        .map(|f| (f.path.clone(), f.status, f.in_head))
+        .collect()
+}
+
 // ------------------------------------------------------- direct API --
 
 #[test]
@@ -756,6 +767,117 @@ fn revert_restores_head_bytes_for_the_scope_and_validates_paths() {
     assert_eq!(fx.read("p.cic.layout.json"), Sidecar::default().render());
 }
 
+/// `in_head` on every scope file IS the rule `revert` restores by, and it
+/// is not a function of `status`: a file added to the index and then
+/// deleted from disk (porcelain `AD`) is `deleted` — to the eye a tracked
+/// file that went missing — but HEAD never had it, so a revert cannot put
+/// it back. A client that inferred "revertable" from `deleted` listed
+/// such a file in its confirm step, named it in the request, and had the
+/// WHOLE revert refused `untracked` (found in review, reproduced live).
+/// Here: every shape without a HEAD version says `in_head: false`, a
+/// revert of the scope restores exactly the `in_head` files and reports
+/// the rest, and an explicit ask for the `AD` path is the refusal it
+/// always was — so narrowing to `in_head` is what makes the request
+/// succeed.
+#[test]
+fn in_head_is_the_revert_rule_per_scope_file_and_ad_entries_have_none() {
+    if !git_available() {
+        return;
+    }
+    let fx = Fixture::new(true);
+    let git = fx.git();
+    // One of each: modified (HEAD has it), a deleted tracked file (HEAD
+    // has it), untracked (no), index-added (no), index-added then
+    // deleted from disk — `AD` (no), renamed in the index (the new path:
+    // no).
+    fx.write("p.cic", &PIPELINE.replace("value=2.0", "value=3.0"));
+    std::fs::remove_file(fx.project.join("p.cic.layout.json")).unwrap();
+    fx.write("scripts/new.py", "def new():\n    return 0\n");
+    fx.write("scripts/staged.py", "def staged():\n    return 0\n");
+    sh_git(&fx.root, &["add", "examples/wall/scripts/staged.py"]);
+    fx.write("scripts/probe_ad.py", "def probe():\n    return 0\n");
+    sh_git(&fx.root, &["add", "examples/wall/scripts/probe_ad.py"]);
+    std::fs::remove_file(fx.project.join("scripts/probe_ad.py")).unwrap();
+    sh_git(
+        &fx.root,
+        &[
+            "mv",
+            "examples/wall/scripts/helper.py",
+            "examples/wall/scripts/moved.py",
+        ],
+    );
+    assert!(
+        sh_git(
+            &fx.root,
+            &[
+                "status",
+                "--porcelain",
+                "--",
+                "examples/wall/scripts/probe_ad.py"
+            ]
+        )
+        .starts_with("AD "),
+        "the fixture is the porcelain `AD` shape"
+    );
+
+    let status = git.status(&scope()).unwrap();
+    assert_eq!(
+        scope_heads(&status),
+        vec![
+            ("p.cic".to_owned(), FileStatus::Modified, true),
+            ("p.cic.layout.json".to_owned(), FileStatus::Deleted, true),
+            ("scripts/moved.py".to_owned(), FileStatus::Renamed, false),
+            ("scripts/new.py".to_owned(), FileStatus::Untracked, false),
+            ("scripts/probe_ad.py".to_owned(), FileStatus::Deleted, false),
+            ("scripts/staged.py".to_owned(), FileStatus::Added, false),
+        ],
+        "two `deleted` files, one with a HEAD version and one without"
+    );
+
+    // An explicit ask that includes the `AD` path: refused, nothing moves.
+    let refused = git
+        .revert(
+            &scope(),
+            Some(&["p.cic".to_owned(), "scripts/probe_ad.py".to_owned()]),
+        )
+        .unwrap_err();
+    assert!(matches!(refused, GitRefusal::Untracked(ref p) if p == "scripts/probe_ad.py"));
+    assert!(fx.read("p.cic").contains("value=3.0"), "nothing reverted");
+
+    // The ask a client builds from `in_head`: exactly the restorable set.
+    let wanted: Vec<String> = status
+        .scope
+        .iter()
+        .filter(|f| f.in_head)
+        .map(|f| f.path.clone())
+        .collect();
+    assert_eq!(wanted, ["p.cic", "p.cic.layout.json"]);
+    let done = git.revert(&scope(), Some(&wanted)).unwrap();
+    assert_eq!(done.reverted, wanted);
+    assert!(
+        done.untracked.is_empty(),
+        "nothing outside the ask is reported"
+    );
+    assert_eq!(fx.read("p.cic"), fx.head_text("examples/wall/p.cic"));
+    assert_eq!(fx.read("p.cic.layout.json"), Sidecar::default().render());
+    // The files without a HEAD version were left exactly as they were.
+    assert!(fx.project.join("scripts/new.py").is_file());
+    assert!(fx.project.join("scripts/staged.py").is_file());
+    assert!(fx.project.join("scripts/moved.py").is_file());
+    assert!(!fx.project.join("scripts/probe_ad.py").exists());
+    assert!(!fx.project.join("scripts/helper.py").exists());
+
+    // The unnarrowed revert over what is left: nothing restorable — and
+    // the `AD` file is among the reported, not a refusal by itself.
+    assert!(matches!(
+        git.revert(&scope(), None),
+        Err(GitRefusal::NothingToRevert)
+    ));
+    let status = git.status(&scope()).unwrap();
+    assert!(status.scope.iter().all(|f| !f.in_head));
+    assert_eq!(status.scope.len(), 4);
+}
+
 #[test]
 fn index_lock_is_the_locked_state_and_refuses_writes() {
     if !git_available() {
@@ -1044,7 +1166,8 @@ fn unborn_repo_is_all_added_and_the_first_commit_works() {
         status.scope[0],
         cicada_server::protocol::ScopeFile {
             path: "p.cic".into(),
-            status: FileStatus::Added
+            status: FileStatus::Added,
+            in_head: false,
         }
     );
     let committed = git.commit(&scope(), "first\n").unwrap();
@@ -1353,7 +1476,8 @@ async fn git_routes_over_a_served_project_under_the_watcher() {
     );
     assert_eq!(
         body["scope"],
-        serde_json::json!([{"path": "p.cic", "status": "modified"}])
+        serde_json::json!([{"path": "p.cic", "status": "modified", "in_head": true}]),
+        "the wire shape carries the revert rule per file"
     );
     let delta_text = delta["payload"]["text"].as_str().unwrap();
     assert_eq!(

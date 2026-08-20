@@ -431,6 +431,16 @@ pub struct ScopeFile {
     pub path: String,
     /// Its status.
     pub status: FileStatus,
+    /// HEAD has a version of this path, so `revert` can put it back — THE
+    /// server's rule (`git.rs` `Entry::in_head`: tracked, not an index
+    /// addition, not the new side of a rename, and not on an unborn
+    /// branch), published so that no client re-derives it from `status`.
+    /// The two do not line up: porcelain `AD` (added to the index, then
+    /// deleted from disk) is `deleted` with NO HEAD version; an unmerged
+    /// `AA` is `modified` with none. `false` → a revert leaves the file
+    /// alone (it never deletes) and an explicit ask for it is refused
+    /// `untracked`.
+    pub in_head: bool,
 }
 
 /// The pipeline file's git view: markers per node.

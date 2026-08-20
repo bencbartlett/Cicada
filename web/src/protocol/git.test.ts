@@ -28,7 +28,7 @@ const STATUS: GitStatusResponse = {
     unborn: false,
   },
   pipeline: { path: "p.cic", tracked: true, ignored: false, dirty: true, nodes: [{ name: "size", change: "modified" }], removed: [] },
-  scope: [{ path: "p.cic", status: "modified" }],
+  scope: [{ path: "p.cic", status: "modified", in_head: true }],
   text_hash: "ff".repeat(32),
 };
 
