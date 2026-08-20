@@ -25,15 +25,46 @@ one `.cic` snippet per node, solved by CI).
 
 ## Maths & logic
 
+- `absolute(x: Number) → Number` — Absolute · GH: Absolute — the magnitude `|x|`.
+- `acos(x: Number) → Number` — Arccosine · GH: ArcCosine — `arccos x`, an angle in radians. Red when: `|x| > 1` — the function is undefined there (loud refusal, never a silent NaN).
 - `add(a: Number, b: Number) → Number` — Add · GH: Addition — sum of two numbers.
+- `and(a: Boolean, b: Boolean) → Boolean` — And · GH: Gate And — true when both operands are true.
+- `asin(x: Number) → Number` — Arcsine · GH: ArcSine — `arcsin x`, an angle in radians. Red when: `|x| > 1` — the function is undefined there (loud refusal, never a silent NaN).
+- `atan(x: Number) → Number` — Arctangent · GH: ArcTangent — `arctan x`, an angle in radians.
+- `atan2(y: Number, x: Number) → Number` — Arctangent 2 — the angle of the vector `(x, y)` from the +x axis, in `(-π, π]`: the quadrant-aware arctangent of `y / x` (the Grasshopper expression `atan2`; there is no component).
+- `average(list: [Number]) → Number` — Average · GH: Average — the arithmetic mean of a list of numbers (summed left to right, then divided by the count). Red when: the list is empty — the mean of nothing is undefined (loud refusal, never a silent zero or NaN).
+- `bounds(list: [Number]) → Domain` — Bounds · GH: Bounds — the domain spanned by a list of numbers, from its smallest to its largest. Red when: the list is empty — nothing has no bounds (loud refusal).
+- `ceiling(x: Number) → Number` — Ceiling · GH: Ceiling — the smallest integer value not below `x` (`2.2` → `3`, `-2.7` → `-2`).
 - `construct_domain(start: Number, end: Number) → Domain` — Construct Domain · GH: Construct Domain — a numeric interval from its endpoints.
+- `cos(x: Number) → Number` — Cosine · GH: Cosine — `cos x` for an angle in radians.
 - `deconstruct_domain(domain: Domain) → (start: Number, end: Number)` — Deconstruct Domain · GH: Deconstruct Domain — the endpoints of an interval.
+- `degrees(radians: Number) → Number` — Degrees · GH: Degrees — convert an angle from radians to degrees (`× 180/π`).
 - `divide(a: Number, b: Number) → Number` — Divide · GH: Division — quotient of two numbers (IEEE: dividing by zero yields ±∞).
+- `equals(a: Number, b: Number, tolerance: Number = 0.0) → Boolean` — Equals · GH: Equality — true when two numbers are equal within a tolerance (`|a - b| <= tolerance`; exact by default). Red when: `tolerance` is negative — nothing is within a negative distance.
+- `exp(x: Number) → Number` — Exponential — `e^x` (`power(a=e, b=x)` with the dedicated, more accurate libm routine; the inverse of `ln`).
+- `floor(x: Number) → Number` — Floor · GH: Floor — the largest integer value not above `x` (`2.7` → `2`, `-2.2` → `-3`).
+- `larger(a: Number, b: Number) → Boolean` — Larger Than · GH: Larger Than — true when `a` is strictly above `b` (`not` of the other comparison, or `equals`, gives the non-strict forms).
+- `ln(x: Number) → Number` — Natural Logarithm · GH: Natural logarithm — `ln x`, the logarithm to base e. Red when: `x` is negative — the real logarithm is undefined there (loud refusal, never a silent NaN).
+- `log(x: Number, base: Number = 10.0) → Number` — Logarithm · GH: Logarithm — `log_base x`, base 10 by default (`ln` for base e). Bases 10 and 2 use the dedicated libm routines (so `log(1000)` is `3`, not `2.9999…`); any other base is `ln x / ln base`. Red when: `x` is negative, or when `base` is not positive or is `1` — the logarithm is undefined there (loud refusal, never a silent NaN).
+- `mass_addition(list: [Number]) → (result: Number, partial: [Number])` — Mass Addition · GH: Mass Addition — the sum of a list of numbers and its running sums, accumulated left to right (the order is part of the contract — floating sums depend on it).
+- `max(a: Number, b: Number) → Number` — Maximum · GH: Maximum — the larger of two numbers.
+- `min(a: Number, b: Number) → Number` — Minimum · GH: Minimum — the smaller of two numbers.
 - `modulo(a: Number, b: Number) → Number` — Modulo · GH: Modulus — IEEE remainder of `a / b` (sign follows `a`). Red when: `a % 0` is NaN, which value construction refuses — the node goes red.
 - `multiply(a: Number, b: Number) → Number` — Multiply · GH: Multiplication — product of two numbers.
+- `negative(x: Number) → Number` — Negative · GH: Negative — the negation `-x`.
+- `not(x: Boolean) → Boolean` — Not · GH: Gate Not — the boolean negation.
+- `or(a: Boolean, b: Boolean) → Boolean` — Or · GH: Gate Or — true when either operand is true.
+- `pick(pattern: Boolean, true: E, false: E) → E` — Pick · GH: Pick'n'Choose — the per-element `if`: `true` when the pattern holds, `false` otherwise (lift with `each()` to choose per element; both branches are solved — selection is data, not control flow).
 - `power(a: Number, b: Number) → Number` — Power · GH: Power — `a` raised to `b` (`^` in expressions).
+- `radians(degrees: Number) → Number` — Radians · GH: Radians — convert an angle from degrees to radians (`× π/180`).
 - `remap(value: Number, source: Domain, target: Domain) → Number` — Remap · GH: Remap Numbers — map a value linearly from a source domain to a target domain. Values outside the source domain extrapolate linearly (no clamping). Red when: the source domain is empty (`start == end`) — the map is undefined there.
+- `round(x: Number) → Number` — Round · GH: Round — the nearest integer value, ties away from zero (`2.5` → `3`, `-2.5` → `-3`; Grasshopper's Round uses .NET's ties-to-even — the schoolbook rule is the one users expect, and it is stated here).
+- `sin(x: Number) → Number` — Sine · GH: Sine — `sin x` for an angle in radians.
+- `smaller(a: Number, b: Number) → Boolean` — Smaller Than · GH: Smaller Than — true when `a` is strictly below `b` (`not` of the other comparison, or `equals`, gives the non-strict forms).
+- `sqrt(x: Number) → Number` — Square Root · GH: Square Root — the non-negative square root of `x` (IEEE: correctly rounded, so results are identical on every platform). Red when: `x` is negative — the real square root is undefined there (loud refusal, never a silent NaN).
 - `subtract(a: Number, b: Number) → Number` — Subtract · GH: Subtraction — difference of two numbers.
+- `tan(x: Number) → Number` — Tangent · GH: Tangent — `tan x` for an angle in radians.
+- `xor(a: Boolean, b: Boolean) → Boolean` — Xor · GH: Gate Xor — true when exactly one operand is true.
 
 ## List & axis
 

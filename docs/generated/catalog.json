@@ -227,6 +227,75 @@
       ]
     },
     {
+      "name": "absolute",
+      "title": "Absolute",
+      "description": "the magnitude `|x|`.",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Absolute",
+      "examples": [
+        "magnitude = absolute(x=-2.5)"
+      ],
+      "inputs": [
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`|x|`, never negative."
+        }
+      ]
+    },
+    {
+      "name": "acos",
+      "title": "Arccosine",
+      "description": "`arccos x`, an angle in radians.",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "`|x| > 1` — the function is undefined there (loud refusal, never a silent NaN).",
+      "gh": "ArcCosine",
+      "examples": [
+        "angle = acos(x=0.5)"
+      ],
+      "inputs": [
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`arccos x` in radians."
+        }
+      ]
+    },
+    {
       "name": "add",
       "title": "Add",
       "description": "sum of two numbers.",
@@ -265,6 +334,263 @@
           "list_depth": 0,
           "optional": false,
           "doc": "The sum `a + b`."
+        }
+      ]
+    },
+    {
+      "name": "and",
+      "title": "And",
+      "description": "true when both operands are true.",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Gate And",
+      "examples": [
+        "both = and(a=True, b=False)"
+      ],
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Left operand."
+        },
+        {
+          "name": "b",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Right operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`a && b`."
+        }
+      ]
+    },
+    {
+      "name": "asin",
+      "title": "Arcsine",
+      "description": "`arcsin x`, an angle in radians.",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "`|x| > 1` — the function is undefined there (loud refusal, never a silent NaN).",
+      "gh": "ArcSine",
+      "examples": [
+        "angle = asin(x=0.5)"
+      ],
+      "inputs": [
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`arcsin x` in radians."
+        }
+      ]
+    },
+    {
+      "name": "atan",
+      "title": "Arctangent",
+      "description": "`arctan x`, an angle in radians.",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "ArcTangent",
+      "examples": [
+        "angle = atan(x=0.5)"
+      ],
+      "inputs": [
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`arctan x` in radians."
+        }
+      ]
+    },
+    {
+      "name": "atan2",
+      "title": "Arctangent 2",
+      "description": "the angle of the vector `(x, y)` from the +x axis, in `(-π, π]`: the quadrant-aware arctangent of `y / x` (the Grasshopper expression `atan2`; there is no component).",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": null,
+      "examples": [
+        "heading = atan2(y=1.0, x=1.0)"
+      ],
+      "inputs": [
+        {
+          "name": "y",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The y coordinate (the opposite side)."
+        },
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The x coordinate (the adjacent side)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The angle in radians, `(-π, π]`."
+        }
+      ]
+    },
+    {
+      "name": "average",
+      "title": "Average",
+      "description": "the arithmetic mean of a list of numbers (summed left to right, then divided by the count).",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "the list is empty — the mean of nothing is undefined (loud refusal, never a silent zero or NaN).",
+      "gh": "Average",
+      "examples": [
+        "xs = [1.0, 2.0, 3.0, 6.0]\nmean = average(list=xs)"
+      ],
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[Number]",
+          "base": "Number",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The numbers to reduce."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The mean."
+        }
+      ]
+    },
+    {
+      "name": "bounds",
+      "title": "Bounds",
+      "description": "the domain spanned by a list of numbers, from its smallest to its largest.",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "the list is empty — nothing has no bounds (loud refusal).",
+      "gh": "Bounds",
+      "examples": [
+        "xs = [3.0, -1.0, 2.5]\nspan = bounds(list=xs)"
+      ],
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[Number]",
+          "base": "Number",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The numbers to reduce."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Domain",
+          "base": "Domain",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The domain `min..max` (a singleton list gives an empty domain `x..x`)."
+        }
+      ]
+    },
+    {
+      "name": "ceiling",
+      "title": "Ceiling",
+      "description": "the smallest integer value not below `x` (`2.2` → `3`, `-2.7` → `-2`).",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Ceiling",
+      "examples": [
+        "whole = ceiling(x=2.2)"
+      ],
+      "inputs": [
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`⌈x⌉` as a Number."
         }
       ]
     },
@@ -311,6 +637,41 @@
       ]
     },
     {
+      "name": "cos",
+      "title": "Cosine",
+      "description": "`cos x` for an angle in radians.",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Cosine",
+      "examples": [
+        "value = cos(x=0.5)"
+      ],
+      "inputs": [
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The angle, in radians.",
+          "dimension": "angle"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`cos x`."
+        }
+      ]
+    },
+    {
       "name": "deconstruct_domain",
       "title": "Deconstruct Domain",
       "description": "the endpoints of an interval.",
@@ -353,6 +714,41 @@
       ]
     },
     {
+      "name": "degrees",
+      "title": "Degrees",
+      "description": "convert an angle from radians to degrees (`× 180/π`).",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Degrees",
+      "examples": [
+        "readable = degrees(radians=1.5707963267948966)"
+      ],
+      "inputs": [
+        {
+          "name": "radians",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The angle in radians.",
+          "dimension": "angle"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The angle in degrees."
+        }
+      ]
+    },
+    {
       "name": "divide",
       "title": "Divide",
       "description": "quotient of two numbers (IEEE: dividing by zero yields ±∞).",
@@ -391,6 +787,373 @@
           "list_depth": 0,
           "optional": false,
           "doc": "The quotient `a / b` (±∞ when `b` is zero)."
+        }
+      ]
+    },
+    {
+      "name": "equals",
+      "title": "Equals",
+      "description": "true when two numbers are equal within a tolerance (`|a - b| <= tolerance`; exact by default).",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "`tolerance` is negative — nothing is within a negative distance.",
+      "gh": "Equality",
+      "examples": [
+        "same = equals(a=0.1, b=0.1)\nclose = equals(a=0.1, b=0.1000001, tolerance=0.001)"
+      ],
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Left operand."
+        },
+        {
+          "name": "b",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Right operand."
+        },
+        {
+          "name": "tolerance",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "0.0",
+          "doc": "How far apart `a` and `b` may be and still count as equal (`0.0` is"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`true` when `a` and `b` are within `tolerance` of each other."
+        }
+      ]
+    },
+    {
+      "name": "exp",
+      "title": "Exponential",
+      "description": "`e^x` (`power(a=e, b=x)` with the dedicated, more accurate libm routine; the inverse of `ln`).",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": null,
+      "examples": [
+        "growth = exp(x=2.0)"
+      ],
+      "inputs": [
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`e^x`, always positive (`+∞` on overflow, as IEEE defines it)."
+        }
+      ]
+    },
+    {
+      "name": "floor",
+      "title": "Floor",
+      "description": "the largest integer value not above `x` (`2.7` → `2`, `-2.2` → `-3`).",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Floor",
+      "examples": [
+        "whole = floor(x=2.7)"
+      ],
+      "inputs": [
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`⌊x⌋` as a Number."
+        }
+      ]
+    },
+    {
+      "name": "larger",
+      "title": "Larger Than",
+      "description": "true when `a` is strictly above `b` (`not` of the other comparison, or `equals`, gives the non-strict forms).",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Larger Than",
+      "examples": [
+        "flag = larger(a=1.5, b=2.5)"
+      ],
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Left operand."
+        },
+        {
+          "name": "b",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Right operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`a > b`."
+        }
+      ]
+    },
+    {
+      "name": "ln",
+      "title": "Natural Logarithm",
+      "description": "`ln x`, the logarithm to base e.",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "`x` is negative — the real logarithm is undefined there (loud refusal, never a silent NaN).",
+      "gh": "Natural logarithm",
+      "examples": [
+        "decades = ln(x=100.0)"
+      ],
+      "inputs": [
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`ln x` (`ln 0` is −∞, as IEEE defines it)."
+        }
+      ]
+    },
+    {
+      "name": "log",
+      "title": "Logarithm",
+      "description": "`log_base x`, base 10 by default (`ln` for base e). Bases 10 and 2 use the dedicated libm routines (so `log(1000)` is `3`, not `2.9999…`); any other base is `ln x / ln base`.",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "`x` is negative, or when `base` is not positive or is `1` — the logarithm is undefined there (loud refusal, never a silent NaN).",
+      "gh": "Logarithm",
+      "examples": [
+        "decades = log(x=1000.0)\noctaves = log(x=8.0, base=2.0)"
+      ],
+      "inputs": [
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The operand."
+        },
+        {
+          "name": "base",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "10.0",
+          "doc": "The logarithm base."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`log_base x` (`log 0` is −∞, as IEEE defines it)."
+        }
+      ]
+    },
+    {
+      "name": "mass_addition",
+      "title": "Mass Addition",
+      "description": "the sum of a list of numbers and its running sums, accumulated left to right (the order is part of the contract — floating sums depend on it).",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Mass Addition",
+      "examples": [
+        "xs = [0.5, 0.25, 0.125]\ntotal, running = mass_addition(list=xs)"
+      ],
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[Number]",
+          "base": "Number",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The numbers to reduce."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "result",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The sum of the list (`0.0` for an empty list)."
+        },
+        {
+          "name": "partial",
+          "type": "[Number]",
+          "base": "Number",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The running sums: `partial[i]` is the sum of the first `i + 1`"
+        }
+      ]
+    },
+    {
+      "name": "max",
+      "title": "Maximum",
+      "description": "the larger of two numbers.",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Maximum",
+      "examples": [
+        "pick = max(a=1.5, b=2.5)"
+      ],
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Left operand."
+        },
+        {
+          "name": "b",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Right operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Whichever of `a` and `b` is larger (either when equal)."
+        }
+      ]
+    },
+    {
+      "name": "min",
+      "title": "Minimum",
+      "description": "the smaller of two numbers.",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Minimum",
+      "examples": [
+        "pick = min(a=1.5, b=2.5)"
+      ],
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Left operand."
+        },
+        {
+          "name": "b",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Right operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Whichever of `a` and `b` is smaller (either when equal)."
         }
       ]
     },
@@ -480,6 +1243,166 @@
       ]
     },
     {
+      "name": "negative",
+      "title": "Negative",
+      "description": "the negation `-x`.",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Negative",
+      "examples": [
+        "flipped = negative(x=2.5)"
+      ],
+      "inputs": [
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`-x`."
+        }
+      ]
+    },
+    {
+      "name": "not",
+      "title": "Not",
+      "description": "the boolean negation.",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Gate Not",
+      "examples": [
+        "inverted = not(x=True)"
+      ],
+      "inputs": [
+        {
+          "name": "x",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`true` when `x` is false, and vice versa."
+        }
+      ]
+    },
+    {
+      "name": "or",
+      "title": "Or",
+      "description": "true when either operand is true.",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Gate Or",
+      "examples": [
+        "both = or(a=True, b=False)"
+      ],
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Left operand."
+        },
+        {
+          "name": "b",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Right operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`a || b`."
+        }
+      ]
+    },
+    {
+      "name": "pick",
+      "title": "Pick",
+      "description": "the per-element `if`: `true` when the pattern holds, `false` otherwise (lift with `each()` to choose per element; both branches are solved — selection is data, not control flow).",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Pick'n'Choose",
+      "examples": [
+        "tall = toggle(value=True)\nheight = pick(pattern=tall, true=3.0, false=1.0)"
+      ],
+      "inputs": [
+        {
+          "name": "pattern",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Which branch to take."
+        },
+        {
+          "name": "true",
+          "type": "E",
+          "base": "E",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The value when the pattern is true (any kind; both branches bind one"
+        },
+        {
+          "name": "false",
+          "type": "E",
+          "base": "E",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The value when the pattern is false."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "E",
+          "base": "E",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The chosen branch's value (absent when that branch is absent — `E` carries the `?`)."
+        }
+      ]
+    },
+    {
       "name": "power",
       "title": "Power",
       "description": "`a` raised to `b` (`^` in expressions).",
@@ -518,6 +1441,40 @@
           "list_depth": 0,
           "optional": false,
           "doc": "`a` raised to the power `b`."
+        }
+      ]
+    },
+    {
+      "name": "radians",
+      "title": "Radians",
+      "description": "convert an angle from degrees to radians (`× π/180`).",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Radians",
+      "examples": [
+        "quarter_turn = radians(degrees=90.0)"
+      ],
+      "inputs": [
+        {
+          "name": "degrees",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The angle in degrees."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The angle in radians."
         }
       ]
     },
@@ -573,6 +1530,152 @@
       ]
     },
     {
+      "name": "round",
+      "title": "Round",
+      "description": "the nearest integer value, ties away from zero (`2.5` → `3`, `-2.5` → `-3`; Grasshopper's Round uses .NET's ties-to-even — the schoolbook rule is the one users expect, and it is stated here).",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Round",
+      "examples": [
+        "nearest = round(x=2.5)"
+      ],
+      "inputs": [
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The nearest integer as a Number (`floor`/`ceiling` for one-sided rounding)."
+        }
+      ]
+    },
+    {
+      "name": "sin",
+      "title": "Sine",
+      "description": "`sin x` for an angle in radians.",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Sine",
+      "examples": [
+        "value = sin(x=0.5)"
+      ],
+      "inputs": [
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The angle, in radians.",
+          "dimension": "angle"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`sin x`."
+        }
+      ]
+    },
+    {
+      "name": "smaller",
+      "title": "Smaller Than",
+      "description": "true when `a` is strictly below `b` (`not` of the other comparison, or `equals`, gives the non-strict forms).",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Smaller Than",
+      "examples": [
+        "flag = smaller(a=1.5, b=2.5)"
+      ],
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Left operand."
+        },
+        {
+          "name": "b",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Right operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`a < b`."
+        }
+      ]
+    },
+    {
+      "name": "sqrt",
+      "title": "Square Root",
+      "description": "the non-negative square root of `x` (IEEE: correctly rounded, so results are identical on every platform).",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "`x` is negative — the real square root is undefined there (loud refusal, never a silent NaN).",
+      "gh": "Square Root",
+      "examples": [
+        "side = sqrt(x=2.25)"
+      ],
+      "inputs": [
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`√x`."
+        }
+      ]
+    },
+    {
       "name": "subtract",
       "title": "Subtract",
       "description": "difference of two numbers.",
@@ -611,6 +1714,83 @@
           "list_depth": 0,
           "optional": false,
           "doc": "The difference `a - b`."
+        }
+      ]
+    },
+    {
+      "name": "tan",
+      "title": "Tangent",
+      "description": "`tan x` for an angle in radians.",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Tangent",
+      "examples": [
+        "value = tan(x=0.5)"
+      ],
+      "inputs": [
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The angle, in radians.",
+          "dimension": "angle"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`tan x`."
+        }
+      ]
+    },
+    {
+      "name": "xor",
+      "title": "Xor",
+      "description": "true when exactly one operand is true.",
+      "category": "Maths & logic",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Gate Xor",
+      "examples": [
+        "both = xor(a=True, b=False)"
+      ],
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Left operand."
+        },
+        {
+          "name": "b",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Right operand."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`a ^ b`."
         }
       ]
     },
