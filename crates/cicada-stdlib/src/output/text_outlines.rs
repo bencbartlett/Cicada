@@ -47,10 +47,16 @@ pub struct TextOutlinesIn {
 /// Panics when the font is not bundled (the message lists the bundled
 /// names), `size` is not above tolerance, a glyph is missing from the font
 /// (names the character), `segments < 1`, or the plane is degenerate.
+///
+/// # Examples
+///
+/// ```cic
+/// glyphs = text_outlines(text="A12", size=5.0)
+/// ```
 #[node(
     category = "Output, display & export",
     tier = "S",
-    version = 1,
+    version = 1, gh = none,
     uses_tolerance
 )]
 #[must_use]

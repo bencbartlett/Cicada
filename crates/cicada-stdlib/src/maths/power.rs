@@ -5,7 +5,13 @@ use cicada_macros::node;
 use super::BinaryIn;
 
 /// Power — `a` raised to `b` (`^` in expressions).
-#[node(category = "Maths & logic", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// kilo = power(a=2.0, b=10.0)
+/// ```
+#[node(category = "Maths & logic", tier = "S", version = 1, gh = "Power")]
 #[must_use]
 pub fn power(input: BinaryIn) -> f64 {
     input.a.powf(input.b)

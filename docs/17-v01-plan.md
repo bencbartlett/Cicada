@@ -23,7 +23,7 @@ runs in parallel from day 1:
 | 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | pending |
 | 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | pending |
 | 6 | WASM script host — load precompiled guests, epoch cancellation, `cicada-guest` SDK | last | weeks | pending |
-| C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | pending |
+| C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); C1+ pending |
 
 Out of v0.1 (unchanged from doc 05): fillets/chamfers and B-rep
 maturity, the Blender bridge, fidget, the .gh importer, Tauri, the AI
@@ -230,6 +230,21 @@ format, doc 08.
   `gh =` present, `# Examples` present and solving); `gh` attribute in
   `#[node]`; `# Examples` execution in CI. **Done when** the regenerated
   catalog is byte-identical to before the move, golden hashes unchanged.
+  **Done 2026-08-20** in three commits: the catalog's within-category
+  tie-break became the dialect name (so the move could be proven
+  byte-identical and future moves never reorder the catalog), then the
+  pure move (117 top-level items byte-identical, 58 golden constants
+  unchanged, catalog byte-identical), then the format: `gh = "…" | none`
+  required by the macro (trybuild cases), `# Examples` ```` ```cic ````
+  fences extracted into `NodeSpec::examples` (bare fences refused —
+  rustdoc would doctest them), all 57 nodes named or `none`d and given a
+  runnable snippet, the conformance test
+  (`crates/cicada-stdlib/tests/conformance.rs`), the runner
+  (`crates/cicada-cli/tests/node_examples.rs` — parse, check with zero
+  diagnostics, lower, solve with a fresh cache; exporters' inputs solve,
+  the exporter itself is asserted skipped), CATALOG.md's `· GH:` tag and
+  catalog.json's `gh`/`examples` fields, the `add-stdlib-node` skill
+  rewritten for the layout.
 - **C1**: the nodes our diagnostics already cite — `compact`,
   `pad_last`/`cycle`/`truncate` policies — plus duplicate / reverse /
   sort / dispatch / group_by and the maths tail (min/max/abs/round/

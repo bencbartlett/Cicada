@@ -21,7 +21,20 @@ pub struct PartitionIn {
 /// Panics when a size is negative (the offending index and value in the
 /// message) or when the sizes do not sum to the list's slot count (both
 /// counts in the message) — never a silent short or padded last group.
-#[node(category = "List & axis", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// xs = [1.0, 2.0, 3.0, 4.0]
+/// sizes = [1, 3]
+/// groups = partition(list=xs, sizes=sizes)
+/// ```
+#[node(
+    category = "List & axis",
+    tier = "S",
+    version = 1,
+    gh = "Partition List"
+)]
 #[must_use]
 pub fn partition(input: PartitionIn) -> Vec<Vec<ElemSlot>> {
     let mut sizes = Vec::with_capacity(input.sizes.len());

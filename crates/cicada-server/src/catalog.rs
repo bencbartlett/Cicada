@@ -31,6 +31,13 @@ struct Node<'a> {
     /// goes red. Format 2.
     #[serde(skip_serializing_if = "Option::is_none")]
     panics: Option<&'a str>,
+    /// The Grasshopper component this node replaces, or null for a
+    /// Cicada-only node — always present (the attribute is required), so
+    /// a migrant's search can match GH names. Format 2, additive.
+    gh: Option<&'a str>,
+    /// Runnable `.cic` snippets (no `# cicada 1` header), solved by CI;
+    /// empty for script nodes. Format 2, additive.
+    examples: Vec<&'a str>,
     inputs: Vec<Port<'a>>,
     outputs: Vec<Port<'a>>,
 }
@@ -89,6 +96,8 @@ fn build<'a>(specs: &[&'a NodeSpec]) -> Catalog<'a> {
                 pure: spec.pure,
                 uses_tolerance: spec.uses_tolerance,
                 panics: spec.panics,
+                gh: spec.gh,
+                examples: spec.examples.to_vec(),
                 inputs: spec.inputs.iter().map(port).collect(),
                 outputs: spec.outputs.iter().map(port).collect(),
             })
@@ -135,6 +144,17 @@ mod tests {
             slider["panics"].is_string(),
             "format 2 carries the contract"
         );
+        assert_eq!(
+            slider["gh"], "Number Slider",
+            "format 2 carries the GH name"
+        );
+        assert!(
+            slider["examples"].as_array().is_some_and(|e| !e.is_empty()),
+            "format 2 carries the runnable examples"
+        );
+        // A Cicada-only node says so explicitly: null, never absent.
+        let as_closed = nodes.iter().find(|n| n["name"] == "as_closed").unwrap();
+        assert!(as_closed["gh"].is_null() && as_closed.get("gh").is_some());
         assert!(render_json(specs).unwrap().ends_with('\n'));
     }
 }

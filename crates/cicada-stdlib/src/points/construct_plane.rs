@@ -30,10 +30,20 @@ pub struct ConstructPlaneIn {
 /// Panics when `x` has no length at tolerance, or `y` is parallel to `x`
 /// at tolerance (its component off the x line has no length) — red with
 /// the measured length, never a NaN frame.
+///
+/// # Examples
+///
+/// ```cic
+/// at = construct_point(x=1.0, y=2.0, z=3.0)
+/// along = unit_x(factor=3.0)
+/// up = unit_z(factor=2.0)
+/// frame = construct_plane(origin=at, x=along, y=up)
+/// ```
 #[node(
     category = "Point · Vector · Plane",
     tier = "S",
     version = 1,
+    gh = "Construct Plane",
     uses_tolerance
 )]
 #[must_use]

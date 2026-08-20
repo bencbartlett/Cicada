@@ -33,7 +33,15 @@ pub struct CullOut {
 /// Panics when the pattern's length differs from the list's slot count —
 /// strict zip, both counts in the message (GH's repeating Cull Pattern is
 /// the silent-mismatch behavior docs/09 retires).
-#[node(category = "List & axis", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// xs = [10.0, 20.0, 30.0, 40.0]
+/// keep = [True, False, True, True]
+/// kept, sources = cull(list=xs, pattern=keep)
+/// ```
+#[node(category = "List & axis", tier = "S", version = 1, gh = "Cull Pattern")]
 #[must_use]
 pub fn cull(input: CullIn) -> CullOut {
     assert!(

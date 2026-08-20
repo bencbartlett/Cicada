@@ -16,7 +16,20 @@ pub struct TextTagIn {
 }
 
 /// Text Tag — a display-only text label at a plane.
-#[node(category = "Output, display & export", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// at = construct_point(x=0.0, y=0.0, z=5.0)
+/// frame = xy_plane(origin=at)
+/// label = text_tag(location=frame, text="part C12", size=2.0)
+/// ```
+#[node(
+    category = "Output, display & export",
+    tier = "S",
+    version = 1,
+    gh = "Text Tag 3D"
+)]
 pub fn text_tag(input: TextTagIn) {
     let _ = input; // pure sink; the viewer draws at stage 5
 }

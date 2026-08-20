@@ -28,7 +28,19 @@ pub struct SphereIn {
 ///
 /// Panics when the radius is not above tolerance, `segments < 3`, or the
 /// plane is degenerate.
-#[node(category = "Surface & solid", tier = "S", version = 1, uses_tolerance)]
+///
+/// # Examples
+///
+/// ```cic
+/// ball = sphere(radius=1.5, segments=24)
+/// ```
+#[node(
+    category = "Surface & solid",
+    tier = "S",
+    version = 1,
+    gh = "Sphere",
+    uses_tolerance
+)]
 #[must_use]
 pub fn sphere(config: &ProjectConfig, input: SphereIn) -> Watertight<Mesh> {
     Watertight(red(cicada_geom::meshbuild::sphere_mesh(

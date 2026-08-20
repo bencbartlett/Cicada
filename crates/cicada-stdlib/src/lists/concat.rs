@@ -14,7 +14,15 @@ pub struct ConcatIn {
 
 /// Concat — `a` then `b`, one list (GH Merge for two lists). Slot-preserving:
 /// absent slots of either input keep their places in the output.
-#[node(category = "List & axis", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// head = [1.0, 2.0]
+/// tail = [3.0]
+/// joined = concat(a=head, b=tail)
+/// ```
+#[node(category = "List & axis", tier = "S", version = 1, gh = "Merge")]
 #[must_use]
 pub fn concat(input: ConcatIn) -> Vec<ElemSlot> {
     let mut out = input.a;

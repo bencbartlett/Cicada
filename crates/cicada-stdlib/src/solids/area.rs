@@ -40,7 +40,20 @@ pub struct AreaOut {
 /// distinct vertices, a zero radius or empty extent, or an enclosed area
 /// within tolerance² of zero — collinear vertices), non-planar within
 /// tolerance, or its frame is degenerate.
-#[node(category = "Surface & solid", tier = "S", version = 1, uses_tolerance)]
+///
+/// # Examples
+///
+/// ```cic
+/// ring = circle(radius=2.0)
+/// measure, centroid = area(curve=ring)
+/// ```
+#[node(
+    category = "Surface & solid",
+    tier = "S",
+    version = 1,
+    gh = "Area",
+    uses_tolerance
+)]
 #[must_use]
 pub fn area(config: &ProjectConfig, input: AreaIn) -> AreaOut {
     let tol = config.tol();

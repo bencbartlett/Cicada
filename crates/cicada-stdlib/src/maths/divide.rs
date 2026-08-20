@@ -5,7 +5,13 @@ use cicada_macros::node;
 use super::BinaryIn;
 
 /// Divide — quotient of two numbers (IEEE: dividing by zero yields ±∞).
-#[node(category = "Maths & logic", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// ratio = divide(a=7.0, b=2.0)
+/// ```
+#[node(category = "Maths & logic", tier = "S", version = 1, gh = "Division")]
 #[must_use]
 pub fn divide(input: BinaryIn) -> f64 {
     input.a / input.b

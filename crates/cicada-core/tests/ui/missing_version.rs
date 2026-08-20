@@ -7,7 +7,7 @@ pub struct In {
 }
 
 /// Bad — no semantic version declared.
-#[node(category = "Maths & logic", tier = "S")]
+#[node(category = "Maths & logic", tier = "S", gh = none)]
 pub fn bad(input: In) -> f64 {
     input.x
 }

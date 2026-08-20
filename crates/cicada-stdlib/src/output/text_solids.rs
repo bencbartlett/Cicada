@@ -54,10 +54,16 @@ pub struct TextSolidsIn {
 /// a glyph's contours cannot be triangulated into a watertight prism
 /// (touching or self-intersecting outlines — a font defect, named by
 /// character).
+///
+/// # Examples
+///
+/// ```cic
+/// labels = text_solids(text="A12", size=5.0, depth=2.0)
+/// ```
 #[node(
     category = "Output, display & export",
     tier = "S",
-    version = 1,
+    version = 1, gh = none,
     uses_tolerance
 )]
 #[must_use]

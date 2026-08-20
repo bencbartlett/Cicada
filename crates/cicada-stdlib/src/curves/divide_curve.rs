@@ -36,7 +36,20 @@ pub struct DivideCurveOut {
 ///
 /// Panics when `count < 1` or the curve is degenerate at tolerance (no
 /// usable length, zero radius, collapsed frame).
-#[node(category = "Curve", tier = "S", version = 1, uses_tolerance)]
+///
+/// # Examples
+///
+/// ```cic
+/// ring = circle(radius=2.0)
+/// points, tangents, params = divide_curve(curve=ring, count=12)
+/// ```
+#[node(
+    category = "Curve",
+    tier = "S",
+    version = 1,
+    gh = "Divide Curve",
+    uses_tolerance
+)]
 #[must_use]
 pub fn divide_curve(config: &ProjectConfig, input: DivideCurveIn) -> DivideCurveOut {
     let divided = red(cicada_geom::curve::divide(

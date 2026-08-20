@@ -124,6 +124,17 @@ pub struct NodeSpec {
     /// Carried into both catalog renderings so agents read contracts from
     /// the catalog, never by grepping crates (doc 14).
     pub panics: Option<&'static str>,
+    /// The Grasshopper component this node replaces (`#[node(gh = "Move")]`),
+    /// or `None` for a Cicada-only node (`gh = none`). Feeds search-to-place
+    /// for GH migrants and the docs (DECISIONS.md stdlib row, 2026-08-19).
+    /// The attribute is REQUIRED — `None` is always an explicit `none`.
+    pub gh: Option<&'static str>,
+    /// Runnable `.cic` snippets from the rustdoc `# Examples` section: the
+    /// contents of each ```` ```cic ```` fence, lines joined by newlines,
+    /// without the `# cicada 1` header (the runner adds it). CI solves every one
+    /// (doc 14 §Documentation pipeline); the conformance test requires at
+    /// least one per stdlib node.
+    pub examples: &'static [&'static str],
     /// Input ports in declaration order. A port with a default is optional.
     pub inputs: &'static [PortSpec],
     /// Output ports in declaration order. Single-output nodes use one port
@@ -470,6 +481,8 @@ mod tests {
             pure: true,
             uses_tolerance: false,
             panics: None,
+            gh: Some("Divide Curve"),
+            examples: &[],
             inputs: DIVIDE_IN,
             outputs: DIVIDE_OUT,
             module: "test",

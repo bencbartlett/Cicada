@@ -26,7 +26,19 @@ pub struct CircleIn {
 ///
 /// Panics when the radius is not above tolerance or the plane's axes are
 /// degenerate (zero-length or parallel).
-#[node(category = "Curve", tier = "S", version = 1, uses_tolerance)]
+///
+/// # Examples
+///
+/// ```cic
+/// ring = circle(radius=2.5)
+/// ```
+#[node(
+    category = "Curve",
+    tier = "S",
+    version = 1,
+    gh = "Circle",
+    uses_tolerance
+)]
 #[must_use]
 pub fn circle(config: &ProjectConfig, input: CircleIn) -> Closed<Curve> {
     assert!(

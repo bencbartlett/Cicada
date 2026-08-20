@@ -9,7 +9,13 @@ use super::BinaryIn;
 /// # Panics
 ///
 /// `a % 0` is NaN, which value construction refuses — the node goes red.
-#[node(category = "Maths & logic", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// remainder = modulo(a=7.5, b=2.0)
+/// ```
+#[node(category = "Maths & logic", tier = "S", version = 1, gh = "Modulus")]
 #[must_use]
 pub fn modulo(input: BinaryIn) -> f64 {
     input.a % input.b

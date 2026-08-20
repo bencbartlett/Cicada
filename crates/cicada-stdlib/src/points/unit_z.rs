@@ -6,7 +6,18 @@ use cicada_macros::node;
 use super::UnitIn;
 
 /// Unit Z — the world z direction, scaled.
-#[node(category = "Point · Vector · Plane", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// up = unit_z(factor=3.0)
+/// ```
+#[node(
+    category = "Point · Vector · Plane",
+    tier = "S",
+    version = 1,
+    gh = "Unit Z"
+)]
 #[must_use]
 pub fn unit_z(input: UnitIn) -> Vector {
     Vector::new(0.0, 0.0, input.factor)

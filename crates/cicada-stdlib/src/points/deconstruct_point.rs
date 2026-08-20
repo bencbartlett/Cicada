@@ -22,7 +22,19 @@ pub struct DeconstructPointOut {
 }
 
 /// Deconstruct Point — the x/y/z coordinates of a point.
-#[node(category = "Point · Vector · Plane", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// corner = construct_point(x=1.0, y=2.0, z=0.5)
+/// x, y, z = deconstruct_point(point=corner)
+/// ```
+#[node(
+    category = "Point · Vector · Plane",
+    tier = "S",
+    version = 1,
+    gh = "Deconstruct"
+)]
 #[must_use]
 pub fn deconstruct_point(input: DeconstructPointIn) -> DeconstructPointOut {
     DeconstructPointOut {

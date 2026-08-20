@@ -16,7 +16,19 @@ pub struct CustomPreviewIn {
 
 /// Custom Preview — display a geometry with a color; the display cost
 /// shows in the profiler next to compute cost.
-#[node(category = "Output, display & export", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// ring = circle(radius=2.0)
+/// show = custom_preview(geometry=ring)
+/// ```
+#[node(
+    category = "Output, display & export",
+    tier = "S",
+    version = 1,
+    gh = "Custom Preview"
+)]
 pub fn custom_preview(input: CustomPreviewIn) {
     let _ = input; // pure sink; the viewer draws at stage 5
 }

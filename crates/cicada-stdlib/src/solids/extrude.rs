@@ -28,7 +28,21 @@ pub struct ExtrudeIn {
 /// Panics when the profile is degenerate or non-planar at tolerance, the
 /// direction lies in the profile plane, `segments < 3`, or the profile
 /// polygon is self-intersecting.
-#[node(category = "Surface & solid", tier = "S", version = 1, uses_tolerance)]
+///
+/// # Examples
+///
+/// ```cic
+/// ring = circle(radius=2.0)
+/// up = unit_z(factor=5.0)
+/// prism = extrude(profile=ring, direction=up)
+/// ```
+#[node(
+    category = "Surface & solid",
+    tier = "S",
+    version = 1,
+    gh = "Extrude",
+    uses_tolerance
+)]
 #[must_use]
 pub fn extrude(config: &ProjectConfig, input: ExtrudeIn) -> Watertight<Mesh> {
     Watertight(red(cicada_geom::meshbuild::extrude(

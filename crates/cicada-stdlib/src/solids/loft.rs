@@ -39,7 +39,23 @@ pub struct LoftIn {
 /// self-intersecting, the sections wind in opposite directions, the
 /// sections coincide or are coplanar (zero volume), `segments < 3` for an
 /// analytic section, or the result is not watertight.
-#[node(category = "Surface & solid", tier = "S", version = 1, uses_tolerance)]
+///
+/// # Examples
+///
+/// ```cic
+/// base = circle(radius=2.0)
+/// top_at = construct_point(x=0.0, y=0.0, z=4.0)
+/// top_frame = xy_plane(origin=top_at)
+/// top = circle(plane=top_frame, radius=1.0)
+/// cone = loft(start=base, end=top, segments=32)
+/// ```
+#[node(
+    category = "Surface & solid",
+    tier = "S",
+    version = 1,
+    gh = "Loft",
+    uses_tolerance
+)]
 #[must_use]
 pub fn loft(config: &ProjectConfig, input: LoftIn) -> Watertight<Mesh> {
     match cicada_geom::meshbuild::loft(&input.start.0, &input.end.0, input.segments, config.tol()) {

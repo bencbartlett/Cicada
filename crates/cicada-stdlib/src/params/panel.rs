@@ -11,7 +11,14 @@ pub struct PanelIn {
 }
 
 /// Panel — display sink; shows counts and samples on the canvas.
-#[node(category = "Params & input", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// nums = series(start=0.0, step=2.5, count=4)
+/// readout = panel(data=nums)
+/// ```
+#[node(category = "Params & input", tier = "S", version = 1, gh = "Panel")]
 pub fn panel(input: PanelIn) {
     // Pure sink: display happens at the viewer (display is an edge,
     // docs/08 rule 9); headless solves just pull the input.

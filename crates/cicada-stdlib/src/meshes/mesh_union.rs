@@ -19,7 +19,17 @@ pub struct MeshUnionIn {
 ///
 /// Panics when Manifold refuses an operand (named by index) — its
 /// ε-validity is stricter than structural watertightness in corner cases.
-#[node(category = "Mesh & field", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// span = construct_domain(start=0.0, end=2.0)
+/// block = box(x=span, y=span, z=span)
+/// shift = unit_x(factor=1.0)
+/// blocks = linear_array(geometry=block, direction=shift, count=2)
+/// fused = mesh_union(meshes=blocks)
+/// ```
+#[node(category = "Mesh & field", tier = "S", version = 1, gh = "Mesh Union")]
 #[must_use]
 pub fn mesh_union(input: MeshUnionIn) -> Watertight<Mesh> {
     let meshes: Vec<Mesh> = input.meshes.into_iter().map(|w| w.0).collect();

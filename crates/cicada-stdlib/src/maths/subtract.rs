@@ -5,7 +5,18 @@ use cicada_macros::node;
 use super::BinaryIn;
 
 /// Subtract — difference of two numbers.
-#[node(category = "Maths & logic", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// gap = subtract(a=7.5, b=2.25)
+/// ```
+#[node(
+    category = "Maths & logic",
+    tier = "S",
+    version = 1,
+    gh = "Subtraction"
+)]
 #[must_use]
 pub fn subtract(input: BinaryIn) -> f64 {
     input.a - input.b

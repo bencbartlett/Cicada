@@ -20,7 +20,23 @@ pub struct MeshIntersectionIn {
 /// # Panics
 ///
 /// Panics when Manifold refuses an operand.
-#[node(category = "Mesh & field", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// span = construct_domain(start=0.0, end=2.0)
+/// first = box(x=span, y=span, z=span)
+/// at = construct_point(x=1.0, y=1.0, z=1.0)
+/// frame = xy_plane(origin=at)
+/// second = box(plane=frame, x=span, y=span, z=span)
+/// overlap = mesh_intersection(a=first, b=second)
+/// ```
+#[node(
+    category = "Mesh & field",
+    tier = "S",
+    version = 1,
+    gh = "Mesh Intersection"
+)]
 #[must_use]
 pub fn mesh_intersection(input: MeshIntersectionIn) -> Watertight<Mesh> {
     Watertight(red(cicada_geom::boolean::intersection(

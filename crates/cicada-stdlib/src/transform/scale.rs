@@ -25,7 +25,21 @@ pub struct ScaleIn {
 ///
 /// Panics when `|factor|` is within tolerance of zero — geometry would
 /// collapse to a point.
-#[node(category = "Transform", tier = "S", version = 1, uses_tolerance)]
+///
+/// # Examples
+///
+/// ```cic
+/// ring = circle(radius=2.0)
+/// about = construct_point(x=1.0, y=0.0, z=0.0)
+/// bigger = scale(geometry=ring, center=about, factor=3.0)
+/// ```
+#[node(
+    category = "Transform",
+    tier = "S",
+    version = 1,
+    gh = "Scale",
+    uses_tolerance
+)]
 #[must_use]
 pub fn scale(config: &ProjectConfig, input: ScaleIn) -> Transformable {
     assert!(

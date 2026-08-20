@@ -22,10 +22,19 @@ pub struct Vector2PtIn {
 ///
 /// Panics when `unitize` is on and the points coincide within tolerance —
 /// a zero vector has no direction.
+///
+/// # Examples
+///
+/// ```cic
+/// tail = construct_point(x=1.0, y=1.0, z=0.0)
+/// head = construct_point(x=4.0, y=5.0, z=0.0)
+/// direction = vector_2pt(a=tail, b=head, unitize=True)
+/// ```
 #[node(
     category = "Point · Vector · Plane",
     tier = "S",
     version = 1,
+    gh = "Vector 2Pt",
     uses_tolerance
 )]
 #[must_use]

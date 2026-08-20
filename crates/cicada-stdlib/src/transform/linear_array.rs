@@ -22,7 +22,15 @@ pub struct LinearArrayIn {
 /// # Panics
 ///
 /// Panics when `count < 1`.
-#[node(category = "Transform", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// ring = circle(radius=1.0)
+/// step = unit_x(factor=3.0)
+/// row = linear_array(geometry=ring, direction=step, count=4)
+/// ```
+#[node(category = "Transform", tier = "S", version = 1, gh = "Linear Array")]
 #[must_use]
 pub fn linear_array(input: LinearArrayIn) -> Vec<Transformable> {
     assert!(

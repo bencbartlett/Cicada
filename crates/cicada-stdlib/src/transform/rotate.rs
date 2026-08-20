@@ -27,7 +27,20 @@ pub struct RotateIn {
 /// # Panics
 ///
 /// Panics when the plane is degenerate (zero-length or parallel axes).
-#[node(category = "Transform", tier = "S", version = 1, uses_tolerance)]
+///
+/// # Examples
+///
+/// ```cic
+/// ring = circle(radius=2.0)
+/// turned = rotate(geometry=ring, angle=1.5707963267948966)
+/// ```
+#[node(
+    category = "Transform",
+    tier = "S",
+    version = 1,
+    gh = "Rotate",
+    uses_tolerance
+)]
 #[must_use]
 pub fn rotate(config: &ProjectConfig, input: RotateIn) -> Transformable {
     let frame = red(orthonormal(&input.plane, config.tol()));

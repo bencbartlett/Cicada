@@ -21,7 +21,15 @@ pub struct FlattenIn {
 /// marshalling with its index: optional lists have no representation, so
 /// there is nothing slot-preserving to do with one); the node itself has no
 /// other refusal.
-#[node(category = "List & axis", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// xs = [1.0, 2.0, 3.0, 4.0, 5.0]
+/// pairs = chunk(list=xs, size=2)
+/// flat = flatten(list=pairs)
+/// ```
+#[node(category = "List & axis", tier = "S", version = 1, gh = "Flatten Tree")]
 #[must_use]
 pub fn flatten(input: FlattenIn) -> Vec<ElemSlot> {
     input.list.into_iter().flatten().collect()

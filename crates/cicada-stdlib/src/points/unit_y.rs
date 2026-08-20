@@ -6,7 +6,18 @@ use cicada_macros::node;
 use super::UnitIn;
 
 /// Unit Y — the world y direction, scaled.
-#[node(category = "Point · Vector · Plane", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// step = unit_y(factor=2.0)
+/// ```
+#[node(
+    category = "Point · Vector · Plane",
+    tier = "S",
+    version = 1,
+    gh = "Unit Y"
+)]
 #[must_use]
 pub fn unit_y(input: UnitIn) -> Vector {
     Vector::new(0.0, input.factor, 0.0)

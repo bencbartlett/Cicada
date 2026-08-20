@@ -12,7 +12,14 @@ pub struct LengthIn {
 
 /// List Length — the number of slots in a list (absent slots included —
 /// slot-preserving nulls keep their places, docs/08 rule 6).
-#[node(category = "List & axis", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// xs = [1.0, 2.0, 3.0]
+/// count = length(list=xs)
+/// ```
+#[node(category = "List & axis", tier = "S", version = 1, gh = "List Length")]
 #[must_use]
 pub fn length(input: LengthIn) -> i64 {
     #[allow(clippy::cast_possible_wrap)] // list lengths are far below i64::MAX

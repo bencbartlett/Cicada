@@ -6,7 +6,14 @@ pub struct In {
     pub x: f64,
 }
 
-/// A doc line that forgot the em-dash split.
+/// Bad — a bare fence in `# Examples`: rustdoc would compile it as a Rust
+/// doctest (and fail); the snippet must be tagged ```cic.
+///
+/// # Examples
+///
+/// ```
+/// y = bad(x=1.0)
+/// ```
 #[node(category = "Maths & logic", tier = "S", version = 1, gh = none)]
 pub fn bad(input: In) -> f64 {
     input.x

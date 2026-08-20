@@ -15,7 +15,16 @@ pub struct PolylineIn {
 }
 
 /// Polyline — a vertex chain, open or closed.
-#[node(category = "Curve", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// xs = [0.0, 4.0, 4.0, 0.0]
+/// ys = [0.0, 0.0, 3.0, 3.0]
+/// corners = construct_point(x=each(xs), y=each(ys))
+/// outline = polyline(vertices=corners, closed=True)
+/// ```
+#[node(category = "Curve", tier = "S", version = 1, gh = "PolyLine")]
 #[must_use]
 pub fn polyline(input: PolylineIn) -> Curve {
     Curve::Polyline(Polyline {

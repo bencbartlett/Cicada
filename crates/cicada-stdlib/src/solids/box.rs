@@ -29,7 +29,20 @@ pub struct BoxIn {
 ///
 /// Panics when any extent is empty at tolerance or the plane is
 /// degenerate.
-#[node(category = "Surface & solid", tier = "S", version = 1, uses_tolerance)]
+///
+/// # Examples
+///
+/// ```cic
+/// span = construct_domain(start=0.0, end=2.0)
+/// block = box(x=span, y=span, z=span)
+/// ```
+#[node(
+    category = "Surface & solid",
+    tier = "S",
+    version = 1,
+    gh = "Domain Box",
+    uses_tolerance
+)]
 #[must_use]
 pub fn box_(config: &ProjectConfig, input: BoxIn) -> Watertight<Mesh> {
     Watertight(red(cicada_geom::meshbuild::box_mesh(

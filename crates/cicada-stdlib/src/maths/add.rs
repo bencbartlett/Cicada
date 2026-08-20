@@ -12,7 +12,13 @@ pub struct AddIn {
 }
 
 /// Add — sum of two numbers.
-#[node(category = "Maths & logic", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// total = add(a=1.5, b=2.25)
+/// ```
+#[node(category = "Maths & logic", tier = "S", version = 1, gh = "Addition")]
 #[must_use]
 pub fn add(input: AddIn) -> f64 {
     input.a + input.b

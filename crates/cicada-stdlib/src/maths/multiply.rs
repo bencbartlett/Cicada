@@ -5,7 +5,18 @@ use cicada_macros::node;
 use super::BinaryIn;
 
 /// Multiply — product of two numbers.
-#[node(category = "Maths & logic", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// product = multiply(a=1.5, b=2.5)
+/// ```
+#[node(
+    category = "Maths & logic",
+    tier = "S",
+    version = 1,
+    gh = "Multiplication"
+)]
 #[must_use]
 pub fn multiply(input: BinaryIn) -> f64 {
     input.a * input.b

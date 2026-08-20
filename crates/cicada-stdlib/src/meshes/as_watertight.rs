@@ -18,7 +18,15 @@ pub struct AsWatertightIn {
 ///
 /// Panics when the mesh has open or inconsistently oriented edges — red
 /// with the count, never a silent pass (wall lesson 13).
-#[node(category = "Mesh & field", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// span = construct_domain(start=0.0, end=2.0)
+/// block = box(x=span, y=span, z=span)
+/// sealed = as_watertight(mesh=block)
+/// ```
+#[node(category = "Mesh & field", tier = "S", version = 1, gh = none)]
 #[must_use]
 pub fn as_watertight(input: AsWatertightIn) -> Watertight<Mesh> {
     assert!(

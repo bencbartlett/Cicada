@@ -21,7 +21,20 @@ pub struct RemapIn {
 ///
 /// Panics when the source domain is empty (`start == end`) — the map is
 /// undefined there.
-#[node(category = "Maths & logic", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// unit = construct_domain(start=0.0, end=1.0)
+/// percent = construct_domain(start=0.0, end=100.0)
+/// scaled = remap(value=0.25, source=unit, target=percent)
+/// ```
+#[node(
+    category = "Maths & logic",
+    tier = "S",
+    version = 1,
+    gh = "Remap Numbers"
+)]
 #[must_use]
 #[allow(clippy::float_cmp)] // exact emptiness IS the undefined case
 pub fn remap(input: RemapIn) -> f64 {

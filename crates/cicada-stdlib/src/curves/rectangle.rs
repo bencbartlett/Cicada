@@ -29,7 +29,21 @@ pub struct RectangleIn {
 ///
 /// Panics when either extent is empty at tolerance or the plane is
 /// degenerate.
-#[node(category = "Curve", tier = "S", version = 1, uses_tolerance)]
+///
+/// # Examples
+///
+/// ```cic
+/// width = construct_domain(start=0.0, end=4.0)
+/// height = construct_domain(start=0.0, end=3.0)
+/// frame_rect = rectangle(x=width, y=height)
+/// ```
+#[node(
+    category = "Curve",
+    tier = "S",
+    version = 1,
+    gh = "Rectangle",
+    uses_tolerance
+)]
 #[must_use]
 pub fn rectangle(config: &ProjectConfig, input: RectangleIn) -> Closed<Curve> {
     for (name, domain) in [("x", &input.x), ("y", &input.y)] {

@@ -23,7 +23,17 @@ pub struct AsClosedIn {
 /// Panics when the curve cannot close: a line, endpoints apart beyond
 /// tolerance, or fewer than 3 distinct vertices after closing — red with
 /// the distance that failed, never a silent pass (wall lesson 13).
-#[node(category = "Curve", tier = "S", version = 1, uses_tolerance)]
+///
+/// # Examples
+///
+/// ```cic
+/// xs = [0.0, 4.0, 0.0, 0.0]
+/// ys = [0.0, 0.0, 3.0, 0.0]
+/// corners = construct_point(x=each(xs), y=each(ys))
+/// chain = polyline(vertices=corners)
+/// ring = as_closed(curve=chain)
+/// ```
+#[node(category = "Curve", tier = "S", version = 1, gh = none, uses_tolerance)]
 #[must_use]
 pub fn as_closed(config: &ProjectConfig, input: AsClosedIn) -> Closed<Curve> {
     Closed(red(cicada_geom::curve::close_curve(

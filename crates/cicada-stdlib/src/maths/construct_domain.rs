@@ -13,7 +13,18 @@ pub struct ConstructDomainIn {
 }
 
 /// Construct Domain — a numeric interval from its endpoints.
-#[node(category = "Maths & logic", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// span = construct_domain(start=0.0, end=4.0)
+/// ```
+#[node(
+    category = "Maths & logic",
+    tier = "S",
+    version = 1,
+    gh = "Construct Domain"
+)]
 #[must_use]
 pub fn construct_domain(input: ConstructDomainIn) -> Domain {
     Domain::new(input.start, input.end)

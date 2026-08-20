@@ -1,0 +1,5 @@
+error: #[node] requires gh = "Grasshopper Component Name" (the component this node replaces, e.g. gh = "Move") or gh = none for a Cicada-only node — the catalog and search-to-place show GH migrants the name they know
+  --> tests/ui/missing_gh.rs:12:5
+   |
+12 | pub fn bad(input: In) -> f64 {
+   |     ^^

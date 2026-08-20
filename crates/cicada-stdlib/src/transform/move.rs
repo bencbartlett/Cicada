@@ -15,7 +15,15 @@ pub struct MoveIn {
 }
 
 /// Move — translate geometry along a vector.
-#[node(category = "Transform", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// corner = construct_point(x=1.0, y=2.0, z=3.0)
+/// shift = unit_x(factor=10.0)
+/// moved = move(geometry=corner, motion=shift)
+/// ```
+#[node(category = "Transform", tier = "S", version = 1, gh = "Move")]
 #[must_use]
 pub fn move_(input: MoveIn) -> Transformable {
     Similarity::translation(input.motion).apply(&input.geometry)

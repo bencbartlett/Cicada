@@ -27,7 +27,18 @@ pub struct SliderIn {
 ///
 /// Panics when `value` lies outside `min..=max` or the bounds are
 /// inverted — a drifted literal is a loud red, never a silent clamp.
-#[node(category = "Params & input", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// amps = slider(value=12.0, min=0.0, max=30.0, step=0.5)
+/// ```
+#[node(
+    category = "Params & input",
+    tier = "S",
+    version = 1,
+    gh = "Number Slider"
+)]
 #[must_use]
 pub fn slider(input: SliderIn) -> f64 {
     assert!(

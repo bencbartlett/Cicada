@@ -21,7 +21,25 @@ pub struct MeshDifferenceIn {
 /// # Panics
 ///
 /// Panics when Manifold refuses the mesh or a cutter (named by index).
-#[node(category = "Mesh & field", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// span = construct_domain(start=0.0, end=2.0)
+/// block = box(x=span, y=span, z=span)
+/// top = construct_point(x=1.0, y=1.0, z=2.0)
+/// top_frame = xy_plane(origin=top)
+/// ball = sphere(plane=top_frame, radius=0.75, segments=24)
+/// still = unit_x(factor=0.0)
+/// cutters = linear_array(geometry=ball, direction=still, count=1)
+/// carved = mesh_difference(mesh=block, cutters=cutters)
+/// ```
+#[node(
+    category = "Mesh & field",
+    tier = "S",
+    version = 1,
+    gh = "Mesh Difference"
+)]
 #[must_use]
 pub fn mesh_difference(input: MeshDifferenceIn) -> Watertight<Mesh> {
     let cutters: Vec<Mesh> = input.cutters.into_iter().map(|w| w.0).collect();

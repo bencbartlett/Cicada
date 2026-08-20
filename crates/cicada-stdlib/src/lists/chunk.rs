@@ -19,7 +19,19 @@ pub struct ChunkIn {
 /// # Panics
 ///
 /// Panics when `size < 1`.
-#[node(category = "List & axis", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// xs = [1.0, 2.0, 3.0, 4.0, 5.0]
+/// pairs = chunk(list=xs, size=2)
+/// ```
+#[node(
+    category = "List & axis",
+    tier = "S",
+    version = 1,
+    gh = "Partition List"
+)]
 #[must_use]
 pub fn chunk(input: ChunkIn) -> Vec<Vec<ElemSlot>> {
     let size = usize::try_from(input.size)

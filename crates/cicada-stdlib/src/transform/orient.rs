@@ -26,7 +26,23 @@ pub struct OrientIn {
 /// # Panics
 ///
 /// Panics when either plane is degenerate.
-#[node(category = "Transform", tier = "S", version = 1, uses_tolerance)]
+///
+/// # Examples
+///
+/// ```cic
+/// ring = circle(radius=2.0)
+/// source = xy_plane()
+/// at = construct_point(x=10.0, y=0.0, z=5.0)
+/// target = xz_plane(origin=at)
+/// placed = orient(geometry=ring, source=source, target=target)
+/// ```
+#[node(
+    category = "Transform",
+    tier = "S",
+    version = 1,
+    gh = "Orient",
+    uses_tolerance
+)]
 #[must_use]
 pub fn orient(config: &ProjectConfig, input: OrientIn) -> Transformable {
     let source = red(orthonormal(&input.source, config.tol()));

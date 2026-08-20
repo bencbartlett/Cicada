@@ -25,10 +25,20 @@ pub struct ExportObjIn {
 /// Panics when the file cannot be written (missing directory,
 /// permissions) — an export that silently wrote nothing is the worst
 /// outcome (wall lesson 7).
+///
+/// # Examples
+///
+/// ```cic
+/// span = construct_domain(start=0.0, end=2.0)
+/// block = box(x=span, y=span, z=span)
+/// still = unit_x(factor=0.0)
+/// blocks = linear_array(geometry=block, direction=still, count=1)
+/// dump = export_obj(meshes=blocks, path="block.obj")
+/// ```
 #[node(
     category = "Output, display & export",
     tier = "S",
-    version = 1,
+    version = 1, gh = none,
     effectful
 )]
 pub fn export_obj(input: ExportObjIn) {

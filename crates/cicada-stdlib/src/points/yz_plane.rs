@@ -6,7 +6,19 @@ use cicada_macros::node;
 use super::WorldPlaneIn;
 
 /// YZ Plane — the world YZ frame at an origin.
-#[node(category = "Point · Vector · Plane", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// at = construct_point(x=5.0, y=6.0, z=7.0)
+/// frame = yz_plane(origin=at)
+/// ```
+#[node(
+    category = "Point · Vector · Plane",
+    tier = "S",
+    version = 1,
+    gh = "YZ Plane"
+)]
 #[must_use]
 pub fn yz_plane(input: WorldPlaneIn) -> Plane {
     Plane {

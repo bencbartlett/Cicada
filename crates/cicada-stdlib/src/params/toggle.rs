@@ -10,7 +10,18 @@ pub struct ToggleIn {
 }
 
 /// Boolean Toggle — an on/off parameter.
-#[node(category = "Params & input", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// show = toggle(value=True)
+/// ```
+#[node(
+    category = "Params & input",
+    tier = "S",
+    version = 1,
+    gh = "Boolean Toggle"
+)]
 #[must_use]
 pub fn toggle(input: ToggleIn) -> bool {
     input.value

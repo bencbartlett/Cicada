@@ -1,0 +1,5 @@
+error: `# Examples` fences must be tagged `cic` (```cic), got `` — a bare fence is compiled by rustdoc as a Rust doctest and fails; any other tag would ship an example CI never solves
+  --> tests/ui/examples_bare_fence.rs:18:5
+   |
+18 | pub fn bad(input: In) -> f64 {
+   |     ^^

@@ -64,7 +64,7 @@ mod naming_fixtures {
     }
 
     /// Loop Fixture — keyword-dodging fn name must register as `loop`.
-    #[node(category = "Maths & logic", tier = "S", version = 1)]
+    #[node(category = "Maths & logic", tier = "S", version = 1, gh = none)]
     pub fn loop_(input: FixtureIn) -> f64 {
         input.r#true
     }
@@ -74,6 +74,7 @@ mod naming_fixtures {
         category = "Maths & logic",
         tier = "S",
         version = 1,
+        gh = none,
         name = "fixture_renamed"
     )]
     pub fn some_other_ident(input: FixtureIn) -> f64 {
@@ -153,6 +154,46 @@ mod tests {
         assert_eq!(start.default, Some("0.0"));
         assert_eq!(start.doc, "First value.");
         assert_eq!(count.default, None);
+    }
+
+    // The node format's two newest pieces through the real macro: the
+    // `gh` attribute and the `# Examples` ```cic fence, extracted as the
+    // snippet text without the header (the runner adds `# cicada 1`).
+    #[test]
+    fn gh_and_examples_roundtrip_into_the_spec() {
+        let specs = registry();
+        let series = specs
+            .iter()
+            .find(|s| s.name == "series")
+            .expect("series registered");
+        assert_eq!(series.gh, Some("Series"));
+        assert_eq!(
+            series.examples,
+            &["xs = series(start=0.0, step=2.5, count=4)"]
+        );
+        // Multi-line fences keep their line structure, `\n`-joined, no
+        // trailing newline.
+        let remap = specs
+            .iter()
+            .find(|s| s.name == "remap")
+            .expect("remap registered");
+        assert_eq!(remap.gh, Some("Remap Numbers"));
+        assert_eq!(
+            remap.examples,
+            &["unit = construct_domain(start=0.0, end=1.0)\n\
+               percent = construct_domain(start=0.0, end=100.0)\n\
+               scaled = remap(value=0.25, source=unit, target=percent)"]
+        );
+        // `gh = none` is an explicit answer, carried as None.
+        let as_closed = specs
+            .iter()
+            .find(|s| s.name == "as_closed")
+            .expect("as_closed registered");
+        assert_eq!(as_closed.gh, None);
+        // The `# Panics` contract still ends where `# Examples` begins.
+        let panics = series.panics.expect("series has a contract");
+        assert!(!panics.contains("```"), "{panics}");
+        assert!(!panics.contains("Examples"), "{panics}");
     }
 
     #[test]

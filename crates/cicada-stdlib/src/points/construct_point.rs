@@ -18,7 +18,18 @@ pub struct ConstructPointIn {
 }
 
 /// Construct Point — a point from x/y/z coordinates.
-#[node(category = "Point · Vector · Plane", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// corner = construct_point(x=1.0, y=2.0, z=0.5)
+/// ```
+#[node(
+    category = "Point · Vector · Plane",
+    tier = "S",
+    version = 1,
+    gh = "Construct Point"
+)]
 #[must_use]
 pub fn construct_point(input: ConstructPointIn) -> Point {
     Point::new(input.x, input.y, input.z)

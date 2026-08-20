@@ -37,10 +37,23 @@ pub struct VoronoiOut {
 /// seed is off the boundary plane, coincides with another seed within
 /// tolerance, or owns no area inside the boundary; or when `seeds` is
 /// empty.
+///
+/// # Examples
+///
+/// ```cic
+/// bx = construct_domain(start=0.0, end=10.0)
+/// by = construct_domain(start=0.0, end=10.0)
+/// board = rectangle(x=bx, y=by)
+/// xs = [2.0, 8.0, 5.0]
+/// ys = [5.0, 4.0, 8.0]
+/// seeds = construct_point(x=each(xs), y=each(ys))
+/// cells = voronoi(seeds=seeds, boundary=board)
+/// ```
 #[node(
     category = "Intersect & regions",
     tier = "S",
     version = 1,
+    gh = "Voronoi",
     uses_tolerance
 )]
 #[must_use]

@@ -21,7 +21,18 @@ pub struct SeriesIn {
 ///
 /// Panics when `count` is negative — loud refusal, never a silent empty
 /// list (the scheduler turns node panics into red nodes, stage 3).
-#[node(category = "Sequences & random", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// xs = series(start=0.0, step=2.5, count=4)
+/// ```
+#[node(
+    category = "Sequences & random",
+    tier = "S",
+    version = 1,
+    gh = "Series"
+)]
 #[must_use]
 pub fn series(input: SeriesIn) -> Vec<f64> {
     assert!(

@@ -23,7 +23,19 @@ pub struct RandomIn {
 /// # Panics
 ///
 /// Panics when `count` is negative.
-#[node(category = "Sequences & random", tier = "S", version = 1)]
+///
+/// # Examples
+///
+/// ```cic
+/// span = construct_domain(start=0.0, end=10.0)
+/// draws = random(domain=span, count=5, seed=7)
+/// ```
+#[node(
+    category = "Sequences & random",
+    tier = "S",
+    version = 1,
+    gh = "Random"
+)]
 #[must_use]
 pub fn random(input: RandomIn) -> Vec<f64> {
     assert!(
