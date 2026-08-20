@@ -47,9 +47,9 @@ Worked examples: `crates/cicada-stdlib/src/maths.rs` (multi-output:
    node next to its closest siblings (ADJACENCY, not strict docs/08 row
    order — the files already group by kinship, e.g. the domain nodes sit
    between `add` and `subtract`); a multi-node row (`Add / Subtract / …`)
-   orders left-to-right. Catalog order within a category is module path
-   (alphabetical), then source line — so inside one module, source order
-   is catalog order.
+   orders left-to-right. Catalog order within a category is the dialect
+   NAME (alphabetical) — placement in the source never changes the
+   committed catalog.
 4. **Tests, all three kinds** (see the worked examples):
    - *Table*: hand-picked cases including edges (zeros, negatives,
      extremes) and a `#[should_panic]` case for each loud refusal. A node

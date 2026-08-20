@@ -34,8 +34,8 @@ pub(crate) fn red<T>(result: Result<T, cicada_geom::GeomError>) -> T {
 }
 
 /// Every node registered in this binary, in canonical catalog order
-/// (docs/08 category order, then module path + source line within a
-/// category).
+/// (docs/08 category order, then dialect name within a category — the
+/// order never depends on the source layout).
 #[must_use]
 pub fn registry() -> &'static [&'static NodeSpec] {
     cicada_core::spec::registered()
@@ -237,14 +237,30 @@ mod tests {
     }
 
     #[test]
-    fn registry_order_is_category_then_source_order() {
+    fn registry_order_is_category_then_name() {
         let specs = registry();
         let names: Vec<&str> = specs.iter().map(|s| s.name).collect();
-        let series_pos = names.iter().position(|n| *n == "series").expect("series");
-        let add_pos = names.iter().position(|n| *n == "add").expect("add");
+        let position = |name: &str| names.iter().position(|n| *n == name).expect(name);
         assert!(
-            series_pos < add_pos,
+            position("series") < position("add"),
             "Sequences & random (docs/08 §2) precedes Maths & logic (§3): {names:?}"
         );
+        // Within a category the tie-break is the dialect name, not the
+        // source position: `construct_plane` is defined LAST in its module
+        // but sorts first; `subtract` is defined before `divide` but sorts
+        // after it.
+        assert!(position("construct_plane") < position("construct_point"));
+        assert!(position("divide") < position("subtract"));
+        for pair in specs.windows(2) {
+            if pair[0].category == pair[1].category {
+                assert!(
+                    pair[0].name < pair[1].name,
+                    "`{}` must precede `{}` inside `{}`",
+                    pair[0].name,
+                    pair[1].name,
+                    pair[0].category
+                );
+            }
+        }
     }
 }

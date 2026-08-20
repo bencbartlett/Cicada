@@ -129,9 +129,10 @@ pub struct NodeSpec {
     /// Output ports in declaration order. Single-output nodes use one port
     /// named `out`.
     pub outputs: &'static [PortSpec],
-    /// Defining module (`module_path!`) — catalog sort key within category.
+    /// Defining module (`module_path!`) — names the source in the
+    /// duplicate-name refusal; never an ordering key.
     pub module: &'static str,
-    /// Defining line (`line!`) — catalog sort key within module.
+    /// Defining line (`line!`) — same role as `module`.
     pub line: u32,
 }
 
@@ -314,9 +315,11 @@ pub struct NodeRegistration {
 inventory::collect!(NodeRegistration);
 
 /// Every node registered in the linked binary, in canonical catalog order:
-/// docs/08 category order, then (module path, line) within a category —
-/// alphabetical by module, source order within a module. Computed once and
-/// cached (hot callers: palette search, checker).
+/// docs/08 category order, then dialect NAME within a category. The order
+/// is a property of the catalog, never of the source layout — one node per
+/// file (DECISIONS.md stdlib row, 2026-08-19) would otherwise reorder the
+/// committed catalog every time a file moves. Computed once and cached
+/// (hot callers: palette search, checker).
 ///
 /// # Panics
 ///
@@ -332,13 +335,7 @@ pub fn registered() -> &'static [&'static NodeSpec] {
                 .into_iter()
                 .map(|registration| registration.spec)
                 .collect();
-            specs.sort_by_key(|spec| {
-                (
-                    crate::catalog::category_rank(spec.category),
-                    spec.module,
-                    spec.line,
-                )
-            });
+            specs.sort_by_key(|spec| (crate::catalog::category_rank(spec.category), spec.name));
             let mut seen = BTreeSet::new();
             for spec in &specs {
                 assert!(

@@ -10,39 +10,40 @@ the `?` rides through to `E` outputs), `Any` = display-sink catch-all.
 
 ## Params & input
 
+- `panel(data: Any) → ()` — Panel — display sink; shows counts and samples on the canvas.
 - `slider(value: Number, min: Number = 0.0, max: Number = 10.0, step: Number = 0.0) → Number` — Number Slider — a bounded numeric parameter. Red when: `value` lies outside `min..=max` or the bounds are inverted — a drifted literal is a loud red, never a silent clamp.
 - `toggle(value: Boolean) → Boolean` — Boolean Toggle — an on/off parameter.
-- `panel(data: Any) → ()` — Panel — display sink; shows counts and samples on the canvas.
 
 ## Sequences & random
 
-- `series(start: Number = 0.0, step: Number = 1.0, count: Integer) → [Number]` — Series — an arithmetic sequence of numbers. Red when: `count` is negative — loud refusal, never a silent empty list (the scheduler turns node panics into red nodes, stage 3).
 - `random(domain: Domain, count: Integer, seed: Integer) → [Number]` — Random — seeded uniform random numbers in a domain. Red when: `count` is negative.
+- `series(start: Number = 0.0, step: Number = 1.0, count: Integer) → [Number]` — Series — an arithmetic sequence of numbers. Red when: `count` is negative — loud refusal, never a silent empty list (the scheduler turns node panics into red nodes, stage 3).
 
 ## Maths & logic
 
 - `add(a: Number, b: Number) → Number` — Add — sum of two numbers.
 - `construct_domain(start: Number, end: Number) → Domain` — Construct Domain — a numeric interval from its endpoints.
 - `deconstruct_domain(domain: Domain) → (start: Number, end: Number)` — Deconstruct Domain — the endpoints of an interval.
-- `subtract(a: Number, b: Number) → Number` — Subtract — difference of two numbers.
-- `multiply(a: Number, b: Number) → Number` — Multiply — product of two numbers.
 - `divide(a: Number, b: Number) → Number` — Divide — quotient of two numbers (IEEE: dividing by zero yields ±∞).
 - `modulo(a: Number, b: Number) → Number` — Modulo — IEEE remainder of `a / b` (sign follows `a`). Red when: `a % 0` is NaN, which value construction refuses — the node goes red.
+- `multiply(a: Number, b: Number) → Number` — Multiply — product of two numbers.
 - `power(a: Number, b: Number) → Number` — Power — `a` raised to `b` (`^` in expressions).
 - `remap(value: Number, source: Domain, target: Domain) → Number` — Remap — map a value linearly from a source domain to a target domain. Values outside the source domain extrapolate linearly (no clamping). Red when: the source domain is empty (`start == end`) — the map is undefined there.
+- `subtract(a: Number, b: Number) → Number` — Subtract — difference of two numbers.
 
 ## List & axis
 
-- `item(list: [E], index: Integer, wrap: Boolean = false) → E` — List Item — one element of a list by index. Selecting an absent (`Optional`) slot yields an absent element — `E` carries the `?`, so the output is `Point?` exactly when the list is `[Point?]`. Red when: the list is empty, or when `index` is out of range and `wrap` is off.
-- `length(list: [E]) → Integer` — List Length — the number of slots in a list (absent slots included — slot-preserving nulls keep their places, docs/08 rule 6).
-- `flatten(list: [[E]]) → [E]` — Flatten — one nesting level removed: the inner lists concatenated in order (`[[a, b], [c]]` → `[a, b, c]`). One level only, always (docs/09: `flatten_all` for every level, and says so); absent inner slots are preserved as absent slots of the output. Red when: an OUTER slot is absent (a missing inner list — refused at marshalling with its index: optional lists have no representation, so there is nothing slot-preserving to do with one); the node itself has no other refusal.
-- `partition(list: [E], sizes: [Integer]) → [[E]]` — Partition — consecutive groups of the given sizes (`[a, b, c, d]` with sizes `[1, 3]` → `[[a], [b, c, d]]`). Slot-preserving: absent slots land in their group as absent slots. Red when: a size is negative (the offending index and value in the message) or when the sizes do not sum to the list's slot count (both counts in the message) — never a silent short or padded last group.
 - `chunk(list: [E], size: Integer) → [[E]]` — Chunk — consecutive groups of `size` slots; the last group may be short (GH Partition List). Slot-preserving: absent slots land in their group as absent slots; an empty list chunks to no groups. Red when: `size < 1`.
 - `concat(a: [E], b: [E]) → [E]` — Concat — `a` then `b`, one list (GH Merge for two lists). Slot-preserving: absent slots of either input keep their places in the output.
 - `cull(list: [E], pattern: [Boolean]) → (kept: [E], map: IndexMap)` — Cull — keep the slots where the pattern is true and drop the rest, returning the kept list and the index map back into the source (the sanctioned way elements leave a list — identity survives). Red when: the pattern's length differs from the list's slot count — strict zip, both counts in the message (GH's repeating Cull Pattern is the silent-mismatch behavior docs/09 retires).
+- `flatten(list: [[E]]) → [E]` — Flatten — one nesting level removed: the inner lists concatenated in order (`[[a, b], [c]]` → `[a, b, c]`). One level only, always (docs/09: `flatten_all` for every level, and says so); absent inner slots are preserved as absent slots of the output. Red when: an OUTER slot is absent (a missing inner list — refused at marshalling with its index: optional lists have no representation, so there is nothing slot-preserving to do with one); the node itself has no other refusal.
+- `item(list: [E], index: Integer, wrap: Boolean = false) → E` — List Item — one element of a list by index. Selecting an absent (`Optional`) slot yields an absent element — `E` carries the `?`, so the output is `Point?` exactly when the list is `[Point?]`. Red when: the list is empty, or when `index` is out of range and `wrap` is off.
+- `length(list: [E]) → Integer` — List Length — the number of slots in a list (absent slots included — slot-preserving nulls keep their places, docs/08 rule 6).
+- `partition(list: [E], sizes: [Integer]) → [[E]]` — Partition — consecutive groups of the given sizes (`[a, b, c, d]` with sizes `[1, 3]` → `[[a], [b, c, d]]`). Slot-preserving: absent slots land in their group as absent slots. Red when: a size is negative (the offending index and value in the message) or when the sizes do not sum to the list's slot count (both counts in the message) — never a silent short or padded last group.
 
 ## Point · Vector · Plane
 
+- `construct_plane(origin: Point = origin, x: Vector = unit_x, y: Vector = unit_y) → Plane` — Construct Plane — a frame from an origin and two axes: x unitized, y orthonormalized against x (Gram–Schmidt), so the stored plane is a right-handed orthonormal frame with normal x × y. Red when: `x` has no length at tolerance, or `y` is parallel to `x` at tolerance (its component off the x line has no length) — red with the measured length, never a NaN frame.
 - `construct_point(x: Number = 0.0, y: Number = 0.0, z: Number = 0.0) → Point` — Construct Point — a point from x/y/z coordinates.
 - `deconstruct_point(point: Point) → (x: Number, y: Number, z: Number)` — Deconstruct Point — the x/y/z coordinates of a point.
 - `unit_x(factor: Number = 1.0) → Vector` — Unit X — the world x direction, scaled.
@@ -52,31 +53,30 @@ the `?` rides through to `E` outputs), `Any` = display-sink catch-all.
 - `xy_plane(origin: Point = origin) → Plane` — XY Plane — the world XY frame at an origin.
 - `xz_plane(origin: Point = origin) → Plane` — XZ Plane — the world XZ frame at an origin.
 - `yz_plane(origin: Point = origin) → Plane` — YZ Plane — the world YZ frame at an origin.
-- `construct_plane(origin: Point = origin, x: Vector = unit_x, y: Vector = unit_y) → Plane` — Construct Plane — a frame from an origin and two axes: x unitized, y orthonormalized against x (Gram–Schmidt), so the stored plane is a right-handed orthonormal frame with normal x × y. Red when: `x` has no length at tolerance, or `y` is parallel to `x` at tolerance (its component off the x line has no length) — red with the measured length, never a NaN frame.
 
 ## Curve
 
+- `as_closed(curve: Curve) → Closed<Curve>` — As Closed — the checked closed-curve refinement (docs/08 rule 5). Already-closed curves pass through unchanged; an open polyline whose endpoints coincide within tolerance closes (duplicate end vertex dropped). Red when: the curve cannot close: a line, endpoints apart beyond tolerance, or fewer than 3 distinct vertices after closing — red with the distance that failed, never a silent pass (wall lesson 13).
+- `circle(plane: Plane = xy_plane, radius: Number) → Closed<Curve>` — Circle — an analytic circle in a plane. The stored frame is orthonormalized at construction, so downstream evaluation is exact. Red when: the radius is not above tolerance or the plane's axes are degenerate (zero-length or parallel).
+- `divide_curve(curve: Curve, count: Integer = 10) → (points: [Point], tangents: [Vector], parameters: [Number])` — Divide Curve — points, tangents, and parameters at equal arc-length steps. An open curve yields `count + 1` samples (both ends included); a closed curve yields `count` (the seam appears once). Red when: `count < 1` or the curve is degenerate at tolerance (no usable length, zero radius, collapsed frame).
 - `line(a: Point, b: Point) → Curve` — Line — a straight segment between two points.
 - `polyline(vertices: [Point], closed: Boolean = false) → Curve` — Polyline — a vertex chain, open or closed.
-- `circle(plane: Plane = xy_plane, radius: Number) → Closed<Curve>` — Circle — an analytic circle in a plane. The stored frame is orthonormalized at construction, so downstream evaluation is exact. Red when: the radius is not above tolerance or the plane's axes are degenerate (zero-length or parallel).
 - `rectangle(plane: Plane = xy_plane, x: Domain, y: Domain) → Closed<Curve>` — Rectangle — an analytic rectangle in a plane, always closed. The frame is orthonormalized at construction. (The rounded-`corner` parameter arrives with compound curves, v0.1.) Red when: either extent is empty at tolerance or the plane is degenerate.
-- `divide_curve(curve: Curve, count: Integer = 10) → (points: [Point], tangents: [Vector], parameters: [Number])` — Divide Curve — points, tangents, and parameters at equal arc-length steps. An open curve yields `count + 1` samples (both ends included); a closed curve yields `count` (the seam appears once). Red when: `count < 1` or the curve is degenerate at tolerance (no usable length, zero radius, collapsed frame).
-- `as_closed(curve: Curve) → Closed<Curve>` — As Closed — the checked closed-curve refinement (docs/08 rule 5). Already-closed curves pass through unchanged; an open polyline whose endpoints coincide within tolerance closes (duplicate end vertex dropped). Red when: the curve cannot close: a line, endpoints apart beyond tolerance, or fewer than 3 distinct vertices after closing — red with the distance that failed, never a silent pass (wall lesson 13).
 
 ## Surface & solid
 
 - `area(curve: Closed<Curve>) → (area: Number, centroid: Point)` — Area — the enclosed area and the area centroid of a closed planar curve (the spike form of docs/08 §7 Area: closed curves only; surfaces arrive with v0.1). Polylines by the shoelace formula in their own plane (Newell normal) — the centroid is the AREA centroid, not the vertex mean (the wall scales its Voronoi cells about it); circles and rectangles analytically. The area is orientation-independent (always positive). Self-intersecting polylines are not detected: the shoelace result is what it is (lobes of opposite winding cancel). Red when: the curve is degenerate at tolerance (fewer than 3 distinct vertices, a zero radius or empty extent, or an enclosed area within tolerance² of zero — collinear vertices), non-planar within tolerance, or its frame is degenerate.
+- `box(plane: Plane = xy_plane, x: Domain, y: Domain, z: Domain) → Watertight<Mesh>` — Box — an axis-aligned box in a plane's frame (mesh-backed under its v0.1 name, doc 15). Decreasing domains are normalized. Red when: any extent is empty at tolerance or the plane is degenerate.
 - `extrude(profile: Closed<Curve>, direction: Vector, segments: Integer = 64) → Watertight<Mesh>` — Extrude — extrude a closed planar profile into a watertight prism (mesh-backed under its v0.1 name, doc 15). Red when: the profile is degenerate or non-planar at tolerance, the direction lies in the profile plane, `segments < 3`, or the profile polygon is self-intersecting.
 - `loft(start: Closed<Curve>, end: Closed<Curve>, segments: Integer = 64) → Watertight<Mesh>` — Loft — a ruled solid between two closed sections, capped at both ends (the wall's frusta: Voronoi cell → tip cap; cones and chamfers from circle → circle). Sections pair vertex `i` with vertex `i` (polylines vertex-to-vertex as given — no resampling, seam = vertex 0; analytic sections tessellated to `segments` vertices starting at the plane's x axis), walls are two triangles per quad, caps are ear-clipped (non-convex sections welcome), orientation is fixed by signed volume and the result is re-verified watertight. Lift with `each()` to loft per part (`loft(start=each(cells), end=each(caps))`). Red when: the vertex counts differ (both counts in the message), a section is open, degenerate at tolerance, non-planar, or self-intersecting, the sections wind in opposite directions, the sections coincide or are coplanar (zero volume), `segments < 3` for an analytic section, or the result is not watertight.
-- `box(plane: Plane = xy_plane, x: Domain, y: Domain, z: Domain) → Watertight<Mesh>` — Box — an axis-aligned box in a plane's frame (mesh-backed under its v0.1 name, doc 15). Decreasing domains are normalized. Red when: any extent is empty at tolerance or the plane is degenerate.
 - `sphere(plane: Plane = xy_plane, radius: Number, segments: Integer = 32) → Watertight<Mesh>` — Sphere — a UV sphere at a plane's origin (mesh-backed under its v0.1 name, doc 15). Red when: the radius is not above tolerance, `segments < 3`, or the plane is degenerate.
 
 ## Mesh & field
 
-- `mesh_union(meshes: [Watertight<Mesh>]) → Watertight<Mesh>` — Mesh Union — the union of watertight meshes via Manifold (docs/08: watertight, parallel, seconds). Red when: Manifold refuses an operand (named by index) — its ε-validity is stricter than structural watertightness in corner cases.
+- `as_watertight(mesh: Mesh) → Watertight<Mesh>` — As Watertight — the checked watertight refinement (docs/08: the mesh-tier solid): every edge shared by exactly two consistently oriented triangles. Red when: the mesh has open or inconsistently oriented edges — red with the count, never a silent pass (wall lesson 13).
 - `mesh_difference(mesh: Watertight<Mesh>, cutters: [Watertight<Mesh>]) → Watertight<Mesh>` — Mesh Difference — subtract every cutter from a mesh via Manifold; the result may be the empty solid. Lift with `each()` to carve per part (`mesh_difference(mesh=each(frusta), cutters=each(cutter_groups))`). Red when: Manifold refuses the mesh or a cutter (named by index).
 - `mesh_intersection(a: Watertight<Mesh>, b: Watertight<Mesh>) → Watertight<Mesh>` — Mesh Intersection — the intersection of two watertight meshes via Manifold; the result may be the empty solid. Red when: Manifold refuses an operand.
-- `as_watertight(mesh: Mesh) → Watertight<Mesh>` — As Watertight — the checked watertight refinement (docs/08: the mesh-tier solid): every edge shared by exactly two consistently oriented triangles. Red when: the mesh has open or inconsistently oriented edges — red with the count, never a silent pass (wall lesson 13).
+- `mesh_union(meshes: [Watertight<Mesh>]) → Watertight<Mesh>` — Mesh Union — the union of watertight meshes via Manifold (docs/08: watertight, parallel, seconds). Red when: Manifold refuses an operand (named by index) — its ε-validity is stricter than structural watertightness in corner cases.
 
 ## Intersect & regions
 
@@ -84,16 +84,16 @@ the `?` rides through to `E` outputs), `Any` = display-sink catch-all.
 
 ## Transform
 
+- `linear_array(geometry: T, direction: Vector, count: Integer) → [T]` — Linear Array — `count` copies stepped along a direction, the first at the original position. Red when: `count < 1`.
 - `move(geometry: T, motion: Vector) → T` — Move — translate geometry along a vector.
+- `orient(geometry: T, source: Plane, target: Plane) → T` — Orient — the rigid motion carrying the source plane onto the target plane (the wall's part-to-plate workhorse). Red when: either plane is degenerate.
 - `rotate(geometry: T, angle: Number, plane: Plane = xy_plane) → T` — Rotate — rotate geometry about a plane's normal through its origin. Red when: the plane is degenerate (zero-length or parallel axes).
 - `scale(geometry: T, center: Point = origin, factor: Number) → T` — Scale — uniform scale about a center. Negative factors point-reflect (mesh orientation is preserved by winding correction). Red when: `|factor|` is within tolerance of zero — geometry would collapse to a point.
-- `orient(geometry: T, source: Plane, target: Plane) → T` — Orient — the rigid motion carrying the source plane onto the target plane (the wall's part-to-plate workhorse). Red when: either plane is degenerate.
-- `linear_array(geometry: T, direction: Vector, count: Integer) → [T]` — Linear Array — `count` copies stepped along a direction, the first at the original position. Red when: `count < 1`.
 
 ## Output, display & export
 
 - `custom_preview(geometry: Geometry, color: Color = white) → ()` — Custom Preview — display a geometry with a color; the display cost shows in the profiler next to compute cost.
-- `text_tag(location: Plane, text: Text, size: Number = 1.0) → ()` — Text Tag — a display-only text label at a plane.
 - `export_obj(meshes: [Mesh], path: Text) → ()` — Export OBJ — write meshes to a Wavefront OBJ file for external viewers (the stage-4 debug window into headless geometry; the real exporters — 3MF, DXF — arrive with the wall corpus). Red when: the file cannot be written (missing directory, permissions) — an export that silently wrote nothing is the worst outcome (wall lesson 7).
 - `text_outlines(text: Text, size: Number, plane: Plane = xy_plane, font: Text = "DejaVu Sans Bold", segments: Integer = 8, line_gap: Number = 1.35) → [Closed<Curve>]` — Text Outlines — glyph contours as closed polylines (béziers flattened to `segments` per curve span), laid out left-to-right from the plane origin along +x with the baseline on the x axis; `size` is the capital-letter height; a newline in `text` stacks lines downward by `line_gap` × `size`, left-aligned. Fonts are bundled in the binary (reproducibility); the spike bundles `DejaVu Sans Bold` only. One curve per contour, in text order then the font's contour order; whitespace advances the pen and yields no curve. Red when: the font is not bundled (the message lists the bundled names), `size` is not above tolerance, a glyph is missing from the font (names the character), `segments < 1`, or the plane is degenerate.
 - `text_solids(text: Text, size: Number, depth: Number, plane: Plane = xy_plane, font: Text = "DejaVu Sans Bold", segments: Integer = 8, line_gap: Number = 1.35) → [Watertight<Mesh>]` — Text Solids — one watertight solid per glyph (counters handled: the glyph region is triangulated with its holes), extruded `depth` along the plane normal (negative = the other way), same layout as `text_outlines` (cap-height `size`, baseline on the plane's x axis, newline stacks lines by `line_gap` × `size`). Glyphs of several pieces (`i`, `%`, `"`) are one mesh with several shells; whitespace yields no solid. The wall's label deboss cutters. Red when: `text_outlines` would (the font is not bundled — the message lists the bundled names —, `size` is not above tolerance, a glyph is missing from the font — names the character —, `segments < 1`, the plane is degenerate), when `depth` is within tolerance of zero, or when a glyph's contours cannot be triangulated into a watertight prism (touching or self-intersecting outlines — a font defect, named by character).
+- `text_tag(location: Plane, text: Text, size: Number = 1.0) → ()` — Text Tag — a display-only text label at a plane.
