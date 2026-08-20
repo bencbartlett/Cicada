@@ -106,10 +106,22 @@ struct Probe {
 
 fn probe_shapes(origin: DVec3) -> Vec<Probe> {
     vec![
-        Probe { name: "box", shape: probe_box(origin) },
-        Probe { name: "extrude", shape: probe_extrude(origin).into() },
-        Probe { name: "difference", shape: probe_difference(origin) },
-        Probe { name: "loft", shape: probe_loft(origin).into() },
+        Probe {
+            name: "box",
+            shape: probe_box(origin),
+        },
+        Probe {
+            name: "extrude",
+            shape: probe_extrude(origin).into(),
+        },
+        Probe {
+            name: "difference",
+            shape: probe_difference(origin),
+        },
+        Probe {
+            name: "loft",
+            shape: probe_loft(origin).into(),
+        },
     ]
 }
 
@@ -119,7 +131,10 @@ fn probe_shapes(origin: DVec3) -> Vec<Probe> {
 
 fn smoke() {
     for probe in probe_shapes(DVec3::ZERO) {
-        let mesh = probe.shape.mesh_with_tolerance(LINEAR_DEFLECTION).expect("tessellation");
+        let mesh = probe
+            .shape
+            .mesh_with_tolerance(LINEAR_DEFLECTION)
+            .expect("tessellation");
         let faces = probe.shape.faces().count();
         let edges = probe.shape.edges().count();
         println!(
@@ -175,14 +190,33 @@ fn dump(out_dir: &Path) {
     for probe in probe_shapes(DVec3::ZERO) {
         let bin_path: PathBuf = out_dir.join(format!("{}.bin", probe.name));
         let txt_path: PathBuf = out_dir.join(format!("{}.brep", probe.name));
-        probe.shape.write_brep_bin(&bin_path).expect("BinTools::Write");
-        probe.shape.write_brep_text(&txt_path).expect("BRepTools::Write");
+        probe
+            .shape
+            .write_brep_bin(&bin_path)
+            .expect("BinTools::Write");
+        probe
+            .shape
+            .write_brep_text(&txt_path)
+            .expect("BRepTools::Write");
         let bin = std::fs::read(&bin_path).expect("read .bin");
         let txt = std::fs::read(&txt_path).expect("read .brep");
-        println!("{:<11} bintools  bytes={:<8} sha256={}", probe.name, bin.len(), sha256_hex(&bin));
-        println!("{:<11} breptools bytes={:<8} sha256={}", probe.name, txt.len(), sha256_hex(&txt));
+        println!(
+            "{:<11} bintools  bytes={:<8} sha256={}",
+            probe.name,
+            bin.len(),
+            sha256_hex(&bin)
+        );
+        println!(
+            "{:<11} breptools bytes={:<8} sha256={}",
+            probe.name,
+            txt.len(),
+            sha256_hex(&txt)
+        );
 
-        let mesh = probe.shape.mesh_with_tolerance(LINEAR_DEFLECTION).expect("tessellation");
+        let mesh = probe
+            .shape
+            .mesh_with_tolerance(LINEAR_DEFLECTION)
+            .expect("tessellation");
         let (geom, normals) = mesh_hashes(&mesh);
         println!(
             "{:<11} mesh      verts={:<6} tris={:<6} sha256={} normals={}",
@@ -199,7 +233,10 @@ fn dump(out_dir: &Path) {
         // triangulation embedded — which would make "canonical bytes" depend
         // on display history.
         let after_path = out_dir.join(format!("{}.after_mesh.bin", probe.name));
-        probe.shape.write_brep_bin(&after_path).expect("BinTools::Write (after mesh)");
+        probe
+            .shape
+            .write_brep_bin(&after_path)
+            .expect("BinTools::Write (after mesh)");
         let after = std::fs::read(&after_path).expect("read after-mesh");
         println!(
             "{:<11} aftermesh bytes={:<8} sha256={} identical_to_premesh={}",
@@ -212,7 +249,9 @@ fn dump(out_dir: &Path) {
         // Round-trip: does the serialized form re-read to the same bytes?
         let reread = Shape::read_brep_bin(&bin_path).expect("BinTools::Read");
         let rt_path = out_dir.join(format!("{}.roundtrip.bin", probe.name));
-        reread.write_brep_bin(&rt_path).expect("BinTools::Write (round trip)");
+        reread
+            .write_brep_bin(&rt_path)
+            .expect("BinTools::Write (round trip)");
         let rt = std::fs::read(&rt_path).expect("read round trip");
         println!(
             "{:<11} roundtrip bytes={:<8} sha256={} identical={}",
@@ -243,7 +282,9 @@ fn report(op: &str, total: Duration, parts: usize, extra: &str) {
 fn bench(parts: usize) {
     // Each part sits at its own offset so nothing is shared or cached
     // between parts inside OCCT.
-    let origins: Vec<DVec3> = (0..parts).map(|i| dvec3(i as f64 * 15.0, 0.0, 0.0)).collect();
+    let origins: Vec<DVec3> = (0..parts)
+        .map(|i| dvec3(i as f64 * 15.0, 0.0, 0.0))
+        .collect();
 
     let t = Instant::now();
     let boxes: Vec<Shape> = origins.iter().map(|o| probe_box(*o)).collect();
@@ -254,8 +295,11 @@ fn bench(parts: usize) {
     report("extrude", t.elapsed(), parts, "");
 
     let t = Instant::now();
-    let diffs: Vec<Shape> =
-        boxes.iter().zip(&cutters).map(|(b, c)| b.subtract(c).into()).collect();
+    let diffs: Vec<Shape> = boxes
+        .iter()
+        .zip(&cutters)
+        .map(|(b, c)| b.subtract(c).into())
+        .collect();
     report("difference", t.elapsed(), parts, "");
 
     // Tessellation in two halves: the OCCT mesher itself
@@ -269,7 +313,12 @@ fn bench(parts: usize) {
         .map(|d| Mesher::try_new(d, LINEAR_DEFLECTION).expect("BRepMesh_IncrementalMesh"))
         .collect();
     let mesh_total = t.elapsed();
-    report("mesh(occt)", mesh_total, parts, &format!("(BRepMesh_IncrementalMesh, deflection={LINEAR_DEFLECTION})"));
+    report(
+        "mesh(occt)",
+        mesh_total,
+        parts,
+        &format!("(BRepMesh_IncrementalMesh, deflection={LINEAR_DEFLECTION})"),
+    );
 
     let t = Instant::now();
     let mut tris = 0usize;
@@ -280,14 +329,24 @@ fn bench(parts: usize) {
         verts += mesh.vertices.len();
     }
     let extract_total = t.elapsed();
-    report("mesh(extract)", extract_total, parts, &format!("(binding FFI extraction, tris={tris}, verts={verts})"));
+    report(
+        "mesh(extract)",
+        extract_total,
+        parts,
+        &format!("(binding FFI extraction, tris={tris}, verts={verts})"),
+    );
 
     // The combined number the question asks for. (An earlier version
     // re-meshed "fresh" Cut results here and measured LESS than the mesher
     // alone: the boolean reuses the untouched box faces, whose shared
     // TShapes already carried triangulation from the pass above — a
     // false-fresh measurement. Summing the two honest halves instead.)
-    report("tessellate", mesh_total + extract_total, parts, "(= mesh(occt) + mesh(extract))");
+    report(
+        "tessellate",
+        mesh_total + extract_total,
+        parts,
+        "(= mesh(occt) + mesh(extract))",
+    );
 
     // The loft is not part of the per-part pipeline above but is a probe
     // shape; time it too so the memo has a number.

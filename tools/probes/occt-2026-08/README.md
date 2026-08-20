@@ -19,6 +19,8 @@ OCCT. Throwaway code; the memo is the deliverable.
     required only for static OCCT, harmless for the shared build.
   - `0004-occt-sys-msvc-release-flags.diff` — source path only: the cmake
     crate drops `/O2` on MSVC, so `builtin` compiles an unoptimized OCCT.
+    Note `opencascade-sys` takes `occt-sys` from crates.io; the fork's
+    copy (and this patch) is only compiled through `[patch.crates-io]`.
 - `Cargo.toml` — pins the binding by git rev and points a `[patch]` at a
   scratch clone with the patches applied (path documented inline; the
   memo's §Reproduce has the full command sequence).
