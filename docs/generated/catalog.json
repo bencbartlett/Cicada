@@ -2315,6 +2315,57 @@
       ]
     },
     {
+      "name": "insert_items",
+      "title": "Insert Items",
+      "description": "insert elements into a list at the given indices, one insertion after another (`[a, b, c]` with items `[x, y]` at `[1, 3]` → `[a, x, b, y, c]`; GH Insert Items). Each index addresses the list as the previous insertions left it — `[0, 0]` puts the second item in front of the first. Slot-preserving: absent slots insert like any other element. No wrapping: an index past the current length is red, never a silent append.",
+      "category": "List & axis",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "the item count differs from the index count — strict zip, both counts in the message — or when an index is negative or beyond the list's length at its turn (the index, its position, and that length in the message).",
+      "gh": "Insert Items",
+      "examples": [
+        "xs = [1.0, 2.0, 3.0]\nextra = [10.0, 20.0]\nwidened = insert_items(list=xs, items=extra, indices=[1, 3])"
+      ],
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The list to insert into."
+        },
+        {
+          "name": "items",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The elements to insert, one per index (strict zip with `indices`)."
+        },
+        {
+          "name": "indices",
+          "type": "[Integer]",
+          "base": "Integer",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "Where each item goes, applied in order: index `i` is a position in the list AS IT IS after the previous insertions (`0` = the front, the current length = the back)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The list with every item inserted, `list` order preserved."
+        }
+      ]
+    },
+    {
       "name": "item",
       "title": "List Item",
       "description": "one element of a list by index. Selecting an absent (`Optional`) slot yields an absent element — `E` carries the `?`, so the output is `Point?` exactly when the list is `[Point?]`.",
@@ -2790,6 +2841,57 @@
           "list_depth": 1,
           "optional": false,
           "doc": "The first `count` slots (unchanged when `count` equals the length)."
+        }
+      ]
+    },
+    {
+      "name": "weave",
+      "title": "Weave",
+      "description": "merge two lists by a repeating turn pattern (`[0, 1]` over `[a0, a1]` and `[b0, b1]` → `[a0, b0, a1, b1]`; GH Weave, two streams). The pattern repeats until both streams are used up, so an unequal pair ends on the longer stream's turns only when the pattern still asks for it — a turn that asks a stream with nothing left while the other still has slots is red (GH pads with nulls there; docs/09 retires silent matching). Slot-preserving: absent slots take their turn like any other.",
+      "category": "List & axis",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "a pattern entry is not `0` or `1`, when the pattern is empty but the streams are not, or when a turn asks a stream that is already used up while the other still has slots left — the turn and both remaining counts in the message (`pad_last` / `truncate` fit the streams to the pattern).",
+      "gh": "Weave",
+      "examples": [
+        "evens = [0.0, 2.0, 4.0]\nodds = [1.0, 3.0, 5.0]\ncounted = weave(pattern=[0, 1], a=evens, b=odds)"
+      ],
+      "inputs": [
+        {
+          "name": "pattern",
+          "type": "[Integer]",
+          "base": "Integer",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The turn order, repeated: `0` takes the next slot of `a`, `1` the next slot of `b` (`[0, 1]` alternates; `[0, 0, 1]` takes two from `a` per one from `b`)."
+        },
+        {
+          "name": "a",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "Stream 0."
+        },
+        {
+          "name": "b",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "Stream 1."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The two streams interleaved in pattern order, every slot of both used once."
         }
       ]
     },
