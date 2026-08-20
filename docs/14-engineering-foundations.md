@@ -223,8 +223,10 @@ per file) and the three tests from the source. One source renders
 every view: `CATALOG.md`, `catalog.json`,
 `/api/catalog`, `cicada mcp` (shipped 2026-08-20: the MCP tools
 `catalog_search` / `node_doc` / `list_categories` / `check` for agents —
-`node_doc` IS the `/api/catalog` node object and `check` IS
-`compile::check_source`, doc 11 §Read tools), and `cicada docs`. Node icons are generated assets in the
+`node_doc` IS the `/api/catalog` node object (its output schema is held
+to the renderer by a test over every node) and `check` IS
+`compile::check_source` followed by the session's `lower_partial` dry,
+doc 11 §Read tools), and `cicada docs`. Node icons are generated assets in the
 same spirit (doc 16): produced by the AI icon pipeline from
 NodeSpecs, committed, CI-warned when missing.
 

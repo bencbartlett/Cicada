@@ -366,7 +366,31 @@ format, doc 08.
   slice: the live-graph tools (`what_feeds`, `wire_summary`, `profile`,
   `diagnostics`) — they need a running solve and belong to the app's
   server; a `volatile` flag in `node_doc` — `NodeSpec` has none until
-  item 3b adds it (only `pure` / `effectful` are reported).
+  item 3b adds it (only `pure` / `effectful` are reported; when 3b adds
+  the field to `catalog::node()`, the `node_doc_schema_matches_every_catalog_entry`
+  test demands it be described in `NodeDoc` in `mcp.rs` — the value
+  flows through the renderer on its own, the schema does not).
+  **Review fixes 2026-08-20** (adversarial review of the package):
+  `check` now runs the dry lowering (`lower_partial`, the session's
+  form) after the checker and reports `excluded` bindings with the
+  canvas's status + reason (`Exclusion::reason()`, one renderer shared
+  with the view-model) — `ok` was true for an integer literal at 2^53
+  that `cicada run` refused; `node_doc`'s `outputSchema` is the real
+  node shape (`NodeDoc` / `PortDoc`, held to `catalog::node_value` by a
+  test over every stdlib node) instead of an open object; the
+  project's script nodes are KEPT in the catalog cache (the dry lowering
+  needs their run functions to exist; nothing ever runs); tests now pin
+  GH-only search matches (`Pick'n'Choose` → `pick`, `addition` → `add`
+  above `mass_addition` — deleting the `gh` scoring branch once left
+  every test green), the out-of-project and scripted-subdirectory
+  `check {path}` branches (forcing the in-project branch once passed
+  every test), an exporter's `pure` / `effectful`, and the 2^53 literal.
+  `.mcp.json.example` registers the BUILT binary
+  (`${CARGO_TARGET_DIR:-target}/debug/cicada`, Claude Code's variable
+  expansion) — the `cargo run -p cicada-cli` form is a cold
+  feature-unification context that rebuilds the Manifold kernel with
+  cmake on PATH, which no MCP client's startup timeout survives; `.mcp.json`
+  is gitignored (the docs say to copy the example there).
 Every node: the three tests, the doc format, catalog regenerated in the
 same commit (skill `add-stdlib-node`).
 

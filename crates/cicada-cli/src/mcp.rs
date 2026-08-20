@@ -11,10 +11,18 @@
 //! change on disk) and `check` resolves relative paths against the project
 //! directory.
 //!
+//! `check` is the checker AND the dry lowering: after `compile::check_source`
+//! it runs the session's `lower_partial` (closures are built, nothing is
+//! solved) so the refusals only lowering sees — an integer literal at or
+//! beyond 2^53, a literal that refuses construction — reach the agent as
+//! `excluded` bindings with the very text the canvas would show, instead
+//! of an `ok: true` that `cicada run` then contradicts.
+//!
 //! Transport discipline: stdout carries JSON-RPC frames and nothing else;
 //! every note goes to stderr. The server is read-only by construction —
 //! edits reach a pipeline through the running app's atomic
-//! `POST /api/edit/apply_text` (docs/13), never through this process.
+//! `POST /api/edit/apply_text` (docs/13), never through this process, and
+//! no node — script or stdlib — ever runs here.
 //!
 //! Built on `rmcp` (the official MCP Rust SDK, Apache-2.0) without its
 //! macros: the tools are plain functions routed by hand so the workspace
@@ -27,10 +35,14 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Context as _;
 use cicada_core::catalog::category_rank;
+use cicada_core::config::ProjectConfig;
 use cicada_core::spec::NodeSpec;
+use cicada_lang::check::Resolution;
 use cicada_lang::diag::{Diagnostic, DiagnosticKind};
+use cicada_lang::document::Document;
 use cicada_server::compile;
-use cicada_server::scripts::ScriptCancel;
+use cicada_server::lower::{Exclusion, lower_partial};
+use cicada_server::scripts::{ScriptCancel, ScriptNode};
 use rmcp::handler::server::common::schema_for_input;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::ToolCallContext;
@@ -63,11 +75,12 @@ multi-output node; `each(list)` maps a node over a list; `x.port` selects an out
 This server is READ-ONLY: use `catalog_search` to find nodes by name, title, \
 Grasshopper component name or description; `list_categories` to see the catalog's \
 shape; `node_doc` for one node's full contract (ports, defaults, when it goes red, a \
-runnable example) before wiring it; and `check` to typecheck pipeline text or a file \
-in milliseconds — the inner loop: iterate on `check` until it reports no diagnostics, \
-then apply the text through the running app's atomic `POST /api/edit/apply_text` \
-route (docs/13) or `cicada run <file>` headless. Diagnostics carry a `fix` with a \
-`replacement` when one is machine-applicable.";
+runnable example) before wiring it; and `check` to typecheck and dry-lower pipeline \
+text or a file in milliseconds — the inner loop: iterate on `check` until `ok` is true \
+(no diagnostics, no binding excluded by a lowering refusal), then apply the text \
+through the running app's atomic `POST /api/edit/apply_text` route (docs/13) or \
+`cicada run <file>` headless. Diagnostics carry a `fix` with a `replacement` when one \
+is machine-applicable.";
 
 /// Run the MCP server over stdin/stdout until the client closes the pipe.
 ///
@@ -124,6 +137,27 @@ pub fn mcp_command(args: &McpArgs) -> anyhow::Result<()> {
 /// Python describe they gate.
 type Fingerprint = Vec<(PathBuf, Vec<u8>)>;
 
+/// The catalog every tool reads and `check` lowers against: the specs
+/// (stdlib first, then the project's script nodes by name — `compile`'s
+/// order) and the discovered script nodes themselves. The script nodes
+/// are kept, not dropped, because the dry lowering inside `check` needs
+/// their run functions to EXIST (`lower_call` refuses a script spec it has
+/// no node for); they are never called — this process solves nothing.
+struct ProjectCatalog {
+    specs: Vec<&'static NodeSpec>,
+    scripts: HashMap<String, ScriptNode>,
+}
+
+impl ProjectCatalog {
+    /// The stdlib alone — what a server without `--project` reads.
+    fn stdlib() -> Self {
+        Self {
+            specs: cicada_stdlib::registry().to_vec(),
+            scripts: HashMap::new(),
+        }
+    }
+}
+
 /// The project whose script nodes join the catalog.
 struct Project {
     /// The project directory — `scripts/` lives here and `check` paths
@@ -133,7 +167,7 @@ struct Project {
     /// from (never killed here: this process never solves).
     cancel: Arc<ScriptCancel>,
     /// The last discovered catalog and the fingerprint it matched.
-    cache: Mutex<Option<(Fingerprint, Vec<&'static NodeSpec>)>>,
+    cache: Mutex<Option<(Fingerprint, Arc<ProjectCatalog>)>>,
 }
 
 impl Project {
@@ -178,28 +212,29 @@ impl Project {
 
     /// The project catalog: stdlib + this project's script nodes, re-run
     /// through the server's discovery whenever `scripts/` changed.
-    fn specs(&self) -> Result<Vec<&'static NodeSpec>, Refusal> {
+    fn catalog(&self) -> Result<Arc<ProjectCatalog>, Refusal> {
         let fingerprint = self.fingerprint()?;
         let mut cache = self
             .cache
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some((cached, specs)) = cache.as_ref()
+        if let Some((cached, catalog)) = cache.as_ref()
             && *cached == fingerprint
         {
-            return Ok(specs.clone());
+            return Ok(Arc::clone(catalog));
         }
-        // The run functions (and the Python worker pool behind them) are
-        // dropped on the spot: this process describes scripts, never runs
-        // them.
-        let (specs, _scripts) =
+        // A changed `scripts/` replaces the whole catalog; the previous
+        // script nodes (and the worker pool behind their run functions)
+        // drop with it.
+        let (specs, scripts) =
             compile::catalog_specs_in(&self.dir, &self.cancel).map_err(|error| {
                 Refusal::ScriptDiscovery {
                     message: error.to_string(),
                 }
             })?;
-        *cache = Some((fingerprint, specs.clone()));
-        Ok(specs)
+        let catalog = Arc::new(ProjectCatalog { specs, scripts });
+        *cache = Some((fingerprint, Arc::clone(&catalog)));
+        Ok(catalog)
     }
 }
 
@@ -208,6 +243,8 @@ impl Project {
 /// The MCP service: the tool router plus the project it reads from.
 struct McpServer {
     project: Option<Project>,
+    /// The catalog of a server without `--project`.
+    stdlib: Arc<ProjectCatalog>,
     router: ToolRouter<Self>,
 }
 
@@ -215,17 +252,23 @@ impl McpServer {
     fn new(project: Option<Project>) -> anyhow::Result<Self> {
         Ok(Self {
             project,
+            stdlib: Arc::new(ProjectCatalog::stdlib()),
             router: build_router()?,
         })
     }
 
     /// The catalog every tool reads: the project's (stdlib + scripts) or
     /// the stdlib alone.
-    fn specs(&self) -> Result<Vec<&'static NodeSpec>, Refusal> {
+    fn catalog(&self) -> Result<Arc<ProjectCatalog>, Refusal> {
         match &self.project {
-            Some(project) => project.specs(),
-            None => Ok(cicada_stdlib::registry().to_vec()),
+            Some(project) => project.catalog(),
+            None => Ok(Arc::clone(&self.stdlib)),
         }
+    }
+
+    /// The specs of [`Self::catalog`].
+    fn specs(&self) -> Result<Vec<&'static NodeSpec>, Refusal> {
+        self.catalog().map(|catalog| catalog.specs.clone())
     }
 
     /// Where `check {path}` resolves a relative path.
@@ -307,7 +350,7 @@ fn build_router() -> anyhow::Result<ToolRouter<McpServer>> {
             catalog_search,
         ))
         .with_route((
-            tool::<NodeDocArgs, serde_json::Map<String, serde_json::Value>>(
+            tool::<NodeDocArgs, NodeDoc>(
                 "node_doc",
                 "The full specification of one node by its dialect name — the same object \
                  `/api/catalog` serves: `signature`; `title`; `description`; `category`; \
@@ -342,21 +385,27 @@ fn build_router() -> anyhow::Result<ToolRouter<McpServer>> {
         .with_route((
             tool::<CheckArgs, CheckResult>(
                 "check",
-                "Parse and typecheck a Cicada pipeline WITHOUT solving any geometry — \
-                 milliseconds, the inner loop. Pass exactly one of `text` (the whole \
-                 pipeline source, `# cicada 1` header included) or `path` (a `.cic` file; \
-                 relative paths resolve against the project directory, and the file's own \
-                 `scripts/` directory joins its catalog). Returns `ok` and the doc-11 \
-                 diagnostics: each has `kind` (unknown_node, unknown_name, missing_kwarg, \
-                 unknown_kwarg, type_mismatch, needs_lift, needs_adapter, \
-                 zip_length_mismatch, unpack_arity, unknown_port, rebinding, cycle, \
-                 parse_error, …), the red `node` (binding name), a `span` (1-based line, \
-                 byte columns), a domain-quality `message`, `expected`/`actual` types in \
-                 catalog notation where relevant, and a `fix` with a `label` and — when \
-                 the fix is a pure splice of the span — a `replacement`. Iterate until \
-                 `ok` is true before applying text to a project; a pipeline with \
-                 diagnostics still opens (red nodes are a valid state) but its red cone \
-                 will not solve.",
+                "Parse, typecheck and dry-lower a Cicada pipeline WITHOUT solving any \
+                 geometry — milliseconds, the inner loop. Pass exactly one of `text` (the \
+                 whole pipeline source, `# cicada 1` header included) or `path` (a `.cic` \
+                 file; relative paths resolve against the project directory, and the \
+                 file's own `scripts/` directory joins its catalog). Returns `ok`, the \
+                 doc-11 diagnostics and `excluded`. Each diagnostic has `kind` \
+                 (unknown_node, unknown_name, missing_kwarg, unknown_kwarg, type_mismatch, \
+                 needs_lift, needs_adapter, zip_length_mismatch, unpack_arity, \
+                 unknown_port, rebinding, cycle, parse_error, …), the red `node` (binding \
+                 name), a `span` (1-based line, byte columns), a domain-quality `message`, \
+                 `expected`/`actual` types in catalog notation where relevant, and a `fix` \
+                 with a `label` and — when the fix is a pure splice of the span — a \
+                 `replacement`. `excluded` lists every binding the app would NOT solve, \
+                 with `status` `red` (its own diagnostics, `#off`, or a lowering refusal \
+                 such as an integer literal at or beyond 2^53 — refusals the checker \
+                 alone never sees) or `blocked` (fed by an excluded binding) and the \
+                 `reason` the canvas shows. `ok` is true when there are no diagnostics \
+                 and no lowering refusal (`#off` and its blocked cone are a deliberate \
+                 state, not an error). Iterate until `ok` is true before applying text to \
+                 a project; a pipeline with diagnostics still opens (red nodes are a valid \
+                 state) but its excluded bindings will not solve.",
             )?,
             check,
         )))
@@ -389,6 +438,11 @@ enum Refusal {
     UnreadablePath { path: String, message: String },
     /// The project's `scripts/` directory failed discovery.
     ScriptDiscovery { message: String },
+    /// The dry lowering could not assemble the checked pipeline into a
+    /// graph — an engine bug, never a pipeline problem (per-binding
+    /// refusals are `excluded` entries, not this); the message is the
+    /// evidence to report.
+    GraphAssembly { message: String },
 }
 
 impl Refusal {
@@ -398,7 +452,8 @@ impl Refusal {
             | Self::UnknownCategory { message, .. }
             | Self::CheckSource { message }
             | Self::UnreadablePath { message, .. }
-            | Self::ScriptDiscovery { message } => message,
+            | Self::ScriptDiscovery { message }
+            | Self::GraphAssembly { message } => message,
         }
     }
 
@@ -630,6 +685,83 @@ struct NodeDocArgs {
     name: String,
 }
 
+/// The SHAPE of a `node_doc` result — `/api/catalog`'s node object (the
+/// server's renderer, `catalog::node_value`, produces the value; this type
+/// only documents it for the tool's `outputSchema`) plus `signature` and
+/// `effectful`. The unit test `node_doc_schema_matches_every_catalog_entry`
+/// holds the two together: a field added to the catalog renderer must be
+/// described here, or the test says so.
+#[derive(JsonSchema)]
+#[allow(dead_code)] // schema-only: never constructed, the value comes from the renderer
+struct NodeDoc {
+    /// Dialect name — what you write before `(` in a binding.
+    name: String,
+    /// Human title.
+    title: String,
+    /// What the node does (one sentence, lowercase, ends with a period).
+    description: String,
+    /// Catalog category (ribbon tab).
+    category: String,
+    /// `S` = spike set, `1` = v0.1, `2` = v0.2.
+    tier: String,
+    /// Semantic node version (part of the cache key).
+    version: u32,
+    /// Pure nodes are memoized and run whenever their inputs change.
+    pure: bool,
+    /// `!pure`: exporters and other side-effecting nodes — never run unless
+    /// a human or `cicada run --node` names them.
+    effectful: bool,
+    /// Whether the node's result depends on the project tolerance.
+    uses_tolerance: bool,
+    /// The runtime contract: the conditions under which the node goes red
+    /// (absent when the node cannot fail).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    panics: Option<String>,
+    /// The Grasshopper component this node replaces; always present — null
+    /// for Cicada-only nodes.
+    #[schemars(required)]
+    gh: Option<String>,
+    /// Runnable `.cic` snippets (no `# cicada 1` header) CI solves; empty
+    /// for script nodes.
+    examples: Vec<String>,
+    /// `name(port: Type = default, …) → Type` — the signature to write a binding from.
+    signature: String,
+    /// Input ports in signature order.
+    inputs: Vec<PortDoc>,
+    /// Output ports; a single output is the port `out`.
+    outputs: Vec<PortDoc>,
+}
+
+/// One port of a [`NodeDoc`] — the `/api/catalog` port object.
+#[derive(JsonSchema)]
+#[allow(dead_code)] // schema-only, see NodeDoc
+struct PortDoc {
+    /// Port name — the kwarg (inputs) or the `.port` selector (outputs).
+    name: String,
+    /// Catalog notation: `Number`, `[Point]`, `Mesh?`; `T` = any
+    /// transformable kind, `E` = any element kind, `Any` = a display sink.
+    #[serde(rename = "type")]
+    ty: String,
+    /// The base kind of `type` without list brackets or `?`.
+    base: String,
+    /// How many `[…]` list levels `type` carries.
+    list_depth: u8,
+    /// True when `type` carries `?` — a value that may be absent. NOT
+    /// whether the kwarg may be omitted; that is `default`.
+    optional: bool,
+    /// The default as dialect text; present = the kwarg may be omitted,
+    /// absent = you must pass it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default: Option<String>,
+    /// The port's documentation paragraph (absent when the port has none).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    doc: Option<String>,
+    /// `length` ports rescale with the project unit; `angle` ports are
+    /// radians (absent for dimensionless ports).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dimension: Option<String>,
+}
+
 fn node_doc(
     server: &McpServer,
     Parameters(args): Parameters<NodeDocArgs>,
@@ -765,18 +897,38 @@ enum CheckedSource {
     },
 }
 
+/// One binding the app would not solve (the canvas's `excluded` view,
+/// status word and reason from the same renderer).
+#[derive(Debug, Serialize, JsonSchema)]
+struct ExcludedBinding {
+    /// The binding name.
+    node: String,
+    /// `red` — its own diagnostics, `#off`, or a lowering refusal — or
+    /// `blocked` — fed by an excluded binding.
+    status: String,
+    /// The reason as the canvas shows it on the node.
+    reason: String,
+}
+
 /// Result of `check`.
 #[derive(Debug, Serialize, JsonSchema)]
 struct CheckResult {
     /// What was checked.
     source: CheckedSource,
-    /// True when there are no diagnostics.
+    /// True when there are no diagnostics and no binding is excluded by a
+    /// lowering refusal (`#off` and its blocked cone are a deliberate
+    /// state, not an error).
     ok: bool,
     /// Number of diagnostics.
     diagnostic_count: usize,
     /// The doc-11 diagnostics: `kind`, `node`, `span {line, col_start,
     /// col_end}`, `message`, `expected`, `actual`, `fix {label, replacement}`.
     diagnostics: Vec<serde_json::Value>,
+    /// Every binding the app would not solve, by name: red by its own
+    /// diagnostics / `#off` / a lowering refusal the checker alone never
+    /// sees (an integer literal at or beyond 2^53, a literal that refuses
+    /// construction), or blocked by an excluded upstream.
+    excluded: Vec<ExcludedBinding>,
     /// Binding names the pipeline introduces, in file order.
     bindings: Vec<String>,
 }
@@ -788,13 +940,49 @@ fn check(
     outcome(check_pipeline(server, args))
 }
 
-fn check_pipeline(server: &McpServer, args: CheckArgs) -> Result<CheckResult, Refusal> {
-    let (document, diagnostics, source) = match (args.text, args.path) {
-        (Some(text), None) => {
-            let specs = server.specs()?;
-            let (document, resolution) = compile::check_source(&text, &specs);
-            (document, resolution.diagnostics, CheckedSource::Text)
+/// A parsed + checked pipeline with the catalog it was checked against —
+/// what the dry lowering consumes.
+struct Checked {
+    document: Document,
+    resolution: Resolution,
+    catalog: Arc<ProjectCatalog>,
+}
+
+impl Checked {
+    /// Check `text` against `catalog` — THE checker.
+    fn against(text: &str, catalog: Arc<ProjectCatalog>) -> Self {
+        let (document, resolution) = compile::check_source(text, &catalog.specs);
+        Self {
+            document,
+            resolution,
+            catalog,
         }
+    }
+
+    /// The dry lowering: the session's `lower_partial` over the checked
+    /// document (closures are built, nothing runs, the graph is dropped),
+    /// reduced to the bindings it excluded and why — the canvas's view.
+    fn excluded(&self) -> Result<Vec<(String, Exclusion)>, Refusal> {
+        let lowered = lower_partial(
+            &self.document,
+            &self.resolution,
+            &self.catalog.specs,
+            &ProjectConfig::default(),
+            &self.catalog.scripts,
+        )
+        .map_err(|error| Refusal::GraphAssembly {
+            message: error.to_string(),
+        })?;
+        Ok(lowered.excluded.into_iter().collect())
+    }
+}
+
+fn check_pipeline(server: &McpServer, args: CheckArgs) -> Result<CheckResult, Refusal> {
+    let (checked, source) = match (args.text, args.path) {
+        (Some(text), None) => (
+            Checked::against(&text, server.catalog()?),
+            CheckedSource::Text,
+        ),
         (None, Some(path)) => {
             let relative = PathBuf::from(&path);
             let joined = match server.base_dir() {
@@ -820,9 +1008,8 @@ fn check_pipeline(server: &McpServer, args: CheckArgs) -> Result<CheckResult, Re
             let in_project = server
                 .base_dir()
                 .is_some_and(|base| pipeline.parent() == Some(base));
-            let (document, resolution) = if in_project {
-                let specs = server.specs()?;
-                compile::check_source(&text, &specs)
+            let checked = if in_project {
+                Checked::against(&text, server.catalog()?)
             } else {
                 let loaded =
                     compile::load(&pipeline, &text, &ScriptCancel::new()).map_err(|error| {
@@ -830,11 +1017,17 @@ fn check_pipeline(server: &McpServer, args: CheckArgs) -> Result<CheckResult, Re
                             message: error.to_string(),
                         }
                     })?;
-                (loaded.document, loaded.resolution)
+                Checked {
+                    document: loaded.document,
+                    resolution: loaded.resolution,
+                    catalog: Arc::new(ProjectCatalog {
+                        specs: loaded.specs,
+                        scripts: loaded.scripts,
+                    }),
+                }
             };
             (
-                document,
-                resolution.diagnostics,
+                checked,
                 CheckedSource::Path {
                     path: pipeline.display().to_string(),
                 },
@@ -851,15 +1044,31 @@ fn check_pipeline(server: &McpServer, args: CheckArgs) -> Result<CheckResult, Re
             });
         }
     };
-    let bindings = document
+    let excluded = checked.excluded()?;
+    let diagnostics = &checked.resolution.diagnostics;
+    let bindings = checked
+        .document
         .statements()
         .flat_map(|(_, statement, _)| statement.targets.iter().map(|target| target.name.clone()))
         .collect();
     Ok(CheckResult {
         source,
-        ok: diagnostics.is_empty(),
+        // `#off` and the cone it blocks are a deliberate state; a lowering
+        // refusal is a problem the checker could not see.
+        ok: diagnostics.is_empty()
+            && !excluded
+                .iter()
+                .any(|(_, exclusion)| matches!(exclusion, Exclusion::Lowering(_))),
         diagnostic_count: diagnostics.len(),
         diagnostics: diagnostics.iter().map(diagnostic_json).collect(),
+        excluded: excluded
+            .iter()
+            .map(|(node, exclusion)| ExcludedBinding {
+                node: node.clone(),
+                status: exclusion.status().to_owned(),
+                reason: exclusion.reason(),
+            })
+            .collect(),
         bindings,
     })
 }
@@ -941,6 +1150,39 @@ mod tests {
         assert!(result.total_matches > 3);
     }
 
+    /// The GH-name field must carry weight on its own: `slider`'s GH name
+    /// equals its title, so only a query that matches NOTHING but `gh`
+    /// proves the branch (a deleted `gh` scoring line once left every test
+    /// green).
+    #[test]
+    fn search_matches_gh_names_that_appear_nowhere_else() {
+        let server = stdlib_server();
+        let query = |text: &str| {
+            search(
+                &server,
+                &SearchArgs {
+                    query: text.to_owned(),
+                    category: None,
+                    limit: None,
+                },
+            )
+            .unwrap()
+        };
+        // `pick`: name "pick", title "Pick", GH "Pick'n'Choose" — the
+        // apostrophes keep the word out of every prose field.
+        let result = query("Pick'n'Choose");
+        assert_eq!(result.total_matches, 1, "{result:?}");
+        assert_eq!(result.nodes[0].name, "pick");
+        assert_eq!(result.nodes[0].score, 80, "an exact GH match ranks 80");
+        // `add`'s GH name "Addition" (exact, 80) outranks `mass_addition`'s
+        // name prefix (60): without the GH branch `add` would not match.
+        let result = query("addition");
+        assert_eq!(result.nodes[0].name, "add", "{result:?}");
+        assert_eq!(result.nodes[0].score, 80);
+        assert_eq!(result.nodes[1].name, "mass_addition");
+        assert_eq!(result.nodes[1].score, 60);
+    }
+
     #[test]
     fn empty_query_lists_a_category_and_unknown_category_refuses() {
         let server = stdlib_server();
@@ -978,11 +1220,19 @@ mod tests {
             "slider(value: Number, min: Number = 0.0, max: Number = 10.0, step: Number = 0.0) → Number"
         );
         assert_eq!(doc["effectful"], false);
+        assert_eq!(doc["pure"], true);
         let inputs = doc["inputs"].as_array().unwrap();
         assert_eq!(inputs[0]["name"], "value");
         assert_eq!(inputs[1]["default"], "0.0");
         assert!(doc["panics"].is_string());
         assert_eq!(doc["outputs"][0]["name"], "out");
+
+        // An exporter: the flags are derived, not hardcoded.
+        let exporter = doc_of(&server, "export_obj").unwrap();
+        assert_eq!(exporter["pure"], false);
+        assert_eq!(exporter["effectful"], true);
+        assert_eq!(exporter["outputs"], serde_json::json!([]));
+        assert!(exporter["signature"].as_str().unwrap().ends_with("→ ()"));
 
         let refused = doc_of(&server, "slidr").unwrap_err();
         match refused {
@@ -990,6 +1240,89 @@ mod tests {
                 assert_eq!(did_you_mean.as_deref(), Some("slider"));
             }
             other => panic!("expected an unknown-node refusal, got {other:?}"),
+        }
+    }
+
+    /// The `node_doc` output schema describes the value the renderer
+    /// produces — for EVERY node: each key of each entry (and of each port)
+    /// is a described property, and each required property is present. A
+    /// field added to `catalog::node()` (e.g. `volatile`, item 3b) fails
+    /// here until `NodeDoc` documents it.
+    #[test]
+    fn node_doc_schema_matches_every_catalog_entry() {
+        let server = stdlib_server();
+        let tool = server.router.get("node_doc").unwrap();
+        let schema = tool.output_schema.as_ref().unwrap();
+        let properties = schema["properties"].as_object().unwrap();
+        for key in [
+            "inputs",
+            "outputs",
+            "panics",
+            "gh",
+            "signature",
+            "effectful",
+        ] {
+            assert!(properties.contains_key(key), "schema describes `{key}`");
+        }
+        let required: Vec<&str> = schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|k| k.as_str().unwrap())
+            .collect();
+        assert!(
+            required.contains(&"gh"),
+            "gh is always present (null = Cicada-only)"
+        );
+        let port_schema = &schema["$defs"]["PortDoc"];
+        let port_properties = port_schema["properties"].as_object().unwrap();
+        let port_required: Vec<&str> = port_schema["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|k| k.as_str().unwrap())
+            .collect();
+
+        for spec in cicada_stdlib::registry() {
+            let doc = doc_of(&server, spec.name).unwrap();
+            for key in doc.keys() {
+                assert!(
+                    properties.contains_key(key),
+                    "`{}` has `{key}` which the node_doc schema does not describe",
+                    spec.name
+                );
+            }
+            for key in &required {
+                assert!(
+                    doc.contains_key(*key),
+                    "`{}` lacks required `{key}`",
+                    spec.name
+                );
+            }
+            for port in doc["inputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .chain(doc["outputs"].as_array().unwrap())
+            {
+                let port = port.as_object().unwrap();
+                for key in port.keys() {
+                    assert!(
+                        port_properties.contains_key(key),
+                        "port `{}` of `{}` has `{key}` which the PortDoc schema does not describe",
+                        port["name"],
+                        spec.name
+                    );
+                }
+                for key in &port_required {
+                    assert!(
+                        port.contains_key(*key),
+                        "port `{}` of `{}` lacks required `{key}`",
+                        port["name"],
+                        spec.name
+                    );
+                }
+            }
         }
     }
 
@@ -1019,6 +1352,15 @@ mod tests {
         assert_eq!(result.diagnostics[0]["kind"], "unknown_node");
         assert_eq!(result.diagnostics[0]["fix"]["replacement"], "slider");
         assert_eq!(result.bindings, ["x"]);
+        assert_eq!(result.excluded.len(), 1);
+        assert_eq!(
+            (
+                result.excluded[0].node.as_str(),
+                result.excluded[0].status.as_str(),
+                result.excluded[0].reason.as_str()
+            ),
+            ("x", "red", "has diagnostics")
+        );
 
         let result = check_pipeline(
             &server,
@@ -1029,6 +1371,7 @@ mod tests {
         )
         .unwrap();
         assert!(result.ok, "{:?}", result.diagnostics);
+        assert!(result.excluded.is_empty());
         assert!(matches!(result.source, CheckedSource::Text));
 
         for (text, path) in [(None, None), (Some(String::new()), Some(String::new()))] {
@@ -1044,6 +1387,49 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(refused, Refusal::UnreadablePath { .. }));
+    }
+
+    /// What the checker alone never sees: an integer literal at 2^53 is
+    /// refused by lowering (`cicada run` exits 1, the canvas shows the node
+    /// red) — `check` must not say `ok` for it. `#off` is a deliberate
+    /// state: excluded, reported, but still `ok`.
+    #[test]
+    fn check_reports_lowering_refusals_as_excluded_and_off_as_deliberate() {
+        let server = stdlib_server();
+        let text = |source: &str| {
+            check_pipeline(
+                &server,
+                CheckArgs {
+                    text: Some(source.to_owned()),
+                    path: None,
+                },
+            )
+            .unwrap()
+        };
+        let result = text(
+            "# cicada 1\nn = duplicate(item=1.0, count=9007199254740993)\nm = reverse(list=n)\n",
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(!result.ok, "a lowering refusal is not ok");
+        let by_name: HashMap<&str, (&str, &str)> = result
+            .excluded
+            .iter()
+            .map(|e| (e.node.as_str(), (e.status.as_str(), e.reason.as_str())))
+            .collect();
+        let (status, reason) = by_name["n"];
+        assert_eq!(status, "red");
+        assert!(reason.contains("2^53"), "{reason}");
+        assert_eq!(by_name["m"], ("blocked", "fed by red `n`"));
+
+        let result = text(
+            "# cicada 1\na = slider(value=1.0, min=0.0, max=2.0)\n#off b = multiply(a=a, b=2.0)\nd = add(a=a, b=1.0)\n",
+        );
+        assert!(result.ok, "{:?}", result.excluded);
+        assert_eq!(result.excluded.len(), 1);
+        assert_eq!(result.excluded[0].node, "b");
+        assert_eq!(result.excluded[0].status, "red");
+        assert_eq!(result.excluded[0].reason, "disabled (`#off`)");
+        assert_eq!(result.bindings, ["a", "d"], "a disabled line binds nothing");
     }
 
     #[test]

@@ -2,8 +2,11 @@
 //! a Model Context Protocol server over stdio, driven with real JSON-RPC
 //! framing — `initialize` → `notifications/initialized` → `tools/list` →
 //! every tool once → `ping` — asserting the shapes an agent client reads:
-//! tool schemas, `node_doc`'s ports and GH name, `check`'s did-you-mean
-//! diagnostic, and (with `--project`) a script node in the catalog.
+//! tool schemas (`node_doc`'s real output schema), `node_doc`'s ports and
+//! GH name, GH-only search matches, `check`'s did-you-mean diagnostic and
+//! its `excluded` bindings (the dry lowering's refusals), and (with
+//! `--project`) a script node in the catalog plus the three `path` cases —
+//! in the project, outside it, in a scripted subdirectory.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -237,10 +240,47 @@ fn assert_tool_list(tools: &[Value]) {
             && check_tool["inputSchema"]["properties"]["path"].is_object(),
         "{check_tool}"
     );
+    assert!(
+        check_tool["outputSchema"]["properties"]["excluded"].is_object()
+            && check_tool["outputSchema"]["properties"]["diagnostics"].is_object(),
+        "{check_tool}"
+    );
+    // node_doc's output schema is the real shape, not an open object: a
+    // client validating structuredContent learns the fields.
+    let doc_tool = tools.iter().find(|t| t["name"] == "node_doc").unwrap();
+    let doc_properties = doc_tool["outputSchema"]["properties"].as_object().unwrap();
+    for key in [
+        "inputs",
+        "outputs",
+        "panics",
+        "gh",
+        "signature",
+        "effectful",
+        "examples",
+    ] {
+        assert!(
+            doc_properties.contains_key(key),
+            "node_doc schema lacks `{key}`: {doc_tool}"
+        );
+    }
+    assert_ne!(
+        doc_tool["outputSchema"]["additionalProperties"], true,
+        "{doc_tool}"
+    );
+    let port_properties = doc_tool["outputSchema"]["$defs"]["PortDoc"]["properties"]
+        .as_object()
+        .unwrap();
+    for key in ["type", "default", "doc", "optional", "dimension"] {
+        assert!(
+            port_properties.contains_key(key),
+            "PortDoc schema lacks `{key}`"
+        );
+    }
 }
 
-/// `catalog_search`: the exact name ranks first; GH names match too; limit
-/// applies after ranking.
+/// `catalog_search`: the exact name ranks first; GH names match too — on
+/// their own, by a word no other field carries; limit applies after
+/// ranking.
 fn assert_catalog_search(client: &mut Client) {
     let hits = client.call("catalog_search", &json!({"query": "slider", "limit": 5}));
     let hits = structured(&hits);
@@ -259,6 +299,19 @@ fn assert_catalog_search(client: &mut Client) {
         &json!({"query": "Number Slider", "limit": 1}),
     );
     assert_eq!(structured(&by_gh)["nodes"][0]["name"], "slider");
+    // A GH name that appears in no other field: `pick` is "Pick'n'Choose"
+    // in Grasshopper; `add` is "Addition" (exact, 80) and must beat
+    // `mass_addition`'s name prefix (60).
+    let gh_only = client.call("catalog_search", &json!({"query": "Pick'n'Choose"}));
+    let gh_only = structured(&gh_only);
+    assert_eq!(gh_only["total_matches"], 1, "{gh_only}");
+    assert_eq!(gh_only["nodes"][0]["name"], "pick");
+    assert_eq!(gh_only["nodes"][0]["score"], 80);
+    let addition = client.call("catalog_search", &json!({"query": "addition"}));
+    let addition = structured(&addition);
+    assert_eq!(addition["nodes"][0]["name"], "add", "{addition}");
+    assert_eq!(addition["nodes"][0]["score"], 80);
+    assert_eq!(addition["nodes"][1]["name"], "mass_addition");
 }
 
 /// `list_categories`: ribbon order, counts sum to the catalog.
@@ -314,6 +367,16 @@ fn assert_node_doc(client: &mut Client) {
             .starts_with("amps = slider(")
     );
 
+    // An exporter: `pure` / `effectful` come from the spec, not a constant.
+    let exporter = client.call("node_doc", &json!({"name": "export_obj"}));
+    let exporter = structured(&exporter);
+    assert_eq!(exporter["pure"], false);
+    assert_eq!(exporter["effectful"], true);
+    assert_eq!(exporter["tier"], "S");
+    assert_eq!(exporter["version"], 1);
+    assert!(exporter["gh"].is_null(), "Cicada-only: null, present");
+    assert_eq!(exporter["outputs"], json!([]));
+
     let missing = client.call("node_doc", &json!({"name": "slidr"}));
     assert_eq!(missing["isError"], true, "{missing}");
     assert_eq!(missing["structuredContent"]["error"], "unknown_node");
@@ -344,6 +407,10 @@ fn assert_check(client: &mut Client) {
     assert_eq!(diagnostic["fix"]["replacement"], "slider");
     assert_eq!(checked["bindings"], json!(["amps"]));
     assert_eq!(checked["source"]["kind"], "text");
+    assert_eq!(
+        checked["excluded"],
+        json!([{"node": "amps", "status": "red", "reason": "has diagnostics"}])
+    );
 
     let clean = client.call(
         "check",
@@ -352,7 +419,30 @@ fn assert_check(client: &mut Client) {
     let clean = structured(&clean);
     assert_eq!(clean["ok"], true, "{clean}");
     assert_eq!(clean["diagnostics"], json!([]));
+    assert_eq!(clean["excluded"], json!([]));
     assert_eq!(clean["bindings"], json!(["amps", "twice"]));
+
+    // A refusal only lowering sees (the checker carries literals as f64;
+    // 2^53 is refused as inexact) — `cicada run` exits 1 on this text and
+    // the canvas shows `n` red, so `check` must not say ok. The downstream
+    // binding is blocked, with the canvas's words.
+    let lowering = client.call(
+        "check",
+        &json!({"text": "# cicada 1\nn = duplicate(item=1.0, count=9007199254740993)\nm = reverse(list=n)\n"}),
+    );
+    let lowering = structured(&lowering);
+    assert_eq!(lowering["ok"], false, "{lowering}");
+    assert_eq!(lowering["diagnostic_count"], 0);
+    let excluded = lowering["excluded"].as_array().unwrap();
+    let n = excluded.iter().find(|e| e["node"] == "n").unwrap();
+    assert_eq!(n["status"], "red");
+    assert!(
+        n["reason"].as_str().unwrap().contains("2^53"),
+        "the lowering's own message: {n}"
+    );
+    let m = excluded.iter().find(|e| e["node"] == "m").unwrap();
+    assert_eq!(m["status"], "blocked");
+    assert_eq!(m["reason"], "fed by red `n`");
 
     // Exactly one source; an unknown argument is refused rather than
     // ignored (deny_unknown_fields).
@@ -416,7 +506,11 @@ fn project_scripts_join_the_catalog_and_check_resolves_project_paths() {
 
     let file = client.call("check", &json!({"path": "pipeline.cic"}));
     let file = structured(&file);
+    // `ok` covers the dry lowering too: the script node lowers (its run
+    // function exists in the kept catalog) — a missing script map would
+    // exclude `tripled` as red.
     assert_eq!(file["ok"], true, "{file}");
+    assert_eq!(file["excluded"], json!([]));
     assert_eq!(file["source"]["kind"], "path");
     assert!(
         file["source"]["path"]
@@ -443,6 +537,8 @@ fn project_scripts_join_the_catalog_and_check_resolves_project_paths() {
     assert_eq!(missing["isError"], true, "{missing}");
     assert_eq!(missing["structuredContent"]["error"], "unreadable_path");
 
+    assert_check_outside_the_project(&mut client, project.path());
+
     // A script added while the server runs joins the catalog on the next
     // call — discovery re-runs when scripts/ changes (no restart, no stale
     // catalog).
@@ -459,6 +555,59 @@ fn project_scripts_join_the_catalog_and_check_resolves_project_paths() {
 
     let stderr = client.finish();
     assert!(stderr.contains("project "), "{stderr}");
+}
+
+/// `check {path}` outside the project: a file elsewhere is checked against
+/// its OWN directory's scripts, exactly as `cicada run` would — not the
+/// project's (the stranger's node is unknown to the project catalog, as
+/// `text` shows, yet its own pipeline is ok by absolute path); a scripted
+/// subdirectory of the project (`examples/wall/` under `examples/`) is a
+/// project of its own — relative to `--project` for resolution, its own
+/// directory for the catalog. Forcing the in-project branch once passed
+/// every test.
+fn assert_check_outside_the_project(client: &mut Client, project: &Path) {
+    let half_script = SCRIPT
+        .replace("triple_up", "half_down")
+        .replace("Triple Up", "Half Down")
+        .replace("* 3.0", "* 0.5");
+    let stranger = tempfile::tempdir().unwrap();
+    std::fs::create_dir(stranger.path().join("scripts")).unwrap();
+    std::fs::write(
+        stranger.path().join("scripts").join("half.py"),
+        &half_script,
+    )
+    .unwrap();
+    let stranger_text = "# cicada 1\nh = half_down(x=4.0)\n";
+    std::fs::write(stranger.path().join("other.cic"), stranger_text).unwrap();
+    let as_text = client.call("check", &json!({"text": stranger_text}));
+    let as_text = structured(&as_text);
+    assert_eq!(as_text["ok"], false, "{as_text}");
+    assert_eq!(as_text["diagnostics"][0]["kind"], "unknown_node");
+    let absolute = stranger.path().join("other.cic");
+    let as_file = client.call("check", &json!({"path": absolute.to_string_lossy()}));
+    let as_file = structured(&as_file);
+    assert_eq!(as_file["ok"], true, "{as_file}");
+    assert_eq!(as_file["bindings"], json!(["h"]));
+    assert!(
+        as_file["source"]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("other.cic")
+    );
+    // The scripted subdirectory — inside the project tree, its own catalog.
+    let inner_dir = project.join("inner");
+    std::fs::create_dir_all(inner_dir.join("scripts")).unwrap();
+    std::fs::write(inner_dir.join("scripts").join("half.py"), &half_script).unwrap();
+    std::fs::write(inner_dir.join("inner.cic"), stranger_text).unwrap();
+    let inner = client.call("check", &json!({"path": "inner/inner.cic"}));
+    let inner = structured(&inner);
+    assert_eq!(inner["ok"], true, "{inner}");
+    assert!(
+        inner["source"]["path"]
+            .as_str()
+            .unwrap()
+            .ends_with("inner.cic")
+    );
 }
 
 #[test]

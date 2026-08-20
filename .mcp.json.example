@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "cicada": {
-      "command": "cargo",
-      "args": ["run", "-q", "-p", "cicada-cli", "--", "mcp", "--project", "examples"]
+      "command": "${CARGO_TARGET_DIR:-target}/debug/cicada",
+      "args": ["mcp", "--project", "examples"]
     }
   }
 }
