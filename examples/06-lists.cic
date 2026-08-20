@@ -1,0 +1,50 @@
+# cicada 1
+# Lists 101: the typed combinators that replace GH's tree surgery (docs/09)
+# — sort / dispatch / group_by keep provenance, zip is strict and its
+# adapters are visible nodes, and maths lifts element-wise with each().
+# Run:   cargo run -p cicada-cli -- run examples/06-lists.cic
+# (every node is pure: add --time and the second run is fully cached)
+
+# Eight column positions (range includes both ends) with random heights.
+span = construct_domain(start=0.0, end=14.0)
+xs = range(domain=span, steps=7)
+n = length(list=xs)
+tall_span = construct_domain(start=1.0, end=6.0)
+heights = random(domain=tall_span, count=n, seed=3)
+
+# Sort the columns by height. `order` maps each sorted slot back to its
+# source index — identity survives the reorder (docs/08 rule 6).
+sorted_heights, sorted_xs, order = sort(keys=heights, values=xs)
+tallest_first = reverse(list=sorted_xs)
+
+# Tall vs short: a comparison lifted over the list feeds dispatch, which
+# returns both halves AND their index maps.
+limit = slider(value=3.5, min=1.0, max=6.0)
+is_tall = larger(a=each(heights), b=limit)
+tall_xs, short_xs, tall_from, short_from = dispatch(list=xs, pattern=is_tall)
+
+# Band the heights by their integer part and gather per band — the honest
+# form of a Path Mapper recipe: one group per distinct key, first-seen order.
+bands = floor(x=each(heights))
+per_band, band_keys = group_by(keys=bands, values=heights)
+
+# Reducers: the total with running sums, and the mean.
+total, running = mass_addition(list=heights)
+mean = average(list=heights)
+
+# Strict zip, explicitly adapted: a two-entry pattern repeated to n slots
+# (GH Repeat Data) culls every other column; a short list padded with its
+# last value (GH's longest-list matching, made visible) scales them.
+on_off = [True, False]
+mask = repeat(pattern=on_off, count=n)
+kept_heights, kept_from = cull(list=heights, pattern=mask)
+kept_xs, kept_xs_from = cull(list=xs, pattern=mask)
+k = length(list=kept_xs)
+few = [1.0, 1.5]
+scales = pad_last(list=few, count=k)
+radii = multiply(a=each(scales), b=0.3)
+
+# Geometry from lists: a sphere per kept column, sized by the padded scale.
+tops = construct_point(x=each(kept_xs), z=each(kept_heights))
+frames = xy_plane(origin=each(tops))
+balls = sphere(plane=each(frames), radius=each(radii), segments=16)

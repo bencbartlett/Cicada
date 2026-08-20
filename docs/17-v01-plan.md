@@ -23,7 +23,7 @@ runs in parallel from day 1:
 | 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | pending |
 | 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | pending |
 | 6 | WASM script host — load precompiled guests, epoch cancellation, `cicada-guest` SDK | last | weeks | pending |
-| C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); C1+ pending |
+| C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); **C1 done** (2026-08-20: 46 nodes — lists, maths tail, sequences; the diagnostics name real nodes and a test keeps it so; `examples/06-lists.cic`); `cicada mcp` not started; C2+ pending |
 
 Out of v0.1 (unchanged from doc 05): fillets/chamfers and B-rep
 maturity, the Blender bridge, fidget, the .gh importer, Tauri, the AI
@@ -293,7 +293,32 @@ format, doc 08.
   `pad_last`/`cycle`/`truncate` policies — plus duplicate / reverse /
   sort / dispatch / group_by and the maths tail (min/max/abs/round/
   floor/ceil/trig). A test asserts no diagnostic names an unregistered
-  node.
+  node. **Done 2026-08-20** (`wt/catalog`, four commits, 46 nodes, all in
+  the C0 format with the three tests, goldens blessed through the
+  run-once path, catalog regenerated each commit): lists — `compact`,
+  `duplicate`, `reverse`, `sort`, `dispatch`, `group_by`, `shift_list`,
+  `split_list`, `nest`, `transpose`, `pad_last`, `truncate`; maths —
+  `negative`, `absolute`, `round`, `floor`, `ceiling`, `min`, `max`,
+  `sqrt`, `ln`, `log`, `exp`, `sin`, `cos`, `tan`, `asin`, `acos`,
+  `atan`, `atan2`, `radians`, `degrees`, `smaller`, `larger`, `equals`,
+  `and`, `or`, `not`, `xor`, `pick`, `mass_addition`, `average`,
+  `bounds`; sequences — `range`, `repeat`, `jitter` (one shared PRNG).
+  Findings: the `cycle` zip policy cannot be a node under that name (the
+  §1 time param owns it) — its node form is `repeat`, and docs/02/09/10
+  still say `cycle` for the policy; `compact(list: [E?]) → (values: [E],
+  map)` is the documented signature but the checker binds `E` WITH the
+  wired `?`, so a `[Point?]` still types `[Point?]` after compacting —
+  the one-line `E?`-port rule in `bind_var` is a dialect-change item;
+  `cross` (two type variables) and `squeeze`/`flatten_all`
+  (data-dependent depth) wait on checker work. The strict-zip diagnostic
+  now names `pad_last` / `repeat` / `truncate`;
+  `crates/cicada-cli/tests/diagnostic_vocabulary.rs` scans the
+  diagnostic sources' string literals against the registry.
+  `examples/02-solids`/`03-voronoi` use `duplicate(count=1)` as the
+  singleton (02 drops from 11 to 10 nodes — the Playwright smoke's count
+  assertion follows in the web lane); `examples/06-lists.cic` is the
+  consumer (the orbit example planned as 06 moves to the next free
+  number).
 - **C2**: mesh-tier cylinder/cone/extrude_to_point/volume/bounding_box
   and the vector/plane nodes (ports pin_cutters / tip_caps math out of
   Python in the wall).

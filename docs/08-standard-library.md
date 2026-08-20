@@ -187,25 +187,26 @@ variants ("/") compress sibling nodes.
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
 | Series | `(start: Number = 0, step: Number = 1, count: Integer) → [Number]` | S | |
-| Range | `(domain: Domain, steps: Integer) → [Number]` | 1 | inclusive ends |
+| Range | `(domain: Domain, steps: Integer) → [Number]` | 1 | shipped (C1): `steps + 1` values, both ends exactly the domain's; red when `steps < 1` |
 | Random | `(domain: Domain, count: Integer, seed: Integer) → [Number]` | S | explicit seed, always |
-| Jitter | `(list: [T], strength: Number, seed: Integer) → (list: [T], map: IndexMap)` | 1 | shuffle with provenance |
-| Repeat | `(pattern: [T], count: Integer) → [T]` | 1 | |
+| Jitter | `(list: [E], strength: Number = 1, seed: Integer) → (list: [E], map: IndexMap)` | 1 | shipped (C1): shuffle with provenance — seeded key per slot (`splitmix64`, the same generator as Random), stable sort; strength 0 = identity |
+| Repeat | `(pattern: [E], count: Integer) → [E]` | 1 | shipped (C1): GH Repeat Data — the node form of the cyclic zip policy (docs/09 calls it `cycle`; that name is the §1 time param's) |
 
 ### 3 · Maths & logic
 
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
 | Add / Subtract / Multiply / Divide / Modulo / Power | `(a: Number, b: Number) → Number` | S | overloads for Vector where sensible (Vector+Vector, Vector×Number) |
-| Negative / Absolute / Round / Floor / Ceiling / Min / Max | `(x: Number…) → Number` | 1 | |
-| Sin / Cos / Tan / Asin / Acos / Atan2 / Radians / Degrees | `(x: Number) → Number` | 1 | |
+| Negative / Absolute / Round / Floor / Ceiling / Min / Max | `(x: Number) → Number` / `(a, b: Number) → Number` | 1 | shipped (C1): `negative`, `absolute`, `round` (ties away from zero — stated, GH rounds to even), `floor`, `ceiling`, `min`, `max` |
+| Sin / Cos / Tan / Asin / Acos / Atan / Atan2 / Radians / Degrees | `(x: Number) → Number` / `atan2(y, x)` / `radians(degrees)` / `degrees(radians)` | 1 | shipped (C1): radians throughout (angle-dimension ports); `asin`/`acos` red outside [−1, 1] |
+| Square Root / Natural Logarithm / Logarithm / Exponential | `sqrt(x)` / `ln(x)` / `log(x, base = 10)` / `exp(x)` | 1 | shipped (C1) — not in the original list; Grasshopper's Maths tab staples (Square Root, Natural logarithm, Logarithm), which a migrant reaches for daily; red for a negative `x`, a base of 1 or below 0 |
 | Expression | `(free variables…) → Number` | S | math syntax: write `z = x^2 + y^2` (`^` = power); `x`, `y` auto-become input ports, `z` names the output; the checker infers Integer for `+ − ×` over all-Integer inputs (so computed counts feed Integer ports), `/` and `^` always Number |
 | Remap | `(value: Number, source: Domain, target: Domain) → Number` | S | the wall used this constantly |
 | Construct / Deconstruct Domain | `(start, end) ↔ Domain` | S | |
-| Smaller / Larger / Equals | `(a: Number, b: Number, tolerance…) → Boolean` | 1 | |
-| And / Or / Not / Xor | `(a: Boolean, b: Boolean) → Boolean` | 1 | |
-| Pick | `(pattern: Boolean, true: T, false: T) → T` | 1 | per-element if |
-| Mass Addition / Average / Bounds | `(list: [Number]) → Number / Domain` | 1 | reducers |
+| Smaller / Larger / Equals | `(a: Number, b: Number) → Boolean` / `equals(a, b, tolerance = 0)` | 1 | shipped (C1): strict `<` / `>`; `equals` is exact by default, `abs(a − b) <= tolerance` otherwise |
+| And / Or / Not / Xor | `(a: Boolean, b: Boolean) → Boolean` / `not(x)` | 1 | shipped (C1) |
+| Pick | `(pattern: Boolean, true: E, false: E) → E` | 1 | shipped (C1): per-element if over any kind (both branches bind one `E`; both are solved — selection is data, not control flow) |
+| Mass Addition / Average / Bounds | `mass_addition(list) → (result: Number, partial: [Number])` / `average(list) → Number` / `bounds(list) → Domain` | 1 | shipped (C1): left-to-right sums (the order is the contract); `average`/`bounds` red on an empty list |
 
 ### 4 · List & axis
 
@@ -213,15 +214,15 @@ variants ("/") compress sibling nodes.
 |---|---|---|---|
 | List Item | `(list: [E], index: Integer, wrap: Boolean = false) → E` | S | `E` binds per call: item of a `[Point]` is a Point; hole-aware since stage 6 — an absent slot selects as an absent element (`E` carries `?`) |
 | List Length | `(list: [E]) → Integer` | S | counts slots, absent included (slot-preserving; `E` carries `?`, so `[T?]` is an ordinary `[E]`) |
-| Reverse | `(list: [T]) → [T]` | 1 | |
-| Shift List | `(list: [T], offset: Integer, wrap: Boolean = true) → [T]` | 1 | |
-| Sort | `(keys: [Number], values: [T]) → (sorted: [T], map: IndexMap)` | 1 | stable; map preserves identity |
+| Reverse | `(list: [E]) → [E]` | 1 | shipped (C1) |
+| Shift List | `(list: [E], offset: Integer, wrap: Boolean = true) → [E]` | 1 | shipped (C1): wrapping rotates; `wrap=false` drops what falls off (no map — a dropped end shifts no surviving index) |
+| Sort | `(keys: [Number], values: [E]) → (keys: [Number], sorted: [E], map: IndexMap)` | 1 | shipped (C1): stable; map preserves identity; also returns the sorted keys (GH Sort List's K) |
 | Cull | `(list: [E], pattern: [Boolean]) → (kept: [E], map: IndexMap)` | S | the only way elements leave a list; strict zip (counts in the error), no pattern repetition; `map` = kept index → source index |
-| Dispatch | `(list: [T], pattern: [Boolean]) → (a: [T], b: [T], map: IndexMap)` | 1 | |
-| Weave / Merge / Insert Items / Split List | — | 1 | slot-preserving throughout |
-| Duplicate | `(item: T, count: Integer) → [T]` | 1 | |
+| Dispatch | `(list: [E], pattern: [Boolean]) → (a: [E], b: [E], map_a: IndexMap, map_b: IndexMap)` | 1 | shipped (C1): strict zip; one map per half (a single map for two lists was ambiguous) |
+| Weave / Merge / Insert Items / Split List | `split_list(list: [E], index: Integer) → (a: [E], b: [E])` | 1 | slot-preserving throughout; `split_list` shipped (C1); Merge = `concat`; Weave / Insert Items pending |
+| Duplicate | `(item: E, count: Integer) → [E]` | 1 | shipped (C1): GH Duplicate Data; `count=1` is the idiomatic singleton list (geometry lists come from nodes) |
 | flatten / partition / chunk / concat | `(list: [[E]]) → [E]` / `(list: [E], sizes: [Integer]) → [[E]]` / `(list: [E], size: Integer) → [[E]]` / `(a: [E], b: [E]) → [E]` | S | shipped (stage 6, the wall's per-part cutter groups): `flatten` drops one level (absent outer slots refuse, inner holes survive); `partition` sizes must cover the list exactly (counts in the error); `chunk`'s last group may be short (GH Partition List); `concat` is slot-preserving |
-| map / zip / cross / nest / squeeze / transpose / group_by / compact | list & nesting combinators | S | wire-level lifts with node forms; strict `zip` (mismatch = error; `pad_last`/`cycle`/`truncate` opt-in); `compact` returns `IndexMap`; doc 09 |
+| map / zip / cross / nest / squeeze / transpose / group_by / compact | list & nesting combinators | S | wire-level lifts with node forms; strict `zip` (mismatch = error; the opt-in adapters are the nodes `pad_last(list, count)` / `repeat(pattern, count)` / `truncate(list, count)` — shipped C1); shipped C1 as nodes: `nest` (Graft), `transpose` (Flip Matrix; rectangular only, ragged is red), `group_by(keys: [Number], values: [E]) → (groups: [[E]], keys: [Number])` (first-occurrence order), `compact(list: [E?]) → (values: [E], map: IndexMap)` (the checker still carries the wired `?` through `E` until the `E?`-port rule lands — a dialect-change item); `cross` needs a second type variable and `squeeze`'s depth is data-dependent — both pending; doc 09 |
 
 Path Mapper does not exist; standard combinators and named axes replace
 it (doc 09).
