@@ -182,6 +182,15 @@ Python 3 on PATH (or `CICADA_PYTHON`); worker protocol is dependency-free
 - **Scope to one crate where possible.** Crate boundaries are agent work
   boundaries. Run the touched crate's tests plus
   `cargo check --workspace` before declaring done.
+- **A worktree may hold another agent's uncommitted work.** Never clean
+  by pattern — no `git clean`, no `git ls-files --others | xargs rm`, no
+  `git checkout -- .` / `git stash` over files you did not touch. Delete
+  only the exact artifact paths you created (a mutation run's
+  `proptest-regressions/<category>/<node>.txt`, your scratch files), and
+  keep everything else in the session's scratchpad directory. Learned the
+  hard way (2026-08-20): a review's pattern cleanup on `wt/catalog`
+  deleted the in-progress `cicada mcp` sources of a sibling package and
+  they had to be replayed from that agent's transcript.
 - **Fail loudly and immediately.** No silent fallbacks; a wrong answer is
   worse than a loud refusal. `unwrap`/`expect` are lint-denied in library
   code (tests exempt); `overflow-checks` stay on in release; errors are
