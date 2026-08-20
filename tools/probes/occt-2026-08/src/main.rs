@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use glam::{DVec3, dvec3};
-use opencascade::mesh::Mesh;
+use opencascade::mesh::{Mesh, Mesher};
 use opencascade::primitives::{Face, Shape, Solid, Wire};
 use sha2::{Digest, Sha256};
 
@@ -258,15 +258,36 @@ fn bench(parts: usize) {
         boxes.iter().zip(&cutters).map(|(b, c)| b.subtract(c).into()).collect();
     report("difference", t.elapsed(), parts, "");
 
+    // Tessellation in two halves: the OCCT mesher itself
+    // (BRepMesh_IncrementalMesh, attaches Poly_Triangulation to the faces)
+    // and the binding's extraction into Rust Vecs (one FFI call per node,
+    // per UV, per normal, per triangle) — the second half is binding
+    // overhead a Cicada seam would write differently.
+    let t = Instant::now();
+    let meshers: Vec<Mesher> = diffs
+        .iter()
+        .map(|d| Mesher::try_new(d, LINEAR_DEFLECTION).expect("BRepMesh_IncrementalMesh"))
+        .collect();
+    let mesh_total = t.elapsed();
+    report("mesh(occt)", mesh_total, parts, &format!("(BRepMesh_IncrementalMesh, deflection={LINEAR_DEFLECTION})"));
+
     let t = Instant::now();
     let mut tris = 0usize;
     let mut verts = 0usize;
-    for d in &diffs {
-        let mesh = d.mesh_with_tolerance(LINEAR_DEFLECTION).expect("tessellation");
+    for m in meshers {
+        let mesh = m.mesh().expect("triangulation extraction");
         tris += mesh.indices.len() / 3;
         verts += mesh.vertices.len();
     }
-    report("tessellate", t.elapsed(), parts, &format!("(deflection={LINEAR_DEFLECTION}, tris={tris}, verts={verts})"));
+    let extract_total = t.elapsed();
+    report("mesh(extract)", extract_total, parts, &format!("(binding FFI extraction, tris={tris}, verts={verts})"));
+
+    // The combined number the question asks for. (An earlier version
+    // re-meshed "fresh" Cut results here and measured LESS than the mesher
+    // alone: the boolean reuses the untouched box faces, whose shared
+    // TShapes already carried triangulation from the pass above — a
+    // false-fresh measurement. Summing the two honest halves instead.)
+    report("tessellate", mesh_total + extract_total, parts, "(= mesh(occt) + mesh(extract))");
 
     // The loft is not part of the per-part pipeline above but is a probe
     // shape; time it too so the memo has a number.
