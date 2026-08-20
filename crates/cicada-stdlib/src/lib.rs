@@ -171,6 +171,30 @@ mod tests {
         assert_eq!(count.default, None);
     }
 
+    // C1: the first optional-element VARIABLE port (`Vec<Option<ElemSlot>>`
+    // → `[E?]`) renders the documented `compact` signature — the port takes
+    // the holes, the outputs are the bare `[E]` plus the IndexMap.
+    #[test]
+    fn compact_spec_renders_the_optional_element_port() {
+        let specs = registry();
+        let compact = specs
+            .iter()
+            .find(|s| s.name == "compact")
+            .expect("compact registered");
+        assert_eq!(
+            compact.signature(),
+            "compact(list: [E?]) → (values: [E], map: IndexMap)"
+        );
+        let [list] = compact.inputs else {
+            panic!("compact has one input")
+        };
+        assert!(list.ty.optional && list.ty.list_depth == 1 && list.ty.base == "E");
+        assert!(
+            !compact.outputs[0].ty.optional,
+            "values is the present list"
+        );
+    }
+
     // The node format's two newest pieces through the real macro: the
     // `gh` attribute and the `# Examples` ```cic fence, extracted as the
     // snippet text without the header (the runner adds `# cicada 1`).

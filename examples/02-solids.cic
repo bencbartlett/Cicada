@@ -17,13 +17,12 @@ top_frame = xy_plane(origin=top)
 ball = sphere(plane=top_frame, radius=0.75, segments=24)
 
 # Geometry lists come from nodes (list literals hold plain scalars);
-# a count-1 linear_array is the idiomatic singleton.
-still = unit_x(factor=0.0)
-cutter_list = linear_array(geometry=ball, direction=still, count=1)
+# duplicate(count=1) is the idiomatic singleton.
+cutter_list = duplicate(item=ball, count=1)
 
 # The carve, via Manifold.
 carved = mesh_difference(mesh=block, cutters=cutter_list)
 
 # The debug window into headless geometry: any OBJ viewer opens this.
-dump_list = linear_array(geometry=carved, direction=still, count=1)
+dump_list = duplicate(item=carved, count=1)
 dump = export_obj(meshes=dump_list, path="02-solids.obj")

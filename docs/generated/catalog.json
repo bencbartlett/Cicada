@@ -658,6 +658,48 @@
       ]
     },
     {
+      "name": "compact",
+      "title": "Compact",
+      "description": "drop the absent slots of a list, returning the present elements and the index map back into the source (the Optional-flow counterpart of `cull`: the only other way slots leave a list, docs/09).",
+      "category": "List & axis",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Clean Tree",
+      "examples": [
+        "xs = [3.0, 1.0, 2.0]\npresent, sources = compact(list=xs)"
+      ],
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[E?]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": true,
+          "doc": "The list whose absent slots are to be dropped."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "values",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The present elements, in order — no absent slots remain."
+        },
+        {
+          "name": "map",
+          "type": "IndexMap",
+          "base": "IndexMap",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Provenance: `map[i]` is the source index of `values[i]` (docs/08"
+        }
+      ]
+    },
+    {
       "name": "concat",
       "title": "Concat",
       "description": "`a` then `b`, one list (GH Merge for two lists). Slot-preserving: absent slots of either input keep their places in the output.",
@@ -751,6 +793,116 @@
       ]
     },
     {
+      "name": "dispatch",
+      "title": "Dispatch",
+      "description": "split a list into two by a boolean pattern (true → `a`, false → `b`), each with its index map back into the source; `a` and `b` together hold every slot (absent slots dispatch like any other).",
+      "category": "List & axis",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "the pattern's length differs from the list's slot count — strict zip, both counts in the message.",
+      "gh": "Dispatch",
+      "examples": [
+        "xs = [10.0, 20.0, 30.0, 40.0]\nodd = [True, False, True, False]\npicked, rest, picked_from, rest_from = dispatch(list=xs, pattern=odd)"
+      ],
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The list to split."
+        },
+        {
+          "name": "pattern",
+          "type": "[Boolean]",
+          "base": "Boolean",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "Where true the slot goes to `a`, where false to `b` — one entry per"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "a",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The slots whose pattern entry is true, in order."
+        },
+        {
+          "name": "b",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The slots whose pattern entry is false, in order."
+        },
+        {
+          "name": "map_a",
+          "type": "IndexMap",
+          "base": "IndexMap",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Provenance of `a`: `map_a[i]` is the source index of `a[i]`."
+        },
+        {
+          "name": "map_b",
+          "type": "IndexMap",
+          "base": "IndexMap",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Provenance of `b`: `map_b[i]` is the source index of `b[i]`."
+        }
+      ]
+    },
+    {
+      "name": "duplicate",
+      "title": "Duplicate",
+      "description": "a list of `count` copies of one element (the idiomatic singleton list is `count=1`: geometry lists come from nodes, list literals hold scalars). An absent element duplicates into absent slots (`E` carries the `?`).",
+      "category": "List & axis",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "`count` is negative (`0` is the empty list).",
+      "gh": "Duplicate Data",
+      "examples": [
+        "dot = construct_point(x=1.0, y=2.0, z=0.0)\ndots = duplicate(item=dot, count=3)"
+      ],
+      "inputs": [
+        {
+          "name": "item",
+          "type": "E",
+          "base": "E",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The element to repeat (any kind — a geometry, a number, a text)."
+        },
+        {
+          "name": "count",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "How many copies; `1` is the idiomatic singleton list."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "`count` copies of `item`, sharing one value."
+        }
+      ]
+    },
+    {
       "name": "flatten",
       "title": "Flatten",
       "description": "one nesting level removed: the inner lists concatenated in order (`[[a, b], [c]]` → `[a, b, c]`). One level only, always (docs/09: `flatten_all` for every level, and says so); absent inner slots are preserved as absent slots of the output.",
@@ -782,6 +934,57 @@
           "list_depth": 1,
           "optional": false,
           "doc": "The inner lists concatenated in order, one nesting level down."
+        }
+      ]
+    },
+    {
+      "name": "group_by",
+      "title": "Group By",
+      "description": "gather a list into groups by numeric key (the honest version of most Path Mapper recipes, docs/09): one group per distinct key, in order of first occurrence, source order kept inside each group, absent slots grouped like any other. Keys compare exactly. For provenance, group the indices themselves — `group_by(keys=k, values=series(…))` — or sort by the same keys (`sort` returns the `IndexMap`).",
+      "category": "List & axis",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "the key count differs from the value count — strict zip, both counts in the message.",
+      "gh": null,
+      "examples": [
+        "plate = [2, 1, 2, 1, 3]\nparts = [10.0, 20.0, 30.0, 40.0, 50.0]\nper_plate, plates = group_by(keys=plate, values=parts)"
+      ],
+      "inputs": [
+        {
+          "name": "keys",
+          "type": "[Number]",
+          "base": "Number",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The numeric group key of each slot — one per slot of `values`"
+        },
+        {
+          "name": "values",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The list to group."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "groups",
+          "type": "[[E]]",
+          "base": "E",
+          "list_depth": 2,
+          "optional": false,
+          "doc": "One group per distinct key, in order of the key's first occurrence;"
+        },
+        {
+          "name": "keys",
+          "type": "[Number]",
+          "base": "Number",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The distinct keys, index-aligned with `groups`."
         }
       ]
     },
@@ -872,6 +1075,83 @@
       ]
     },
     {
+      "name": "nest",
+      "title": "Nest",
+      "description": "one nesting level added: each element becomes its own singleton sublist (`[a, b]` → `[[a], [b]]`; GH Graft, docs/09). Slot-preserving: an absent slot becomes a singleton holding an absent slot. `flatten` undoes it.",
+      "category": "List & axis",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Graft Tree",
+      "examples": [
+        "xs = [1.0, 2.0, 3.0]\nsingletons = nest(list=xs)"
+      ],
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The list whose elements become singleton sublists."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[[E]]",
+          "base": "E",
+          "list_depth": 2,
+          "optional": false,
+          "doc": "One singleton sublist per slot, in order."
+        }
+      ]
+    },
+    {
+      "name": "pad_last",
+      "title": "Pad Last",
+      "description": "lengthen a list to `count` slots by repeating its last slot: the explicit, visible form of Grasshopper's longest-list matching (docs/09 — zip is strict; this is the opt-in adapter, and the repeated element shows up in the text). An absent last slot pads with absent slots.",
+      "category": "List & axis",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "`count` is below the list's slot count (`pad_last` only lengthens — `truncate` shortens), or when the list is empty and `count` is positive (no last slot to repeat).",
+      "gh": null,
+      "examples": [
+        "few = [1.0, 2.0]\nmany = [10.0, 20.0, 30.0, 40.0]\nn = length(list=many)\npadded = pad_last(list=few, count=n)\nsums = add(a=each(padded), b=each(many))"
+      ],
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The list to lengthen."
+        },
+        {
+          "name": "count",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The slot count to reach (typically `length` of the list it will be"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The list with its last slot repeated up to `count` slots (unchanged when `count` equals its length)."
+        }
+      ]
+    },
+    {
       "name": "partition",
       "title": "Partition",
       "description": "consecutive groups of the given sizes (`[a, b, c, d]` with sizes `[1, 3]` → `[[a], [b, c, d]]`). Slot-preserving: absent slots land in their group as absent slots.",
@@ -911,6 +1191,279 @@
           "list_depth": 2,
           "optional": false,
           "doc": "The groups in order, with the given sizes."
+        }
+      ]
+    },
+    {
+      "name": "reverse",
+      "title": "Reverse",
+      "description": "the list in reverse order. Slot-preserving: absent slots reverse with the rest.",
+      "category": "List & axis",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Reverse List",
+      "examples": [
+        "xs = [1.0, 2.0, 3.0]\nbackwards = reverse(list=xs)"
+      ],
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The list to reverse."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The same slots, last first."
+        }
+      ]
+    },
+    {
+      "name": "shift_list",
+      "title": "Shift List",
+      "description": "rotate a list by an offset (wrapping, the default) or slide it and drop what falls off (`wrap=false`, GH Shift List). Slot-preserving either way: absent slots move with the rest. A dropped tail or head shifts no surviving index relative to its neighbours, so no index map is returned — `cull` when provenance matters.",
+      "category": "List & axis",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "gh": "Shift List",
+      "examples": [
+        "xs = [1.0, 2.0, 3.0, 4.0]\nrolled = shift_list(list=xs, offset=1)\nclipped = shift_list(list=xs, offset=-1, wrap=False)"
+      ],
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The list to shift."
+        },
+        {
+          "name": "offset",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Shift amount: positive moves the head to the tail (`[a, b, c]` by"
+        },
+        {
+          "name": "wrap",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "default": "true",
+          "doc": "Wrap the shifted-off slots around to the other end; off, they are"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The shifted list — the same slot count when wrapping, `|offset|` fewer otherwise."
+        }
+      ]
+    },
+    {
+      "name": "sort",
+      "title": "Sort",
+      "description": "reorder a list by numeric keys, ascending and stable (equal keys keep their source order), returning the sorted keys, the reordered values, and the index map back into the source.",
+      "category": "List & axis",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "the key count differs from the value count — strict zip, both counts in the message.",
+      "gh": "Sort List",
+      "examples": [
+        "heights = [2.5, 0.5, 1.5]\nlabels = [\"tall\", \"short\", \"mid\"]\nordered_heights, ordered_labels, sources = sort(keys=heights, values=labels)"
+      ],
+      "inputs": [
+        {
+          "name": "keys",
+          "type": "[Number]",
+          "base": "Number",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The numeric sort keys — one per slot of `values` (strict zip)."
+        },
+        {
+          "name": "values",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The list to reorder by the keys (to sort numbers alone, wire the"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "keys",
+          "type": "[Number]",
+          "base": "Number",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The keys in ascending order."
+        },
+        {
+          "name": "sorted",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "`values` reordered by the keys (a slot rides with its key, absent"
+        },
+        {
+          "name": "map",
+          "type": "IndexMap",
+          "base": "IndexMap",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Provenance: `map[i]` is the source index of `sorted[i]`."
+        }
+      ]
+    },
+    {
+      "name": "split_list",
+      "title": "Split List",
+      "description": "cut a list in two at an index (`[a, b, c]` at `1` → `[a]` and `[b, c]`). Slot-preserving: absent slots land in their half. Both halves keep source order, so no index map is needed (`b[i]` came from `index + i`).",
+      "category": "List & axis",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "`index` is negative or beyond the list's slot count — both in the message (never a silent clamp).",
+      "gh": "Split List",
+      "examples": [
+        "xs = [1.0, 2.0, 3.0, 4.0, 5.0]\nhead, tail = split_list(list=xs, index=2)"
+      ],
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The list to split."
+        },
+        {
+          "name": "index",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The split index: slots before it go to `a`, the rest to `b`"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "a",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The slots before the index, in order."
+        },
+        {
+          "name": "b",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The slots from the index on, in order."
+        }
+      ]
+    },
+    {
+      "name": "transpose",
+      "title": "Transpose",
+      "description": "swap the two nesting levels of a rectangular nested list (`[[a, b], [c, d]]` → `[[a, c], [b, d]]`; GH Flip Matrix, docs/09). Slot-preserving: absent slots move to their transposed places.",
+      "category": "List & axis",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "the inner lists differ in length — ragged data has no transpose; the first offending group and both lengths are in the message (never a silent pad or clip).",
+      "gh": "Flip Matrix",
+      "examples": [
+        "xs = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]\nrows = chunk(list=xs, size=3)\ncolumns = transpose(list=rows)"
+      ],
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[[E]]",
+          "base": "E",
+          "list_depth": 2,
+          "optional": false,
+          "doc": "The rectangular nested list (every inner list the same length)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[[E]]",
+          "base": "E",
+          "list_depth": 2,
+          "optional": false,
+          "doc": "The transposed nested list: as many groups as the inner lists were long, each as long as there were inner lists."
+        }
+      ]
+    },
+    {
+      "name": "truncate",
+      "title": "Truncate",
+      "description": "shorten a list to its first `count` slots: the explicit, visible form of Grasshopper's shortest-list matching (docs/09 — zip is strict; this is the opt-in adapter). Dropping a tail shifts no surviving index, so no index map is returned — `cull` when elements leave from the middle.",
+      "category": "List & axis",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "uses_tolerance": false,
+      "panics": "`count` exceeds the list's slot count (`truncate` only shortens — `pad_last` lengthens) or is negative.",
+      "gh": null,
+      "examples": [
+        "few = [1.0, 2.0]\nmany = [10.0, 20.0, 30.0, 40.0]\nn = length(list=few)\nclipped = truncate(list=many, count=n)\nsums = add(a=each(few), b=each(clipped))"
+      ],
+      "inputs": [
+        {
+          "name": "list",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The list to shorten."
+        },
+        {
+          "name": "count",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The slot count to keep (typically `length` of the list it will be"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[E]",
+          "base": "E",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The first `count` slots (unchanged when `count` equals the length)."
         }
       ]
     },
