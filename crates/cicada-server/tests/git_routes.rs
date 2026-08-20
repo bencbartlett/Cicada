@@ -14,13 +14,14 @@
 // exemption recognizes #[test] fns only — not helpers in integration tests.
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::too_many_lines)]
 
+use std::collections::BTreeSet;
 use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use cicada_server::git::{Git, GitError, GitRefusal, Scope};
+use cicada_server::git::{Git, GitError, GitRefusal, Scope, node_names};
 use cicada_server::protocol::{
     ChangeKind, FileStatus, GitState, Operation, PROTOCOL_VERSION, RepoInfo,
 };
@@ -342,6 +343,152 @@ fn status_reports_state_and_every_marker_kind() {
             ("scripts/new.py".to_owned(), FileStatus::Untracked),
         ]
     );
+}
+
+/// The docs/17 item-2 "done when", against a REAL diff: for a working tree
+/// with many edits apart (a line inserted at the top so every later line
+/// shifts, a param change, an in-place rename, a deletion, a deletion and
+/// an unrelated same-literal addition far apart, a `#off` toggle, a new
+/// comment, an appended binding), the set of marked nodes IS the set of
+/// bindings on the `+` lines of `git diff -U0 HEAD`, and every binding on
+/// a `-` line is accounted for — still bound (modified), `removed` with
+/// its HEAD line, or a rename's `from`. No expected list is written by
+/// hand: both sides come from git's own output.
+#[test]
+fn markers_are_exactly_the_bindings_on_the_diffs_changed_lines() {
+    if !git_available() {
+        return;
+    }
+    let fx = Fixture::new(true);
+    let git = fx.git();
+    let head = "# cicada 1\n\
+                size = slider(value=2.0, min=0.5, max=5.0)\n\
+                span = construct_domain(start=0.0, end=size)\n\
+                block = box(x=span, y=span, z=span)\n\
+                a = 4.0\n\
+                b = 5.0\n\
+                c = 6.0\n\
+                d = 7.0\n\
+                e = 8.0\n\
+                f = 9.0\n\
+                ball = sphere(radius=size)\n\
+                g = 10.0\n";
+    fx.write("p.cic", head);
+    sh_git(&fx.root, &["commit", "-q", "-am", "twelve bindings"]);
+    let work = "# cicada 1\n\
+                # a comment on a new line\n\
+                first = 0.5\n\
+                size = slider(value=3.0, min=0.5, max=5.0)\n\
+                span = construct_domain(start=0.0, end=size)\n\
+                cube = box(x=span, y=span, z=span)\n\
+                b = 5.0\n\
+                c = 6.0\n\
+                #off d = 7.0\n\
+                e = 8.0\n\
+                f = 9.0\n\
+                ball = sphere(radius=size)\n\
+                g = 10.0\n\
+                later = 4.0\n\
+                tail = 11.0\n";
+    fx.write("p.cic", work);
+
+    let status = git.status(&scope()).unwrap();
+    let diff = sh_git(
+        &fx.root,
+        &[
+            "diff",
+            "-U0",
+            "--no-color",
+            "HEAD",
+            "--",
+            "examples/wall/p.cic",
+        ],
+    );
+    let names_on = |sign: char| -> BTreeSet<String> {
+        diff.lines()
+            .filter(|line| {
+                line.starts_with(sign) && !line.starts_with("+++") && !line.starts_with("---")
+            })
+            .flat_map(|line| node_names(&line[1..]))
+            .collect()
+    };
+    let plus = names_on('+');
+    let minus = names_on('-');
+    assert!(plus.len() >= 6 && minus.len() >= 4, "{diff}");
+    assert!(
+        diff.matches("\n@@ ").count() >= 3,
+        "the edits must be apart (several hunks): {diff}"
+    );
+
+    let marked: BTreeSet<String> = status
+        .pipeline
+        .nodes
+        .iter()
+        .map(|n| n.name.clone())
+        .collect();
+    assert_eq!(
+        marked, plus,
+        "the marked nodes are exactly the bindings on the diff's `+` lines:\n{diff}"
+    );
+    assert_eq!(
+        marked.len(),
+        status.pipeline.nodes.len(),
+        "one marker per node"
+    );
+    let work_names: BTreeSet<String> = node_names(work).into_iter().collect();
+    let removed: BTreeSet<String> = status
+        .pipeline
+        .removed
+        .iter()
+        .map(|r| r.name.clone())
+        .collect();
+    let froms: BTreeSet<String> = status
+        .pipeline
+        .nodes
+        .iter()
+        .filter_map(|n| n.from.clone())
+        .collect();
+    for name in &minus {
+        assert!(
+            work_names.contains(name) || removed.contains(name) || froms.contains(name),
+            "`{name}` is on a `-` line but neither still bound, removed, nor a rename source: \
+             {status:?}"
+        );
+    }
+    assert!(removed.is_subset(&minus) && froms.is_subset(&minus));
+    assert!(
+        removed.is_disjoint(&work_names),
+        "removed means no longer bound"
+    );
+    // Each removed node's HEAD line names it in HEAD's text.
+    for gone in &status.pipeline.removed {
+        let line = head.lines().nth(gone.line_in_head - 1).unwrap();
+        assert_eq!(
+            node_names(line),
+            std::slice::from_ref(&gone.name),
+            "{gone:?}"
+        );
+    }
+    // The kinds, by the rules: a name HEAD binds → modified; a new name
+    // paired in its hunk → renamed; the rest → added. `later = 4.0` shares
+    // `a`'s literal but sits in another hunk: added, and `a` removed.
+    let kinds: Vec<(String, ChangeKind, Option<String>)> = node_changes(&status);
+    assert_eq!(
+        kinds,
+        vec![
+            ("first".to_owned(), ChangeKind::Added, None),
+            ("size".to_owned(), ChangeKind::Modified, None),
+            (
+                "cube".to_owned(),
+                ChangeKind::Renamed,
+                Some("block".to_owned())
+            ),
+            ("d".to_owned(), ChangeKind::Modified, None),
+            ("later".to_owned(), ChangeKind::Added, None),
+            ("tail".to_owned(), ChangeKind::Added, None),
+        ]
+    );
+    assert_eq!(removed, BTreeSet::from(["a".to_owned()]));
 }
 
 #[test]
