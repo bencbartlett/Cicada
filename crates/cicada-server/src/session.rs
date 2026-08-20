@@ -5305,6 +5305,199 @@ size = slider(value=4.0, min=0.5, max=5.0)
         assert_eq!(std::fs::read_to_string(&pipeline).unwrap(), source);
     }
 
+    // -------------------------------------------- the script cancel bridge --
+
+    /// Poll `condition` until it holds or `deadline` passes — a wait for an
+    /// event (a Python worker entering or leaving the bridge), bounded so a
+    /// broken bridge fails the test instead of wedging it. `on_timeout`
+    /// runs before the panic: it releases whatever the test holds blocked,
+    /// so the session can still drop (a generation stuck in Python would
+    /// otherwise wedge the solve loop's join and hang the test binary).
+    fn wait_until(
+        what: &str,
+        deadline: Duration,
+        condition: impl Fn() -> bool,
+        on_timeout: impl FnOnce(),
+    ) {
+        let started = Instant::now();
+        while !condition() {
+            if started.elapsed() >= deadline {
+                on_timeout();
+                panic!("waited {deadline:?} for {what} — it never happened");
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // one story: Esc kills the generation's Python call, and ONLY that one
+    fn esc_kills_exactly_the_cancelled_generations_python_calls() {
+        // Review finding (2026-08-20): the headline wiring of the per-solve
+        // cancel handle — a script node enters the bridge under ITS
+        // generation's token — had no end-to-end test; a bridge entered
+        // under a throwaway token passed every test. This drives
+        // Session → SolveLoop → executor → NodeCtx → ScriptCancel::enter →
+        // KillSwitch → worker, both ways: (1) Esc during a structural
+        // generation kills its blocked Python call and the node lands
+        // `cancelled` promptly; (2) an explicit effectful run's Python
+        // call SURVIVES an Esc and a preview submission (docs/13: a slider
+        // drag never cancels an export). Python 3 on PATH is a dev/CI
+        // requirement, as for scripts.rs.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("scripts")).unwrap();
+        std::fs::write(
+            dir.path().join("scripts").join("hold.py"),
+            "import os\nimport time\n\nimport cicada\n\n\
+             @cicada.node(title=\"Hold\", description=\"returns x once its release file exists.\")\n\
+             def hold(path: \"Text\", x: \"Number\") -> \"Number\":\n\
+             \x20   while not os.path.exists(path):\n\
+             \x20       time.sleep(0.005)\n\
+             \x20   return x\n\n\
+             @cicada.node(title=\"Hold Export\", description=\"an exporter that waits for its release file.\", effectful=True)\n\
+             def hold_export(path: \"Text\", x: \"Number\") -> None:\n\
+             \x20   while not os.path.exists(path):\n\
+             \x20       time.sleep(0.005)\n",
+        )
+        .unwrap();
+        let release_slow = dir.path().join("release-slow");
+        let release_dump = dir.path().join("release-dump");
+        let literal = |path: &Path| path.to_string_lossy().replace('\\', "/");
+        let source = format!(
+            "# cicada 1\n\
+             x = 2.0\n\
+             slow = hold(path=\"{}\", x=x)\n\
+             dump = hold_export(path=\"{}\", x=x)\n",
+            literal(&release_slow),
+            literal(&release_dump)
+        );
+        let pipeline = dir.path().join("p.cic");
+        std::fs::write(&pipeline, &source).unwrap();
+        let config = SessionConfig {
+            project_dir: dir.path().to_owned(),
+            pipeline,
+            cache_dir: Some(dir.path().join("cache")),
+            threads: 2,
+            project: ProjectConfig::default(),
+            op_clock: None,
+        };
+        // Python startup included: generous, and only ever waited in full
+        // when the bridge is broken — then every hold is released so the
+        // session can drop and the failure is a panic, not a hang.
+        let deadline = Duration::from_secs(30);
+        let release_all = || {
+            let _ = std::fs::write(&release_slow, b"timeout");
+            let _ = std::fs::write(&release_dump, b"timeout");
+        };
+
+        // (1) The load's structural generation blocks in `hold`.
+        let session = Session::open(config).unwrap();
+        let bridge = Arc::clone(&session.core.scripts);
+        wait_until(
+            "the load's Python call to enter the bridge",
+            deadline,
+            || bridge.in_flight() == 1,
+            release_all,
+        );
+        assert!(session.solve.is_busy(), "the generation is in flight");
+        assert!(!release_slow.exists(), "nothing released it");
+        session.cancel();
+        // The token's hook killed the switch; the pool notices within its
+        // poll period and kills the worker.
+        wait_until(
+            "the killed call to leave the bridge",
+            deadline,
+            || bridge.in_flight() == 0,
+            release_all,
+        );
+        session.wait_idle();
+        let state = session.debug_state(false);
+        assert_eq!(
+            state["statuses"]["slow"]["state"], "cancelled",
+            "{}",
+            state["statuses"]
+        );
+        let last = state["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rfind(|t| t["kind"] == "structural")
+            .cloned()
+            .unwrap();
+        assert_eq!(last["cancelled"], true, "{last}");
+        assert!(
+            last["cancel_to_idle_ms"].as_f64().is_some(),
+            "an Esc ended it: {last}"
+        );
+
+        // (2) Isolation. Let `slow` complete from now on, then hold an
+        // explicit export open in Python while the interactive side is
+        // cancelled and re-submitted around it.
+        std::fs::write(&release_slow, b"go").unwrap();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let _ = drain(&mut rx);
+        let outcome = std::thread::scope(|scope| {
+            let export = scope.spawn(|| session.run_effectful("dump"));
+            wait_until(
+                "the export's Python call to enter the bridge",
+                deadline,
+                || bridge.in_flight() >= 1,
+                release_all,
+            );
+            // Esc: cancels the loop's generation (none in flight) and every
+            // idle solve — never the export's token.
+            session.cancel();
+            // A slider tick: a preview generation over `slow` (its own
+            // token), solved around the export.
+            session.handle(
+                id,
+                None,
+                ClientMessage::ParamPreview {
+                    node: "x".into(),
+                    port: None,
+                    value: "3.0".into(),
+                },
+            );
+            session.wait_idle();
+            let state = session.debug_state(false);
+            assert_eq!(
+                state["statuses"]["slow"]["state"], "done",
+                "the preview's call ran to completion: {}",
+                state["statuses"]
+            );
+            assert_eq!(
+                state["statuses"]["dump"]["state"], "running",
+                "the export is still in Python: {}",
+                state["statuses"]
+            );
+            assert_eq!(bridge.in_flight(), 1, "exactly the export's call remains");
+            // Release the export: it completes — which it could not have,
+            // had the Esc or the preview touched its switch.
+            std::fs::write(&release_dump, b"go").unwrap();
+            export.join().unwrap()
+        });
+        let report = outcome.expect("the export ran to completion through the Esc");
+        assert_eq!(report["ok"], true, "{report}");
+        wait_until(
+            "the export's call to leave the bridge",
+            deadline,
+            || bridge.in_flight() == 0,
+            release_all,
+        );
+        let state = session.debug_state(false);
+        assert_eq!(
+            state["statuses"]["dump"]["state"], "done",
+            "{}",
+            state["statuses"]
+        );
+        let msgs = texts(&drain(&mut rx));
+        let finished = msgs
+            .iter()
+            .find(|m| m["type"] == "run_finished")
+            .expect("run_finished reaches the clients");
+        assert_eq!(finished["payload"]["ok"], true, "{finished}");
+    }
+
     // ------------------------------------------------ hypothetical solves --
 
     #[test]
