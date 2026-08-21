@@ -265,8 +265,8 @@ frames' display buffers (bounded), making warmed-loop playback 60 fps
 with near-zero server traffic. `clock` is the unbounded escape hatch
 — deterministic per value, uncached by design.
 
-*(Live, v0.1 item 4 — the engine half; the web's play bar is the next
-package.)* **What the transport is.** Session state beside the
+*(Live, v0.1 item 4 — shipped whole 2026-08-20: the engine and the web's
+play bar, `wt/transport`.)* **What the transport is.** Session state beside the
 document, never in it: a playhead `t_ms` (milliseconds, unbounded,
 0 at reset) read off the session clock — `t = anchor_t + (now −
 anchor_clock) × speed` while playing, frozen while paused; every
@@ -344,7 +344,7 @@ intents:
 |---|---|---|
 | `transport_play` | `{}` | The playhead advances from where it stands at `speed`; the current frame paints at once. Idempotent while playing |
 | `transport_pause` | `{}` | Freezes the playhead. Idempotent while paused |
-| `transport_seek` | `{"frame": 57}` | Moves the playhead to a frame of the primary loop (`t_ms = frame × period_ms / frames`), playing or paused — a paused seek paints the frame. `frame ≥ frames` is refused |
+| `transport_seek` | `{"frame": 57}` | Moves the playhead to the first representable playhead INSIDE the frame of the primary loop (nominally `frame × period_ms / frames`, nudged up until it quantizes back to `frame` — the nominal start rounds a few ulps short for some frames, so a bare seek would paint one frame low; `lower.rs` `Playhead::at_frame`), playing or paused — a paused seek paints the frame. `frame ≥ frames` is refused |
 | `transport_speed` | `{"factor": 0.5}` | Playback rate, playhead ms per wall ms, from the current position. Not finite or `≤ 0` is refused |
 | `transport_reset` | `{}` | Pause and rewind to `t_ms = 0` — frame 0, `clock` at 0, the values a headless run evaluates |
 
@@ -416,10 +416,12 @@ the `preview_policy` message, and both sliders' `pending · N s`
 rendering of it). Shipped with v0.1 item 2 (2026-08-20, server half):
 the three `/api/git/*` routes above over the git binary (`git.rs`;
 `GET /api/project` gained `scripts` and `git`). Shipped with v0.1 item 4
-(the engine half): the transport — `TransportView` in every snapshot,
-the `transport` broadcast, the five `transport_*` intents, the playhead
-injected at lowering, playback over the preview loop (§Animation
-transport); the web's play bar follows. Still not in:
+(shipped whole): the transport — `TransportView` in every snapshot (each
+driven port carrying its OWN loop for the inspector), the `transport`
+broadcast, the five `transport_*` intents, the playhead injected at
+lowering, playback over the preview loop, AND the web's play bar (Space,
+the scrubber, hidden ports on both surfaces with the server refusing a
+wire into them, the e2e — §Animation transport). Still not in:
 the other git refs / graph-diff overlay / per-node history, `/api/blob`
 beyond value summaries, reconnect replay (a reconnect is a fresh session
 join: one hydration path — the client retries with backoff and

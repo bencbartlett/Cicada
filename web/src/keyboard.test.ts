@@ -350,7 +350,7 @@ describe("handleHotkey", () => {
   // `transport_play`, playing → `transport_pause`; the server's broadcast
   // is what flips the view, never the keypress.
   describe("Space toggles the transport", () => {
-    const driven = [{ node: "spin", port: "frame", signal: "frame" as const }];
+    const driven = [{ node: "spin", port: "frame", signal: "frame" as const, loop: { frames: 120, period_ms: 4000 } }];
     const view = (playing: boolean) => ({
       view: { playing, speed: 1, t_ms: 0, frame: 0, frames: 120, period_ms: 4000, driven },
       receivedAt: 0,

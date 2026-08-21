@@ -15,11 +15,11 @@ import type {
   ValueSummary,
   WireView,
 } from "../protocol/messages";
-import { outputDoc, portTitle, transportDrivenSignal } from "../canvas/grid";
+import { drivenTitle, outputDoc, portTitle, transportDrivenSignal } from "../canvas/grid";
 import { LiteralWidget } from "../canvas/LiteralWidgets";
 import { literalKindOf } from "../state/literals";
 import { canWrite, nodeByName, useCicada } from "../state/store";
-import { formatPlayhead } from "../state/transport";
+import { drivenEntry, fedValue } from "../state/transport";
 import { viewportApi } from "../viewport/api";
 import { readFrameCounters } from "./debugHandle";
 import { formatBytes, formatMs, statusText, summaryText } from "./format";
@@ -268,7 +268,7 @@ function NodeInspect({ name, extra }: { name: string; extra: number }) {
         <section className="insp-section" data-testid="node-transport">
           <h3 className="insp-h">transport</h3>
           {driven.map(([input, signal]) => (
-            <DrivenRow key={input.name} node={name} input={input} signal={signal} />
+            <DrivenRow key={input.name} node={name} input={input} signal={signal} onSelect={(n) => selectNodes([n])} />
           ))}
         </section>
       )}
@@ -444,21 +444,41 @@ function InputRow({
 /**
  * A transport-driven input in the inspector (docs/13 §Animation transport):
  * the port's name and type, what drives it, and the value the transport is
- * feeding it right now (the loop frame, or the playhead in seconds) when
- * this node is in the current graph's driven set — never an editor, never
- * a wire source. A hand-written kwarg (`frame=5`) is shown as the headless
- * value it is.
+ * feeding it right now when this node is in the current graph's driven set
+ * — the frame of THIS port's own loop (`DrivenView.loop`, the numbers the
+ * lowering quantized it from; a second `cycle` loops inside the primary at
+ * its own rate, so the primary loop's frame would be wrong here), or the
+ * playhead in seconds — never an editor, never a drop target. What the
+ * text says is the headless value and is shown as such: a hand-written
+ * kwarg (`frame=5`) as `headless 5`, a wire (`frame=n`) as `headless ←
+ * n.out` with the source selectable — never "not wired".
  */
-function DrivenRow({ node, input, signal }: { node: string; input: InputView; signal: DrivenSignal }) {
+function DrivenRow({
+  node,
+  input,
+  signal,
+  onSelect,
+}: {
+  node: string;
+  input: InputView;
+  signal: DrivenSignal;
+  onSelect: (node: string) => void;
+}) {
   const color = kindColor(input.base === "?" ? "" : baseOfType(input.base));
   const { transport, playhead } = usePlayhead();
-  const on = transport?.view.driven.some((d) => d.node === node && d.port === input.name) ?? false;
-  let value: string | null = null;
-  if (on && transport !== null && playhead !== null) {
-    value = signal === "frame" ? `frame ${playhead.frame} of ${transport.view.frames}` : formatPlayhead(playhead.tMs);
-  }
+  const entry = transport === null ? undefined : drivenEntry(transport.view, node, input.name);
+  const on = entry !== undefined;
+  const value = entry !== undefined && playhead !== null ? fedValue(entry, playhead.tMs) : null;
+  const title = drivenTitle(input.name, input.type, signal, on, input.literal, input.wired);
   return (
-    <div className="port-row" data-testid={`driven-${input.name}`} data-signal={signal} data-driven={on}>
+    <div
+      className="port-row"
+      data-testid={`driven-${input.name}`}
+      data-signal={signal}
+      data-driven={on}
+      data-wired={input.wired === undefined ? undefined : `${input.wired.node}.${input.wired.port}`}
+      title={title}
+    >
       <span className="port-dot filled" style={{ color }} title="driven by the transport" />
       <span title={portTitle(input.name, input.type, input.doc)}>
         <span className="port-name">{input.name}</span>
@@ -476,11 +496,25 @@ function DrivenRow({ node, input, signal }: { node: string; input: InputView; si
             ← transport (not driving)
           </span>
         )}
-        {input.literal !== undefined && (
-          <span className="faint" title="what the text says — the value a headless run (cicada run) evaluates">
+        {input.wired !== undefined ? (
+          <span
+            className="faint"
+            title="what the text says — the source a headless run (cicada run) evaluates; the transport overrides it in the app. Unwire it to drop the kwarg."
+            data-testid={`driven-${input.name}-wired`}
+          >
             {" "}
-            · headless <code>{input.literal}</code>
+            · headless ←{" "}
+            <button className="link" onClick={() => onSelect(input.wired!.node)} title="select the source node">
+              {input.wired.node}.{input.wired.port}
+            </button>
           </span>
+        ) : (
+          input.literal !== undefined && (
+            <span className="faint" title="what the text says — the value a headless run (cicada run) evaluates">
+              {" "}
+              · headless <code>{input.literal}</code>
+            </span>
+          )
         )}
       </span>
     </div>

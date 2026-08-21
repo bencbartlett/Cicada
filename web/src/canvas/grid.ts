@@ -114,9 +114,10 @@ export function filterCatalog(
   const accepting = probe === null ? null : new Map(probe.map((e) => [e.func, e.ports]));
   const hits: { hit: SearchHit; rank: number }[] = [];
   for (const node of catalog.nodes) {
-    // A transport-driven port is never a wire target (the hidden-port
-    // rule): the probe answers by type alone, so it is dropped here.
-    const ports = accepting?.get(node.name)?.filter(([port]) => drivenSignalOf(node, port) === undefined);
+    // The accepting ports are the server's verdict, whole: a transport-
+    // driven port (`cycle.frame`) is never among them — the server's
+    // `wire_verdict` blocks it — and nothing is second-guessed here.
+    const ports = accepting?.get(node.name);
     if (accepting !== null && (ports === undefined || ports.length === 0)) continue;
     const rank = searchRank(node, q);
     if (rank === null) continue;
@@ -173,9 +174,11 @@ export function outputDoc(catalog: Catalog | null, func: string | undefined, por
  * `undefined` for every other port and for a func the catalog does not
  * know (the project's script nodes — none are driven). Such a port is the
  * session's, not the user's (docs/13 §Animation transport): the canvas
- * and the inspector HIDE it — no handle, no wire target, no literal editor
- * — and show the transport in its place; a kwarg a human wrote for it by
- * hand stays in the text as the headless value, never edited here.
+ * and the inspector HIDE it as a port — no connectable handle, no literal
+ * editor — and show the transport in its place. The server decides it is
+ * never a wire target (`probe_wire` answers `blocked`, `connect` refuses);
+ * a kwarg or wire a human wrote for it by hand stays in the text as the
+ * headless value / source, shown and removable, never edited here.
  */
 export function transportDrivenSignal(
   catalog: Catalog | null,
@@ -188,6 +191,36 @@ export function transportDrivenSignal(
 
 function drivenSignalOf(node: CatalogNode, port: string): DrivenSignal | undefined {
   return node.inputs.find((input) => input.name === port)?.transport_driven;
+}
+
+/**
+ * The hover text of a transport-driven port's row (canvas node and
+ * inspector alike): what drives it, whether it is driving now, and what
+ * the text says for the headless run — a literal kwarg or a wire, named
+ * as the headless value / source, never edited here.
+ */
+export function drivenTitle(
+  name: string,
+  type: string,
+  signal: DrivenSignal,
+  driving: boolean,
+  literal: string | undefined,
+  wired: { node: string; port: string } | undefined,
+): string {
+  const what = signal === "frame" ? "the loop frame" : "the playhead in seconds";
+  // The transport owns the port in the app (it fills it from the playhead);
+  // it is never edited here. What the text says is the headless value.
+  const owned = "the session's — never edited here";
+  const state = driving
+    ? `driven by the transport (${what}), ${owned}.`
+    : `the transport's port (${what}); not driving while this node is not solvable; ${owned}.`;
+  let written = "";
+  if (wired !== undefined) {
+    written = ` The text wires \`${name}=${wired.node}\` — the headless source (cicada run); the transport overrides it in the app. Unwire it to drop the kwarg.`;
+  } else if (literal !== undefined) {
+    written = ` The text's \`${name}=${literal}\` is the headless value (cicada run).`;
+  }
+  return `${name}: ${type} — ${state}${written}`;
 }
 
 /** The hover text of a port row: `name: type — doc` (docs/16: one line, the type, the doc). */

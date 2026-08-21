@@ -503,6 +503,13 @@
   background: var(--accent-bg);
 }
 
+/* The handle a hand-wired transport-driven port keeps so the text's wire is
+   drawn: an anchor for the edge, never a drop target (the server refuses). */
+.cicada-canvas .react-flow__handle.cn-handle.driven {
+  opacity: 0.65;
+  cursor: default;
+}
+
 .cn-lift-offer {
   border: 1px dashed var(--accent);
   animation: cn-pulse 900ms ease-in-out infinite alternate;

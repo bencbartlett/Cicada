@@ -212,13 +212,16 @@ describe("filterCatalog", () => {
     const hits = filterCatalog(catalog, "merge", [{ func: "concat", ports: [["a", "ok"]] }]);
     expect(hits.map((h) => h.node.name)).toEqual(["concat"]);
   });
-  it("never offers a transport-driven port as a wire target — a func with nothing else accepting drops out", () => {
-    // The probe answers by type: an Integer wire fits `cycle.frames` AND
-    // `cycle.frame`; only the first may be offered.
-    const both = filterCatalog(catalog, "", [{ func: "cycle", ports: [["frames", "ok"], ["frame", "ok"]] }]);
-    expect(both.map((h) => [h.node.name, h.ports])).toEqual([["cycle", [["frames", "ok"]]]]);
-    const only = filterCatalog(catalog, "", [{ func: "cycle", ports: [["frame", "ok"]] }]);
-    expect(only).toEqual([]);
+  it("carries the server's accepting ports WHOLE — the hidden-port rule is the server's, not re-decided here", () => {
+    // A transport-driven port (`cycle.frame`) is never a wire target: the
+    // server's `wire_verdict` blocks it, so the probe's catalog never lists
+    // it (session test `a_transport_driven_port_is_never_a_wire_target_from_the_app`).
+    // The client does not second-guess the answer (the protocol-change rule:
+    // never compute wire compatibility client-side) — what the server offers
+    // is what the search shows, and a func with no accepting port drops out.
+    const offered = filterCatalog(catalog, "", [{ func: "cycle", ports: [["frames", "ok"]] }]);
+    expect(offered.map((h) => [h.node.name, h.ports])).toEqual([["cycle", [["frames", "ok"]]]]);
+    expect(filterCatalog(catalog, "", [{ func: "cycle", ports: [] }])).toEqual([]);
   });
 });
 

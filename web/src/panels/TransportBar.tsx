@@ -93,7 +93,12 @@ export function TransportBar() {
         aria-label="reset"
         title={title("reset — pause and rewind to frame 0 (the headless values)")}
         disabled={!writer}
-        onClick={() => send({ type: "transport_reset", payload: {} })}
+        onClick={(event) => {
+          send({ type: "transport_reset", payload: {} });
+          // Give the keyboard back to the transport: a focused button takes
+          // Space as its click, and a second reset is not what Space means.
+          event.currentTarget.blur();
+        }}
       >
         ⏮
       </button>

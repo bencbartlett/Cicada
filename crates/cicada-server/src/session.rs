@@ -45,7 +45,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use cicada_core::config::ProjectConfig;
 use cicada_core::hash::ValueHash;
-use cicada_core::spec::NodeSpec;
+use cicada_core::spec::{NodeSpec, TransportSignal};
 use cicada_lang::ast::Rhs;
 use cicada_lang::check::BindingType;
 use cicada_lang::diag::{Diagnostic, DiagnosticKind};
@@ -65,7 +65,7 @@ use crate::lower::{
 };
 use crate::protocol::{
     Actor, ApplyTextRequest, ClientMessage, DeltaSource, DrivenSignal, DrivenView, HistoryView,
-    LeaseView, NodeState, NodeStatus, PreviewMode, ProbeCatalogEntry, ProbeVerdict, Role,
+    LeaseView, LoopView, NodeState, NodeStatus, PreviewMode, ProbeCatalogEntry, ProbeVerdict, Role,
     ServerMessage, SolveSummary, TransportView, ValueSummary, encode, is_gesture, is_write,
     type_tag,
 };
@@ -3262,6 +3262,29 @@ fn wire_verdict(
     port: &str,
     text: &str,
 ) -> (String, Option<String>) {
+    // A transport-driven port (`cycle.frame`, `clock.t`) is the session's,
+    // not a wire's: the lowering fills it from the playhead whatever the
+    // text says, so a wire into it would be dead in the app. The type
+    // lattice would accept an Integer there — this is the one rule the
+    // checker does not know, and it is decided HERE (the probe and the
+    // connect gesture both ask this function) so the canvas never computes
+    // it (docs/13; the protocol-change skill: the server owns wire
+    // compatibility). A wire the text already carries is shown and may be
+    // unwired; it is only never offered or created from the app.
+    if let Some(signal) = transport_driven_port(document, specs, node, port) {
+        let what = match signal {
+            TransportSignal::Frame => "the loop frame",
+            TransportSignal::Time => "the playhead in seconds",
+        };
+        return (
+            "blocked".to_owned(),
+            Some(format!(
+                "`{node}`: `{port}` is driven by the transport — the session fills it with {what} \
+                 whatever the text says, so nothing can be wired into it in the app (a headless \
+                 run evaluates what the text says)"
+            )),
+        );
+    }
     let mut scratch = document.clone();
     let order = spec_order_doc(&scratch, specs, node);
     if let Err(error) = writer::set_kwarg(&mut scratch, node, port, text, order.as_deref()) {
@@ -3509,6 +3532,17 @@ fn spec_order_doc(
     specs: &[&'static NodeSpec],
     node: &str,
 ) -> Option<Vec<&'static str>> {
+    let spec = call_spec_doc(document, specs, node)?;
+    Some(spec.inputs.iter().map(|port| port.name).collect())
+}
+
+/// The spec of the node a binding calls (`None` for a literal, an
+/// expression, a broken line, an unknown func).
+fn call_spec_doc(
+    document: &Document,
+    specs: &[&'static NodeSpec],
+    node: &str,
+) -> Option<&'static NodeSpec> {
     let line = document.find_binding(node)?;
     let cicada_lang::Line::Statement { statement, .. } = &document.lines()[line] else {
         return None;
@@ -3516,8 +3550,26 @@ fn spec_order_doc(
     let Rhs::Call(call) = &statement.rhs else {
         return None;
     };
-    let spec = specs.iter().find(|spec| spec.name == call.func.name)?;
-    Some(spec.inputs.iter().map(|port| port.name).collect())
+    specs
+        .iter()
+        .find(|spec| spec.name == call.func.name)
+        .copied()
+}
+
+/// The transport signal of `node.port` when that input is transport-driven
+/// (`PortSpec::transport_driven` — `cycle.frame`, `clock.t`); `None` for
+/// every other port and for a binding that is not a call.
+fn transport_driven_port(
+    document: &Document,
+    specs: &[&'static NodeSpec],
+    node: &str,
+    port: &str,
+) -> Option<TransportSignal> {
+    call_spec_doc(document, specs, node)?
+        .inputs
+        .iter()
+        .find(|input| input.name == port)
+        .and_then(|input| input.transport_driven)
 }
 
 fn debounce_loop(core: &Core) {
@@ -3761,9 +3813,16 @@ impl Core {
                     node: port.node.clone(),
                     port: port.port.to_owned(),
                     signal: match port.signal {
-                        cicada_core::spec::TransportSignal::Frame => DrivenSignal::Frame,
-                        cicada_core::spec::TransportSignal::Time => DrivenSignal::Time,
+                        TransportSignal::Frame => DrivenSignal::Frame,
+                        TransportSignal::Time => DrivenSignal::Time,
                     },
+                    // The port's OWN loop — the numbers its frame was
+                    // quantized from — so a client never shows it the
+                    // primary loop's frame.
+                    r#loop: port.r#loop.map(|(frames, period)| LoopView {
+                        frames: frames.unsigned_abs(),
+                        period_ms: period * 1000.0,
+                    }),
                 })
                 .collect(),
         }
@@ -5183,6 +5242,173 @@ mod tests {
         assert!(
             into_c["reason"].as_str().unwrap().contains("cycle"),
             "{into_c}"
+        );
+    }
+
+    // A transport-driven port is never a wire target from the app: the
+    // lowering fills `cycle.frame` / `clock.t` from the playhead whatever
+    // the text says, so a wire there would be dead — and the type lattice
+    // alone would accept an Integer into `frame`. The rule is decided in
+    // the server (`wire_verdict`): the probe answers `blocked` with the
+    // reason for a canvas node and omits the port from the catalog's
+    // accepting ports, and `connect` refuses before the text moves. A wire
+    // the text already carries (`frame=n`) stays: it is the headless
+    // source, shown in the app and removable, never silently hidden.
+    #[test]
+    #[allow(clippy::too_many_lines)] // the probe, the connect and the kept wire, one story
+    fn a_transport_driven_port_is_never_a_wire_target_from_the_app() {
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             n = 7\n\
+             spin = cycle(period=4.0, frames=120)\n\
+             elapsed = clock(speed=1.0)\n\
+             size = spin + elapsed\n",
+        );
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let before = std::fs::read_to_string(&pipeline).unwrap();
+
+        session.handle(
+            id,
+            Some("q".into()),
+            ClientMessage::ProbeWire {
+                from: WireEnd {
+                    node: "n".into(),
+                    port: "out".into(),
+                },
+            },
+        );
+        let msgs = texts(&drain(&mut rx));
+        let probe = msgs.iter().find(|m| m["type"] == "wire_probe").unwrap();
+        let targets = probe["payload"]["targets"].as_array().unwrap();
+        let find = |node: &str, port: &str| {
+            targets
+                .iter()
+                .find(|t| t["node"] == node && t["port"] == port)
+                .unwrap_or_else(|| panic!("{node}.{port} in {targets:?}"))
+                .clone()
+        };
+        assert_eq!(
+            find("spin", "frames")["verdict"],
+            "ok",
+            "an Integer wire fits `frames`"
+        );
+        let frame = find("spin", "frame");
+        assert_eq!(frame["verdict"], "blocked");
+        assert_eq!(
+            frame["reason"],
+            "`spin`: `frame` is driven by the transport — the session fills it with the loop \
+             frame whatever the text says, so nothing can be wired into it in the app (a \
+             headless run evaluates what the text says)"
+        );
+        let t = find("elapsed", "t");
+        assert_eq!(t["verdict"], "blocked");
+        assert!(
+            t["reason"]
+                .as_str()
+                .unwrap()
+                .contains("the playhead in seconds"),
+            "{t}"
+        );
+        // The catalog's accepting ports: `cycle` offers `frames`, never
+        // `frame`; `clock` offers `speed`, never `t`.
+        let catalog = probe["payload"]["catalog"].as_array().unwrap();
+        let ports_of = |func: &str| -> Vec<String> {
+            catalog
+                .iter()
+                .find(|c| c["func"] == func)
+                .unwrap_or_else(|| panic!("{func} in {catalog:?}"))["ports"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p[0].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let cycle_ports = ports_of("cycle");
+        assert!(
+            cycle_ports.contains(&"frames".to_owned()),
+            "{cycle_ports:?}"
+        );
+        assert!(
+            !cycle_ports.contains(&"frame".to_owned()),
+            "{cycle_ports:?}"
+        );
+        let clock_ports = ports_of("clock");
+        assert!(clock_ports.contains(&"speed".to_owned()), "{clock_ports:?}");
+        assert!(!clock_ports.contains(&"t".to_owned()), "{clock_ports:?}");
+
+        // `connect` is refused with the same reason, and the text never moved.
+        for (node, port) in [("spin", "frame"), ("elapsed", "t")] {
+            let error = session
+                .dispatch(
+                    id,
+                    Some("c".into()),
+                    ClientMessage::Connect {
+                        from: WireEnd {
+                            node: "n".into(),
+                            port: "out".into(),
+                        },
+                        to: WireEnd {
+                            node: node.into(),
+                            port: port.into(),
+                        },
+                        lift: false,
+                    },
+                )
+                .unwrap_err();
+            let why = error.to_string();
+            assert!(why.contains("is driven by the transport"), "{why}");
+            assert!(why.contains(&format!("`{node}`: `{port}`")), "{why}");
+        }
+        session.wait_idle();
+        assert_eq!(std::fs::read_to_string(&pipeline).unwrap(), before);
+        assert_eq!(history_of(&session)["depth"], 0, "nothing landed");
+
+        // A wire the text carries into the port is kept, shown in the
+        // graph, and removable — the app never hides it.
+        std::fs::write(
+            &pipeline,
+            "# cicada 1\n\
+             n = 7\n\
+             spin = cycle(period=4.0, frames=120, frame=n)\n\
+             size = spin + 1.0\n",
+        )
+        .unwrap();
+        assert!(session.reload_from_disk("external change", false).unwrap());
+        session.wait_idle();
+        {
+            let inner = session.core.lock_inner();
+            assert!(
+                inner
+                    .graph
+                    .wires
+                    .iter()
+                    .any(|w| w.from.node == "n" && w.to.node == "spin" && w.to.port == "frame"),
+                "{:?}",
+                inner.graph.wires
+            );
+            let spin = inner.graph.node("spin").unwrap();
+            assert!(spin.excluded.is_none(), "the transport still drives it");
+        }
+        assert_eq!(session.transport().driven.len(), 1);
+        session.handle(
+            id,
+            None,
+            ClientMessage::Disconnect {
+                to: WireEnd {
+                    node: "spin".into(),
+                    port: "frame".into(),
+                },
+            },
+        );
+        session.wait_idle();
+        let text = std::fs::read_to_string(&pipeline).unwrap();
+        assert!(
+            text.contains("spin = cycle(period=4.0, frames=120)"),
+            "{text}"
         );
     }
 
@@ -9212,7 +9438,8 @@ size = slider(value=4.0, min=0.5, max=5.0)
             serde_json::json!({
                 "playing": false, "speed": 1.0, "t_ms": 0.0, "frame": 0,
                 "frames": 10, "period_ms": 1000.0,
-                "driven": [{ "node": "spin", "port": "frame", "signal": "frame" }]
+                "driven": [{ "node": "spin", "port": "frame", "signal": "frame",
+                             "loop": { "frames": 10, "period_ms": 1000.0 } }]
             })
         );
         assert_eq!(painted_frame(&session), 0, "the load paints frame 0");
@@ -9401,6 +9628,87 @@ size = slider(value=4.0, min=0.5, max=5.0)
                 "the paint after seeking to {frame}"
             );
         }
+    }
+
+    // Every driven port carries its OWN loop in the view (`DrivenView::loop`):
+    // a second `cycle` loops inside the primary at its own rate, and a
+    // client that showed it the primary loop's frame would lie — the web's
+    // inspector did exactly that (review of the web half, 2026-08-20). The
+    // loop on the wire is the one the lowering quantized the port's frame
+    // from, so the client's `floor(t_ms × frames / period_ms) mod frames`
+    // on it IS the injected value; `clock.t` carries none.
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn each_driven_port_carries_its_own_loop_and_the_frame_it_is_fed_follows_it() {
+        let (_dir, config, _clock) = project_with_clock(
+            "# cicada 1\n\
+             slow = cycle(period=8.0, frames=40)\n\
+             fast = cycle(period=2.0, frames=60)\n\
+             tick = clock(speed=1.0)\n\
+             a = slow + fast\n\
+             b = a + tick\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (writer, _) = session.connect(tx);
+        drain(&mut rx);
+
+        // The primary loop is the longest period (`slow`); seek its frame 10
+        // = 2 s in.
+        session.handle(writer, None, ClientMessage::TransportSeek { frame: 10 });
+        session.wait_idle();
+        let view = session.transport();
+        assert_eq!(
+            (view.frame, view.frames, view.period_ms, view.t_ms),
+            (10, 40, 8000.0, 2000.0)
+        );
+        assert_eq!(
+            serde_json::to_value(&view.driven).unwrap(),
+            serde_json::json!([
+                { "node": "slow", "port": "frame", "signal": "frame",
+                  "loop": { "frames": 40, "period_ms": 8000.0 } },
+                { "node": "fast", "port": "frame", "signal": "frame",
+                  "loop": { "frames": 60, "period_ms": 2000.0 } },
+                { "node": "tick", "port": "t", "signal": "time" }
+            ])
+        );
+
+        // The client's arithmetic on each port's own loop reproduces the
+        // value the lowering injected: `fast` is at frame 0 of 60 (2 s is a
+        // whole turn of its 2 s loop), NOT at the primary's frame 10.
+        let inner = session.core.lock_inner();
+        let kept = inner.last_complete.as_ref().unwrap();
+        for driven in &view.driven {
+            let injected = kept
+                .lowered
+                .driven
+                .iter()
+                .find(|d| d.node == driven.node)
+                .unwrap();
+            match (&driven.r#loop, injected.value.data()) {
+                (Some(r#loop), ValueData::Integer(frame)) => {
+                    #[allow(clippy::cast_precision_loss)]
+                    let frames = r#loop.frames as f64;
+                    let client = (view.t_ms * frames / r#loop.period_ms).floor();
+                    #[allow(clippy::cast_precision_loss)]
+                    let injected = *frame as f64;
+                    assert_eq!(client.rem_euclid(frames), injected, "{}", driven.node);
+                }
+                (None, ValueData::Number(seconds)) => {
+                    assert_eq!(driven.signal, DrivenSignal::Time);
+                    assert_eq!(*seconds, view.t_ms / 1000.0, "{}", driven.node);
+                }
+                other => panic!("{}: {other:?}", driven.node),
+            }
+        }
+        let fast = kept
+            .lowered
+            .driven
+            .iter()
+            .find(|d| d.node == "fast")
+            .unwrap();
+        assert_eq!(fast.value.data(), &ValueData::Integer(0));
     }
 
     // docs/17 item 4 "done when": previews never write the file holds under
@@ -9616,7 +9924,8 @@ size = slider(value=4.0, min=0.5, max=5.0)
         assert_eq!(announced.len(), 1, "{messages:?}");
         assert_eq!(
             announced[0]["payload"]["driven"],
-            serde_json::json!([{ "node": "spin", "port": "frame", "signal": "frame" }])
+            serde_json::json!([{ "node": "spin", "port": "frame", "signal": "frame",
+                                 "loop": { "frames": 50, "period_ms": 2000.0 } }])
         );
         // Still playing, 1 s in: frame 25 of the new loop.
         let view = session.transport();

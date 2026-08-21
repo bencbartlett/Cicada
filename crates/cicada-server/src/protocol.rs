@@ -636,7 +636,7 @@ pub struct TransportView {
 }
 
 /// One transport-driven port in [`TransportView::driven`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DrivenView {
     /// The binding.
     pub node: String,
@@ -644,6 +644,27 @@ pub struct DrivenView {
     pub port: String,
     /// Which signal fills it.
     pub signal: DrivenSignal,
+    /// The loop a `frame` port quantizes — this node's OWN `frames` and
+    /// `period_ms` (its literals, or `cycle`'s defaults), the numbers the
+    /// lowering injected its frame from. A client showing "the frame this
+    /// port is fed" computes `floor(t_ms × frames / period_ms) mod frames`
+    /// on THIS loop, never on the primary loop's (`TransportView::frames`
+    /// / `period_ms`), which is only the scrubber's: a second `cycle` loops
+    /// inside the primary at its own rate. Absent for `time` ports.
+    /// Additive (v0.1 item 4, the web half).
+    #[serde(rename = "loop", default, skip_serializing_if = "Option::is_none")]
+    pub r#loop: Option<LoopView>,
+}
+
+/// A frame loop as a client sees it ([`DrivenView::loop`]): `frames` over
+/// `period_ms` — `period_ms` IS the lowering's `period × 1000`, so the
+/// client's quantization and the server's agree in the doubles.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoopView {
+    /// Frames per loop (> 0).
+    pub frames: u64,
+    /// The loop's period in milliseconds (> 0).
+    pub period_ms: f64,
 }
 
 /// The transport signal behind a driven port (`catalog.json`'s
@@ -1332,11 +1353,16 @@ mod tests {
                     node: "spin".into(),
                     port: "frame".into(),
                     signal: DrivenSignal::Frame,
+                    r#loop: Some(LoopView {
+                        frames: 120,
+                        period_ms: 4000.0,
+                    }),
                 },
                 DrivenView {
                     node: "elapsed".into(),
                     port: "t".into(),
                     signal: DrivenSignal::Time,
+                    r#loop: None,
                 },
             ],
         };
@@ -1350,7 +1376,8 @@ mod tests {
                     "playing": true, "speed": 1.5, "t_ms": 1250.0, "frame": 37,
                     "frames": 120, "period_ms": 4000.0,
                     "driven": [
-                        { "node": "spin", "port": "frame", "signal": "frame" },
+                        { "node": "spin", "port": "frame", "signal": "frame",
+                          "loop": { "frames": 120, "period_ms": 4000.0 } },
                         { "node": "elapsed", "port": "t", "signal": "time" }
                     ]
                 }

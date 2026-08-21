@@ -20,7 +20,7 @@ runs in parallel from day 1:
 | P | OCCT probe — prebuilt 7.8.x build/link on win/mac/linux, determinism, timings, license, CI shape | parallel worktree | hours, cap 1 day | **done** 2026-08-20 — GREEN on win-64 with one rename patch, byte-deterministic, ~3 ms/boolean; Linux/macOS measured by item 3 WP-A's CI job; memo `docs/probes/occt-2026-08.md` |
 | 3 | OCCT-backed Solid — the `Solid` kind, primitives/extrude/loft/revolve/sweep, booleans, `tessellate`, STEP; `mesh_*` renames in the same commit | main geometry track from week 3 | weeks | **WP-A done** 2026-08-20, review fixes applied the same day (fork `bencbartlett/opencascade-rs@960a8bc`, `occt` feature + seam in `cicada-geom`, `tools/fetch_occt.py`, CI jobs `occt (ubuntu)` per PR and `occt (<os>)` nightly — the non-Windows jobs await their first run); WP-B next |
 | 3b | Scheduler foundations — per-solve cancel handle, `volatile`, idle-class hypothetical solve — plus compute-on-release | parallel (sched/server) | ~1 week | **done** 2026-08-20 (`wt/sched`, eighteen commits after three review rounds: the engine half, then the web half — both sliders show the pending value + estimate from `preview_policy`, the release that writes nothing is `end_drag` and every announced drag's end is `drag_ended` — with a Playwright drag of the wall's `deboss`, an observer page watching, as its evidence) |
-| 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | **engine half done** 2026-08-20 (`wt/transport`: `cycle` / `clock` with the `transport_driven` port attribute, the playhead injected at lowering, per-session transport state + the five `transport_*` intents + `TransportView` in every snapshot and the `transport` broadcast, playback over the preview loop, `examples/07-orbit.cic`; measured on the orbit: second pass 120 generations, 0 computed / 1,800 cached, p50 0.43 ms); the web half (play bar, Space, hidden ports, the scrubber) next |
+| 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | **DONE** 2026-08-20 (`wt/transport`): engine — `cycle` / `clock` with the `transport_driven` port attribute, the playhead injected at lowering, per-session transport state + the five `transport_*` intents + `TransportView` in every snapshot and the `transport` broadcast, playback over the preview loop, `examples/07-orbit.cic` (orbit second pass 120 generations, 0 computed / 1,800 cached, p50 0.43 ms); web — the play bar (play/pause, the frame scrubber, speed, reset), `Space`, the transport-driven ports hidden on the canvas and in the inspector (each driven port carrying its own loop; the server owns the wire-target rule — `probe_wire`/`connect` refuse), observers read-only, `web/e2e/transport.spec.ts` |
 | 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | pending |
 | 6 | WASM script host — load precompiled guests, epoch cancellation, `cicada-guest` SDK | last | weeks | pending |
 | C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); **C1 done** (2026-08-20: 48 nodes — lists, maths tail, sequences; the diagnostics name real nodes and a test keeps it so; `compact` satisfiable at check time; `examples/06-lists.cic`); **`cicada mcp` done** (2026-08-20: the four doc-11 read tools over stdio on `rmcp`); C2+ pending |
@@ -411,15 +411,26 @@ playback (test); a headless run yields frame 0.
   through `window.__cicada.send`, viewport screenshots at rest, at
   frame 30 and at frame 63 all differ, the planet and moon where the
   angle says; the page received 131 frames over the two seconds.
-- **Next (the web half)**: the play bar (play/pause, the frame
-  scrubber over `frames`, speed, reset), Space toggles, hide
-  `transport_driven` ports on the canvas and in the inspector (the
-  catalog says which), render `driven` on the time nodes, extrapolate
-  the playhead between `transport` broadcasts, and a Playwright spec on
-  the orbit (two screenshots a quarter-loop apart differ; the
-  `/debug/state` oracle shows the transport kind). Candidates beyond the
-  slice: the `transport` view on the status bar's generation line; a
-  `transport` field in `GET /api/project`.
+- **Shipped (the web half, 2026-08-20, `wt/transport`)**: the play bar
+  (play/pause, the frame scrubber over the primary loop, speed, reset),
+  Space toggles when no text field has focus, the `transport_driven`
+  ports hidden on the canvas and in the inspector (the catalog says
+  which; each driven port carries its OWN loop so the inspector shows the
+  frame IT is fed, never the primary loop's — a second `cycle` loops
+  inside at its own rate — additive `DrivenView.loop`), the wire-target
+  rule moved to the SERVER (`wire_verdict` — `probe_wire` answers
+  `blocked`, `connect` refuses; a wire the text carries is kept, drawn
+  and removable, never hidden), `driven` rendered on the time nodes, the
+  playhead extrapolated between `transport` broadcasts, observers
+  read-only, and `web/e2e/transport.spec.ts` on the orbit and a
+  two-cycle + clock pipeline (the `/debug/state` oracle: the transport
+  kind, per-port loops, the seek exactness, the refused wire). Engine
+  touched under the same package: `transport_seek` now lands the first
+  representable playhead INSIDE the frame (`Playhead::at_frame`; a bare
+  nominal seek painted frames 31/62/65 one short), and each `DrivenPort`
+  carries its loop into the view. Candidates beyond the slice (not done):
+  the `transport` view on the status bar's generation line; a `transport`
+  field in `GET /api/project`.
 
 ## Item 5 — scrub caching (1–2 weeks)
 

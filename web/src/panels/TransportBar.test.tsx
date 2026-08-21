@@ -22,7 +22,7 @@ const orbit: TransportView = {
   frame: 30,
   frames: 120,
   period_ms: 4000,
-  driven: [{ node: "spin", port: "frame", signal: "frame" }],
+  driven: [{ node: "spin", port: "frame", signal: "frame", loop: { frames: 120, period_ms: 4000 } }],
 };
 
 const broadcast = (view: TransportView): ServerEnvelope => ({ v: 1, seq: 9, type: "transport", payload: view });
@@ -86,8 +86,14 @@ describe("TransportBar", () => {
     expect(screen.getByTestId("transport").dataset.playing).toBe("true");
     fireEvent.click(screen.getByTestId("tr-play"));
     expect(sent.at(-1)).toEqual({ type: "transport_pause", payload: {} });
-    fireEvent.click(screen.getByTestId("tr-reset"));
+    const reset = screen.getByTestId("tr-reset");
+    reset.focus();
+    expect(document.activeElement).toBe(reset);
+    fireEvent.click(reset);
     expect(sent.at(-1)).toEqual({ type: "transport_reset", payload: {} });
+    // The button gives the keyboard back: a focused button would take the
+    // next Space as its click and reset again instead of playing.
+    expect(document.activeElement, "reset blurs itself after the click").not.toBe(reset);
     act(() => useCicada.getState().applyServerMessage(broadcast({ ...orbit, t_ms: 0, frame: 0 })));
     expect(screen.getByTestId("tr-frame").textContent).toBe("0 / 120");
     expect(screen.getByTestId("tr-time").textContent).toBe("0.00 s");

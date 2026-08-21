@@ -6,12 +6,14 @@
  * view (never merges), a delta leaves it alone, a dead socket forgets it.
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import type { GraphView, ServerEnvelope, TransportView } from "../protocol/messages";
+import type { DrivenView, GraphView, ServerEnvelope, TransportView } from "../protocol/messages";
 import { EMPTY_HISTORY, errorNoticeLevel, useCicada } from "./store";
 import {
   DISPLAY_TICK_MS,
   SPEED_CHOICES,
   TRANSPORT_AT_REST,
+  drivenEntry,
+  fedValue,
   formatPlayhead,
   formatSpeed,
   frameAt,
@@ -27,7 +29,7 @@ const orbit: TransportView = {
   frame: 30,
   frames: 120,
   period_ms: 4000,
-  driven: [{ node: "spin", port: "frame", signal: "frame" }],
+  driven: [{ node: "spin", port: "frame", signal: "frame", loop: { frames: 120, period_ms: 4000 } }],
 };
 
 describe("frameAt — the server's quantization, floor(t × frames / period) mod frames", () => {
@@ -81,6 +83,41 @@ describe("playheadAt — the view is a position at the moment of the message", (
   });
   it("a clock that reads before the receipt stamp counts as no time elapsed", () => {
     expect(playheadAt({ view: orbit, receivedAt: 5000 }, 4000)).toEqual({ tMs: 1000, frame: 30 });
+  });
+});
+
+describe("fedValue — what the transport feeds one driven port, on THAT port's own loop", () => {
+  // `slow = cycle(period=8.0, frames=40)`, `fast = cycle(period=2.0, frames=60)`,
+  // `tick = clock()`: the primary loop is `slow` (the longest period); the
+  // view's `frame` / `frames` are its. `fast` loops inside it four times.
+  const slow: DrivenView = { node: "slow", port: "frame", signal: "frame", loop: { frames: 40, period_ms: 8000 } };
+  const fast: DrivenView = { node: "fast", port: "frame", signal: "frame", loop: { frames: 60, period_ms: 2000 } };
+  const tick: DrivenView = { node: "tick", port: "t", signal: "time" };
+  const view: TransportView = { ...orbit, playing: false, t_ms: 2000, frame: 10, frames: 40, period_ms: 8000, driven: [slow, fast, tick] };
+
+  it("a frame port shows the frame of its own loop — never the primary loop's frame", () => {
+    // At the primary's frame 10 of 40 (2 s) the 2 s loop has come round: frame 0 of 60.
+    expect(fedValue(slow, 2000)).toBe("frame 10 of 40");
+    expect(fedValue(fast, 2000)).toBe("frame 0 of 60");
+    expect(fedValue(fast, 2100)).toBe("frame 3 of 60");
+    expect(fedValue(slow, 2100)).toBe("frame 10 of 40");
+    // The same server arithmetic as the primary loop: floor(t × frames / period_ms) mod frames.
+    expect(fedValue(fast, 7999.99)).toBe(`frame ${frameAt(7999.99, 60, 2000)} of 60`);
+  });
+  it("a time port shows the playhead in seconds", () => {
+    expect(fedValue(tick, 2000)).toBe("2.00 s");
+    expect(fedValue(tick, 0)).toBe("0.00 s");
+  });
+  it("drivenEntry finds the port in the driven set, or nothing when the node is not driven", () => {
+    expect(drivenEntry(view, "fast", "frame")).toBe(fast);
+    expect(drivenEntry(view, "tick", "t")).toBe(tick);
+    expect(drivenEntry(view, "fast", "frames"), "the loop ports are not driven").toBeUndefined();
+    expect(drivenEntry(view, "gone", "frame")).toBeUndefined();
+    expect(drivenEntry({ ...view, driven: [] }, "slow", "frame")).toBeUndefined();
+  });
+  it("a frame entry without a positive loop is a protocol fault — thrown, never frame 0", () => {
+    const bad = { ...fast, loop: { frames: 0, period_ms: 2000 } };
+    expect(() => fedValue(bad, 1000)).toThrow(RangeError);
   });
 });
 

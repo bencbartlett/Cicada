@@ -6,7 +6,7 @@
  * is replaced whole by every snapshot and `transport` message, and every
  * control goes out as an intent whose refusal says why.
  */
-import type { TransportView } from "../protocol/messages";
+import type { DrivenView, TransportView } from "../protocol/messages";
 
 /** The store's transport slice: the last view, whole, and when it arrived. */
 export interface TransportState {
@@ -54,6 +54,31 @@ export function frameAt(tMs: number, frames: number, periodMs: number): number {
   }
   const raw = Math.floor((tMs * frames) / periodMs);
   return ((raw % frames) + frames) % frames;
+}
+
+/**
+ * The driven entry of `node.port` in the view — the port is in the current
+ * graph's driven set (the transport is feeding it) — or `undefined` when
+ * the node is red / not in the graph / the view is gone.
+ */
+export function drivenEntry(view: TransportView, node: string, port: string): DrivenView | undefined {
+  return view.driven.find((d) => d.node === node && d.port === port);
+}
+
+/**
+ * What the transport feeds one driven port at playhead `tMs`, as the
+ * inspector shows it: a `frame` port's frame of ITS OWN loop — `frame 3 of
+ * 60`, `frameAt` on the `loop` the server sent with the entry, the numbers
+ * the lowering quantized the injected frame from — never the primary
+ * loop's frame (a second `cycle` loops inside the primary at its own rate:
+ * at the primary's frame 10 of 40 over 8 s, a 60-frame / 2 s `cycle` is at
+ * frame 0 of 60); a `time` port's playhead in seconds (`2.00 s`).
+ */
+export function fedValue(driven: DrivenView, tMs: number): string {
+  if (driven.signal === "frame") {
+    return `frame ${frameAt(tMs, driven.loop.frames, driven.loop.period_ms)} of ${driven.loop.frames}`;
+  }
+  return formatPlayhead(tMs);
 }
 
 /** The playhead the bar displays: the server's position advanced by the wall time since it was heard, at `speed`. */

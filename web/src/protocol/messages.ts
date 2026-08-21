@@ -266,14 +266,45 @@ export interface GraphView {
  */
 export type DrivenSignal = "frame" | "time";
 
-/** One port the transport drives in the current graph (`protocol::DrivenView`). */
-export interface DrivenView {
-  /** The binding. */
-  node: string;
-  /** The port (`frame`, `t`). */
-  port: string;
-  signal: DrivenSignal;
+/**
+ * A frame loop as the server states it (`protocol::LoopView`): `frames`
+ * over `period_ms` — `period_ms` IS the lowering's `period × 1000`, so
+ * `frameAt` (`state/transport.ts`) and the server's quantization agree in
+ * the doubles.
+ */
+export interface LoopView {
+  /** Frames per loop (> 0). */
+  frames: number;
+  /** The loop's period in milliseconds (> 0). */
+  period_ms: number;
 }
+
+/**
+ * One port the transport drives in the current graph (`protocol::DrivenView`).
+ * A `frame` port carries its OWN `loop` — this node's `frames` / `period_ms`
+ * (its literals, or `cycle`'s defaults), the numbers the lowering quantized
+ * its frame from: "the frame this port is fed" is `frameAt(t_ms, loop.frames,
+ * loop.period_ms)` on THIS loop, never on the primary loop's
+ * (`TransportView.frames` / `period_ms` are only the scrubber's — a second
+ * `cycle` loops inside the primary at its own rate). A `time` port carries
+ * none: it is fed the playhead in seconds.
+ */
+export type DrivenView =
+  | {
+      /** The binding. */
+      node: string;
+      /** The port (`frame`). */
+      port: string;
+      signal: "frame";
+      loop: LoopView;
+    }
+  | {
+      node: string;
+      /** The port (`t`). */
+      port: string;
+      signal: "time";
+      loop?: undefined;
+    };
 
 /**
  * The transport as every client sees it (`protocol::TransportView`): in
