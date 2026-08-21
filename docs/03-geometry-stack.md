@@ -40,9 +40,11 @@ WP-A and WP-B, **ON by default since WP-C (2026-08-20)**: the product's
 `box`/`extrude`/`loft`/… nodes are OCCT-backed, so the product build needs
 the kernel, every cargo command runs under `tools/fetch_occt.py`'s env, and
 every CI job that builds fetches the prebuilt first (the dedicated `occt`
-jobs folded into the standard matrix). `--no-default-features` is the
+jobs folded into the standard matrix). `cargo check -p cicada-geom --no-default-features` is the
 kernel-free build: the same signatures, every kernel call a typed
-`GeomError::KernelUnavailable`, and CI keeps it compiling.
+`GeomError::KernelUnavailable`, and CI keeps it compiling (the crates
+above cicada-geom take its default features through the dependency
+edge, so only cicada-geom itself has a kernel-free world today).
 
 - **Prebuilt, never the source build.** The binding links a prebuilt
   OpenCASCADE 7.8.1 found through `DEP_OCCT_ROOT`: conda-forge's `occt`
