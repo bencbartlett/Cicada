@@ -5,6 +5,12 @@
  * display resets. Late subscribers get the frames received before they
  * mounted (bounded replay), so a viewport that mounts after `snapshot`
  * still paints the initial display set.
+ *
+ * Frames arrive in the server's display-lane order (docs/13 §Two lanes,
+ * one socket) and are handed on in that order; control-plane texts may
+ * overtake them on the wire and apply nothing here — the ledger behind the
+ * subscribers (`viewport/sceneStore`) converges by its per-output
+ * generation rules (`frameBus.test.ts`).
  */
 import type { Frame } from "../protocol/frames";
 

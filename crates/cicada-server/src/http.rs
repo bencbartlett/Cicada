@@ -26,14 +26,14 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use cicada_core::config::ProjectConfig;
 use futures_util::{SinkExt as _, StreamExt as _};
-use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 use crate::git::{Git, GitRefusal, Scope};
 use crate::protocol::{
     ApplyTextRequest, CommitRequest, DeltaSource, GitErrorKind, IntentEnvelope, PROTOCOL_VERSION,
     RevertRequest, Role, ServerMessage, encode,
 };
-use crate::session::{IntentError, Outgoing, Session, SessionConfig};
+use crate::session::{ClientLanes, IntentError, Outgoing, Session, SessionConfig};
 
 /// The lease hand-off grace after a writer disconnects (docs/13: 5 s).
 pub const LEASE_GRACE: Duration = Duration::from_secs(5);
@@ -1045,6 +1045,68 @@ async fn debug_screenshot(
 
 // ---------------------------------------------------------------- ws --
 
+/// Where the write task puts a message: the WebSocket's sink in `serve`,
+/// a recording sink in tests. One message at a time — `send` resolves when
+/// the transport accepted it, which is the backpressure the lanes' priority
+/// rides on (at most one display frame is ever "in the sink" ahead of a
+/// control text).
+pub(crate) trait WireSink {
+    /// Hand one message to the transport; `Err` means the socket is gone.
+    fn put(&mut self, message: Message) -> impl Future<Output = Result<(), ()>> + Send;
+}
+
+impl<S> WireSink for S
+where
+    S: futures_util::Sink<Message> + Unpin + Send,
+{
+    async fn put(&mut self, message: Message) -> Result<(), ()> {
+        self.send(message).await.map_err(|_| ())
+    }
+}
+
+/// The per-client write task (docs/13 §Two lanes, one socket): drain the
+/// control lane first — `biased`, so whenever both lanes hold a message
+/// the control text goes — and the display lane otherwise, in its FIFO
+/// order. Control texts are small and ≤ 10 Hz (statuses are coalesced), so
+/// the display lane is never starved in practice; a display frame in
+/// flight is never pre-empted (the sink takes whole messages), which bounds
+/// a control text's wait to one frame. Returns when both lanes are closed
+/// or the sink refuses a message.
+pub(crate) async fn pump_lanes<S: WireSink>(
+    mut control: UnboundedReceiver<Outgoing>,
+    mut display: UnboundedReceiver<Outgoing>,
+    sink: &mut S,
+) {
+    let mut control_open = true;
+    let mut display_open = true;
+    while control_open || display_open {
+        let next = tokio::select! {
+            biased;
+            message = control.recv(), if control_open => {
+                let Some(message) = message else {
+                    control_open = false;
+                    continue;
+                };
+                message
+            },
+            message = display.recv(), if display_open => {
+                let Some(message) = message else {
+                    display_open = false;
+                    continue;
+                };
+                message
+            },
+        };
+        let outgoing = match next {
+            Outgoing::Text(text) => Message::Text(text.into()),
+            Outgoing::Binary(bytes) => Message::Binary(bytes),
+        };
+        if sink.put(outgoing).await.is_err() {
+            break;
+        }
+    }
+}
+
 async fn ws_upgrade(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PipelineQuery>,
@@ -1112,22 +1174,24 @@ async fn client_loop(socket: WebSocket, session: Arc<Session>) {
         return;
     }
 
-    let (tx, mut rx) = unbounded_channel::<Outgoing>();
-    let (id, role) = session.connect(tx.clone());
+    // Two lanes to one socket (docs/13 §Two lanes, one socket): the
+    // control plane and the display plane each get a channel, and the write
+    // task drains control first — `hello`, `snapshot`, every delta, status
+    // and `preview_policy` go out ahead of whatever display restream is
+    // still queued (the wall's is ~350 MB). `tx` here is this socket's own
+    // control-lane handle for the protocol errors below.
+    let (tx, control_rx) = unbounded_channel::<Outgoing>();
+    let (display_tx, display_rx) = unbounded_channel::<Outgoing>();
+    let (id, role) = session.connect(ClientLanes {
+        control: tx.clone(),
+        display: display_tx,
+    });
     let _ = tx.send(Outgoing::Text(session.hello(id, role)));
     let _ = tx.send(Outgoing::Text(session.snapshot(false, "initial")));
     session.restream_display(id);
 
     let send_task = tokio::spawn(async move {
-        while let Some(message) = rx.recv().await {
-            let outgoing = match message {
-                Outgoing::Text(text) => Message::Text(text.into()),
-                Outgoing::Binary(bytes) => Message::Binary(bytes),
-            };
-            if sink.send(outgoing).await.is_err() {
-                break;
-            }
-        }
+        pump_lanes(control_rx, display_rx, &mut sink).await;
     });
 
     // Intents are handled IN ORDER on one blocking thread per client.
@@ -1294,4 +1358,334 @@ async fn spa_fallback(State(state): State<Arc<AppState>>, uri: Uri) -> Response 
         project = state.config.project_dir.to_string_lossy(),
     ))
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::ClientMessage;
+    use std::sync::Mutex as StdMutex;
+    use tokio::sync::Semaphore;
+    use tokio::sync::mpsc::UnboundedSender;
+
+    /// What the mock client saw, in wire order.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Seen {
+        /// A JSON text: its `type`.
+        Text(String),
+        /// A binary frame: its length.
+        Binary(usize),
+    }
+
+    /// A recording sink that models the wire: it accepts one message per
+    /// permit, so the test decides exactly when the link has room — no
+    /// sleeps, no wall clock — and records what went out, in which order.
+    /// A message awaiting a permit is "in flight": handed to the transport,
+    /// not yet on the wire — exactly a WebSocket sink's `send` blocked on a
+    /// full socket buffer.
+    struct GatedRecorder {
+        room: Arc<Semaphore>,
+        seen: Arc<StdMutex<Vec<Seen>>>,
+        sent: UnboundedSender<Seen>,
+    }
+
+    impl WireSink for GatedRecorder {
+        async fn put(&mut self, message: Message) -> Result<(), ()> {
+            let permit = self.room.acquire().await.map_err(|_| ())?;
+            permit.forget();
+            let entry = match message {
+                Message::Text(text) => Seen::Text(
+                    serde_json::from_str::<serde_json::Value>(&text)
+                        .ok()
+                        .and_then(|v| v["type"].as_str().map(str::to_owned))
+                        .unwrap_or_else(|| "<not json>".to_owned()),
+                ),
+                Message::Binary(bytes) => Seen::Binary(bytes.len()),
+                Message::Ping(_) | Message::Pong(_) | Message::Close(_) => return Err(()),
+            };
+            self.seen
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(entry.clone());
+            let _ = self.sent.send(entry);
+            Ok(())
+        }
+    }
+
+    /// The mock client: the recorder plus the test's side of it.
+    struct Wire {
+        room: Arc<Semaphore>,
+        seen: Arc<StdMutex<Vec<Seen>>>,
+        sent: tokio::sync::mpsc::UnboundedReceiver<Seen>,
+    }
+
+    impl Wire {
+        fn new() -> (Self, GatedRecorder) {
+            let room = Arc::new(Semaphore::new(0));
+            let seen = Arc::new(StdMutex::new(Vec::new()));
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            (
+                Self {
+                    room: Arc::clone(&room),
+                    seen: Arc::clone(&seen),
+                    sent: rx,
+                },
+                GatedRecorder {
+                    room,
+                    seen,
+                    sent: tx,
+                },
+            )
+        }
+
+        /// Let ONE message onto the wire and return it.
+        async fn release_one(&mut self) -> Seen {
+            self.room.add_permits(1);
+            self.sent.recv().await.expect("the pump is alive")
+        }
+
+        fn seen(&self) -> Vec<Seen> {
+            self.seen
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        }
+    }
+
+    fn text(type_tag: &str) -> Outgoing {
+        Outgoing::Text(format!(
+            r#"{{"v":1,"seq":0,"type":"{type_tag}","payload":{{}}}}"#
+        ))
+    }
+
+    fn binary(len: usize) -> Outgoing {
+        Outgoing::Binary(bytes::Bytes::from(vec![0_u8; len]))
+    }
+
+    #[tokio::test]
+    async fn the_pump_prefers_the_control_lane_and_keeps_the_display_lane_fifo() {
+        let (control_tx, control_rx) = unbounded_channel::<Outgoing>();
+        let (display_tx, display_rx) = unbounded_channel::<Outgoing>();
+        let (mut wire, mut recorder) = Wire::new();
+        let pump = tokio::spawn(async move {
+            pump_lanes(control_rx, display_rx, &mut recorder).await;
+        });
+
+        // Both lanes pre-filled: control goes first, display keeps its order.
+        for len in [1, 2, 3] {
+            display_tx.send(binary(len)).unwrap();
+        }
+        control_tx.send(text("status")).unwrap();
+        assert_eq!(wire.release_one().await, Seen::Text("status".into()));
+        assert_eq!(wire.release_one().await, Seen::Binary(1));
+        // The pump now holds frame 2 in flight; a control text enqueued here
+        // waits for exactly that one frame, then overtakes frame 3.
+        control_tx.send(text("delta")).unwrap();
+        assert_eq!(wire.release_one().await, Seen::Binary(2));
+        assert_eq!(wire.release_one().await, Seen::Text("delta".into()));
+        assert_eq!(wire.release_one().await, Seen::Binary(3));
+
+        // Closing one lane does not end the pump while the other still
+        // speaks; closing both does.
+        drop(control_tx);
+        display_tx.send(binary(4)).unwrap();
+        assert_eq!(wire.release_one().await, Seen::Binary(4));
+        drop(display_tx);
+        pump.await.unwrap();
+        assert_eq!(
+            wire.seen(),
+            vec![
+                Seen::Text("status".into()),
+                Seen::Binary(1),
+                Seen::Binary(2),
+                Seen::Text("delta".into()),
+                Seen::Binary(3),
+                Seen::Binary(4),
+            ]
+        );
+    }
+
+    /// The follow-up that made the lanes (docs/17, measured 2026-08-20): a
+    /// fresh page receives the whole display set — the wall: ~350 MB — and
+    /// every text queued ~26 s behind it. The modeled link below is that
+    /// measurement's effective rate; the status cadence is docs/13's
+    /// ≤ 10 Hz. The synthetic restream's contents are zeros: the wire, the
+    /// pump and the sink never look inside a frame.
+    const MODELED_LINK_BYTES_PER_S: f64 = 350.0e6 / 26.0;
+    const STATUS_CADENCE_MS: f64 = 100.0;
+    const FRAME_BYTES: usize = 1 << 20;
+    const RESTREAM_FRAMES: usize = 320;
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // one story: join, a 320 MiB restream, an edit's texts overtake it
+    async fn a_control_text_reaches_the_client_within_the_status_cadence_behind_a_restream() {
+        let dir = tempfile::tempdir().unwrap();
+        let pipeline = dir.path().join("p.cic");
+        std::fs::write(
+            &pipeline,
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        )
+        .unwrap();
+        let session = Session::open(SessionConfig {
+            project_dir: dir.path().to_owned(),
+            pipeline,
+            cache_dir: Some(dir.path().join("cache")),
+            threads: 2,
+            project: ProjectConfig::default(),
+            op_clock: None,
+        })
+        .unwrap();
+        session.wait_idle();
+
+        // The join, exactly as `client_loop` does it.
+        let (control_tx, control_rx) = unbounded_channel::<Outgoing>();
+        let (display_tx, display_rx) = unbounded_channel::<Outgoing>();
+        let (id, role) = session.connect(ClientLanes {
+            control: control_tx.clone(),
+            display: display_tx.clone(),
+        });
+        assert_eq!(role, Role::Writer);
+        control_tx
+            .send(Outgoing::Text(session.hello(id, role)))
+            .unwrap();
+        control_tx
+            .send(Outgoing::Text(session.snapshot(false, "initial")))
+            .unwrap();
+        session.restream_display(id);
+        // … plus the wall-sized restream the box cannot produce: 320 MiB of
+        // frames on the display lane, where `restream_display` puts its own.
+        for _ in 0..RESTREAM_FRAMES {
+            display_tx.send(binary(FRAME_BYTES)).unwrap();
+        }
+        let (mut wire, mut recorder) = Wire::new();
+        let pump = tokio::spawn(async move {
+            pump_lanes(control_rx, display_rx, &mut recorder).await;
+        });
+
+        // The join's texts lead; the restream header and the box's frames
+        // follow; then the big restream starts.
+        assert_eq!(wire.release_one().await, Seen::Text("hello".into()));
+        assert_eq!(wire.release_one().await, Seen::Text("snapshot".into()));
+        assert_eq!(wire.release_one().await, Seen::Text("display_reset".into()));
+        let mut synthetic_sent = 0;
+        while synthetic_sent < 3 {
+            match wire.release_one().await {
+                Seen::Binary(len) if len == FRAME_BYTES => synthetic_sent += 1,
+                Seen::Binary(_) => {} // the box's own mesh frame
+                Seen::Text(kind) => {
+                    panic!("a text amid the restream before any was queued: {kind}")
+                }
+            }
+        }
+        let restream_remaining = (RESTREAM_FRAMES - synthetic_sent) * FRAME_BYTES;
+
+        // The edit: a slider drag tick. Its statuses are control texts; the
+        // repaint it earns is a frame, behind the restream.
+        session.handle(
+            id,
+            Some("tick".into()),
+            ClientMessage::ParamPreview {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "3.0".into(),
+            },
+        );
+        session.wait_idle();
+
+        // At most the frame in flight precedes the first text; every text
+        // the tick produced precedes the rest of the restream; the tick's
+        // frame comes after it.
+        let mut bytes_ahead = 0_usize;
+        let mut first_text = None;
+        for position in 0.. {
+            match wire.release_one().await {
+                Seen::Binary(len) => {
+                    bytes_ahead += len;
+                    synthetic_sent += 1;
+                }
+                Seen::Text(kind) => {
+                    first_text = Some((position, kind));
+                    break;
+                }
+            }
+            assert!(
+                position < 2,
+                "the text is still queued behind {bytes_ahead} bytes of restream"
+            );
+        }
+        let (position, kind) = first_text.unwrap();
+        assert_eq!(kind, "status", "the tick's first text is its status");
+        assert!(position <= 1, "at most one frame in flight ahead of it");
+        assert!(bytes_ahead <= FRAME_BYTES);
+        let modeled_ms = |bytes: usize| {
+            f64::from(u32::try_from(bytes).expect("the restream fits u32 bytes"))
+                / MODELED_LINK_BYTES_PER_S
+                * 1000.0
+        };
+        let text_delay_ms = modeled_ms(bytes_ahead);
+        let backlog_delay_ms = modeled_ms(restream_remaining);
+        assert!(
+            text_delay_ms <= STATUS_CADENCE_MS,
+            "text behind {bytes_ahead} bytes = {text_delay_ms:.1} ms on the modeled link"
+        );
+        // Not vacuous: without the lanes the same text would have waited
+        // for the whole remaining restream — far past the cadence.
+        assert!(
+            backlog_delay_ms > 100.0 * STATUS_CADENCE_MS,
+            "the synthetic restream is too small to prove anything: {backlog_delay_ms:.0} ms"
+        );
+
+        // Every further control text drains before the next restream frame.
+        let mut texts_after = Vec::new();
+        loop {
+            match wire.release_one().await {
+                Seen::Text(kind) => texts_after.push(kind),
+                Seen::Binary(len) => {
+                    assert_eq!(len, FRAME_BYTES, "the restream resumes where it stopped");
+                    synthetic_sent += 1;
+                    break;
+                }
+            }
+        }
+        assert!(
+            texts_after.iter().all(|k| k == "status"),
+            "only statuses were pending: {texts_after:?}"
+        );
+        // The remaining restream, FIFO (a late coalesced status may still
+        // overtake it), then the tick's own repaint frame.
+        while synthetic_sent < RESTREAM_FRAMES {
+            match wire.release_one().await {
+                Seen::Binary(len) => {
+                    assert_eq!(len, FRAME_BYTES);
+                    synthetic_sent += 1;
+                }
+                Seen::Text(kind) => assert_eq!(kind, "status"),
+            }
+        }
+        loop {
+            match wire.release_one().await {
+                Seen::Binary(len) => {
+                    assert!(len < FRAME_BYTES, "the box's preview frame");
+                    break;
+                }
+                Seen::Text(kind) => assert_eq!(kind, "status"),
+            }
+        }
+
+        drop(control_tx);
+        drop(display_tx);
+        drop(session);
+        pump.await.unwrap();
+        let seen = wire.seen();
+        assert_eq!(
+            seen.iter()
+                .filter(|s| **s == Seen::Binary(FRAME_BYTES))
+                .count(),
+            RESTREAM_FRAMES,
+            "every restream frame went out exactly once"
+        );
+    }
 }

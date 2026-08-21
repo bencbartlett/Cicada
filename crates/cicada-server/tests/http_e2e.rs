@@ -159,6 +159,9 @@ async fn serve_snapshot_frames_intents_and_debug_state() {
         .await
         .unwrap();
     let mut types = Vec::new();
+    // The wire order, texts by type and frames as `<frame>` — the join's
+    // contract (docs/13 §Two lanes, one socket) is a prefix of it.
+    let mut wire = Vec::new();
     let mut mesh_frames = 0;
     let mut snapshot: Option<serde_json::Value> = None;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
@@ -173,9 +176,11 @@ async fn serve_snapshot_frames_intents_and_debug_state() {
                 if kind == "snapshot" {
                     snapshot = Some(value.clone());
                 }
+                wire.push(kind.clone());
                 types.push(kind);
             }
             Message::Binary(bytes) => {
+                wire.push("<frame>".to_owned());
                 let frame = decode(&bytes).expect("decodable frame");
                 if frame.header().kind == FrameKind::Mesh {
                     mesh_frames += 1;
@@ -194,6 +199,17 @@ async fn serve_snapshot_frames_intents_and_debug_state() {
     assert!(types.contains(&"snapshot".to_owned()), "{types:?}");
     assert!(types.contains(&"display_reset".to_owned()), "{types:?}");
     assert_eq!(mesh_frames, 1, "one displayed mesh output (block)");
+    // The control lane leads (hello, snapshot), and the restream's header
+    // precedes every frame: `display_reset` rides the display lane, FIFO
+    // with the frames it announces — no frame may reach the client before
+    // it, whatever the control lane overtakes.
+    assert_eq!(&wire[..2], ["hello", "snapshot"], "{wire:?}");
+    let reset_at = wire.iter().position(|w| w == "display_reset").unwrap();
+    let first_frame_at = wire.iter().position(|w| w == "<frame>").unwrap();
+    assert!(
+        reset_at < first_frame_at,
+        "display_reset must precede the first frame: {wire:?}"
+    );
     let snapshot = snapshot.unwrap();
     assert_eq!(
         snapshot["payload"]["graph"]["nodes"]

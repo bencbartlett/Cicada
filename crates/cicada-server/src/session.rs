@@ -10,6 +10,10 @@
 //! streams edit a scratch copy and go straight to the latest-wins loop.
 //! Frames go out only for outputs whose value hash changed since the last
 //! broadcast; a joining client gets the whole display set re-streamed.
+//! Every client is reached through two lanes ([`ClientLanes`], docs/13
+//! §Two lanes, one socket): control-plane texts on one, frames (with
+//! `display_reset` and `screenshot_request`, which must keep their place
+//! among them) on the other; the socket's write task drains control first.
 //!
 //! Undo/redo (docs/13 §Undo/redo, DECISIONS.md undo row revised
 //! 2026-08-19): every successful write pushes one [`Op`] holding a **state
@@ -519,8 +523,54 @@ pub enum Outgoing {
     Binary(Bytes),
 }
 
+/// The two lanes to one client's socket (docs/13 §Two lanes, one socket).
+///
+/// The socket's write task drains `control` first (a biased select), so a
+/// control-plane text — `delta`, `status`, `preview_policy`, `lease`,
+/// `error` — never waits behind a display restream (the wall: ~350 MB of
+/// frames on a join; measured 2026-08-20, text queued ~26 s behind them).
+/// `display` keeps its own FIFO order: every binary frame, and the two
+/// texts whose meaning depends on their place among the frames —
+/// `display_reset` (the header of the restream it announces) and
+/// `screenshot_request` (renders what the frames before it painted).
+/// Control may overtake display, never the reverse; why that is safe is
+/// docs/13's argument, not a client-side guess.
+#[derive(Debug, Clone)]
+pub struct ClientLanes {
+    /// Control-plane texts: drained first.
+    pub control: UnboundedSender<Outgoing>,
+    /// Frames and the frame-ordered texts: FIFO among themselves.
+    pub display: UnboundedSender<Outgoing>,
+}
+
+impl ClientLanes {
+    /// Both lanes into ONE channel, so the receive order is the enqueue
+    /// order — the shape of the session tests and of recording sinks that
+    /// assert on a single stream. The HTTP layer never uses it: one channel
+    /// IS the head-of-line blocking the lanes exist to remove.
+    #[must_use]
+    pub fn merged(tx: UnboundedSender<Outgoing>) -> Self {
+        Self {
+            control: tx.clone(),
+            display: tx,
+        }
+    }
+
+    fn control_text(&self, text: String) {
+        let _ = self.control.send(Outgoing::Text(text));
+    }
+
+    fn display_text(&self, text: String) {
+        let _ = self.display.send(Outgoing::Text(text));
+    }
+
+    fn frame(&self, bytes: Bytes) {
+        let _ = self.display.send(Outgoing::Binary(bytes));
+    }
+}
+
 struct Client {
-    tx: UnboundedSender<Outgoing>,
+    lanes: ClientLanes,
     role: Role,
     joined: u64,
 }
@@ -995,12 +1045,12 @@ impl Session {
 
     // --------------------------------------------------------- clients --
 
-    /// Register a client socket. The first client takes the write lease;
-    /// later ones observe. Returns `(client id, role)`. The caller then
-    /// sends [`Self::hello`], [`Self::snapshot`], and
-    /// [`Self::restream_display`].
+    /// Register a client socket by its two lanes ([`ClientLanes`]). The
+    /// first client takes the write lease; later ones observe. Returns
+    /// `(client id, role)`. The caller then sends [`Self::hello`],
+    /// [`Self::snapshot`] (control lane), and [`Self::restream_display`].
     #[must_use]
-    pub fn connect(&self, tx: UnboundedSender<Outgoing>) -> (u32, Role) {
+    pub fn connect(&self, lanes: ClientLanes) -> (u32, Role) {
         let mut inner = self.core.lock_inner();
         inner.next_client += 1;
         inner.join_counter += 1;
@@ -1012,18 +1062,25 @@ impl Session {
             Role::Observer
         };
         let joined = inner.join_counter;
-        inner.clients.insert(id, Client { tx, role, joined });
+        inner.clients.insert(
+            id,
+            Client {
+                lanes,
+                role,
+                joined,
+            },
+        );
         let lease = lease_view(&inner);
         // Everyone learns the new roster.
         for (&other, client) in &inner.clients {
             if other != id {
-                let _ = client.tx.send(Outgoing::Text(encode(
+                client.lanes.control_text(encode(
                     inner.seq,
                     &ServerMessage::Lease {
                         lease: lease.clone(),
                         role: client.role,
                     },
-                )));
+                ));
             }
         }
         (id, role)
@@ -1040,16 +1097,7 @@ impl Session {
             // the observers' pending badges must not stand for it.
             end_drag(&mut inner);
         }
-        let lease = lease_view(&inner);
-        for client in inner.clients.values() {
-            let _ = client.tx.send(Outgoing::Text(encode(
-                inner.seq,
-                &ServerMessage::Lease {
-                    lease: lease.clone(),
-                    role: client.role,
-                },
-            )));
-        }
+        broadcast_lease(&inner);
     }
 
     /// After the writer's grace period: if no writer, promote the oldest
@@ -1125,23 +1173,26 @@ impl Session {
     }
 
     /// Re-stream every displayed output's frames to ONE client (join /
-    /// `resync_display`).
+    /// `resync_display`). `display_reset` and the frames ride the display
+    /// lane together — the reset is the header of the restream it
+    /// announces, and the lane's FIFO is what keeps it ahead of them; the
+    /// notices are control-plane texts.
     pub fn restream_display(&self, id: u32) {
         let mut inner = self.core.lock_inner();
         let Some(client) = inner.clients.get(&id) else {
             return;
         };
-        let tx = client.tx.clone();
+        let lanes = client.lanes.clone();
         let generation = inner
             .display
             .values()
             .map(|d| d.generation)
             .max()
             .unwrap_or(0);
-        let _ = tx.send(Outgoing::Text(encode(
+        lanes.display_text(encode(
             inner.seq,
             &ServerMessage::DisplayReset { generation },
-        )));
+        ));
         let store = Arc::clone(self.core.scheduler.store());
         let tolerance = self.core.config.project.tol();
         let keys: Vec<((u32, u32), Displayed)> =
@@ -1158,11 +1209,11 @@ impl Session {
                         tolerance,
                     );
                     for frame in frames.frames {
-                        let _ = tx.send(Outgoing::Binary(Bytes::from(frame)));
+                        lanes.frame(Bytes::from(frame));
                     }
                 }
                 Err(error) => {
-                    let _ = tx.send(Outgoing::Text(encode(
+                    lanes.control_text(encode(
                         inner.seq,
                         &ServerMessage::Notice {
                             level: "warning".to_owned(),
@@ -1171,18 +1222,18 @@ impl Session {
                                 displayed.hash
                             ),
                         },
-                    )));
+                    ));
                 }
             }
         }
         for notice in self.core.take_notices() {
-            let _ = tx.send(Outgoing::Text(encode(
+            lanes.control_text(encode(
                 inner.seq,
                 &ServerMessage::Notice {
                     level: "warning".to_owned(),
                     message: notice,
                 },
-            )));
+            ));
         }
     }
 
@@ -2031,7 +2082,7 @@ impl Session {
                 self.core
                     .snapshot_locked(&inner, false, &format!("apply_text: {}", request.label));
             for client in inner.clients.values() {
-                let _ = client.tx.send(Outgoing::Text(snapshot.clone()));
+                client.lanes.control_text(snapshot.clone());
             }
         } else {
             let message = ServerMessage::Delta {
@@ -2212,7 +2263,7 @@ impl Session {
             // post-edit text).
             let snapshot = self.core.snapshot_locked(&inner, true, reason);
             for client in inner.clients.values() {
-                let _ = client.tx.send(Outgoing::Text(snapshot.clone()));
+                client.lanes.control_text(snapshot.clone());
             }
             if let Some(drag) = &ended {
                 announce_drag_ended(&inner, drag);
@@ -2527,7 +2578,10 @@ impl Session {
             id,
             target: target.to_owned(),
         };
-        send_to(&inner, chosen, &message);
+        // Behind the frames already queued to that client: `/debug/screenshot`
+        // after `/debug/state?wait=true` renders the completed generation,
+        // not whatever the viewport held before its frames landed.
+        send_to_display_lane(&inner, chosen, &message);
         Some(rx)
     }
 
@@ -2668,16 +2722,18 @@ impl Observer for ForwardObserver {
     }
 }
 
+/// A control-plane text to every client (the control lane).
 fn broadcast(inner: &Inner, message: &ServerMessage) {
     let text = encode(inner.seq, message);
     for client in inner.clients.values() {
-        let _ = client.tx.send(Outgoing::Text(text.clone()));
+        client.lanes.control_text(text.clone());
     }
 }
 
+/// A frame to every client (the display lane, FIFO).
 fn broadcast_binary(inner: &Inner, bytes: &Bytes) {
     for client in inner.clients.values() {
-        let _ = client.tx.send(Outgoing::Binary(bytes.clone()));
+        client.lanes.frame(bytes.clone());
     }
 }
 
@@ -2691,9 +2747,19 @@ fn error_message(intent_id: Option<String>, error: &IntentError) -> ServerMessag
     }
 }
 
+/// A control-plane text to one client (the control lane).
 fn send_to(inner: &Inner, client: u32, message: &ServerMessage) {
     if let Some(c) = inner.clients.get(&client) {
-        let _ = c.tx.send(Outgoing::Text(encode(inner.seq, message)));
+        c.lanes.control_text(encode(inner.seq, message));
+    }
+}
+
+/// A text that must keep its place among one client's frames — rides the
+/// display lane (`screenshot_request`: render what the frames before it
+/// painted; `display_reset` goes through [`Session::restream_display`]).
+fn send_to_display_lane(inner: &Inner, client: u32, message: &ServerMessage) {
+    if let Some(c) = inner.clients.get(&client) {
+        c.lanes.display_text(encode(inner.seq, message));
     }
 }
 
@@ -2707,13 +2773,13 @@ fn lease_view(inner: &Inner) -> LeaseView {
 fn broadcast_lease(inner: &Inner) {
     let lease = lease_view(inner);
     for client in inner.clients.values() {
-        let _ = client.tx.send(Outgoing::Text(encode(
+        client.lanes.control_text(encode(
             inner.seq,
             &ServerMessage::Lease {
                 lease: lease.clone(),
                 role: client.role,
             },
-        )));
+        ));
     }
 }
 
@@ -4375,7 +4441,7 @@ mod tests {
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (id, role) = session.connect(tx);
+        let (id, role) = session.connect(ClientLanes::merged(tx));
         assert_eq!(role, Role::Writer);
         session.restream_display(id);
         let got = drain(&mut rx);
@@ -4542,8 +4608,8 @@ mod tests {
         session.wait_idle();
         let (tx1, mut rx1) = unbounded_channel();
         let (tx2, mut rx2) = unbounded_channel();
-        let (w, role_w) = session.connect(tx1);
-        let (o, role_o) = session.connect(tx2);
+        let (w, role_w) = session.connect(ClientLanes::merged(tx1));
+        let (o, role_o) = session.connect(ClientLanes::merged(tx2));
         assert_eq!((role_w, role_o), (Role::Writer, Role::Observer));
         session.handle(
             o,
@@ -4596,7 +4662,7 @@ mod tests {
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         session.handle(
             id,
             Some("q".into()),
@@ -4679,7 +4745,7 @@ mod tests {
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         let before = std::fs::read_to_string(&pipeline).unwrap();
         let refuse =
             |message: ClientMessage, rx: &mut tokio::sync::mpsc::UnboundedReceiver<Outgoing>| {
@@ -4818,7 +4884,7 @@ mod tests {
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let _client = session.connect(tx);
+        let _client = session.connect(ClientLanes::merged(tx));
         std::fs::write(&pipeline, "# cicada 1\na = 1.0\nb = 5.0\n").unwrap();
         assert!(session.reload_from_disk("test", false).unwrap());
         session.wait_idle();
@@ -4852,7 +4918,7 @@ mod tests {
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         session.handle(
             id,
             Some("s1".into()),
@@ -5051,7 +5117,7 @@ mod tests {
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, _rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         // A structural gesture: it writes the .cic (and the sidecar).
         session.handle(
             id,
@@ -5112,7 +5178,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, _rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         session.handle(
             id,
             None,
@@ -5224,7 +5290,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         assert_eq!(
             history_of(&session),
             serde_json::json!({"can_undo": false, "can_redo": false, "undo_label": null,
@@ -5453,8 +5519,8 @@ size = slider(value=4.0, min=0.5, max=5.0)
         session.wait_idle();
         let (tx1, mut rx1) = unbounded_channel();
         let (tx2, mut rx2) = unbounded_channel();
-        let (w, _) = session.connect(tx1);
-        let (o, _) = session.connect(tx2);
+        let (w, _) = session.connect(ClientLanes::merged(tx1));
+        let (o, _) = session.connect(ClientLanes::merged(tx2));
         session.handle(
             w,
             None,
@@ -5523,7 +5589,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         session.handle(
             id,
             None,
@@ -5688,7 +5754,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         // cancelled and re-submitted around it.
         std::fs::write(&release_slow, b"go").unwrap();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         let _ = drain(&mut rx);
         let outcome = std::thread::scope(|scope| {
             let export = scope.spawn(|| session.run_effectful("dump"));
@@ -5771,7 +5837,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         // Quiet the channel: the join's snapshot, display reset and frames.
         let _ = drain(&mut rx);
         let before = session.debug_state(false);
@@ -5926,7 +5992,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         let _ = drain(&mut rx);
 
         // The model's evidence: the load computed every node (element
@@ -6087,7 +6153,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
             assert!(cost.ms >= COMPUTE_ON_RELEASE_MS, "{cost:?}");
         }
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         let _ = drain(&mut rx);
         let baseline = preview_generations(&session);
         preview(&session, id, "4.0");
@@ -6149,7 +6215,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
             .record_sample("box", 1, 5_000_000_000)
             .unwrap();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         let _ = drain(&mut rx);
         let baseline = preview_generations(&session);
 
@@ -6251,7 +6317,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
             .record_sample("box", 1, 5_000_000_000)
             .unwrap();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         let _ = drain(&mut rx);
         let baseline = preview_generations(&session);
         let policies = |rx: &mut tokio::sync::mpsc::UnboundedReceiver<Outgoing>| {
@@ -6323,7 +6389,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         let _ = drain(&mut rx);
         let predicted = {
             let inner = session.core.lock_inner();
@@ -6394,7 +6460,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         drop(inner);
         // And a live decision for them: no policy message, previews solve.
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         let _ = drain(&mut rx);
         session.handle(
             id,
@@ -6462,7 +6528,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         let _ = drain(&mut rx);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let bar_nanos = (COMPUTE_ON_RELEASE_MS * 1_000_000.0) as u64;
@@ -6685,7 +6751,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
             .record_sample("box", 1, 5_000_000_000)
             .unwrap();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         // Something to undo: one release.
         session.handle(
             id,
@@ -6836,9 +6902,9 @@ size = slider(value=4.0, min=0.5, max=5.0)
             .record_sample("box", 1, 5_000_000_000)
             .unwrap();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         let (obs_tx, mut obs_rx) = unbounded_channel();
-        let (obs, role) = session.connect(obs_tx);
+        let (obs, role) = session.connect(ClientLanes::merged(obs_tx));
         assert_eq!(role, Role::Observer);
         let _ = drain(&mut rx);
         let _ = drain(&mut obs_rx);
@@ -7010,9 +7076,9 @@ size = slider(value=4.0, min=0.5, max=5.0)
             .record_sample("box", 1, 5_000_000_000)
             .unwrap();
         let (tx, mut rx) = unbounded_channel();
-        let (writer, _) = session.connect(tx);
+        let (writer, _) = session.connect(ClientLanes::merged(tx));
         let (obs_tx, mut obs_rx) = unbounded_channel();
-        let (obs, _) = session.connect(obs_tx);
+        let (obs, _) = session.connect(ClientLanes::merged(obs_tx));
         let _ = drain(&mut rx);
         let _ = drain(&mut obs_rx);
 
@@ -7082,7 +7148,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         for i in 0..(OP_LOG_CAP + 5) {
             session.handle(
                 id,
@@ -7132,7 +7198,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         session.handle(
             id,
             None,
@@ -7220,7 +7286,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
 
         // A multi-move + a param + a delete as ONE op.
         session.handle(
@@ -7456,7 +7522,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         assert_eq!(session.relative(), "p.cic");
         let base = session.edit_text();
         assert_eq!(base["path"], "p.cic");
@@ -7669,7 +7735,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let _client = session.connect(tx);
+        let _client = session.connect(ClientLanes::merged(tx));
         let before_hash = file_hash(&pipeline);
         let before_text = std::fs::read_to_string(&pipeline).unwrap();
         // Fault injection: the second target's TEMP path is a directory, so
@@ -7775,7 +7841,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         // One human op first: it must survive the script reload.
         session.handle(
             id,
@@ -7931,7 +7997,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         // One good op first, so the undo path can be exercised too.
         session.handle(
             id,
@@ -8049,7 +8115,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         let tmp = pipeline.parent().unwrap().join(".p.cic.cicada-tmp");
         std::fs::create_dir(&tmp).unwrap();
         let before = on_disk(&pipeline);
@@ -8113,7 +8179,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, _rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         let before = on_disk(&pipeline);
         let (memory_before, hash_before) = text_and_hash(&session);
         let error = session
@@ -8184,7 +8250,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         for (intent, message) in [
             (
                 "m",
@@ -8254,7 +8320,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, _rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         session.handle(
             id,
             None,
@@ -8298,7 +8364,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         drain(&mut rx);
         let before = session.debug_state(false);
         assert_eq!(before["statuses"]["block"]["state"], "done");
