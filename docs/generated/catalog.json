@@ -3724,19 +3724,618 @@
       ]
     },
     {
+      "name": "bounding_box",
+      "title": "Bounding Box",
+      "description": "the smallest box aligned to a plane's frame that holds all the geometry: exact on points, polylines, rectangles, circles and meshes; a solid's bounds come from the kernel (its faces, not a tessellation). The box is a B-rep `Solid`, so the geometry must have extent along all three frame axes.",
+      "category": "Surface & solid",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "the list is empty, the plane is degenerate, the geometry is flat along some frame axis (a box without volume cannot be a solid), or the kernel refuses a solid.",
+      "gh": "Bounding Box",
+      "examples": [
+        "ball = sphere(radius=1.5)\nballs = duplicate(item=ball, count=1)\nhull = bounding_box(geometry=balls)"
+      ],
+      "inputs": [
+        {
+          "name": "geometry",
+          "type": "[Geometry]",
+          "base": "Geometry",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The geometry to bound — points, curves, meshes, solids; one box around all of them (lift with `each()` for one box per item)."
+        },
+        {
+          "name": "plane",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "default": "xy_plane",
+          "doc": "The frame the box is aligned to."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The bounding box as a solid in the plane's frame."
+        }
+      ]
+    },
+    {
       "name": "box",
       "title": "Box",
-      "description": "an axis-aligned box in a plane's frame (mesh-backed under its v0.1 name, doc 15). Decreasing domains are normalized.",
+      "description": "a B-rep box spanning three domains in a plane's frame (six planar faces, exact; the default working mode's box — `mesh_box` is the mesh tier's). Decreasing domains are normalized.",
       "category": "Surface & solid",
       "tier": "S",
       "version": 1,
       "pure": true,
       "volatile": false,
       "uses_tolerance": true,
-      "panics": "any extent is empty at tolerance or the plane is degenerate.",
+      "panics": "any extent is empty at tolerance, the plane is degenerate, or the kernel refuses.",
       "gh": "Domain Box",
       "examples": [
         "span = construct_domain(start=0.0, end=2.0)\nblock = box(x=span, y=span, z=span)"
+      ],
+      "inputs": [
+        {
+          "name": "plane",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "default": "xy_plane",
+          "doc": "The box's frame."
+        },
+        {
+          "name": "x",
+          "type": "Domain",
+          "base": "Domain",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Extent along the frame's x axis."
+        },
+        {
+          "name": "y",
+          "type": "Domain",
+          "base": "Domain",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Extent along the frame's y axis."
+        },
+        {
+          "name": "z",
+          "type": "Domain",
+          "base": "Domain",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Extent along the frame's z axis."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The box solid."
+        }
+      ]
+    },
+    {
+      "name": "cone",
+      "title": "Cone",
+      "description": "a B-rep cone standing on a plane: a planar base of `radius`, an exact conical face to the apex `height` above it (a frustum is `loft(profiles=[circle, circle])`).",
+      "category": "Surface & solid",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "the radius or height is not above tolerance, the plane is degenerate, or the kernel refuses.",
+      "gh": "Cone",
+      "examples": [
+        "tip = cone(radius=3.0, height=6.0)"
+      ],
+      "inputs": [
+        {
+          "name": "plane",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "default": "xy_plane",
+          "doc": "The base plane: the cone stands on it, centred at its origin, its apex `height` along the normal."
+        },
+        {
+          "name": "radius",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The base radius.",
+          "dimension": "length"
+        },
+        {
+          "name": "height",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The height from the base to the apex, along the plane's normal.",
+          "dimension": "length"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The cone solid."
+        }
+      ]
+    },
+    {
+      "name": "cylinder",
+      "title": "Cylinder",
+      "description": "a B-rep cylinder standing on a plane (two planar caps and one exact cylindrical face — the boss and the drill of simple CAD).",
+      "category": "Surface & solid",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "the radius or height is not above tolerance, the plane is degenerate, or the kernel refuses.",
+      "gh": "Cylinder",
+      "examples": [
+        "boss = cylinder(radius=4.0, height=10.0)"
+      ],
+      "inputs": [
+        {
+          "name": "plane",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "default": "xy_plane",
+          "doc": "The base plane: the cylinder stands on it, centred at its origin, rising along its normal."
+        },
+        {
+          "name": "radius",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The radius.",
+          "dimension": "length"
+        },
+        {
+          "name": "height",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The height along the plane's normal.",
+          "dimension": "length"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The cylinder solid."
+        }
+      ]
+    },
+    {
+      "name": "extrude",
+      "title": "Extrude",
+      "description": "extrude a closed planar profile into a B-rep solid with exact edges for every curve kind: a polyline or rectangle becomes a prism of planar faces, a circle an exact cylinder (no `segments` — the mesh tier's `mesh_extrude` tessellates instead).",
+      "category": "Surface & solid",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "the profile is degenerate or non-planar at tolerance, the direction lies in the profile plane, the profile polygon is self-intersecting, or the kernel refuses.",
+      "gh": "Extrude",
+      "examples": [
+        "ring = circle(radius=2.0)\nup = unit_z(factor=5.0)\nprism = extrude(profile=ring, direction=up)"
+      ],
+      "inputs": [
+        {
+          "name": "profile",
+          "type": "Closed<Curve>",
+          "base": "Closed<Curve>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The closed, planar profile to extrude."
+        },
+        {
+          "name": "direction",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Extrusion direction and length (need not be normal to the profile — oblique prisms are legal)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The prism: the profile swept along `direction`."
+        }
+      ]
+    },
+    {
+      "name": "extrude_to_point",
+      "title": "Extrude Point",
+      "description": "taper a closed planar profile to a point: a pyramid over a polyline or rectangle (planar faces), a cone over a circle (the wall's frusta are `loft`; this is their pointed cousin).",
+      "category": "Surface & solid",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "the profile is degenerate, non-planar or self-intersecting at tolerance, the apex lies in the profile plane, or the kernel refuses.",
+      "gh": "Extrude Point",
+      "examples": [
+        "span = construct_domain(start=-1.0, end=1.0)\nbase = rectangle(x=span, y=span)\ntop = construct_point(x=0.0, y=0.0, z=3.0)\npyramid = extrude_to_point(profile=base, apex=top)"
+      ],
+      "inputs": [
+        {
+          "name": "profile",
+          "type": "Closed<Curve>",
+          "base": "Closed<Curve>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The closed, planar profile (the base)."
+        },
+        {
+          "name": "apex",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The apex every edge of the profile tapers to; must lie off the profile's plane."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The pyramid or cone solid."
+        }
+      ]
+    },
+    {
+      "name": "loft",
+      "title": "Loft",
+      "description": "a B-rep solid through two or more closed planar sections, capped at both ends: ruled between consecutive sections by default (a polyline frustum has planar faces; the wall's shape), or smooth through them. Sections are made compatible before the surface is built — edge counts matched, orientations aligned, seams aligned — so polylines of different vertex counts loft too.",
+      "category": "Surface & solid",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "fewer than two profiles are given, a profile is degenerate, non-planar or self-intersecting at tolerance (the message names its index), or the kernel refuses (coincident sections, a loft that does not close into one solid).",
+      "gh": "Loft",
+      "examples": [
+        "span = construct_domain(start=0.0, end=2.0)\nbase = rectangle(x=span, y=span)\nup = unit_z(factor=3.0)\nsections = linear_array(geometry=base, direction=up, count=2)\nbar = loft(profiles=sections)"
+      ],
+      "inputs": [
+        {
+          "name": "profiles",
+          "type": "[Closed<Curve>]",
+          "base": "Closed<Curve>",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The closed, planar sections in order (at least two)."
+        },
+        {
+          "name": "ruled",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "default": "true",
+          "doc": "Straight (ruled) surfaces between consecutive sections — GH Loft's \"Straight\" — or, when false, one smooth B-spline surface through all of them (GH's \"Normal\")."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The lofted solid."
+        }
+      ]
+    },
+    {
+      "name": "solid_difference",
+      "title": "Solid Difference",
+      "description": "subtract every cutter from a B-rep solid in one OCCT pass, coplanar faces merged afterwards; the `mesh_difference` shape (one solid, a list of cutters — lift with `each()` to carve per part), but a `Solid` is always one body: a cut that splits the solid in two or removes it entirely is red, never a compound or an empty solid.",
+      "category": "Surface & solid",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": false,
+      "panics": "the cut leaves anything but one solid (split or emptied), or the kernel refuses.",
+      "gh": "Solid Difference",
+      "examples": [
+        "span = construct_domain(start=0.0, end=20.0)\nthick = construct_domain(start=0.0, end=6.0)\nplate = box(x=span, y=span, z=thick)\ncentre = construct_point(x=10.0, y=10.0, z=-1.0)\ndrill_frame = xy_plane(origin=centre)\ndrill = cylinder(plane=drill_frame, radius=3.0, height=8.0)\ndrills = duplicate(item=drill, count=1)\nplate_with_hole = solid_difference(solid=plate, cutters=drills)"
+      ],
+      "inputs": [
+        {
+          "name": "solid",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The solid to carve."
+        },
+        {
+          "name": "cutters",
+          "type": "[Solid]",
+          "base": "Solid",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The solids to subtract, all in one pass (a through-hole's drill, a pocket's block)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The carved solid — `solid` minus every cutter."
+        }
+      ]
+    },
+    {
+      "name": "solid_intersection",
+      "title": "Solid Intersection",
+      "description": "the common volume of two B-rep solids (OCCT common), coplanar faces merged afterwards; the `mesh_intersection` shape, but a `Solid` is always one body: solids that do not overlap, or overlap in several pieces, are red — there is no empty solid.",
+      "category": "Surface & solid",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": false,
+      "panics": "the solids do not overlap in exactly one body, or the kernel refuses.",
+      "gh": "Solid Intersection",
+      "examples": [
+        "span = construct_domain(start=0.0, end=2.0)\nblock = box(x=span, y=span, z=span)\nball = sphere(radius=1.5)\ncore = solid_intersection(a=block, b=ball)"
+      ],
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The first solid."
+        },
+        {
+          "name": "b",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The second solid."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The common solid."
+        }
+      ]
+    },
+    {
+      "name": "solid_union",
+      "title": "Solid Union",
+      "description": "the B-rep union of one or more solids in one pass (OCCT general fuse), coplanar faces merged afterwards so two fused blocks are one six-face box; n-ary like `mesh_union`, but a `Solid` is always one body: disjoint operands are red, not a compound.",
+      "category": "Surface & solid",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": false,
+      "panics": "the list is empty, the operands do not form one connected body, or the kernel refuses.",
+      "gh": "Solid Union",
+      "examples": [
+        "span = construct_domain(start=0.0, end=2.0)\nblock = box(x=span, y=span, z=span)\nshift = unit_x(factor=1.0)\nblocks = linear_array(geometry=block, direction=shift, count=3)\nbar = solid_union(solids=blocks)"
+      ],
+      "inputs": [
+        {
+          "name": "solids",
+          "type": "[Solid]",
+          "base": "Solid",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The solids to union — they must overlap or touch into one body (a single solid passes through)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The united solid."
+        }
+      ]
+    },
+    {
+      "name": "sphere",
+      "title": "Sphere",
+      "description": "a B-rep sphere at a plane's origin (one exact spherical face; the default working mode's sphere — `mesh_sphere` is the mesh tier's UV sphere).",
+      "category": "Surface & solid",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "the radius is not above tolerance, the plane is degenerate, or the kernel refuses.",
+      "gh": "Sphere",
+      "examples": [
+        "ball = sphere(radius=1.5)"
+      ],
+      "inputs": [
+        {
+          "name": "plane",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "default": "xy_plane",
+          "doc": "Center frame; the plane's z is the polar axis (the seam runs along its x axis)."
+        },
+        {
+          "name": "radius",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The radius.",
+          "dimension": "length"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The sphere solid."
+        }
+      ]
+    },
+    {
+      "name": "volume",
+      "title": "Volume",
+      "description": "the enclosed volume and the volume centroid of a B-rep solid (OCCT's adaptive integration over the faces — exact for planar and quadric faces, to 1e-9 relative for the rest; the mesh tier has no volume node yet — tessellate first).",
+      "category": "Surface & solid",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": false,
+      "panics": "the kernel cannot integrate the solid.",
+      "gh": "Volume",
+      "examples": [
+        "span = construct_domain(start=0.0, end=2.0)\nblock = box(x=span, y=span, z=span)\nsize, middle = volume(solid=block)"
+      ],
+      "inputs": [
+        {
+          "name": "solid",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The solid to measure."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "volume",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The enclosed volume, in document units cubed."
+        },
+        {
+          "name": "centroid",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The volume centroid."
+        }
+      ]
+    },
+    {
+      "name": "as_watertight",
+      "title": "As Watertight",
+      "description": "the checked watertight refinement (docs/08: the mesh-tier solid): every edge shared by exactly two consistently oriented triangles.",
+      "category": "Mesh & field",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": false,
+      "panics": "the mesh has open or inconsistently oriented edges — red with the count, never a silent pass (wall lesson 13).",
+      "gh": null,
+      "examples": [
+        "span = construct_domain(start=0.0, end=2.0)\nblock = mesh_box(x=span, y=span, z=span)\nsealed = as_watertight(mesh=block)"
+      ],
+      "inputs": [
+        {
+          "name": "mesh",
+          "type": "Mesh",
+          "base": "Mesh",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The mesh to refine."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Watertight<Mesh>",
+          "base": "Watertight<Mesh>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The mesh as a checked watertight solid."
+        }
+      ]
+    },
+    {
+      "name": "mesh_box",
+      "title": "Mesh Box",
+      "description": "an axis-aligned box in a plane's frame as a watertight mesh (the mesh tier's box: twelve triangles, Manifold-ready — the wall's cutters and `mesh_difference` want this; the B-rep `box` is the default working mode). Decreasing domains are normalized.",
+      "category": "Mesh & field",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "any extent is empty at tolerance or the plane is degenerate.",
+      "gh": "Mesh Box",
+      "examples": [
+        "span = construct_domain(start=0.0, end=2.0)\nblock = mesh_box(x=span, y=span, z=span)"
       ],
       "inputs": [
         {
@@ -3785,10 +4384,54 @@
       ]
     },
     {
-      "name": "extrude",
-      "title": "Extrude",
-      "description": "extrude a closed planar profile into a watertight prism (mesh-backed under its v0.1 name, doc 15).",
-      "category": "Surface & solid",
+      "name": "mesh_difference",
+      "title": "Mesh Difference",
+      "description": "subtract every cutter from a mesh via Manifold; the result may be the empty solid. Lift with `each()` to carve per part (`mesh_difference(mesh=each(frusta), cutters=each(cutter_groups))`).",
+      "category": "Mesh & field",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": false,
+      "panics": "Manifold refuses the mesh or a cutter (named by index).",
+      "gh": "Mesh Difference",
+      "examples": [
+        "span = construct_domain(start=0.0, end=2.0)\nblock = mesh_box(x=span, y=span, z=span)\ntop = construct_point(x=1.0, y=1.0, z=2.0)\ntop_frame = xy_plane(origin=top)\nball = mesh_sphere(plane=top_frame, radius=0.75, segments=24)\nstill = unit_x(factor=0.0)\ncutters = linear_array(geometry=ball, direction=still, count=1)\ncarved = mesh_difference(mesh=block, cutters=cutters)"
+      ],
+      "inputs": [
+        {
+          "name": "mesh",
+          "type": "Watertight<Mesh>",
+          "base": "Watertight<Mesh>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The solid to carve."
+        },
+        {
+          "name": "cutters",
+          "type": "[Watertight<Mesh>]",
+          "base": "Watertight<Mesh>",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The solids to subtract (the wall's carve: one part, its cutters)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Watertight<Mesh>",
+          "base": "Watertight<Mesh>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The carved solid — `mesh` minus every cutter (possibly empty)."
+        }
+      ]
+    },
+    {
+      "name": "mesh_extrude",
+      "title": "Mesh Extrude",
+      "description": "extrude a closed planar profile into a watertight prism mesh (the mesh tier's extrusion: curved profiles tessellate to `segments` edges — the wall's frusta and cutters; GH reaches it with Extrude then Mesh Brep; the B-rep `extrude` is the default working mode).",
+      "category": "Mesh & field",
       "tier": "S",
       "version": 1,
       "pure": true,
@@ -3797,7 +4440,7 @@
       "panics": "the profile is degenerate or non-planar at tolerance, the direction lies in the profile plane, `segments < 3`, or the profile polygon is self-intersecting.",
       "gh": "Extrude",
       "examples": [
-        "ring = circle(radius=2.0)\nup = unit_z(factor=5.0)\nprism = extrude(profile=ring, direction=up)"
+        "ring = circle(radius=2.0)\nup = unit_z(factor=5.0)\nprism = mesh_extrude(profile=ring, direction=up)"
       ],
       "inputs": [
         {
@@ -3838,10 +4481,54 @@
       ]
     },
     {
-      "name": "loft",
-      "title": "Loft",
-      "description": "a ruled solid between two closed sections, capped at both ends (the wall's frusta: Voronoi cell → tip cap; cones and chamfers from circle → circle). Sections pair vertex `i` with vertex `i` (polylines vertex-to-vertex as given — no resampling, seam = vertex 0; analytic sections tessellated to `segments` vertices starting at the plane's x axis), walls are two triangles per quad, caps are ear-clipped (non-convex sections welcome), orientation is fixed by signed volume and the result is re-verified watertight. Lift with `each()` to loft per part (`loft(start=each(cells), end=each(caps))`).",
-      "category": "Surface & solid",
+      "name": "mesh_intersection",
+      "title": "Mesh Intersection",
+      "description": "the intersection of two watertight meshes via Manifold; the result may be the empty solid.",
+      "category": "Mesh & field",
+      "tier": "S",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": false,
+      "panics": "Manifold refuses an operand.",
+      "gh": "Mesh Intersection",
+      "examples": [
+        "span = construct_domain(start=0.0, end=2.0)\nfirst = mesh_box(x=span, y=span, z=span)\nat = construct_point(x=1.0, y=1.0, z=1.0)\nframe = xy_plane(origin=at)\nsecond = mesh_box(plane=frame, x=span, y=span, z=span)\noverlap = mesh_intersection(a=first, b=second)"
+      ],
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Watertight<Mesh>",
+          "base": "Watertight<Mesh>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "First solid."
+        },
+        {
+          "name": "b",
+          "type": "Watertight<Mesh>",
+          "base": "Watertight<Mesh>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Second solid."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Watertight<Mesh>",
+          "base": "Watertight<Mesh>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The solid common to `a` and `b` (possibly empty)."
+        }
+      ]
+    },
+    {
+      "name": "mesh_loft",
+      "title": "Mesh Loft",
+      "description": "a ruled solid mesh between two closed sections, capped at both ends (the mesh tier's loft — the wall's frusta: Voronoi cell → tip cap; cones and chamfers from circle → circle; GH reaches it with Loft then Mesh Brep; the B-rep `loft` is the default working mode). Sections pair vertex `i` with vertex `i` (polylines vertex-to-vertex as given — no resampling, seam = vertex 0; analytic sections tessellated to `segments` vertices starting at the plane's x axis), walls are two triangles per quad, caps are ear-clipped (non-convex sections welcome), orientation is fixed by signed volume and the result is re-verified watertight. Lift with `each()` to loft per part (`mesh_loft(start=each(cells), end=each(caps))`).",
+      "category": "Mesh & field",
       "tier": "S",
       "version": 1,
       "pure": true,
@@ -3850,7 +4537,7 @@
       "panics": "the vertex counts differ (both counts in the message), a section is open, degenerate at tolerance, non-planar, or self-intersecting, the sections wind in opposite directions, the sections coincide or are coplanar (zero volume), `segments < 3` for an analytic section, or the result is not watertight.",
       "gh": "Loft",
       "examples": [
-        "base = circle(radius=2.0)\ntop_at = construct_point(x=0.0, y=0.0, z=4.0)\ntop_frame = xy_plane(origin=top_at)\ntop = circle(plane=top_frame, radius=1.0)\ncone = loft(start=base, end=top, segments=32)"
+        "base = circle(radius=2.0)\ntop_at = construct_point(x=0.0, y=0.0, z=4.0)\ntop_frame = xy_plane(origin=top_at)\ntop = circle(plane=top_frame, radius=1.0)\ncone = mesh_loft(start=base, end=top, segments=32)"
       ],
       "inputs": [
         {
@@ -3891,19 +4578,19 @@
       ]
     },
     {
-      "name": "sphere",
-      "title": "Sphere",
-      "description": "a UV sphere at a plane's origin (mesh-backed under its v0.1 name, doc 15).",
-      "category": "Surface & solid",
+      "name": "mesh_sphere",
+      "title": "Mesh Sphere",
+      "description": "a UV sphere at a plane's origin as a watertight mesh (the mesh tier's sphere, `segments` longitudes — the wall's pins; the B-rep `sphere` is the default working mode).",
+      "category": "Mesh & field",
       "tier": "S",
       "version": 1,
       "pure": true,
       "volatile": false,
       "uses_tolerance": true,
       "panics": "the radius is not above tolerance, `segments < 3`, or the plane is degenerate.",
-      "gh": "Sphere",
+      "gh": "Mesh Sphere",
       "examples": [
-        "ball = sphere(radius=1.5, segments=24)"
+        "ball = mesh_sphere(radius=1.5, segments=24)"
       ],
       "inputs": [
         {
@@ -3946,130 +4633,6 @@
       ]
     },
     {
-      "name": "as_watertight",
-      "title": "As Watertight",
-      "description": "the checked watertight refinement (docs/08: the mesh-tier solid): every edge shared by exactly two consistently oriented triangles.",
-      "category": "Mesh & field",
-      "tier": "S",
-      "version": 1,
-      "pure": true,
-      "volatile": false,
-      "uses_tolerance": false,
-      "panics": "the mesh has open or inconsistently oriented edges — red with the count, never a silent pass (wall lesson 13).",
-      "gh": null,
-      "examples": [
-        "span = construct_domain(start=0.0, end=2.0)\nblock = box(x=span, y=span, z=span)\nsealed = as_watertight(mesh=block)"
-      ],
-      "inputs": [
-        {
-          "name": "mesh",
-          "type": "Mesh",
-          "base": "Mesh",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "The mesh to refine."
-        }
-      ],
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Watertight<Mesh>",
-          "base": "Watertight<Mesh>",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "The mesh as a checked watertight solid."
-        }
-      ]
-    },
-    {
-      "name": "mesh_difference",
-      "title": "Mesh Difference",
-      "description": "subtract every cutter from a mesh via Manifold; the result may be the empty solid. Lift with `each()` to carve per part (`mesh_difference(mesh=each(frusta), cutters=each(cutter_groups))`).",
-      "category": "Mesh & field",
-      "tier": "S",
-      "version": 1,
-      "pure": true,
-      "volatile": false,
-      "uses_tolerance": false,
-      "panics": "Manifold refuses the mesh or a cutter (named by index).",
-      "gh": "Mesh Difference",
-      "examples": [
-        "span = construct_domain(start=0.0, end=2.0)\nblock = box(x=span, y=span, z=span)\ntop = construct_point(x=1.0, y=1.0, z=2.0)\ntop_frame = xy_plane(origin=top)\nball = sphere(plane=top_frame, radius=0.75, segments=24)\nstill = unit_x(factor=0.0)\ncutters = linear_array(geometry=ball, direction=still, count=1)\ncarved = mesh_difference(mesh=block, cutters=cutters)"
-      ],
-      "inputs": [
-        {
-          "name": "mesh",
-          "type": "Watertight<Mesh>",
-          "base": "Watertight<Mesh>",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "The solid to carve."
-        },
-        {
-          "name": "cutters",
-          "type": "[Watertight<Mesh>]",
-          "base": "Watertight<Mesh>",
-          "list_depth": 1,
-          "optional": false,
-          "doc": "The solids to subtract (the wall's carve: one part, its cutters)."
-        }
-      ],
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Watertight<Mesh>",
-          "base": "Watertight<Mesh>",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "The carved solid — `mesh` minus every cutter (possibly empty)."
-        }
-      ]
-    },
-    {
-      "name": "mesh_intersection",
-      "title": "Mesh Intersection",
-      "description": "the intersection of two watertight meshes via Manifold; the result may be the empty solid.",
-      "category": "Mesh & field",
-      "tier": "S",
-      "version": 1,
-      "pure": true,
-      "volatile": false,
-      "uses_tolerance": false,
-      "panics": "Manifold refuses an operand.",
-      "gh": "Mesh Intersection",
-      "examples": [
-        "span = construct_domain(start=0.0, end=2.0)\nfirst = box(x=span, y=span, z=span)\nat = construct_point(x=1.0, y=1.0, z=1.0)\nframe = xy_plane(origin=at)\nsecond = box(plane=frame, x=span, y=span, z=span)\noverlap = mesh_intersection(a=first, b=second)"
-      ],
-      "inputs": [
-        {
-          "name": "a",
-          "type": "Watertight<Mesh>",
-          "base": "Watertight<Mesh>",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "First solid."
-        },
-        {
-          "name": "b",
-          "type": "Watertight<Mesh>",
-          "base": "Watertight<Mesh>",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "Second solid."
-        }
-      ],
-      "outputs": [
-        {
-          "name": "out",
-          "type": "Watertight<Mesh>",
-          "base": "Watertight<Mesh>",
-          "list_depth": 0,
-          "optional": false,
-          "doc": "The solid common to `a` and `b` (possibly empty)."
-        }
-      ]
-    },
-    {
       "name": "mesh_union",
       "title": "Mesh Union",
       "description": "the union of watertight meshes via Manifold (docs/08: watertight, parallel, seconds).",
@@ -4082,7 +4645,7 @@
       "panics": "Manifold refuses an operand (named by index) — its ε-validity is stricter than structural watertightness in corner cases.",
       "gh": "Mesh Union",
       "examples": [
-        "span = construct_domain(start=0.0, end=2.0)\nblock = box(x=span, y=span, z=span)\nshift = unit_x(factor=1.0)\nblocks = linear_array(geometry=block, direction=shift, count=2)\nfused = mesh_union(meshes=blocks)"
+        "span = construct_domain(start=0.0, end=2.0)\nblock = mesh_box(x=span, y=span, z=span)\nshift = unit_x(factor=1.0)\nblocks = linear_array(geometry=block, direction=shift, count=2)\nfused = mesh_union(meshes=blocks)"
       ],
       "inputs": [
         {
@@ -4102,6 +4665,62 @@
           "list_depth": 0,
           "optional": false,
           "doc": "One solid: the union of all the meshes."
+        }
+      ]
+    },
+    {
+      "name": "tessellate",
+      "title": "Tessellate",
+      "description": "mesh a B-rep solid into the mesh tier's watertight solid: OCCT's mesher at the given chord and angular deflections, per-face vertices welded, the result checked watertight and accepted by Manifold — so it feeds `mesh_union` / `mesh_difference` / the exporters directly. The explicit, costed bridge (docs/08 rule 8): a `Solid` never becomes a mesh on its own.",
+      "category": "Mesh & field",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "the deflection is below 1e-7 or the angle below 1e-12 rad (the kernel's own floors: the mesher refuses anything finer), when the mesher fails or its output is not closed after welding, when Manifold refuses the welded mesh, or the kernel refuses.",
+      "gh": "Mesh Brep",
+      "examples": [
+        "ball = sphere(radius=1.5)\nshell = tessellate(solid=ball, deflection=0.05)"
+      ],
+      "inputs": [
+        {
+          "name": "solid",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The B-rep solid to mesh."
+        },
+        {
+          "name": "deflection",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "0.01",
+          "doc": "The chord deviation: the largest distance between the mesh and the true surface, in document units (the display uses 0.02 mm).",
+          "dimension": "length"
+        },
+        {
+          "name": "angle",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "0.1",
+          "doc": "The angular deviation between adjacent facets, in radians (0.1 rad ≈ 5.7°, about 63 facets per full turn).",
+          "dimension": "angle"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Watertight<Mesh>",
+          "base": "Watertight<Mesh>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The welded, watertight mesh of the solid."
         }
       ]
     },
@@ -4461,7 +5080,7 @@
       "panics": "the file cannot be written (missing directory, permissions) — an export that silently wrote nothing is the worst outcome (wall lesson 7).",
       "gh": null,
       "examples": [
-        "span = construct_domain(start=0.0, end=2.0)\nblock = box(x=span, y=span, z=span)\nstill = unit_x(factor=0.0)\nblocks = linear_array(geometry=block, direction=still, count=1)\ndump = export_obj(meshes=blocks, path=\"block.obj\")"
+        "span = construct_domain(start=0.0, end=2.0)\nblock = mesh_box(x=span, y=span, z=span)\nstill = unit_x(factor=0.0)\nblocks = linear_array(geometry=block, direction=still, count=1)\ndump = export_obj(meshes=blocks, path=\"block.obj\")"
       ],
       "inputs": [
         {

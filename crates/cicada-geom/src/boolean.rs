@@ -23,6 +23,18 @@ fn to_manifold(mesh: &Mesh, which: &str) -> Result<Manifold, GeomError> {
     })
 }
 
+/// Manifold's acceptance of a mesh as a solid, with nothing computed:
+/// the `tessellate` node's last check — a structurally watertight mesh can
+/// still be non-manifold (a pinched vertex, a doubled face), which the mesh
+/// tier's booleans would refuse later with less context.
+///
+/// # Errors
+///
+/// [`GeomError::Kernel`] with Manifold's reason when it refuses the mesh.
+pub fn accepted(mesh: &Mesh) -> Result<(), GeomError> {
+    to_manifold(mesh, "the mesh").map(|_| ())
+}
+
 /// A Manifold back into a core mesh. Index widths: Manifold returns u64
 /// indices; a result with more than `u32::MAX` vertices refuses loudly
 /// (nothing mesh-tier approaches it).

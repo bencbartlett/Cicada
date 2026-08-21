@@ -16,9 +16,11 @@ touching the committed examples — the app writes what you do.
 
 - **01-curves.cic** — params, analytic curves, curve division, an
   expression node.
-- **02-solids.cic** — mesh-backed solids (box/sphere), a Manifold carve,
-  and the debug OBJ exporter (open the written `.obj` in any mesh
-  viewer — F3D, MeshLab, Blender, even VS Code extensions).
+- **02-solids.cic** — B-rep solids, the default working mode: `box`,
+  `sphere`, a `solid_difference` in the OCCT kernel, `volume`, then one
+  `tessellate` for the debug OBJ exporter (open the written `.obj` in
+  any mesh viewer — F3D, MeshLab, Blender, even VS Code extensions).
+  The mesh tier continues under `mesh_*` names (03/04 stay on it).
 - **03-voronoi.cic** — the wall pipeline in miniature: seeded random
   points → Voronoi cells → extruded prisms (`each()` lift) → carve →
   OBJ.

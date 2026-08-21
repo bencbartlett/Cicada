@@ -1,0 +1,198 @@
+//! The `tessellate` node (v0.1 item 3 WP-C): the explicit B-rep → mesh
+//! bridge (docs/08 §8; DECISIONS.md row 42).
+
+use cicada_core::config::ProjectConfig;
+use cicada_core::geometry::{Mesh, Solid, Watertight};
+use cicada_geom::solid::Deflection;
+use cicada_macros::{Ports, node};
+
+use crate::red;
+
+/// Inputs for [`tessellate`].
+#[derive(Ports, Clone, Debug)]
+pub struct TessellateIn {
+    /// The B-rep solid to mesh.
+    pub solid: Solid,
+    /// The chord deviation: the largest distance between the mesh and the
+    /// true surface, in document units (the display uses 0.02 mm).
+    #[port(default = 0.01, dimension = length)]
+    pub deflection: f64,
+    /// The angular deviation between adjacent facets, in radians (0.1 rad
+    /// ≈ 5.7°, about 63 facets per full turn).
+    #[port(default = 0.1, dimension = angle)]
+    pub angle: f64,
+}
+
+/// Tessellate — mesh a B-rep solid into the mesh tier's watertight solid:
+/// OCCT's mesher at the given chord and angular deflections, per-face
+/// vertices welded, the result checked watertight and accepted by
+/// Manifold — so it feeds `mesh_union` / `mesh_difference` / the exporters
+/// directly. The explicit, costed bridge (docs/08 rule 8): a `Solid` never
+/// becomes a mesh on its own.
+///
+/// # Returns
+///
+/// The welded, watertight mesh of the solid.
+///
+/// # Panics
+///
+/// Panics when the deflection is below 1e-7 or the angle below 1e-12 rad
+/// (the kernel's own floors: the mesher refuses anything finer), when the
+/// mesher fails or its output is not closed after welding, when Manifold
+/// refuses the welded mesh, or the kernel refuses.
+///
+/// # Examples
+///
+/// ```cic
+/// ball = sphere(radius=1.5)
+/// shell = tessellate(solid=ball, deflection=0.05)
+/// ```
+#[node(
+    category = "Mesh & field",
+    tier = "1",
+    version = 1,
+    gh = "Mesh Brep",
+    uses_tolerance
+)]
+#[must_use]
+pub fn tessellate(_config: &ProjectConfig, input: TessellateIn) -> Watertight<Mesh> {
+    let deflection = red(Deflection::new(input.deflection, input.angle));
+    let tessellation = red(cicada_geom::solid::tessellate(&input.solid, deflection));
+    // Manifold acceptance: the mesh tier's booleans must take this mesh
+    // as-is (a structurally watertight mesh can still be non-manifold —
+    // a pinched vertex — which Manifold refuses loudly).
+    red(cicada_geom::boolean::accepted(&tessellation.mesh.0));
+    tessellation.mesh
+}
+
+#[cfg(test)]
+mod tests {
+    use std::f64::consts::PI;
+
+    use cicada_core::value::{HashedValue, ValueData};
+    use cicada_geom::meshbuild::signed_volume;
+
+    use super::*;
+    use crate::solids::support::{brep_box, close_rel, config, plane_at, with_kernel};
+
+    #[test]
+    fn tessellate_table_cases() {
+        // A box: twelve triangles whatever the deflection.
+        let Some(cube) = with_kernel(|| {
+            tessellate(
+                &config(),
+                TessellateIn {
+                    solid: brep_box([0.0; 3], [1.0, 2.0, 3.0]),
+                    deflection: 0.01,
+                    angle: 0.1,
+                },
+            )
+        }) else {
+            return;
+        };
+        assert!(cube.0.is_watertight());
+        assert_eq!(cube.0.triangle_count(), 12);
+        assert_eq!(cube.0.vertex_count(), 8);
+        assert!(close_rel(signed_volume(&cube.0), 6.0, 1e-12));
+        // A sphere: finer deflection, more triangles, volume closer to
+        // 4/3 π r³ — and watertight both times.
+        let ball =
+            cicada_geom::solid::sphere(&plane_at(0.0, 0.0, 0.0), 2.0, config().tol()).unwrap();
+        let coarse = tessellate(
+            &config(),
+            TessellateIn {
+                solid: ball.clone(),
+                deflection: 0.5,
+                angle: 0.5,
+            },
+        );
+        let fine = tessellate(
+            &config(),
+            TessellateIn {
+                solid: ball,
+                deflection: 0.005,
+                angle: 0.05,
+            },
+        );
+        assert!(coarse.0.is_watertight() && fine.0.is_watertight());
+        assert!(fine.0.triangle_count() > coarse.0.triangle_count());
+        let exact = 4.0 / 3.0 * PI * 8.0;
+        let coarse_error = (signed_volume(&coarse.0) - exact).abs();
+        let fine_error = (signed_volume(&fine.0) - exact).abs();
+        assert!(fine_error < coarse_error, "{fine_error} vs {coarse_error}");
+        assert!(fine_error / exact < 5e-3);
+        // The result feeds the mesh tier's booleans (Manifold accepted it).
+        let carved = crate::meshes::mesh_difference::mesh_difference(
+            crate::meshes::mesh_difference::MeshDifferenceIn {
+                mesh: cube.clone(),
+                cutters: vec![fine],
+            },
+        );
+        assert!(carved.0.is_watertight());
+    }
+
+    #[test]
+    #[should_panic(expected = "linear_deflection")]
+    fn tessellate_below_the_kernel_floor_is_red() {
+        let _ = tessellate(
+            &config(),
+            TessellateIn {
+                solid: cicada_core::geometry::Solid::from_canonical_bytes(
+                    cicada_core::geometry::SOLID_CANONICAL_HEADER.to_vec(),
+                )
+                .unwrap(),
+                deflection: 1e-9,
+                angle: 0.1,
+            },
+        );
+    }
+
+    proptest::proptest! {
+        // Boxes anywhere at any sane deflection: always twelve triangles,
+        // always the exact volume.
+        #[test]
+        fn property_tessellate_boxes_are_exact(
+            sx in 0.1f64..20.0, sy in 0.1f64..20.0, sz in 0.1f64..20.0,
+            deflection in 0.001f64..1.0,
+        ) {
+            if cicada_geom::solid::kernel_available() {
+                let out = tessellate(
+                    &config(),
+                    TessellateIn {
+                        solid: brep_box([0.0; 3], [sx, sy, sz]),
+                        deflection,
+                        angle: 0.1,
+                    },
+                );
+                proptest::prop_assert_eq!(out.0.triangle_count(), 12);
+                proptest::prop_assert!(close_rel(signed_volume(&out.0), sx * sy * sz, 1e-9));
+            }
+        }
+    }
+
+    #[test]
+    fn tessellate_determinism_golden_hash() {
+        // A box's tessellation: eight exact corners, twelve triangles — a
+        // transcendental-free mesh. Blessed via run-once on win-64
+        // (2026-08-20).
+        let Some(cube) = with_kernel(|| {
+            tessellate(
+                &config(),
+                TessellateIn {
+                    solid: brep_box([0.0; 3], [1.0, 2.0, 3.0]),
+                    deflection: 0.01,
+                    angle: 0.1,
+                },
+            )
+        }) else {
+            return;
+        };
+        let sealed = HashedValue::new(ValueData::Mesh(cube.0)).unwrap();
+        assert_eq!(
+            sealed.hash().to_hex(),
+            crate::solids::support::platform_golden(
+                "0a0565a3a8cf66714507a4e9c94fb6f4e8d437f4131e2b0793814d9f25dc2d2b"
+            )
+        );
+    }
+}

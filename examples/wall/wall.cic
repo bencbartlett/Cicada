@@ -54,7 +54,7 @@ field = solve_field(points=layout.seeds, wires_out=layout.wires_out, wires_in=la
 caps = tip_caps(cells=cells, centroids=geom.centroid, directions=field.directions, lean_lengths=layout.lean_lengths, heights=layout.heights, cell_scale=0.07)
 cap_rings = polyline(vertices=each(caps), closed=True)
 cap_curves = as_closed(curve=each(cap_rings))
-frusta = loft(start=each(cells), end=each(cap_curves))
+frusta = mesh_loft(start=each(cells), end=each(cap_curves))
 
 # --- labels: IDs + deboss placement (labels.py), glyph solids from the bundled font
 # The deboss depth is the full-pipeline slider (docs/15: the heavy cone that

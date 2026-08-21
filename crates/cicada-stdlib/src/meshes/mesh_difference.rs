@@ -30,10 +30,10 @@ pub struct MeshDifferenceIn {
 ///
 /// ```cic
 /// span = construct_domain(start=0.0, end=2.0)
-/// block = box(x=span, y=span, z=span)
+/// block = mesh_box(x=span, y=span, z=span)
 /// top = construct_point(x=1.0, y=1.0, z=2.0)
 /// top_frame = xy_plane(origin=top)
-/// ball = sphere(plane=top_frame, radius=0.75, segments=24)
+/// ball = mesh_sphere(plane=top_frame, radius=0.75, segments=24)
 /// still = unit_x(factor=0.0)
 /// cutters = linear_array(geometry=ball, direction=still, count=1)
 /// carved = mesh_difference(mesh=block, cutters=cutters)
@@ -63,16 +63,16 @@ mod tests {
     use cicada_geom::meshbuild::signed_volume;
 
     use super::*;
+    use crate::meshes::mesh_box::{MeshBoxIn, mesh_box};
     use crate::meshes::support::{aligned_box, overlap_volume};
-    use crate::solids::r#box::{BoxIn, box_};
     use crate::solids::support::config;
 
     #[test]
     fn mesh_difference_table_cases() {
         let unit = |origin: f64| {
-            box_(
+            mesh_box(
                 &config(),
-                BoxIn {
+                MeshBoxIn {
                     plane: Plane {
                         origin: Point::new(origin, origin, origin),
                         ..Plane::world_xy()
@@ -141,9 +141,9 @@ mod tests {
     // extends this to the full wall).
     #[test]
     fn boolean_determinism_golden_hash() {
-        let base = box_(
+        let base = mesh_box(
             &config(),
-            BoxIn {
+            MeshBoxIn {
                 plane: Plane::world_xy(),
                 x: Domain::new(0.0, 2.0),
                 y: Domain::new(0.0, 2.0),
@@ -152,9 +152,9 @@ mod tests {
         );
         // An arithmetic-only cutter: a unit box punched through the top
         // face (transcendental-input goldens are forbidden, see above).
-        let cutter = box_(
+        let cutter = mesh_box(
             &config(),
-            BoxIn {
+            MeshBoxIn {
                 plane: Plane {
                     origin: Point::new(0.5, 0.5, 1.0),
                     ..Plane::world_xy()

@@ -4385,11 +4385,14 @@ mod tests {
     #[test]
     #[allow(clippy::too_many_lines)] // one end-to-end story: open → frames → every gesture
     fn open_solve_and_stream_frames_then_edit_via_intents() {
+        // `mesh_box`: this story asserts MESH display — a pipeline that
+        // never touches the Solid tessellation cache (the B-rep `box` is a
+        // Solid since WP-C and would populate it).
         let (_dir, config) = project(
             "# cicada 1\n\
              size = slider(value=2.0, min=0.5, max=5.0)\n\
              span = construct_domain(start=0.0, end=size)\n\
-             block = box(x=span, y=span, z=span)\n",
+             block = mesh_box(x=span, y=span, z=span)\n",
         );
         let pipeline = config.pipeline.clone();
         let session = Session::open(config).unwrap();
@@ -4544,7 +4547,7 @@ mod tests {
         session.wait_idle();
         let text = std::fs::read_to_string(&pipeline).unwrap();
         assert!(
-            text.contains("block = box(x=extent, y=extent, z=extent)"),
+            text.contains("block = mesh_box(x=extent, y=extent, z=extent)"),
             "{text}"
         );
         session.handle(
@@ -4564,7 +4567,7 @@ mod tests {
             state["text"]
                 .as_str()
                 .unwrap()
-                .contains("block = box(x=extent")
+                .contains("block = mesh_box(x=extent")
         );
         // The box's frame is kept (last coherent value) — display still lists it.
         assert!(state["display"]["block.out"].is_object());
@@ -5540,7 +5543,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
             "# cicada 1\n\
              size = slider(value=2.0, min=0.5, max=5.0)\n\
              span = construct_domain(start=0.0, end=size)\n\
-             block = box(x=span, y=span, z=span)\n\
+             block = mesh_box(x=span, y=span, z=span)\n\
              dx = unit_x()\n\
              blocks = linear_array(geometry=block, direction=dx, count=2)\n\
              dump = export_obj(meshes=blocks, path=\"{obj_text}\")\n"

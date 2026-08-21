@@ -693,7 +693,7 @@ fn carved_block() -> Solid {
 /// `TopTools_ShapeMapHasher` hashes `TShape` ADDRESSES, so if any boolean
 /// or mesher output depended on map iteration order, differing heap states
 /// are exactly what would expose it.
-fn churn_heap(seed: u64, rounds: usize) -> usize {
+pub(super) fn churn_heap(seed: u64, rounds: usize) -> usize {
     let mut state = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
     let mut kept: Vec<Vec<u8>> = Vec::new();
     let mut total = 0;

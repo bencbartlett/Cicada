@@ -856,3 +856,142 @@ fn step_calls_are_safe_across_threads() {
     std::fs::remove_dir_all(&dir).expect("cleanup");
     assert!(failures.is_empty(), "{failures:?}");
 }
+
+// ---------------------------------------------------------------------------
+// Heap independence of the node set's golden corpus (WP-B's review asked
+// for this shape on loft / revolve / multi-body booleans BEFORE their
+// goldens are blessed; the stdlib's goldens are these solids)
+// ---------------------------------------------------------------------------
+
+/// The transcendental-free solids the stdlib pins goldens on (plus the
+/// revolve and sweep, which have no golden but the same question): each a
+/// pure function of exact inputs if the kernel is one.
+fn golden_corpus() -> Vec<(&'static str, Solid)> {
+    let pentagon = |z: f64, pts: &[(f64, f64)]| {
+        Curve::Polyline(Polyline {
+            vertices: pts.iter().map(|&(x, y)| Point::new(x, y, z)).collect(),
+            closed: true,
+        })
+    };
+    let cell = pentagon(
+        0.0,
+        &[(0.0, 0.0), (4.0, 0.0), (5.0, 3.0), (2.0, 5.0), (-1.0, 3.0)],
+    );
+    let cap = pentagon(
+        12.0,
+        &[(2.0, 1.0), (2.75, 1.5), (3.5, 2.0), (2.0, 3.5), (0.5, 2.0)],
+    );
+    let ring_profile = Curve::Polyline(Polyline {
+        vertices: vec![
+            Point::new(2.0, 0.0, 0.0),
+            Point::new(3.0, 0.0, 0.0),
+            Point::new(3.0, 0.0, 1.0),
+            Point::new(2.0, 0.0, 1.0),
+        ],
+        closed: true,
+    });
+    let z_axis = Curve::Line(Line {
+        a: Point::origin(),
+        b: Point::new(0.0, 0.0, 1.0),
+    });
+    let elbow = Curve::Polyline(Polyline {
+        vertices: vec![
+            Point::origin(),
+            Point::new(0.0, 0.0, 4.0),
+            Point::new(3.0, 0.0, 4.0),
+        ],
+        closed: false,
+    });
+    vec![
+        ("loft", solid::loft(&[cell, cap], true, TOL).expect("loft")),
+        (
+            "union of three",
+            solid::union_all(&[
+                cube(Point::origin(), 2.0),
+                cube(Point::new(1.0, 0.0, 0.0), 2.0),
+                cube(Point::new(2.0, 0.0, 0.0), 2.0),
+            ])
+            .expect("union"),
+        ),
+        (
+            "n-ary cut",
+            solid::difference_all(
+                &solid::box_at(Point::origin(), Vector::new(4.0, 3.0, 2.0)).expect("box"),
+                &[
+                    cube(Point::new(3.0, 2.0, 1.0), 2.0),
+                    cube(Point::new(-1.0, -1.0, -1.0), 2.0),
+                ],
+            )
+            .expect("cut"),
+        ),
+        (
+            "intersection",
+            solid::intersection(
+                &solid::box_at(Point::origin(), Vector::new(4.0, 3.0, 2.0)).expect("box"),
+                &solid::box_at(Point::new(1.0, 1.0, 1.0), Vector::new(4.0, 3.0, 2.0)).expect("box"),
+            )
+            .expect("common"),
+        ),
+        (
+            "extrude to point",
+            solid::extrude_to_point(&square(2.0, 0.0), Point::new(0.5, 0.25, 3.0), TOL)
+                .expect("pyramid"),
+        ),
+        (
+            "revolve",
+            solid::revolve(
+                &ring_profile,
+                &z_axis,
+                Domain::new(0.0, TAU),
+                TOL,
+                TOL_ANGLE,
+            )
+            .expect("ring"),
+        ),
+        (
+            "sweep",
+            solid::sweep(&elbow, &square(1.0, 0.0), TOL).expect("sweep"),
+        ),
+    ]
+}
+
+#[test]
+fn node_set_bytes_do_not_depend_on_heap_state_or_thread() {
+    // The shape of `canonical_bytes_do_not_depend_on_heap_state_or_thread`
+    // (occt/tests.rs) over the node set's corpus: computed cold, after
+    // deterministic allocator churn under several seeds, and on 8 threads
+    // at once under per-worker churn — every result byte-identical.
+    use super::tests::churn_heap;
+    use rayon::prelude::*;
+    const THREADS: usize = 8;
+    const REPEATS: usize = 16;
+
+    let golden = golden_corpus();
+    for seed in 1..=4u64 {
+        let _ = churn_heap(seed, 2_000);
+        let again = golden_corpus();
+        for ((name, want), (_, got)) in golden.iter().zip(&again) {
+            assert_eq!(got, want, "seed {seed}: {name} followed the heap");
+        }
+    }
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(THREADS)
+        .build()
+        .expect("pool");
+    let failures: Vec<String> = pool.install(|| {
+        (0..REPEATS)
+            .into_par_iter()
+            .filter_map(|repeat| {
+                let seed = 100 + u64::try_from(repeat).expect("small");
+                let _ = churn_heap(seed, 1_000 + repeat * 37);
+                let again = golden_corpus();
+                golden
+                    .iter()
+                    .zip(&again)
+                    .find(|((_, want), (_, got))| got != want)
+                    .map(|((name, _), _)| format!("repeat {repeat}: {name} drifted"))
+            })
+            .collect()
+    });
+    assert!(failures.is_empty(), "{failures:?}");
+}

@@ -20,15 +20,16 @@ seeds = construct_point(x=each(xs), y=each(ys))
 # One closed cell per seed, index-aligned.
 cells = voronoi(seeds=seeds, boundary=board)
 
-# Extrude every cell into a prism (each() = the lift chip in text form).
+# Extrude every cell into a mesh prism (each() = the lift chip in text
+# form); the mesh tier, because the carve below is Manifold's.
 up = unit_z(factor=3.0)
-prisms = extrude(profile=each(cells), direction=up)
+prisms = mesh_extrude(profile=each(cells), direction=up)
 
 # Carve a shared pin through every prism (the wall carves per-part pin
 # holes; one shared cutter keeps the demo small).
 pin_at = construct_point(x=20.0, y=12.0, z=3.0)
 pin_frame = xy_plane(origin=pin_at)
-pin = sphere(plane=pin_frame, radius=2.5, segments=24)
+pin = mesh_sphere(plane=pin_frame, radius=2.5, segments=24)
 pins = duplicate(item=pin, count=1)
 carved = mesh_difference(mesh=each(prisms), cutters=pins)
 

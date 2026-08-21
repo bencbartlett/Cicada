@@ -1040,7 +1040,8 @@ mod tests {
         assert!(block.preview, "geometry previews by default");
         assert_eq!(
             block.outputs[0].resolved.as_deref(),
-            Some("Watertight<Mesh>")
+            Some("Solid"),
+            "the B-rep box (WP-C): a Solid output"
         );
         assert!(
             block

@@ -1,7 +1,8 @@
-//! The `extrude` node.
+//! The `extrude` node: the B-rep extrusion, OCCT-backed (v0.1 item 3 WP-C;
+//! the spike's mesh-backed extrusion continues as `mesh_extrude`).
 
 use cicada_core::config::ProjectConfig;
-use cicada_core::geometry::{Closed, Curve, Mesh, Watertight};
+use cicada_core::geometry::{Closed, Curve, Solid};
 use cicada_core::spatial::Vector;
 use cicada_macros::{Ports, node};
 
@@ -15,23 +16,22 @@ pub struct ExtrudeIn {
     /// Extrusion direction and length (need not be normal to the profile —
     /// oblique prisms are legal).
     pub direction: Vector,
-    /// Tessellation density for curved profiles (circles).
-    #[port(default = 64)]
-    pub segments: i64,
 }
 
-/// Extrude — extrude a closed planar profile into a watertight prism
-/// (mesh-backed under its v0.1 name, doc 15).
+/// Extrude — extrude a closed planar profile into a B-rep solid with exact
+/// edges for every curve kind: a polyline or rectangle becomes a prism of
+/// planar faces, a circle an exact cylinder (no `segments` — the mesh
+/// tier's `mesh_extrude` tessellates instead).
 ///
 /// # Returns
 ///
-/// The watertight prism: the profile swept along `direction`.
+/// The prism: the profile swept along `direction`.
 ///
 /// # Panics
 ///
 /// Panics when the profile is degenerate or non-planar at tolerance, the
-/// direction lies in the profile plane, `segments < 3`, or the profile
-/// polygon is self-intersecting.
+/// direction lies in the profile plane, the profile polygon is
+/// self-intersecting, or the kernel refuses.
 ///
 /// # Examples
 ///
@@ -48,37 +48,82 @@ pub struct ExtrudeIn {
     uses_tolerance
 )]
 #[must_use]
-pub fn extrude(config: &ProjectConfig, input: ExtrudeIn) -> Watertight<Mesh> {
-    Watertight(red(cicada_geom::meshbuild::extrude(
+pub fn extrude(config: &ProjectConfig, input: ExtrudeIn) -> Solid {
+    red(cicada_geom::solid::extrude(
         &input.profile.0,
         input.direction,
-        input.segments,
         config.tol(),
-    )))
+    ))
 }
 
 #[cfg(test)]
 mod tests {
-    use cicada_core::geometry::Rectangle;
+    use std::f64::consts::PI;
+
+    use cicada_core::geometry::{Circle, Rectangle};
     use cicada_core::scalar::Domain;
-    use cicada_core::spatial::Plane;
-    use cicada_core::value::{HashedValue, ValueData};
-    use cicada_geom::meshbuild::signed_volume;
+    use cicada_core::spatial::{Plane, Point};
 
     use super::*;
-    use crate::solids::support::{config, unit_square_profile};
+    use crate::solids::support::{
+        close_rel, config, platform_golden, ring, solid_hash, unit_square_profile, volume_of,
+        with_kernel,
+    };
 
     #[test]
-    fn extrude_is_watertight_with_expected_volume() {
-        let prism = extrude(
+    fn extrude_table_cases() {
+        let Some(prism) = with_kernel(|| {
+            extrude(
+                &config(),
+                ExtrudeIn {
+                    profile: unit_square_profile(),
+                    direction: Vector::new(0.0, 0.0, 2.0),
+                },
+            )
+        }) else {
+            return;
+        };
+        assert!(close_rel(volume_of(&prism), 2.0, 1e-12));
+        // A circle extrudes to an exact cylinder.
+        let cylinder = extrude(
+            &config(),
+            ExtrudeIn {
+                profile: Closed(Curve::Circle(Circle {
+                    plane: Plane::world_xy(),
+                    radius: 2.0,
+                })),
+                direction: Vector::new(0.0, 0.0, 5.0),
+            },
+        );
+        assert!(close_rel(volume_of(&cylinder), PI * 4.0 * 5.0, 1e-9));
+        // A non-convex polyline (an L) keeps its area × height.
+        let ell = extrude(
+            &config(),
+            ExtrudeIn {
+                profile: ring(
+                    &[
+                        (0.0, 0.0),
+                        (3.0, 0.0),
+                        (3.0, 1.0),
+                        (1.0, 1.0),
+                        (1.0, 3.0),
+                        (0.0, 3.0),
+                    ],
+                    0.0,
+                ),
+                direction: Vector::new(0.0, 0.0, 2.0),
+            },
+        );
+        assert!(close_rel(volume_of(&ell), 5.0 * 2.0, 1e-12));
+        // Downward and oblique both work: |base × normal height|.
+        let down = extrude(
             &config(),
             ExtrudeIn {
                 profile: unit_square_profile(),
-                direction: Vector::new(0.0, 0.0, 2.0),
-                segments: 64,
+                direction: Vector::new(0.5, 0.25, -3.0),
             },
         );
-        assert!((signed_volume(&prism.0) - 2.0).abs() < 1e-9);
+        assert!(close_rel(volume_of(&down), 3.0, 1e-12));
     }
 
     #[test]
@@ -89,57 +134,78 @@ mod tests {
             ExtrudeIn {
                 profile: unit_square_profile(),
                 direction: Vector::new(1.0, 0.0, 0.0),
-                segments: 64,
+            },
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "not planar")]
+    fn extrude_non_planar_profile_is_red() {
+        let _ = extrude(
+            &config(),
+            ExtrudeIn {
+                profile: Closed(Curve::Polyline(cicada_core::geometry::Polyline {
+                    vertices: vec![
+                        Point::new(0.0, 0.0, 0.0),
+                        Point::new(2.0, 0.0, 0.0),
+                        Point::new(2.0, 2.0, 1.0),
+                        Point::new(0.0, 2.0, 0.0),
+                    ],
+                    closed: true,
+                })),
+                direction: Vector::new(0.0, 0.0, 1.0),
             },
         );
     }
 
     proptest::proptest! {
         // Oblique prisms included: volume = base area × normal height for
-        // any shear (Cavalieri), watertight always.
+        // any shear (Cavalieri).
         #[test]
         fn property_extrude_prism_volume(
             dx in 0.1..10.0_f64, dy in 0.1..10.0_f64,
             sx in -3.0..3.0_f64, sy in -3.0..3.0_f64,
             h in 0.1..10.0_f64,
         ) {
-            let out = extrude(
-                &config(),
-                ExtrudeIn {
-                    profile: Closed(Curve::Rectangle(Rectangle {
-                        plane: Plane::world_xy(),
-                        x: Domain::new(0.0, dx),
-                        y: Domain::new(0.0, dy),
-                    })),
-                    direction: Vector::new(sx, sy, h),
-                    segments: 8,
-                },
-            );
-            proptest::prop_assert!(out.0.is_watertight());
-            let want = dx * dy * h;
-            proptest::prop_assert!((signed_volume(&out.0) - want).abs() <= 1e-9 * want.max(1.0));
+            if cicada_geom::solid::kernel_available() {
+                let out = extrude(
+                    &config(),
+                    ExtrudeIn {
+                        profile: Closed(Curve::Rectangle(Rectangle {
+                            plane: Plane::world_xy(),
+                            x: Domain::new(0.0, dx),
+                            y: Domain::new(0.0, dy),
+                        })),
+                        direction: Vector::new(sx, sy, h),
+                    },
+                );
+                proptest::prop_assert!(close_rel(volume_of(&out), dx * dy * h, 1e-9));
+            }
         }
     }
 
     #[test]
     fn extrude_determinism_golden_hash() {
-        // Oblique rectangle prism: pure arithmetic (corner lerps + shear).
-        let prism = extrude(
-            &config(),
-            ExtrudeIn {
-                profile: Closed(Curve::Rectangle(Rectangle {
-                    plane: Plane::world_xy(),
-                    x: Domain::new(0.0, 1.0),
-                    y: Domain::new(0.0, 2.0),
-                })),
-                direction: Vector::new(0.25, 0.0, 3.0),
-                segments: 8,
-            },
-        );
-        let sealed = HashedValue::new(ValueData::Mesh(prism.0)).unwrap();
+        // Oblique rectangle prism: pure arithmetic (corners + a shear).
+        // Blessed via run-once on win-64 (2026-08-20).
+        let Some(prism) = with_kernel(|| {
+            extrude(
+                &config(),
+                ExtrudeIn {
+                    profile: Closed(Curve::Rectangle(Rectangle {
+                        plane: Plane::world_xy(),
+                        x: Domain::new(0.0, 1.0),
+                        y: Domain::new(0.0, 2.0),
+                    })),
+                    direction: Vector::new(0.25, 0.0, 3.0),
+                },
+            )
+        }) else {
+            return;
+        };
         assert_eq!(
-            sealed.hash().to_hex(),
-            "6d59e4bbc7472fc06575a8c88c96be3bedbf7ac45adecad0d0ec5cb84f0d42db"
+            solid_hash(&prism),
+            platform_golden("fa6923a27d9f354630b14acb7e54358290d7dd4f76746b5ef1105884e64f94fc")
         );
     }
 }

@@ -1,7 +1,8 @@
-//! The `sphere` node.
+//! The `sphere` node: the B-rep sphere, OCCT-backed (v0.1 item 3 WP-C;
+//! the spike's mesh-backed sphere continues as `mesh_sphere`).
 
 use cicada_core::config::ProjectConfig;
-use cicada_core::geometry::{Mesh, Watertight};
+use cicada_core::geometry::Solid;
 use cicada_core::spatial::Plane;
 use cicada_macros::{Ports, node};
 
@@ -10,33 +11,32 @@ use crate::red;
 /// Inputs for [`sphere`].
 #[derive(Ports, Clone, Copy, Debug)]
 pub struct SphereIn {
-    /// Center frame; the plane's z is the polar axis.
+    /// Center frame; the plane's z is the polar axis (the seam runs along
+    /// its x axis).
     #[port(default = Plane::world_xy(), default_doc = "xy_plane")]
     pub plane: Plane,
     /// The radius.
     #[port(dimension = length)]
     pub radius: f64,
-    /// Longitudinal segment count (latitude bands follow as half).
-    #[port(default = 32)]
-    pub segments: i64,
 }
 
-/// Sphere — a UV sphere at a plane's origin (mesh-backed under its v0.1
-/// name, doc 15).
+/// Sphere — a B-rep sphere at a plane's origin (one exact spherical face;
+/// the default working mode's sphere — `mesh_sphere` is the mesh tier's
+/// UV sphere).
 ///
 /// # Returns
 ///
-/// The watertight UV-sphere mesh.
+/// The sphere solid.
 ///
 /// # Panics
 ///
-/// Panics when the radius is not above tolerance, `segments < 3`, or the
-/// plane is degenerate.
+/// Panics when the radius is not above tolerance, the plane is
+/// degenerate, or the kernel refuses.
 ///
 /// # Examples
 ///
 /// ```cic
-/// ball = sphere(radius=1.5, segments=24)
+/// ball = sphere(radius=1.5)
 /// ```
 #[node(
     category = "Surface & solid",
@@ -46,97 +46,105 @@ pub struct SphereIn {
     uses_tolerance
 )]
 #[must_use]
-pub fn sphere(config: &ProjectConfig, input: SphereIn) -> Watertight<Mesh> {
-    Watertight(red(cicada_geom::meshbuild::sphere_mesh(
+pub fn sphere(config: &ProjectConfig, input: SphereIn) -> Solid {
+    red(cicada_geom::solid::sphere(
         &input.plane,
         input.radius,
-        input.segments,
         config.tol(),
-    )))
+    ))
 }
 
-// No golden hash of the whole mesh for `sphere`, deliberately: its
-// vertices come from sin/cos (see `support.rs`). Its determinism test
-// below hashes what IS transcendental-free — the topology — and asserts
-// run-to-run byte identity of the rest.
+// No committed golden for `sphere`: a sphere's canonical bytes carry
+// sin/cos-fed coordinates (`support.rs`), so its determinism test asserts
+// run-to-run byte identity and the analytic volume instead.
 #[cfg(test)]
 mod tests {
-    use cicada_core::marshal::IntoValue;
-    use cicada_core::value::{HashedValue, ValueData};
-    use cicada_geom::meshbuild::signed_volume;
+    use std::f64::consts::PI;
+
+    use cicada_core::spatial::Point;
+    use cicada_geom::tol;
 
     use super::*;
-    use crate::solids::support::config;
+    use crate::solids::support::{bounds_of, close_rel, config, plane_at, volume_of, with_kernel};
 
     #[test]
-    fn sphere_is_watertight_with_expected_volume() {
-        let ball = sphere(
+    fn sphere_table_cases() {
+        let Some(ball) = with_kernel(|| {
+            sphere(
+                &config(),
+                SphereIn {
+                    plane: plane_at(1.0, 2.0, 3.0),
+                    radius: 2.0,
+                },
+            )
+        }) else {
+            return;
+        };
+        assert!(close_rel(volume_of(&ball), 4.0 / 3.0 * PI * 8.0, 1e-9));
+        let (min, max) = bounds_of(&ball);
+        assert!(
+            tol::coincident(min, Point::new(-1.0, 0.0, 1.0), 1e-7),
+            "{min:?}"
+        );
+        assert!(
+            tol::coincident(max, Point::new(3.0, 4.0, 5.0), 1e-7),
+            "{max:?}"
+        );
+        let centroid = cicada_geom::solid::volume(&ball).unwrap().centroid;
+        assert!(tol::coincident(centroid, Point::new(1.0, 2.0, 3.0), 1e-9));
+    }
+
+    #[test]
+    #[should_panic(expected = "radius = 0 is out of range")]
+    fn sphere_zero_radius_is_red() {
+        let _ = sphere(
             &config(),
             SphereIn {
                 plane: Plane::world_xy(),
-                radius: 1.0,
-                segments: 48,
+                radius: 0.0,
             },
         );
-        let expected = 4.0 / 3.0 * std::f64::consts::PI;
-        assert!((signed_volume(&ball.0) - expected).abs() / expected < 1e-2);
     }
 
     proptest::proptest! {
-        // UV spheres: watertight, inscribed (volume strictly below the
-        // ball), and nowhere near degenerate for segments >= 12.
+        // Volume = 4/3 π r³ at any centre.
         #[test]
-        fn property_sphere_watertight_volume_bounds(
-            radius in 0.05..10.0_f64,
-            segments in 12i64..48,
-        ) {
-            let out = sphere(
-                &config(),
-                SphereIn {
-                    plane: Plane::world_xy(),
-                    radius,
-                    segments,
-                },
-            );
-            proptest::prop_assert!(out.0.is_watertight());
-            let vol = signed_volume(&out.0);
-            let ball = 4.0 / 3.0 * std::f64::consts::PI * radius.powi(3);
-            proptest::prop_assert!(vol > 0.8 * ball, "volume {} vs ball {}", vol, ball);
-            proptest::prop_assert!(vol < ball * (1.0 + 1e-12));
+        fn property_sphere_volume(r in 0.05f64..20.0, oz in -50.0f64..50.0) {
+            if cicada_geom::solid::kernel_available() {
+                let out = sphere(
+                    &config(),
+                    SphereIn {
+                        plane: plane_at(0.0, 0.0, oz),
+                        radius: r,
+                    },
+                );
+                proptest::prop_assert!(close_rel(volume_of(&out), 4.0 / 3.0 * PI * r * r * r, 1e-9));
+            }
         }
     }
 
-    // Determinism: the index buffer is integer arithmetic (a golden hash,
-    // cross-platform — blessed via run-once), the UV layout has exact
-    // vertex and triangle counts, and the same inputs give byte-identical
-    // positions run to run (a constant for those would be libm-dependent).
     #[test]
-    fn sphere_determinism_topology_golden_hash() {
-        let make = || {
+    fn sphere_determinism_run_to_run() {
+        // Two constructions, byte-identical (the kernel is deterministic
+        // on one platform); no golden constant, by the transcendental rule.
+        let Some(first) = with_kernel(|| {
             sphere(
                 &config(),
                 SphereIn {
                     plane: Plane::world_xy(),
                     radius: 1.5,
-                    segments: 24,
                 },
             )
+        }) else {
+            return;
         };
-        let ball = make().0;
-        // segments = 24 → 12 rings: 2 poles + 11 × 24 ring vertices; 2 × 24
-        // cap triangles + 10 bands × 24 quads × 2.
-        assert_eq!(ball.vertex_count(), 266);
-        assert_eq!(ball.triangle_count(), 528);
-        let topology: Vec<i64> = ball.indices().iter().map(|&i| i64::from(i)).collect();
-        assert_eq!(
-            topology.into_value().unwrap().hash().to_hex(),
-            "7b0a6519a9d3036e0da265a5e90a6ff01f850a641edddbbd60317bbd41e56335"
+        let second = sphere(
+            &config(),
+            SphereIn {
+                plane: Plane::world_xy(),
+                radius: 1.5,
+            },
         );
-        let again = make().0;
-        assert_eq!(
-            HashedValue::new(ValueData::Mesh(ball)).unwrap().hash(),
-            HashedValue::new(ValueData::Mesh(again)).unwrap().hash(),
-            "same inputs, same bytes"
-        );
+        assert_eq!(first, second);
     }
 }

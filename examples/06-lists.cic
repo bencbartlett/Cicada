@@ -47,4 +47,4 @@ radii = multiply(a=each(scales), b=0.3)
 # Geometry from lists: a sphere per kept column, sized by the padded scale.
 tops = construct_point(x=each(kept_xs), z=each(kept_heights))
 frames = xy_plane(origin=each(tops))
-balls = sphere(plane=each(frames), radius=each(radii), segments=16)
+balls = mesh_sphere(plane=each(frames), radius=each(radii), segments=16)

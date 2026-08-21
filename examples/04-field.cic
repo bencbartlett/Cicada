@@ -26,6 +26,6 @@ field_span = construct_domain(start=0.0, end=400.0)
 height_span = construct_domain(start=0.5, end=6.0)
 heights = remap(value=each(field), source=field_span, target=height_span)
 ups = unit_z(factor=each(heights))
-prisms = extrude(profile=each(cells), direction=each(ups))
+prisms = mesh_extrude(profile=each(cells), direction=each(ups))
 
 dump = export_obj(meshes=prisms, path="04-field.obj")
