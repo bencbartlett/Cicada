@@ -222,7 +222,12 @@ mod tests {
     }
 
     #[test]
-    fn volatile_attribute_registers_and_every_shipped_node_is_not() {
+    fn volatile_attribute_registers_and_only_the_file_reader_is() {
+        // The shipped volatile nodes: `import_step` — a file on disk is
+        // external state (docs/08 §11); Clock arrives with item 4 — extend
+        // this list with it. Anything else volatile is a mistake that would
+        // defeat the memo.
+        const SHIPPED_VOLATILE: &[&str] = &["import_step"];
         let specs = registry();
         let fixture = specs
             .iter()
@@ -230,10 +235,14 @@ mod tests {
             .expect("the test-only volatile fixture registers");
         assert!(fixture.volatile, "#[node(volatile)] sets the flag");
         assert!(fixture.pure, "volatile is not effectful");
-        // Exporters are effectful; nothing shipped is volatile (Clock
-        // arrives with item 4 — revise this assertion with it).
+        // Exporters are effectful, never volatile.
         for spec in specs.iter().filter(|s| s.name != "fixture_volatile") {
-            assert!(!spec.volatile, "`{}` is volatile unexpectedly", spec.name);
+            assert_eq!(
+                spec.volatile,
+                SHIPPED_VOLATILE.contains(&spec.name),
+                "`{}`: volatile flag does not match the sanctioned list",
+                spec.name
+            );
         }
     }
 

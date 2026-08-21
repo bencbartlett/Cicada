@@ -5363,6 +5363,77 @@
       "outputs": []
     },
     {
+      "name": "export_step",
+      "title": "Export STEP",
+      "description": "write B-rep solids to a STEP AP214 file (the CAD interchange format — OCCT's own translator) in the document's unit, byte-deterministic: the header's name, timestamp, author and organisation are fixed and the products are numbered in file order, so the same solids always give the same bytes and a re-export diffs clean.",
+      "category": "Output, display & export",
+      "tier": "1",
+      "version": 1,
+      "pure": false,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "the list is empty (a STEP file without products is not an export), when a solid cannot be translated, or when the file cannot be written (missing directory, permissions) — an export that silently wrote nothing is the worst outcome (wall lesson 7).",
+      "gh": null,
+      "examples": [
+        "span = construct_domain(start=0.0, end=20.0)\nblock = box(x=span, y=span, z=span)\nparts = duplicate(item=block, count=1)\nstep = export_step(solids=parts, path=\"block.step\")"
+      ],
+      "inputs": [
+        {
+          "name": "solids",
+          "type": "[Solid]",
+          "base": "Solid",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The solids to write, one STEP product each, in order."
+        },
+        {
+          "name": "path",
+          "type": "Text",
+          "base": "Text",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Output path (`.step` / `.stp`); relative paths resolve against the pipeline's directory. The file stem names the STEP header and its products."
+        }
+      ],
+      "outputs": []
+    },
+    {
+      "name": "import_step",
+      "title": "Import STEP",
+      "description": "read every solid of a STEP file (OCCT's translator), scaled into the document's unit, in the file's order. A file on disk is external state, so this node is `volatile`: it is read again in every solve, never served from the memo — a memo keyed by the path alone would hand back stale geometry after the file changed. Everything downstream keys on the solids' value hashes as usual, so an unchanged file recomputes nothing below it.",
+      "category": "Output, display & export",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": true,
+      "uses_tolerance": true,
+      "panics": "the file cannot be read or translated, or holds no solid (shells and faces alone are not solids).",
+      "gh": null,
+      "examples": [
+        "parts = import_step(path=\"../cicada-stdlib/fixtures/block.step\")\ncount = length(list=parts)"
+      ],
+      "inputs": [
+        {
+          "name": "path",
+          "type": "Text",
+          "base": "Text",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The STEP file to read (`.step` / `.stp`); relative paths resolve against the pipeline's directory."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[Solid]",
+          "base": "Solid",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The file's solids."
+        }
+      ]
+    },
+    {
       "name": "text_outlines",
       "title": "Text Outlines",
       "description": "glyph contours as closed polylines (béziers flattened to `segments` per curve span), laid out left-to-right from the plane origin along +x with the baseline on the x axis; `size` is the capital-letter height; a newline in `text` stacks lines downward by `line_gap` × `size`, left-aligned. Fonts are bundled in the binary (reproducibility); the spike bundles `DejaVu Sans Bold` only. One curve per contour, in text order then the font's contour order; whitespace advances the pen and yields no curve.",

@@ -273,6 +273,11 @@ pub fn tessellate(solid: &Solid, deflection: Deflection) -> Result<Tessellation,
 // The node set (v0.1 item 3 WP-C)
 // ---------------------------------------------------------------------------
 
+/// The fixed `FILE_NAME.time_stamp` every STEP file [`write_step`] writes:
+/// byte-determinism of an export is worth more than a wall-clock the
+/// file's consumers never read.
+pub const STEP_TIMESTAMP: &str = "2000-01-01T00:00:00";
+
 /// What [`volume`] measures: the enclosed volume (document units³) and the
 /// volume centroid.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1092,7 +1097,7 @@ pub fn edges_and_vertices(
 }
 
 /// Write solids to a STEP AP214 file, byte-deterministic for the same
-/// solids (fixed header, `crate::occt::STEP_TIMESTAMP`); `millimeters` is
+/// solids (fixed header, [`STEP_TIMESTAMP`]); `millimeters` is
 /// the document unit's size, declared in the file; `name` is the header's
 /// product/file name.
 ///

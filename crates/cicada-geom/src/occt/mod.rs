@@ -428,9 +428,9 @@ static STEP_LOCK: Mutex<()> = Mutex::new(());
 static QUIET: Once = Once::new();
 
 /// The fixed `FILE_NAME.time_stamp` every STEP file carries
-/// ([`Handle::write_step`]): byte-determinism of an export is worth more
-/// than a wall-clock the file's consumers never read.
-pub const STEP_TIMESTAMP: &str = "2000-01-01T00:00:00";
+/// ([`Handle::write_step`]) — defined at the value level so callers in
+/// every build can name it.
+pub use crate::solid::STEP_TIMESTAMP;
 
 fn step_guard() -> MutexGuard<'static, ()> {
     // A poisoned lock means a STEP call panicked mid-way on another thread;

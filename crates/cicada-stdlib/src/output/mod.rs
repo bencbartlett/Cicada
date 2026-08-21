@@ -29,6 +29,8 @@ mod support;
 
 pub mod custom_preview;
 pub mod export_obj;
+pub mod export_step;
+pub mod import_step;
 pub mod text_outlines;
 pub mod text_solids;
 pub mod text_tag;
