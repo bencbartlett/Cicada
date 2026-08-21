@@ -170,6 +170,18 @@ describe("values", () => {
       ["zeta", "z"],
     ]);
     expect(factsList(undefined)).toEqual([]);
+    // A Solid's summary ("Solid, N faces, bbox" — docs/03): the error, if
+    // any, first; faces before the display tessellation's triangles; the
+    // byte count last.
+    expect(factsList({ triangles: 12, bytes: 4494, faces: 6 })).toEqual([
+      ["faces", "6"],
+      ["triangles", "12"],
+      ["bytes", "4494"],
+    ]);
+    expect(factsList({ bytes: 25, error: "tessellate needs the OCCT kernel" })[0]).toEqual([
+      "error",
+      "tessellate needs the OCCT kernel",
+    ]);
   });
 });
 

@@ -48,7 +48,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::atomic::write_atomic;
 use crate::compile::{self, Loaded};
-use crate::display::{self, DisplayStats, PickTable};
+use crate::display::{self, DisplayContext, DisplayStats, PickTable, SolidCache};
 use crate::lower::{Lowered, LoweredBinding, lower, lower_partial};
 use crate::protocol::{
     Actor, ApplyTextRequest, ClientMessage, DeltaSource, HistoryView, LeaseView, NodeState,
@@ -707,6 +707,10 @@ struct Core {
     /// The last generations' timings (docs/15 measurement protocol: the
     /// preview-latency currency, read from `/debug/state`).
     timings: Mutex<std::collections::VecDeque<GenerationTiming>>,
+    /// The solid display tessellation cache (docs/12 §Display cache),
+    /// keyed by value hash; its counters are in `/debug/state` →
+    /// `display_cache`.
+    solids: SolidCache,
 }
 
 /// One generation's timing record (docs/15 measurement protocol; read
@@ -938,6 +942,7 @@ impl Session {
             op_clock,
             epoch: Instant::now(),
             timings: Mutex::new(std::collections::VecDeque::with_capacity(TIMINGS_KEPT)),
+            solids: SolidCache::default(),
             config,
         });
         let sink: Arc<dyn SolveSink> = core.clone();
@@ -1143,7 +1148,7 @@ impl Session {
             &ServerMessage::DisplayReset { generation },
         )));
         let store = Arc::clone(self.core.scheduler.store());
-        let tolerance = self.core.config.project.tol();
+        let context = self.core.display_context();
         let keys: Vec<((u32, u32), Displayed)> =
             inner.display.iter().map(|(k, v)| (*k, v.clone())).collect();
         for ((node, output), displayed) in keys {
@@ -1155,7 +1160,7 @@ impl Session {
                         node,
                         output,
                         &mut inner.picks,
-                        tolerance,
+                        &context,
                     );
                     for frame in frames.frames {
                         let _ = tx.send(Outgoing::Binary(Bytes::from(frame)));
@@ -2563,7 +2568,8 @@ impl Session {
             .store()
             .load_value(&ValueHash::from_bytes(raw))
             .map_err(|e| e.to_string())?;
-        serde_json::to_value(display::summarize(&value)).map_err(|e| e.to_string())
+        serde_json::to_value(display::summarize(&value, &self.core.display_context()))
+            .map_err(|e| e.to_string())
     }
 
     // ------------------------------------------------------------ debug --
@@ -2634,6 +2640,7 @@ impl Session {
                 })),
             },
             "display": display,
+            "display_cache": self.core.solids.stats(),
             "lease": lease_view(&inner),
             "values": values,
             "timings": *self.core.timings.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
@@ -3272,6 +3279,15 @@ fn debounce_loop(core: &Core) {
 }
 
 impl Core {
+    /// What the display path needs from the session: the project
+    /// configuration and the solid tessellation cache.
+    fn display_context(&self) -> DisplayContext<'_> {
+        DisplayContext {
+            config: &self.config.project,
+            solids: &self.solids,
+        }
+    }
+
     fn lock_inner(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.inner
             .lock()
@@ -3711,7 +3727,7 @@ impl Core {
     ) -> usize {
         let mut bytes_sent = 0_usize;
         let store = Arc::clone(self.scheduler.store());
-        let tolerance = self.config.project.tol();
+        let context = self.display_context();
         // Which (ref, output) should draw now?
         let mut wanted: Vec<(u32, u32, ValueHash)> = Vec::new();
         for node in &inner.graph.nodes {
@@ -3806,7 +3822,7 @@ impl Core {
                         node_ref,
                         output,
                         &mut inner.picks,
-                        tolerance,
+                        &context,
                     );
                     for frame in frames.frames {
                         bytes_sent += frame.len();
@@ -3883,8 +3899,12 @@ impl Core {
                     .and_then(|h| h.get(index).copied()),
                 None => None,
             };
-            let summary =
-                hash.and_then(|hash| store.load_value(&hash).ok().map(|v| display::summarize(&v)));
+            let summary = hash.and_then(|hash| {
+                store
+                    .load_value(&hash)
+                    .ok()
+                    .map(|v| display::summarize(&v, &self.display_context()))
+            });
             outputs.push((output.name.clone(), summary));
         }
         (kept.generation, outputs)

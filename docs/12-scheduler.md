@@ -142,6 +142,42 @@ measured cost samples (feeds ETA), and **display artifacts** —
 tessellations and GPU-ready buffers are themselves costed, cached
 operations keyed like everything else (display is a first-class edge).
 
+### Display cache (as shipped — v0.1 item 3 WP-B)
+
+The first display artifact with a cache of its own is the **solid
+tessellation**: a `Solid` is its kernel's canonical bytes (DECISIONS.md
+row 42), so drawing one means asking OCCT to mesh those bytes at the
+project's display deflection (docs/03 §Display tessellation). That
+work lives in `cicada-server::display::SolidCache`, one instance per
+session (`Core.solids`), NOT in the value store and NOT in the value:
+
+- **Key**: the solid's value hash plus the deflection it was meshed at
+  (the deflection is a pure function of `ProjectConfig`, so a tolerance
+  or unit change misses exactly as it should; the bytes never learn
+  about display).
+- **Value**: the welded display mesh and the face count — one kernel
+  reconstruction serves the frames and the inspector summary ("Solid,
+  N faces, bbox").
+- **Bound**: bytes of mesh buffers as uploaded, default 256 MiB,
+  evicted least-recently-used; eviction costs a re-tessellation, never
+  correctness. Errors are not cached (a solid the kernel refuses is
+  refused again next pass; the refusal fails at the read and is cheap),
+  so a fixed build or a corrected value recovers by itself.
+- **Observable**: `/debug/state` → `display_cache` carries `entries`,
+  `bytes`, `budget`, `hits`, `misses`, `evictions` (additive), and an
+  output whose solid could not be drawn says why in its display
+  `stats.errors` — a build without the `occt` feature draws no solids
+  and says so per element, never silently.
+- **Frames**: a tessellated solid emits the ordinary mesh frames
+  (`frames.rs` unchanged); the instancing key is the solid's own value
+  hash, so identical solids in a list travel once as a blob.
+
+It is the in-memory, per-session form of the "display is a first-class
+edge" idea above; promoting tessellations into the costed, persisted
+store (so a warm reopen draws without the kernel) is the follow-up
+named in docs/17, and the cache's key is already the one such a store
+would use.
+
 ## Solve generations
 
 - An edit (text or canvas) reparses and **typechecks synchronously in

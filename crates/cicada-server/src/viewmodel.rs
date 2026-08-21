@@ -1002,6 +1002,19 @@ mod tests {
         )
     }
 
+    // v0.1 item 3 WP-B: a `Solid` output previews (the kind is in core's
+    // GEOMETRY_KINDS, which is the one list this predicate reads), its
+    // list and optional forms included; the mesh tier's solid stays
+    // displayable on its own terms; scalars do not draw.
+    #[test]
+    fn a_solid_is_a_displayable_kind() {
+        assert!(displayable_kind("Solid"));
+        assert!(displayable_kind("Watertight<Mesh>"));
+        assert!(displayable_kind("Geometry"));
+        assert!(!displayable_kind("Number"));
+        assert!(!displayable_kind("Xform"));
+    }
+
     #[test]
     fn nodes_wires_params_and_previews() {
         let g = view(
