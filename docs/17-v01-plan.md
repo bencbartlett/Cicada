@@ -431,6 +431,24 @@ playback (test); a headless run yields frame 0.
   carries its loop into the view. Candidates beyond the slice (not done):
   the `transport` view on the status bar's generation line; a `transport`
   field in `GET /api/project`.
+- **Review fixes (2026-08-21, `wt/transport`)**: the ticker ran at ~33 Hz
+  on Windows (`Condvar::wait_timeout`'s 15.6 ms quantum), so a 60 fps
+  loop warmed 133 of 240 frames on its first pass and the "second pass
+  100 % cached" DoD held only for loops ≤ ~30 fps — the ticks now lie on
+  an absolute grid (`anchor + N / 60 s`) walked with the high-resolution
+  `thread::sleep`, re-anchored by every control; measured with the new
+  `tools/measure/transport_loop.mjs --expect warm`: a 240-frame / 4 s loop
+  at 60.0 generations/s, gap p50 16.66 ms, first pass every frame (239
+  computed), second pass 0 computed (docs/13 §Latency targets carries the
+  number). A real-ticker session test (`the_ticker_thread_paints_frames_on
+  _its_own`) drives the thread itself; the lost wake-up at Play is closed
+  (the playing flag is stored and notified under the gate the paused wait
+  reads it under); Esc pauses BEFORE cancelling, under the lock the ticker
+  submits under, and a ticker tick that finds the transport paused
+  submits nothing; the frame dedupe has a sub-frame test (a dedupe on the
+  raw time passed every test before) and its `clock` mirror. A refused
+  control broadcasts nothing (docs/13 said "refused or not"; the test
+  pins the truth).
 
 ## Item 5 — scrub caching (1–2 weeks)
 

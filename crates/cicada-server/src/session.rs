@@ -117,7 +117,20 @@ pub const DRAG_GAP_MS: u64 = 300;
 /// ports' values changed since the last tick it handed over, lowers and
 /// submits a `Transport` job to the one-slot latest-wins loop; the solve
 /// bounds the real rate (a slow cone skips frames, never queues them).
-pub const TRANSPORT_TICK: Duration = Duration::from_micros(16_667);
+///
+/// The ticks lie on an ABSOLUTE grid — tick N is due at `anchor + N ×
+/// TRANSPORT_TICK`, the anchor being the instant of the last control that
+/// touched playback — walked with `std::thread::sleep` until each
+/// deadline ([`transport_loop`]). Not a `Condvar::wait_timeout` per tick:
+/// its resolution on Windows is the 15.6 ms scheduler quantum, so a
+/// 16.7 ms timeout rounds to ~31 ms and the ticker ran at ~33 Hz (the
+/// review of 2026-08-21 measured a 60 fps loop warming 133 of its 240
+/// frames on the first pass); `sleep` uses the high-resolution waitable
+/// timer there (Rust ≥ 1.75): 16.67 ms per grid step, under 1 ms late,
+/// and the grid keeps the lateness from accumulating. Exactly 1/60 s in
+/// nanoseconds, so a 60 fps loop's frame boundaries and the grid do not
+/// beat against each other (16.667 ms would drift a frame every 14 min).
+pub const TRANSPORT_TICK: Duration = Duration::from_nanos(16_666_667);
 
 /// The loop the transport shows when no frame-driven node is solvable:
 /// `cycle`'s defaults — 120 frames over 4 s. (`frames`, `period` in
@@ -845,9 +858,21 @@ struct Core {
     timings: Mutex<std::collections::VecDeque<GenerationTiming>>,
     /// Mirror of `Inner::transport.playing` for the ticker thread, which
     /// must not take the document lock just to learn it has nothing to do.
+    /// Stored ONLY under `transport_gate` ([`Self::set_ticker_playing`]).
     transport_playing: AtomicBool,
-    /// The ticker's wait: woken by every control and by shutdown.
-    transport_gate: Mutex<()>,
+    /// The ticker's gate. The value is the grid anchor — the instant of
+    /// the last control that touched playback; every tick is due at
+    /// `anchor + N × TRANSPORT_TICK`, so the ticks keep a fixed phase to
+    /// the frame boundaries that control re-anchored the playhead at
+    /// (a seek on a 60 fps loop otherwise lands the grid at an arbitrary
+    /// phase to the boundaries and skips frames). The mutex is also what
+    /// the playing flag's stores and the wake notify happen under: the
+    /// paused wait's predicate reads the flag under it, so no Play can
+    /// land between the ticker deciding to sleep and sleeping (the lost
+    /// wake-up the review of 2026-08-21 found). Lock order: `inner` →
+    /// `transport_gate`; the ticker never holds the gate while it ticks.
+    transport_gate: Mutex<Instant>,
+    /// Woken by every control and by shutdown, under `transport_gate`.
     transport_wake: Condvar,
 }
 
@@ -1087,7 +1112,7 @@ impl Session {
             epoch: Instant::now(),
             timings: Mutex::new(std::collections::VecDeque::with_capacity(TIMINGS_KEPT)),
             transport_playing: AtomicBool::new(false),
-            transport_gate: Mutex::new(()),
+            transport_gate: Mutex::new(Instant::now()),
             transport_wake: Condvar::new(),
             config,
         });
@@ -1504,7 +1529,7 @@ impl Session {
                     Ok(())
                 })?;
                 // The first frame paints now, not a tick later.
-                self.core.transport_tick();
+                self.core.transport_tick(TickOrigin::Control);
                 Ok(())
             }
             ClientMessage::TransportPause {} => self.transport_control(|transport, now, _| {
@@ -1536,7 +1561,7 @@ impl Session {
                 })?;
                 // A paused scrub paints the frame it landed on; a playing
                 // one continues from there.
-                self.core.transport_tick();
+                self.core.transport_tick(TickOrigin::Control);
                 Ok(())
             }
             ClientMessage::TransportSpeed { factor } => {
@@ -1557,7 +1582,7 @@ impl Session {
                     transport.playing = false;
                     Ok(())
                 })?;
-                self.core.transport_tick();
+                self.core.transport_tick(TickOrigin::Control);
                 Ok(())
             }
             ClientMessage::Undo {} => {
@@ -2507,16 +2532,23 @@ impl Session {
     /// Cancel (Esc): the running generation stops and a queued edit's
     /// solve is dropped; the summary says so and the next edit resubmits.
     pub fn cancel(&self) {
-        let dropped_pending = self.solve.cancel();
         // Esc ends the drag too: the next tick starts a fresh one
         // (re-predicted, re-announced if withheld) — and the end of an
         // announced one is broadcast, Esc being a deliberate stop. And it
-        // pauses the transport: "stop solving" includes the ticker.
-        {
+        // pauses the transport: "stop solving" includes the ticker — PAUSED
+        // FIRST, and the solve cancelled under the same document-lock
+        // hold: a ticker tick submits its job under `inner`
+        // ([`Core::transport_tick`]), so one that ran before this hold is
+        // in the loop for the cancel below to drop, and one that takes the
+        // lock after it sees the transport paused and submits nothing. No
+        // frame solves after Esc (the reverse order left one ticker period
+        // in which a frame could slip in behind the cancel).
+        let dropped_pending = {
             let mut inner = self.core.lock_inner();
             end_drag(&mut inner);
             self.core.pause_transport(&mut inner);
-        }
+            self.solve.cancel()
+        };
         if dropped_pending {
             let inner = self.core.lock_inner();
             broadcast(
@@ -2535,7 +2567,9 @@ impl Session {
     /// One transport control: `apply` edits the state under the lock
     /// (given the op clock now and the primary loop), the playing mirror
     /// and the ticker follow, and the new view is broadcast to every
-    /// client — refused or not, nothing is written. Controls are
+    /// client. A refused control (`Err`) changes nothing and broadcasts
+    /// nothing — the refusing client gets its `error`, and for everyone
+    /// else there is no news. Nothing is ever written. Controls are
     /// writer-only (`is_write`): playback is shared state every client
     /// sees, and the lease is the one arbiter of shared state.
     fn transport_control(
@@ -2546,10 +2580,7 @@ impl Session {
         let now = self.core.now_ms_f64();
         let r#loop = primary_loop(&inner.lowered.driven);
         apply(&mut inner.transport, now, r#loop)?;
-        self.core
-            .transport_playing
-            .store(inner.transport.playing, Ordering::SeqCst);
-        self.core.transport_wake.notify_all();
+        self.core.set_ticker_playing(inner.transport.playing);
         broadcast(
             &inner,
             &ServerMessage::Transport(self.core.transport_view(&inner)),
@@ -2563,12 +2594,13 @@ impl Session {
         self.core.transport_view(&self.core.lock_inner())
     }
 
-    /// One transport tick, on the caller's thread — what the ticker does
-    /// every [`TRANSPORT_TICK`] while playing. Tests drive the transport
-    /// with a virtual clock through this; the ticker's own ticks are
-    /// no-ops between the test's steps (the position is unchanged).
+    /// One ticker tick, on the caller's thread — exactly what the ticker
+    /// does every [`TRANSPORT_TICK`] while playing, nothing while paused.
+    /// Tests drive the transport with a virtual clock through this; the
+    /// ticker's own ticks are no-ops between the test's steps (the
+    /// position is unchanged).
     pub fn transport_tick(&self) {
-        self.core.transport_tick();
+        self.core.transport_tick(TickOrigin::Ticker);
     }
 
     // -------------------------------------------------- effectful runs --
@@ -2931,8 +2963,25 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         self.core.shutdown.store(true, Ordering::SeqCst);
-        self.core.debounce_wake.notify_all();
-        self.core.transport_wake.notify_all();
+        // Each notify under the mutex its waiter's predicate reads the
+        // flag under: a waiter is then either blocked (and woken) or yet
+        // to read the flag (and sees it) — never between the two.
+        {
+            let _debounce = self
+                .core
+                .debounce
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.core.debounce_wake.notify_all();
+        }
+        {
+            let _gate = self
+                .core
+                .transport_gate
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.core.transport_wake.notify_all();
+        }
         if let Some(handle) = self.debouncer.take() {
             let _ = handle.join();
         }
@@ -3615,41 +3664,83 @@ fn debounce_loop(core: &Core) {
 }
 
 /// The transport ticker: while playing, one [`Core::transport_tick`] per
-/// [`TRANSPORT_TICK`]; paused, it sleeps until a control or shutdown wakes
-/// it. The tick reads the session clock for the playhead, so the wall
-/// cadence only sets how often it LOOKS — a virtual clock in tests makes
-/// every unprompted tick a no-op.
+/// [`TRANSPORT_TICK`] on the absolute grid from the gate's anchor; paused,
+/// it sleeps on the gate until a control or shutdown wakes it. The tick
+/// reads the session clock for the playhead, so the wall cadence only
+/// sets how often it LOOKS — a virtual clock in tests makes every
+/// unprompted tick a no-op.
 fn transport_loop(core: &Core) {
     loop {
-        {
+        // Paused: wait on the gate. The predicate reads the playing flag
+        // under the gate's mutex, which every store of it holds too, so a
+        // Play cannot slip between the read and the block.
+        let mut anchor = {
             let guard = core
                 .transport_gate
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            // The guards are dropped at the block's end either way; the
-            // wait's result (timed out or woken) is re-read from the flags.
-            if core.transport_playing.load(Ordering::SeqCst) {
-                let (_guard, _timeout) = core
-                    .transport_wake
-                    .wait_timeout(guard, TRANSPORT_TICK)
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-            } else {
-                let _guard = core
-                    .transport_wake
-                    .wait_while(guard, |()| {
-                        !core.transport_playing.load(Ordering::SeqCst)
-                            && !core.shutdown.load(Ordering::SeqCst)
-                    })
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-            }
-        }
+            let guard = core
+                .transport_wake
+                .wait_while(guard, |_anchor| {
+                    !core.transport_playing.load(Ordering::SeqCst)
+                        && !core.shutdown.load(Ordering::SeqCst)
+                })
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *guard
+        };
         if core.shutdown.load(Ordering::SeqCst) {
             return;
         }
-        if core.transport_playing.load(Ordering::SeqCst) {
-            core.transport_tick();
+        // Playing: walk the grid. The control that started (or
+        // re-anchored) playback painted the frame at the anchor itself, so
+        // the first tick is one period later.
+        let mut deadline = anchor;
+        loop {
+            deadline += TRANSPORT_TICK;
+            let now = Instant::now();
+            if deadline > now {
+                std::thread::sleep(deadline - now);
+            } else if now.duration_since(deadline) > TRANSPORT_TICK {
+                // More than a period behind (a slow lowering, a stalled
+                // machine): tick now and continue the grid from here rather
+                // than burst through the missed points — a missed frame
+                // fills in on the next pass, a burst would paint nothing
+                // new (latest-wins) and cost a lowering per point.
+                deadline = now;
+            }
+            if core.shutdown.load(Ordering::SeqCst) {
+                return;
+            }
+            if !core.transport_playing.load(Ordering::SeqCst) {
+                break;
+            }
+            // A control re-anchored the grid (a seek, a speed change): the
+            // frame boundaries moved with it, so the ticks follow — the
+            // first one a full period after it, as after Play.
+            let current = *core
+                .transport_gate
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if current != anchor {
+                anchor = current;
+                deadline = current;
+                continue;
+            }
+            core.transport_tick(TickOrigin::Ticker);
         }
     }
+}
+
+/// Who is ticking the transport ([`Core::transport_tick`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TickOrigin {
+    /// The ticker thread (or a test standing in for it): ticks only while
+    /// playing — a tick that finds the transport paused under the lock is
+    /// one that raced a pause or an Esc, and submits nothing.
+    Ticker,
+    /// A control that moved the playhead (play, seek, reset): paints the
+    /// frame it landed on, paused or not.
+    Control,
 }
 
 impl Core {
@@ -3837,9 +3928,22 @@ impl Core {
         let now = self.now_ms_f64();
         inner.transport.anchor(now);
         inner.transport.playing = false;
-        self.transport_playing.store(false, Ordering::SeqCst);
-        self.transport_wake.notify_all();
+        self.set_ticker_playing(false);
         broadcast(inner, &ServerMessage::Transport(self.transport_view(inner)));
+    }
+
+    /// Hand the ticker the playing state after a control: under the gate,
+    /// the grid is re-anchored at this instant, the flag stored and the
+    /// ticker woken — one mutex hold, so the ticker's paused wait can
+    /// never miss it (see `transport_gate`). Called with `inner` held.
+    fn set_ticker_playing(&self, playing: bool) {
+        let mut anchor = self
+            .transport_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *anchor = Instant::now();
+        self.transport_playing.store(playing, Ordering::SeqCst);
+        self.transport_wake.notify_all();
     }
 
     /// One tick of the transport: read the playhead, and when the driven
@@ -3848,79 +3952,84 @@ impl Core {
     /// the preview path exactly (the in-flight generation completes, the
     /// newest frame replaces any queued one; nothing is written). Called
     /// by the ticker while playing and by the controls that move the
-    /// playhead (play, seek, reset), paused or not.
-    fn transport_tick(&self) {
+    /// playhead (play, seek, reset), paused or not. The job is submitted
+    /// UNDER the document lock, so [`Session::cancel`]'s pause-then-cancel
+    /// under the same lock leaves no frame behind.
+    fn transport_tick(&self, origin: TickOrigin) {
         let accepted = Instant::now();
-        let job = {
-            let mut inner = self.lock_inner();
-            if inner.lowered.driven.is_empty() {
-                // No time params: playback moves nothing.
-                return;
-            }
-            let now = self.now_ms_f64();
-            let playhead = Playhead {
-                t_ms: inner.transport.t_ms(now),
-            };
-            let position = tick_position(&inner.lowered.driven, playhead);
-            if inner.transport.last_position.as_ref() == Some(&position) {
-                return;
-            }
-            inner.transport.last_position = Some(position);
-            // A LIVE drag's thumb rides along (docs/13 §Slider drags: the
-            // drag's ticks and the transport's interleave on the one loop;
-            // without this the viewport would alternate between the
-            // committed and the dragged value). An announced drag is
-            // compute-on-release: the viewport shows the committed state.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // ms since open
-            let now_ms = now as u64;
-            let live_drag = inner.drag.as_ref().filter(|drag| {
-                !drag.announced && now_ms.saturating_sub(drag.last_tick_ms) <= DRAG_GAP_MS
-            });
-            let lowered = match live_drag {
-                Some(drag) => {
-                    let mut scratch = inner.loaded.document.clone();
-                    match apply_param(
-                        &mut scratch,
-                        &drag.node,
-                        drag.port.as_deref(),
-                        &drag.last_value,
-                    ) {
-                        Ok(()) => {
-                            let resolution = resolve(&scratch, &Catalog::new(&inner.loaded.specs));
-                            lower_partial_with_playhead(
-                                &scratch,
-                                &resolution,
-                                &inner.loaded.specs,
-                                &self.config.project,
-                                &inner.loaded.scripts,
-                                Some(playhead),
-                            )
-                        }
-                        // The tick applied this value a moment ago; a
-                        // refusal now is the committed text's turn.
-                        Err(_) => self.lower_committed(&inner, playhead),
+        let mut inner = self.lock_inner();
+        if inner.lowered.driven.is_empty() {
+            // No time params: playback moves nothing.
+            return;
+        }
+        if origin == TickOrigin::Ticker && !inner.transport.playing {
+            // The ticker raced a pause (or Esc): the pause painted
+            // nothing new and neither does this.
+            return;
+        }
+        let now = self.now_ms_f64();
+        let playhead = Playhead {
+            t_ms: inner.transport.t_ms(now),
+        };
+        let position = tick_position(&inner.lowered.driven, playhead);
+        if inner.transport.last_position.as_ref() == Some(&position) {
+            return;
+        }
+        inner.transport.last_position = Some(position);
+        // A LIVE drag's thumb rides along (docs/13 §Slider drags: the
+        // drag's ticks and the transport's interleave on the one loop;
+        // without this the viewport would alternate between the
+        // committed and the dragged value). An announced drag is
+        // compute-on-release: the viewport shows the committed state.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // ms since open
+        let now_ms = now as u64;
+        let live_drag = inner.drag.as_ref().filter(|drag| {
+            !drag.announced && now_ms.saturating_sub(drag.last_tick_ms) <= DRAG_GAP_MS
+        });
+        let lowered = match live_drag {
+            Some(drag) => {
+                let mut scratch = inner.loaded.document.clone();
+                match apply_param(
+                    &mut scratch,
+                    &drag.node,
+                    drag.port.as_deref(),
+                    &drag.last_value,
+                ) {
+                    Ok(()) => {
+                        let resolution = resolve(&scratch, &Catalog::new(&inner.loaded.specs));
+                        lower_partial_with_playhead(
+                            &scratch,
+                            &resolution,
+                            &inner.loaded.specs,
+                            &self.config.project,
+                            &inner.loaded.scripts,
+                            Some(playhead),
+                        )
                     }
+                    // The tick applied this value a moment ago; a
+                    // refusal now is the committed text's turn.
+                    Err(_) => self.lower_committed(&inner, playhead),
                 }
-                None => self.lower_committed(&inner, playhead),
-            };
-            match lowered {
-                Ok(lowered) => {
-                    let targets = all_targets(&lowered);
-                    Job {
-                        lowered: Arc::new(lowered),
-                        targets,
-                        kind: JobKind::Transport,
-                        submitted: accepted,
-                    }
+            }
+            None => self.lower_committed(&inner, playhead),
+        };
+        let job = match lowered {
+            Ok(lowered) => {
+                let targets = all_targets(&lowered);
+                Job {
+                    lowered: Arc::new(lowered),
+                    targets,
+                    kind: JobKind::Transport,
+                    submitted: accepted,
                 }
-                Err(error) => {
-                    // Graph assembly failing is a bug; shout, paint nothing.
-                    self.notices
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .push(format!("transport lowering failed: {error}"));
-                    return;
-                }
+            }
+            Err(error) => {
+                // Graph assembly failing is a bug; shout, paint nothing.
+                self.notices
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(format!("transport lowering failed: {error}"));
+                return;
             }
         };
         if let Some(solve) = self.solve_loop() {
@@ -9483,6 +9592,41 @@ size = slider(value=4.0, min=0.5, max=5.0)
         session.transport_tick();
         session.wait_idle();
         assert_eq!(transport_generations(&session).len(), 2);
+        // Nor does a playhead that moved INSIDE the frame: the dedupe is on
+        // the quantized frame, not on the time (a dedupe on the raw time
+        // would submit a cached generation per ticker tick — ~60/s — and
+        // every test that advanced by whole frames passed it; review
+        // 2026-08-21).
+        clock.advance(FRAME_NS / 4);
+        assert_eq!(session.transport().t_ms, 275.0);
+        let position_before = session.core.lock_inner().transport.last_position.clone();
+        session.transport_tick();
+        session.wait_idle();
+        assert_eq!(
+            transport_generations(&session).len(),
+            2,
+            "a sub-frame advance is not a frame change"
+        );
+        assert_eq!(
+            session.core.lock_inner().transport.last_position,
+            position_before
+        );
+        clock.advance(FRAME_NS * 3 / 4);
+        session.transport_tick();
+        session.wait_idle();
+        assert_eq!(
+            (session.transport().t_ms, painted_frame(&session)),
+            (350.0, 3)
+        );
+        assert_eq!(transport_generations(&session).len(), 3);
+        // Back to 250 ms of playhead for the rest of the story: a seek.
+        session.handle(writer, None, ClientMessage::TransportSeek { frame: 2 });
+        session.wait_idle();
+        assert_eq!(session.transport().t_ms, 200.0);
+        clock.advance(FRAME_NS / 2);
+        assert_eq!(session.transport().t_ms, 250.0);
+        drain(&mut rx);
+        drain(&mut orx);
 
         // Speed: re-anchored where it stands, then twice as fast.
         session.handle(writer, None, ClientMessage::TransportSpeed { factor: 2.0 });
@@ -9538,6 +9682,8 @@ size = slider(value=4.0, min=0.5, max=5.0)
         );
 
         // Refusals: a frame outside the loop, a speed that is not positive.
+        drain(&mut rx);
+        drain(&mut orx);
         for (intent, expected) in [
             (
                 ClientMessage::TransportSeek { frame: 10 },
@@ -9561,6 +9707,12 @@ size = slider(value=4.0, min=0.5, max=5.0)
             2.0,
             "a refused control changes nothing"
         );
+        // …and announces nothing: the refusing client gets its `error`
+        // (`handle` unicasts it), and nothing changed for anyone else
+        // (docs/13 §Animation transport: the broadcast follows every
+        // ACCEPTED control).
+        assert!(transport_messages(&drain(&mut rx)).is_empty());
+        assert!(transport_messages(&drain(&mut orx)).is_empty());
 
         // Reset: paused at zero.
         session.handle(writer, None, ClientMessage::TransportPlay {});
@@ -9572,15 +9724,85 @@ size = slider(value=4.0, min=0.5, max=5.0)
 
         // Esc pauses playback and says so.
         session.handle(writer, None, ClientMessage::TransportPlay {});
+        session.wait_idle();
         drain(&mut rx);
         session.cancel();
         let heard = transport_messages(&drain(&mut rx));
         assert_eq!(heard.len(), 1);
         assert_eq!(heard[0]["playing"], false);
         assert!(!session.transport().playing);
+        // A ticker tick that raced the Esc (it read "playing" before the
+        // pause and takes the lock after it) submits nothing: no frame
+        // solves after Esc.
+        let after_esc = transport_generations(&session).len();
+        clock.advance(FRAME_NS * 3);
+        session.transport_tick();
+        session.wait_idle();
+        assert_eq!(transport_generations(&session).len(), after_esc);
+        assert_eq!(painted_frame(&session), 0, "paused at 0 by the reset");
 
         // Nothing above was an op: the transport is session state, not an edit.
         assert_eq!(history_of(&session)["depth"], 1, "only the set_param");
+    }
+
+    // The REAL ticker thread, on a real `cicada-transport` thread with the
+    // session's (virtual) clock: after Play it wakes and ticks on its own —
+    // the test never calls `transport_tick()` — so a playhead the test
+    // advances by a frame is painted by the thread, through two play /
+    // pause rounds (each Play is a wake-up the gate must not lose: the
+    // flag's store and the notify happen under the gate's mutex, the same
+    // one the ticker's paused wait reads the flag under; review
+    // 2026-08-21). Bounded waits, like the http e2e's: the outcome is
+    // deterministic (exactly one generation per frame), only the duration
+    // is the machine's.
+    #[test]
+    fn the_ticker_thread_paints_frames_on_its_own() {
+        let (_dir, config, clock) = project_with_clock(ORBIT);
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, _rx) = unbounded_channel();
+        let (writer, _) = session.connect(tx);
+        let wait_until = |what: &str, condition: &dyn Fn() -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !condition() {
+                assert!(Instant::now() < deadline, "timed out waiting for {what}");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        };
+
+        let mut expected_generations = 0;
+        let mut frame: i64 = 0;
+        for round in 0..2 {
+            session.handle(writer, None, ClientMessage::TransportPlay {});
+            expected_generations += 1; // Play paints the frame it stands on.
+            wait_until("the play's frame", &|| {
+                transport_generations(&session).len() == expected_generations
+            });
+            session.wait_idle();
+            assert_eq!(painted_frame(&session), frame, "round {round}");
+            assert!(session.core.transport_playing.load(Ordering::SeqCst));
+            for _ in 0..3 {
+                clock.advance(FRAME_NS);
+                frame += 1;
+                expected_generations += 1;
+                wait_until(&format!("the ticker to paint frame {frame}"), &|| {
+                    transport_generations(&session).len() == expected_generations
+                });
+                session.wait_idle();
+                assert_eq!(painted_frame(&session), frame, "round {round}");
+            }
+            session.handle(writer, None, ClientMessage::TransportPause {});
+            assert!(!session.core.transport_playing.load(Ordering::SeqCst));
+            // Paused, the playhead is frozen: a moved clock moves nothing.
+            clock.advance(FRAME_NS * 5);
+            assert_eq!(session.transport().frame, u64::try_from(frame).unwrap());
+        }
+        session.wait_idle();
+        assert_eq!(
+            transport_generations(&session).len(),
+            expected_generations,
+            "exactly one generation per frame change, none while paused"
+        );
     }
 
     // A seek paints the frame it names — every frame. On `cycle`'s default
@@ -9709,6 +9931,58 @@ size = slider(value=4.0, min=0.5, max=5.0)
             .find(|d| d.node == "fast")
             .unwrap();
         assert_eq!(fast.value.data(), &ValueData::Integer(0));
+    }
+
+    // The mirror of the cycle's dedupe: a `clock` has no frames, so EVERY
+    // tick that moved the playhead at all is a generation (its `t` is the
+    // seconds, a fresh value each time), and an unmoved one still is not.
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn every_sub_frame_tick_is_a_generation_for_a_clock() {
+        let (_dir, config, clock) = project_with_clock(
+            "# cicada 1\n\
+             elapsed = clock(speed=1.0)\n\
+             rise = elapsed * 0.5\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, _rx) = unbounded_channel();
+        let (writer, _) = session.connect(tx);
+        session.handle(writer, None, ClientMessage::TransportPlay {});
+        session.wait_idle();
+        assert_eq!(transport_generations(&session).len(), 1);
+
+        let injected_t = |session: &Session| -> f64 {
+            let inner = session.core.lock_inner();
+            let kept = inner.last_complete.as_ref().unwrap();
+            match kept.lowered.driven[0].value.data() {
+                ValueData::Number(seconds) => *seconds,
+                other => panic!("{other:?}"),
+            }
+        };
+        for step in 1..=3_u64 {
+            clock.advance(1_000_000); // one millisecond — a fraction of any frame
+            session.transport_tick();
+            session.wait_idle();
+            assert_eq!(
+                transport_generations(&session).len(),
+                1 + usize::try_from(step).unwrap()
+            );
+            #[allow(clippy::cast_precision_loss)]
+            let expected = step as f64 / 1000.0;
+            assert_eq!(injected_t(&session), expected);
+        }
+        session.transport_tick();
+        session.wait_idle();
+        assert_eq!(transport_generations(&session).len(), 4, "unmoved: nothing");
+        let generations = transport_generations(&session);
+        assert!(
+            generations
+                .iter()
+                .skip(1)
+                .all(|g| g["computed"].as_u64() >= Some(1)),
+            "a volatile clock computes every time: {generations:?}"
+        );
     }
 
     // docs/17 item 4 "done when": previews never write the file holds under

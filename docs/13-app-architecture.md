@@ -293,7 +293,18 @@ hand-over, lowers the committed text at it and submits a transport job
 to the one-slot latest-wins loop — the preview's policy: the in-flight
 generation completes, the newest frame replaces a queued one, so the
 solve bounds the rate (a slow cone skips frames, never queues them;
-the skipped frames fill in on the next pass). A held slider's value
+the skipped frames fill in on the next pass). The ticks lie on an
+absolute grid — tick N at `anchor + N / 60 s`, the anchor being the
+instant of the last control — walked with a high-resolution sleep, not
+a timed condition-variable wait (whose 15.6 ms quantum on Windows made
+the ticker run at ~33 Hz, so a 60 fps loop never warmed in one pass;
+review 2026-08-21), and re-anchored by every control so a seek on a
+60 fps loop keeps the ticks in phase with the frame boundaries.
+Measured with `tools/measure/transport_loop.mjs` (debug build,
+Windows): a 240-frame / 4 s loop plays at 60.0 generations/s, start
+gaps p50 16.66 ms / max 20 ms, every frame visited on the first pass
+(239 computed generations) and the second pass 240 generations with 0
+computed. A held slider's value
 rides along in the frames while its drag is live (an announced
 compute-on-release drag shows the committed state, as under its own
 ticks). **The primary loop** — the `cycle` with the longest `period`
@@ -307,7 +318,9 @@ shared session state every client sees, and the lease is the one
 arbiter of shared state — two clients fighting over play/pause/seek
 would make the shared viewport incoherent; observers follow, and take
 the lease to drive. Esc pauses the transport along with cancelling the
-generation; the last client leaving pauses it too (a session animating
+generation — paused first, cancelled under the same document-lock hold
+the ticker submits under, so no frame slips in behind the Esc; the
+last client leaving pauses it too (a session animating
 for no one would be the ambient clock the ledger forbids); a reload
 keeps it (the loop is re-read from the new text).
 
@@ -330,10 +343,11 @@ playback moves nothing). It rides every `snapshot` as
 {"v":1,"seq":N,"type":"transport","payload":{ …the view… }}
 ```
 
-broadcast to every client after each control (refused or not,
-nothing changes on a refusal), after Esc, when the last client's
-departure paused playback, and when an edit or reload changed the
-loop or the driven set. The view is a position at the moment of the
+broadcast to every client after each ACCEPTED control (a refused one
+changes nothing and broadcasts nothing — the refusing client gets its
+`error`, and for everyone else there is no news), after Esc, when the
+last client's departure paused playback, and when an edit or reload
+changed the loop or the driven set. The view is a position at the moment of the
 message: while `playing`, the client extrapolates `t_ms + elapsed ×
 speed` for its own playhead display and trusts the next broadcast; the
 frames themselves arrive as ordinary display frames from the transport
@@ -555,7 +569,7 @@ initial load path; there is exactly one client-hydration code path.
 | Optimistic apply | immediate |
 | Param drag → dirty-cone solve → repaint (cheap cones) | 16 ms (60 fps) |
 | Expensive cones (≥ ~1 s predicted) | compute-on-release with honest estimate |
-| Warmed `cycle` loop playback | 60 fps sustained |
+| Warmed `cycle` loop playback | 60 fps sustained — MEASURED 2026-08-21 (`tools/measure/transport_loop.mjs --expect warm`, debug build, Windows): a 60 fps loop at 60.0 generations/s, gap p50 16.66 ms, second pass 0 computed |
 | Beyond budget | progress UI takes over, honestly (doc 12) |
 | Status coalescing | ≤ 10 Hz |
 
