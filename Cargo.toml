@@ -34,9 +34,12 @@ blake3 = "1"
 bytes = "1"
 cargo_metadata = "0.19"
 clap = { version = "4", features = ["derive"] }
-# cxx: only to NAME the binding's `UniquePtr<TopoDS_Shape>` in the OCCT seam
-# (same major as opencascade-sys's own, so one copy is built).
+# cxx: names the binding's `UniquePtr<TopoDS_Shape>` in the OCCT seam and
+# declares cicada-geom's own glue bridge (src/occt/glue.rs); cxx-build
+# compiles that bridge's C++ in cicada-geom's build.rs (same major as
+# opencascade-sys's own, so one copy of each is built).
 cxx = "1"
+cxx-build = "1"
 directories = "6"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 getrandom = "0.3"

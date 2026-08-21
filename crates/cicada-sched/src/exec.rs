@@ -313,6 +313,22 @@ impl Scheduler {
         self.threads
     }
 
+    /// Run `f` over `items` on the scheduler's worker pool, in parallel,
+    /// results in input order — for work that belongs to the solve loop but
+    /// is not a node: the display edge (docs/12 §Display cache tessellates
+    /// a generation's distinct solids here, between the solve and the
+    /// broadcast, never under the session lock). Blocks the caller until
+    /// every item is done; a panic in `f` propagates to the caller.
+    pub fn map_parallel<T, R, F>(&self, items: Vec<T>, f: F) -> Vec<R>
+    where
+        T: Send,
+        R: Send,
+        F: Fn(T) -> R + Sync + Send,
+    {
+        use rayon::prelude::*;
+        self.pool.install(|| items.into_par_iter().map(f).collect())
+    }
+
     /// Solve one generation: pull-compute `targets` and their upstream
     /// cone. Nodes outside the cone are [`NodeOutcome::Skipped`]; dirtiness
     /// inside it is exact by content addressing — unchanged keys hit the

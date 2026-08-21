@@ -1,28 +1,35 @@
 # cicada 1
-# Mesh-tier solids: primitives, a Manifold carve, and the debug OBJ
-# exporter.
+# B-rep solids — the default working mode (DECISIONS.md row 42): a box, a
+# sphere, a solid_difference in the OCCT kernel, measured, tessellated once
+# at the end for the debug OBJ exporter.
 # Solve only:        cargo run -p cicada-cli -- run examples/02-solids.cic
 # Write the OBJ:     cargo run -p cicada-cli -- run examples/02-solids.cic --node dump
 # (exporters are effectful: they NEVER run unless named with --node)
+# The mesh tier (Manifold) is still here under mesh_* names — see
+# 03-voronoi.cic for a carve that stays on meshes.
 
 size = slider(value=2.0, min=0.5, max=5.0)
 span = construct_domain(start=0.0, end=size)
 
-# Spike solids are mesh-backed (Watertight<Mesh>) under their v0.1 names.
+# Solids are exact: the box is six planar faces, the ball one spherical one.
 block = box(x=span, y=span, z=span)
 
 # A ball poking through the block's top face...
 top = construct_point(x=1.0, y=1.0, z=2.0)
 top_frame = xy_plane(origin=top)
-ball = sphere(plane=top_frame, radius=0.75, segments=24)
+ball = sphere(plane=top_frame, radius=0.75)
 
 # Geometry lists come from nodes (list literals hold plain scalars);
 # duplicate(count=1) is the idiomatic singleton.
 cutter_list = duplicate(item=ball, count=1)
 
-# The carve, via Manifold.
-carved = mesh_difference(mesh=block, cutters=cutter_list)
+# The carve, in the kernel; the result is still one exact solid.
+carved = solid_difference(solid=block, cutters=cutter_list)
 
-# The debug window into headless geometry: any OBJ viewer opens this.
-dump_list = duplicate(item=carved, count=1)
+# Measure it — the numbers a mesh could only approximate.
+carved_volume, carved_centroid = volume(solid=carved)
+
+# Tessellate once, at the end, for the mesh-destined exporter.
+shell = tessellate(solid=carved, deflection=0.01)
+dump_list = duplicate(item=shell, count=1)
 dump = export_obj(meshes=dump_list, path="02-solids.obj")

@@ -16,17 +16,35 @@ spade.workspace = true
 thiserror.workspace = true
 ttf-parser.workspace = true
 
+[build-dependencies]
+# Compiles this crate's own kernel glue (src/occt/glue.hxx) under `occt`.
+# Not optional: build scripts see features as CARGO_FEATURE_* variables,
+# not as cfgs, so the script must compile whether or not the feature is on
+# (it compiles no C++ without it).
+cxx-build.workspace = true
+
 [dev-dependencies]
 blake3.workspace = true
 proptest.workspace = true
 rayon.workspace = true
 
 [features]
-# The OCCT B-rep seam (src/occt). OFF by default: it compiles the binding's
-# C++ glue against a prebuilt OCCT 7.8.1 (DEP_OCCT_ROOT from
-# tools/fetch_occt.py; cmake + a C++ toolchain on PATH) and needs the OCCT
-# shared libraries on the loader path at run time. CI: the `occt` jobs.
+# The OCCT B-rep seam (src/occt) — ON by default since v0.1 item 3 WP-C: the
+# product's `box`/`extrude`/… nodes are OCCT-backed, so the product build
+# needs the kernel (DECISIONS.md rented-kernels row, revised 2026-08-20). It
+# compiles the fork's C++ glue and this crate's own (build.rs) against a
+# prebuilt OCCT 7.8.1 (DEP_OCCT_ROOT from tools/fetch_occt.py; cmake + a C++
+# toolchain on PATH) and needs the OCCT shared libraries on the loader path
+# at run time — every cargo command runs under the fetch script's env. A
+# kernel-free build is `--no-default-features`: the same signatures, every
+# kernel call a typed `GeomError::KernelUnavailable`.
+default = ["occt"]
 occt = ["dep:opencascade-sys", "dep:cxx"]
+
+# The solid seam's cost table (docs/03 numbers); needs the kernel.
+[[example]]
+name = "solid_bench"
+required-features = ["occt"]
 
 [lints]
 workspace = true

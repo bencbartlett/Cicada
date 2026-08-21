@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use crate::geometry::{Curve, Mesh};
+use crate::geometry::{Curve, Mesh, Solid};
 use crate::hash::{KindTag, ValueHash, ValueHasher};
 use crate::scalar::{Color, Domain, IndexMap};
 use crate::spatial::{Plane, Point, Vector, Xform};
@@ -48,6 +48,8 @@ pub enum ValueData {
     Curve(Curve),
     /// Triangle mesh (stage 4). Same refinement rule (`Watertight<Mesh>`).
     Mesh(Mesh),
+    /// B-rep solid (v0.1 item 3): the kernel's canonical bytes.
+    Solid(Solid),
     /// A list of already-hashed elements (Merkle node), possibly with a
     /// named axis and absent (`Optional`) slots.
     List(List),
@@ -75,6 +77,7 @@ impl ValueData {
             Self::Xform(_) => "Xform",
             Self::Curve(_) => "Curve",
             Self::Mesh(_) => "Mesh",
+            Self::Solid(_) => "Solid",
             Self::List(_) => "List",
             Self::Nothing => "Nothing",
         }
@@ -177,10 +180,13 @@ fn canonicalize(data: &mut ValueData) -> Result<(), ValueError> {
             }
             Ok(())
         }
+        // A solid is opaque bytes: nothing to canonicalize, no float to
+        // refuse — the kernel seam produced them in canonical form.
         ValueData::Integer(_)
         | ValueData::Boolean(_)
         | ValueData::Text(_)
         | ValueData::IndexMap(_)
+        | ValueData::Solid(_)
         | ValueData::Nothing => Ok(()),
         ValueData::Color(c) => {
             canon_f64(&mut c.r, "Color", "r")?;
@@ -391,6 +397,11 @@ fn hash_data(data: &ValueData) -> ValueHash {
             .f64s(mesh.positions())
             .u32s(mesh.indices())
             .finish(),
+        // The canonical bytes ARE the identity (DECISIONS.md row 42): one
+        // length-prefixed byte string under the kind tag.
+        ValueData::Solid(solid) => ValueHasher::new(KindTag::Solid)
+            .bytes(solid.bytes())
+            .finish(),
         ValueData::List(list) => {
             // Merkle: axis name, then per slot presence + child hash
             // (docs/12: "a list's hash is the hash of its element hashes
@@ -581,6 +592,37 @@ mod tests {
             "geometry hash format drifted:\n{}",
             drifted.join("\n")
         );
+    }
+
+    // The Solid kind (v0.1 item 3 WP-B): the hash is the kind tag over the
+    // length-prefixed canonical bytes — locked here on a synthetic byte
+    // string (header + a tail core cannot read); the seam's tests lock the
+    // same format on the real box and prism bytes. Blessed via run-once.
+    #[test]
+    fn golden_solid_hash_is_over_the_canonical_bytes() {
+        use crate::geometry::{SOLID_CANONICAL_HEADER, Solid};
+        let mut bytes = SOLID_CANONICAL_HEADER.to_vec();
+        bytes.extend_from_slice(b", (c) Open Cascade\nLocations 0\nCicada test tail");
+        let solid = value(ValueData::Solid(
+            Solid::from_canonical_bytes(bytes.clone()).expect("header present"),
+        ));
+        assert_eq!(
+            solid.hash().to_hex(),
+            "b6d0bcd9fcfa70378468828127490d2c84b56841a8594367d0da59b33e07372d"
+        );
+        // Domain-separated from a Text of the same bytes, and sensitive to
+        // every byte of the tail.
+        let text = value(ValueData::Text(Arc::from(
+            String::from_utf8(bytes.clone()).expect("ascii").as_str(),
+        )));
+        assert_ne!(solid.hash(), text.hash());
+        let last = bytes.len() - 1;
+        bytes[last] ^= 1;
+        let other = value(ValueData::Solid(
+            Solid::from_canonical_bytes(bytes).expect("header present"),
+        ));
+        assert_ne!(solid.hash(), other.hash());
+        assert_eq!(solid.data().kind_name(), "Solid");
     }
 
     #[test]

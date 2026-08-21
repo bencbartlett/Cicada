@@ -1,5 +1,5 @@
-//! Geometry value types (stage 4): analytic curves, `SoA` meshes, and the
-//! two spike refinement wrappers.
+//! Geometry value types (stage 4): analytic curves, `SoA` meshes, the
+//! B-rep [`Solid`] (v0.1 item 3), and the two spike refinement wrappers.
 //!
 //! Geometry VALUE types live in core — `ValueData` is core's, and the
 //! dependency law says geom depends on core, never the reverse. What lives
@@ -11,8 +11,11 @@
 //! Representation follows the ledger (DECISIONS.md rows 41–42): curves stay
 //! analytic — tessellation is a derived op, never the stored form; meshes
 //! are flat structure-of-arrays `f64` position buffers plus u32 triangle
-//! indices in `Arc`s, hashed at construction like every value.
+//! indices in `Arc`s, hashed at construction like every value; a solid IS
+//! its kernel's canonical bytes (row 42, revised 2026-08-20) — core never
+//! links the kernel, so the value holds the bytes and nothing else.
 
+use std::fmt;
 use std::sync::Arc;
 
 use crate::scalar::Domain;
@@ -248,6 +251,92 @@ impl Mesh {
     }
 }
 
+/// The first bytes of every canonical solid serialization: OCCT's
+/// `BinTools` header at the PINNED format version 4 (DECISIONS.md row 42,
+/// revised 2026-08-20; `cicada_geom::occt::CANONICAL_FORMAT_VERSION` is the
+/// same pin on the kernel side and a test holds the two together). Core
+/// checks this prefix so garbage never becomes a hashed value; it cannot
+/// check more without the kernel, and does not try.
+pub const SOLID_CANONICAL_HEADER: &[u8] = b"\nOpen CASCADE Topology V4";
+
+/// Why bytes were refused as a solid's canonical form.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SolidError {
+    /// The bytes do not start with [`SOLID_CANONICAL_HEADER`]: not a
+    /// `BinTools` V4 stream, so not a canonical serialization.
+    #[error(
+        "{len} bytes are not a canonical solid serialization (BinTools V4): the stream \
+         starts with {head:?}"
+    )]
+    NotCanonical {
+        /// The byte count offered.
+        len: usize,
+        /// The first bytes, lossily decoded, for the message.
+        head: String,
+    },
+}
+
+/// A B-rep solid (DECISIONS.md row 42): the value IS the kernel's canonical
+/// serialization — OCCT `BinTools` at a pinned format version, without
+/// triangulation or normals, history flags normalized — and nothing else.
+/// Core never depends on the kernel; `cicada-geom`'s `occt` seam produces
+/// these bytes and rebuilds a kernel handle from them when an operation
+/// needs one. The content hash is blake3 over the bytes like every other
+/// value, so interning, instancing, early cutoff and the disk store work
+/// unchanged; `Watertight<Mesh>` stays the mesh-tier solid and
+/// `tessellate: Solid → Watertight<Mesh>` is the explicit, costed bridge
+/// (docs/03 §The seam).
+///
+/// The bytes are an `Arc`: cloning a solid (marshalling, interning, list
+/// slots) never copies the serialization.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Solid {
+    bytes: Arc<[u8]>,
+}
+
+impl Solid {
+    /// Wrap canonical bytes, refusing anything that does not carry the
+    /// `BinTools` V4 header. The kernel seam is the only producer of
+    /// canonical bytes; this door exists for it and for the store's
+    /// reload path.
+    ///
+    /// # Errors
+    ///
+    /// [`SolidError::NotCanonical`] when the bytes lack the header.
+    pub fn from_canonical_bytes(bytes: impl Into<Arc<[u8]>>) -> Result<Self, SolidError> {
+        let bytes: Arc<[u8]> = bytes.into();
+        if !bytes.starts_with(SOLID_CANONICAL_HEADER) {
+            let shown = &bytes[..bytes.len().min(24)];
+            return Err(SolidError::NotCanonical {
+                len: bytes.len(),
+                head: String::from_utf8_lossy(shown).into_owned(),
+            });
+        }
+        Ok(Self { bytes })
+    }
+
+    /// The canonical bytes.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// The canonical bytes, shared (the seam hands them to the kernel's
+    /// reader; the store writes them).
+    #[must_use]
+    pub fn shared_bytes(&self) -> &Arc<[u8]> {
+        &self.bytes
+    }
+}
+
+impl fmt::Debug for Solid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Solid")
+            .field("bytes", &self.bytes.len())
+            .finish()
+    }
+}
+
 /// A curve statically known to be closed (DECISIONS.md row 22): entered via
 /// the checked `as_closed` conversion (or constructors closed by nature —
 /// circles, rectangles). The wrapper is port-type-level; on the wire the
@@ -280,6 +369,11 @@ pub enum Transformable {
     Curve(Curve),
     /// A mesh.
     Mesh(Mesh),
+    /// A B-rep solid. In the type lattice from v0.1 item 3 WP-B (a `T` port
+    /// accepts it); the kernel-backed move/rotate/scale arrive with WP-C —
+    /// until then a transform of a solid is a loud red, never a silent
+    /// pass-through (`cicada_geom::transform::Similarity::apply`).
+    Solid(Solid),
 }
 
 /// The runtime value of a display-sink geometry port (`Geometry` in the
@@ -293,6 +387,8 @@ pub enum GeometryValue {
     Curve(Curve),
     /// A mesh.
     Mesh(Mesh),
+    /// A B-rep solid (drawn through the display tessellation cache).
+    Solid(Solid),
 }
 
 /// The catalog base name of the kind-preserving transform type variable.
@@ -310,6 +406,8 @@ pub const VAR_ELEMENT: &str = "E";
 /// The wire kinds a `T` port accepts. Refined names are listed explicitly:
 /// every spike transform is a similarity, which preserves closedness and
 /// watertightness, so the refinement rides through the type variable.
+/// `Solid` is a transformable kind (B-rep transforms are kind-preserving);
+/// its kernel-backed transforms land with v0.1 item 3 WP-C.
 pub const TRANSFORMABLE_KINDS: &[&str] = &[
     "Point",
     "Vector",
@@ -318,6 +416,7 @@ pub const TRANSFORMABLE_KINDS: &[&str] = &[
     "Closed<Curve>",
     "Mesh",
     "Watertight<Mesh>",
+    "Solid",
 ];
 
 /// The wire kinds a `Geometry` port accepts (display sinks). The checker
@@ -328,6 +427,7 @@ pub const GEOMETRY_KINDS: &[&str] = &[
     "Closed<Curve>",
     "Mesh",
     "Watertight<Mesh>",
+    "Solid",
 ];
 
 #[cfg(test)]
@@ -462,5 +562,53 @@ mod tests {
         let clone = mesh.clone();
         assert!(Arc::ptr_eq(&mesh.positions, &clone.positions));
         assert!(Arc::ptr_eq(&mesh.indices, &clone.indices));
+    }
+
+    /// Header plus an arbitrary tail: what core can verify of canonical
+    /// bytes without the kernel.
+    fn pseudo_canonical(tail: &[u8]) -> Vec<u8> {
+        let mut bytes = SOLID_CANONICAL_HEADER.to_vec();
+        bytes.extend_from_slice(tail);
+        bytes
+    }
+
+    #[test]
+    fn solid_wraps_canonical_bytes_and_refuses_the_rest() {
+        let bytes = pseudo_canonical(b", (c) Open Cascade\nLocations 0\n");
+        let solid = Solid::from_canonical_bytes(bytes.clone()).expect("header present");
+        assert_eq!(solid.bytes(), &bytes[..]);
+        // Exactly the header is canonical as far as core can tell.
+        assert!(Solid::from_canonical_bytes(SOLID_CANONICAL_HEADER.to_vec()).is_ok());
+        for garbage in [
+            &b""[..],
+            b"not a brep",
+            b"\nOpen CASCADE Topology V3, (c) Open Cascade",
+        ] {
+            let error = Solid::from_canonical_bytes(garbage.to_vec())
+                .expect_err("bytes without the V4 header are refused");
+            assert!(
+                matches!(&error, SolidError::NotCanonical { len, .. } if *len == garbage.len()),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn solid_clone_shares_bytes_and_debug_hides_them() {
+        let solid = Solid::from_canonical_bytes(pseudo_canonical(&[0u8; 4000])).expect("solid");
+        let clone = solid.clone();
+        assert!(Arc::ptr_eq(solid.shared_bytes(), clone.shared_bytes()));
+        assert_eq!(solid, clone, "equality is by bytes");
+        let shown = format!("{solid:?}");
+        assert_eq!(shown, "Solid { bytes: 4025 }", "{shown}");
+    }
+
+    #[test]
+    fn solid_is_a_transformable_and_a_geometry_kind() {
+        // The checker's lattice reads these lists (cicada-lang) and so does
+        // the view-model's displayable predicate (cicada-server): one
+        // entry each admits a `Solid` into `T` ports and display sinks.
+        assert!(TRANSFORMABLE_KINDS.contains(&"Solid"));
+        assert!(GEOMETRY_KINDS.contains(&"Solid"));
     }
 }

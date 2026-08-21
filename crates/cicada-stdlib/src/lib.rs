@@ -446,7 +446,12 @@ mod tests {
     }
 
     #[test]
-    fn volatile_attribute_registers_and_every_shipped_node_is_not() {
+    fn volatile_attribute_registers_and_only_the_sanctioned_nodes_are() {
+        // The shipped volatile nodes: `clock` (DECISIONS.md time row:
+        // uncached by design, item 4) and `import_step` — a file on disk is
+        // external state (docs/08 §11). Anything else volatile is a mistake
+        // that would defeat the memo.
+        const SHIPPED_VOLATILE: &[&str] = &["clock", "import_step"];
         let specs = registry();
         let fixture = specs
             .iter()
@@ -454,14 +459,15 @@ mod tests {
             .expect("the test-only volatile fixture registers");
         assert!(fixture.volatile, "#[node(volatile)] sets the flag");
         assert!(fixture.pure, "volatile is not effectful");
-        // Exporters are effectful; the ONE shipped volatile node is
-        // `clock` (DECISIONS.md time row: uncached by design, item 4).
-        let shipped: Vec<&str> = specs
-            .iter()
-            .filter(|s| s.volatile && s.name != "fixture_volatile")
-            .map(|s| s.name)
-            .collect();
-        assert_eq!(shipped, ["clock"], "volatile nodes shipped");
+        // Exporters are effectful, never volatile.
+        for spec in specs.iter().filter(|s| s.name != "fixture_volatile") {
+            assert_eq!(
+                spec.volatile,
+                SHIPPED_VOLATILE.contains(&spec.name),
+                "`{}`: volatile flag does not match the sanctioned list",
+                spec.name
+            );
+        }
     }
 
     #[test]

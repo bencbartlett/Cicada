@@ -1,8 +1,9 @@
 //! Geometry operations and the typed seams to rented kernels (docs/03,
 //! docs/14): tolerance-aware comparisons, frames, curve evaluation,
 //! triangulation, mesh construction, similarity transforms, spade-backed
-//! Voronoi, Manifold-backed mesh booleans, and — behind the `occt` feature
-//! — the OCCT B-rep seam ([`occt`]).
+//! Voronoi, Manifold-backed mesh booleans, the value-level solid API
+//! ([`solid`] — the same signatures in every build) and — behind the
+//! `occt` feature — the OCCT B-rep seam it runs on ([`occt`]).
 //!
 //! The VALUE types live in `cicada-core` (dependency law); this crate is
 //! the constructive layer the stdlib nodes call. Heavy kernel FFI is
@@ -26,6 +27,7 @@ pub mod frame;
 pub mod meshbuild;
 #[cfg(feature = "occt")]
 pub mod occt;
+pub mod solid;
 pub mod text;
 pub mod tol;
 pub mod transform;
@@ -110,4 +112,88 @@ pub enum GeomError {
         /// What failed.
         reason: String,
     },
+    /// A kernel operation that must yield exactly one solid body yielded
+    /// another count: a cut that split its solid in two or removed it
+    /// entirely, a union of disjoint operands, an empty intersection. A
+    /// `Solid` is one body (docs/08 §7), so the result is refused rather
+    /// than returned as a compound or as nothing.
+    #[error("{}", not_one_solid_message(operation, *found))]
+    NotOneSolid {
+        /// The operation that produced the result (`cut`, `fuse`, `common`,
+        /// a reader of bytes).
+        operation: String,
+        /// How many solid bodies it produced.
+        found: usize,
+    },
+    /// The operation needs a rented kernel this build does not link (its
+    /// cargo feature is off). Loud by design: a `Solid` in a build without
+    /// OCCT cannot be drawn or operated on, and says so instead of falling
+    /// back to anything.
+    #[error(
+        "{operation} needs the {kernel} kernel, which this build does not link \
+         (cicada-geom feature `{feature}` is off)"
+    )]
+    KernelUnavailable {
+        /// The kernel's name (`OCCT`).
+        kernel: &'static str,
+        /// The cargo feature that links it.
+        feature: &'static str,
+        /// The operation that was asked for.
+        operation: &'static str,
+    },
+    /// A tessellation request finer than the `tessellate` node's budget
+    /// ([`solid::TESSELLATE_MAX_FACETS_PER_TURN`]): at the part's own
+    /// scale the mesher would place more facets around a full turn than
+    /// the budget allows, and below that line its memory and time grow
+    /// without bound (a unit sphere at the kernel's bare floor of 1e-7
+    /// took 23 GB and did not finish — WP-C review). Refused before the
+    /// mesher runs, with the floors for THIS part spelled out.
+    #[error("{}", tessellation_budget_message(*linear, *angular, *extent, *min_linear, *min_angular))]
+    TessellationBudget {
+        /// The requested chord deviation (document units).
+        linear: f64,
+        /// The requested angular deviation (radians).
+        angular: f64,
+        /// The solid's largest bounding-box extent.
+        extent: f64,
+        /// The finest chord deviation the budget admits for this extent.
+        min_linear: f64,
+        /// The finest angular deviation the budget admits.
+        min_angular: f64,
+    },
+}
+
+/// The user-facing text of [`GeomError::TessellationBudget`]: the request,
+/// the part's size, the floors, the reason and the way out.
+fn tessellation_budget_message(
+    linear: f64,
+    angular: f64,
+    extent: f64,
+    min_linear: f64,
+    min_angular: f64,
+) -> String {
+    format!(
+        "tessellation finer than the budget: deflection {linear} / angle {angular} rad on a solid \
+         {extent} across would mesh finer than {} facets per full turn at the part's own scale — \
+         the floors for this part are deflection {min_linear:.3e} and angle {min_angular:.3e} rad \
+         (the mesher's memory grows without bound below them); coarsen the request, or keep the \
+         Solid exact (section, export_step)",
+        solid::TESSELLATE_MAX_FACETS_PER_TURN
+    )
+}
+
+/// The user-facing text of [`GeomError::NotOneSolid`]: what happened, the
+/// rule, and the way out — never a glue identifier or a kernel enum value.
+fn not_one_solid_message(operation: &str, found: usize) -> String {
+    match found {
+        0 => format!(
+            "{operation} left no solid — a Solid is one body, and nothing remains (the operands \
+             do not overlap the way this operation needs)"
+        ),
+        1 => format!("{operation} left one solid"),
+        n => format!(
+            "{operation} left {n} solids — a Solid is one body; change the inputs so one piece \
+             remains, or build the pieces as separate solids"
+        ),
+    }
 }

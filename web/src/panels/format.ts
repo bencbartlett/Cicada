@@ -141,7 +141,20 @@ export function valueHeadline(summary: ValueSummary): string {
 /** Facts → `key value` pairs in a stable order (known geometry facts first). */
 export function factsList(facts: Record<string, unknown> | undefined): [string, string][] {
   if (facts === undefined) return [];
-  const order = ["element_kind", "vertices", "triangles", "segments", "points", "watertight", "closed"];
+  const order = [
+    "element_kind",
+    "error",
+    "faces",
+    "solids",
+    "vertices",
+    "triangles",
+    "segments",
+    "points",
+    "watertight",
+    "unclosed",
+    "closed",
+    "bytes",
+  ];
   const keys = Object.keys(facts).sort((a, b) => {
     const ia = order.indexOf(a);
     const ib = order.indexOf(b);

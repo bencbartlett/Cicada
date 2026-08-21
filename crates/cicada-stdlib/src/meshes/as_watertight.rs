@@ -27,7 +27,7 @@ pub struct AsWatertightIn {
 ///
 /// ```cic
 /// span = construct_domain(start=0.0, end=2.0)
-/// block = box(x=span, y=span, z=span)
+/// block = mesh_box(x=span, y=span, z=span)
 /// sealed = as_watertight(mesh=block)
 /// ```
 #[node(category = "Mesh & field", tier = "S", version = 1, gh = none)]
@@ -49,14 +49,14 @@ mod tests {
     use cicada_core::value::{HashedValue, ValueData};
 
     use super::*;
-    use crate::solids::r#box::{BoxIn, box_};
+    use crate::meshes::mesh_box::{MeshBoxIn, mesh_box};
     use crate::solids::support::config;
 
     #[test]
     fn as_watertight_accepts_closed_refuses_open() {
-        let closed = box_(
+        let closed = mesh_box(
             &config(),
-            BoxIn {
+            MeshBoxIn {
                 plane: Plane::world_xy(),
                 x: Domain::new(0.0, 1.0),
                 y: Domain::new(0.0, 1.0),
@@ -85,9 +85,9 @@ mod tests {
         fn property_as_watertight_pass_through(
             dx in 0.01..20.0_f64, dy in 0.01..20.0_f64, dz in 0.01..20.0_f64,
         ) {
-            let mesh = box_(
+            let mesh = mesh_box(
                 &config(),
-                BoxIn {
+                MeshBoxIn {
                     plane: Plane::world_xy(),
                     x: Domain::new(0.0, dx),
                     y: Domain::new(0.0, dy),
@@ -103,9 +103,9 @@ mod tests {
     #[test]
     fn as_watertight_determinism_golden_hash() {
         // Pass-through refinement: the hash is exactly the box golden above.
-        let cube = box_(
+        let cube = mesh_box(
             &config(),
-            BoxIn {
+            MeshBoxIn {
                 plane: Plane::world_xy(),
                 x: Domain::new(0.0, 1.0),
                 y: Domain::new(0.0, 2.0),

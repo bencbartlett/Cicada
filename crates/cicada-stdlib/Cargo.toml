@@ -8,7 +8,12 @@ publish.workspace = true
 
 [dependencies]
 cicada-core.workspace = true
-cicada-geom.workspace = true
+# A direct path dependency (not the workspace entry) so this crate can take
+# cicada-geom WITHOUT its default `occt` feature and forward the choice
+# through its own `occt` feature below — the one way the stdlib has a
+# kernel-free world of its own (cargo forbids `default-features = false`
+# on a workspace-inherited dependency whose workspace entry keeps defaults).
+cicada-geom = { path = "../cicada-geom", default-features = false }
 cicada-macros.workspace = true
 
 [dev-dependencies]
@@ -17,6 +22,18 @@ cicada-macros.workspace = true
 glam.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
+
+[features]
+# The OCCT-backed nodes' kernel (v0.1 item 3 WP-C) — ON by default: the
+# product's `box` / `extrude` / … need it. `occt` forwards to cicada-geom's
+# feature of the same name. The kernel-free world is
+# `cargo test -p cicada-stdlib --no-default-features`: the same node set,
+# every Solid node red with the typed `KernelUnavailable` refusal — which
+# is what `solids/support.rs::with_kernel` asserts there (the Linux CI job
+# runs it; review closure 2026-08-21, finding 5). Workspace builds unify
+# the feature on through every other crate's default edge.
+default = ["occt"]
+occt = ["cicada-geom/occt"]
 
 [lints]
 workspace = true

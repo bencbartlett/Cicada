@@ -32,7 +32,9 @@ pub struct LinearArrayIn {
 /// (2^22 slots, or 1 GiB of copies — each copy costed as its slot PLUS the
 /// mesh or polyline it transforms, since every copy is a distinct
 /// geometry: a million-vertex mesh, 36 MB, is refused at 30 copies; the
-/// message names the count, the bytes and the ceiling that bit).
+/// message names the count, the bytes and the ceiling that bit), or for a
+/// `Solid` the OCCT kernel refuses to transform (a `Solid` moves through
+/// the kernel — its B-rep geometry is rewritten, never a mesh in disguise).
 ///
 /// # Examples
 ///

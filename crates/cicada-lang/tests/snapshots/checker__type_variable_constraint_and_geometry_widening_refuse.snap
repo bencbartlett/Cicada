@@ -7,7 +7,7 @@ expression: "check(\"# cicada 1\\n\\\n         amps = slider(value=2.0)\\n\\\n  
     "actual": "Number",
     "expected": "T",
     "kind": "type_mismatch",
-    "message": "`geometry` is kind-preserving over transformable kinds (Point, Vector, Plane, Curve, Closed<Curve>, Mesh, Watertight<Mesh>); `amps` is not one",
+    "message": "`geometry` is kind-preserving over transformable kinds (Point, Vector, Plane, Curve, Closed<Curve>, Mesh, Watertight<Mesh>, Solid); `amps` is not one",
     "node": "bad",
     "span": {
       "col_end": 29,

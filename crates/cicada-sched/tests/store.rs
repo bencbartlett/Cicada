@@ -8,7 +8,9 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use cicada_core::geometry::{Circle, Curve, Line, Mesh, Polyline, Rectangle};
+use cicada_core::geometry::{
+    Circle, Curve, Line, Mesh, Polyline, Rectangle, SOLID_CANONICAL_HEADER, Solid,
+};
 use cicada_core::scalar::{Color, Domain, IndexMap};
 use cicada_core::spatial::{Plane, Point, Vector, Xform};
 use cicada_core::value::{HashedValue, List, ValueData};
@@ -55,7 +57,21 @@ fn leaf_value() -> impl Strategy<Value = Arc<HashedValue>> {
         Just(value(ValueData::Nothing)),
         curve_value(),
         mesh_value(),
+        solid_value(),
     ]
+}
+
+/// Arbitrary solids as the store sees them: the canonical header (all core
+/// can verify) plus an opaque tail. The kernel is never consulted to store
+/// or load, so these exercise exactly the blob codec's path.
+fn solid_value() -> impl Strategy<Value = Arc<HashedValue>> {
+    proptest::collection::vec(any::<u8>(), 0..64).prop_map(|tail| {
+        let mut bytes = SOLID_CANONICAL_HEADER.to_vec();
+        bytes.extend_from_slice(&tail);
+        value(ValueData::Solid(
+            Solid::from_canonical_bytes(bytes).expect("header present"),
+        ))
+    })
 }
 
 fn finite_point() -> impl Strategy<Value = Point> {
@@ -154,6 +170,201 @@ proptest! {
         prop_assert_eq!(loaded.hash(), input.hash());
         prop_assert_eq!(loaded.data(), input.data());
     }
+}
+
+/// A solid above the pack threshold takes the one-file-per-blob path and
+/// comes back byte-identical under the same hash (WP-B: blob → bytes →
+/// same hash); a small one packs.
+#[test]
+fn solid_roundtrips_through_pack_and_file_blobs() {
+    let dir = tempfile::tempdir().unwrap();
+    let small = {
+        let mut bytes = SOLID_CANONICAL_HEADER.to_vec();
+        bytes.extend_from_slice(b", (c) Open Cascade\nLocations 0\n");
+        value(ValueData::Solid(
+            Solid::from_canonical_bytes(bytes).unwrap(),
+        ))
+    };
+    let big = {
+        // Incompressible tail, so the compressed blob stays above the pack
+        // threshold and lands in its own file.
+        let mut bytes = SOLID_CANONICAL_HEADER.to_vec();
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        while bytes.len() < PACK_MAX_BYTES + 4096 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            bytes.extend_from_slice(&state.to_le_bytes());
+        }
+        value(ValueData::Solid(
+            Solid::from_canonical_bytes(bytes).unwrap(),
+        ))
+    };
+    {
+        let (store, _) = DiskStore::open(dir.path()).unwrap();
+        store.store_value(&small).unwrap();
+        store.store_value(&big).unwrap();
+        assert!(matches!(
+            store.locate_value(&small.hash()),
+            Some(BlobLocation::Packed { .. })
+        ));
+        assert!(matches!(
+            store.locate_value(&big.hash()),
+            Some(BlobLocation::File(_))
+        ));
+    }
+    let (store, _) = DiskStore::open(dir.path()).unwrap();
+    for input in [&small, &big] {
+        let loaded = store.load_value(&input.hash()).unwrap();
+        assert_eq!(loaded.hash(), input.hash());
+        let (ValueData::Solid(got), ValueData::Solid(want)) = (loaded.data(), input.data()) else {
+            panic!("kind changed on the way through the store");
+        };
+        assert_eq!(got.bytes(), want.bytes());
+    }
+}
+
+/// A blob whose bytes no longer decode is corruption: refused loudly and
+/// quarantined like a bad mesh, never a Solid with a lie inside.
+#[test]
+fn corrupted_solid_blob_is_refused_and_quarantined() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = {
+        let mut bytes = SOLID_CANONICAL_HEADER.to_vec();
+        bytes.extend_from_slice(b"\ntail tail tail tail tail tail");
+        value(ValueData::Solid(
+            Solid::from_canonical_bytes(bytes).unwrap(),
+        ))
+    };
+    {
+        let (store, _) = DiskStore::open(dir.path()).unwrap();
+        store.store_value(&input).unwrap();
+    }
+    // Corrupt the compressed frame in place (the pack's payload), reopen.
+    let (store, _) = DiskStore::open(dir.path()).unwrap();
+    let Some(BlobLocation::Packed { path, offset, len }) = store.locate_value(&input.hash()) else {
+        panic!("a small solid packs");
+    };
+    let mut bytes = std::fs::read(&path).unwrap();
+    let start = usize::try_from(offset).unwrap();
+    for byte in &mut bytes[start + 8..start + len as usize] {
+        *byte ^= 0x5A;
+    }
+    std::fs::write(&path, bytes).unwrap();
+    drop(store);
+    let (store, _) = DiskStore::open(dir.path()).unwrap();
+    let error = store.load_value(&input.hash()).expect_err("must refuse");
+    assert!(
+        matches!(
+            error,
+            StoreError::Decode { .. }
+                | StoreError::CorruptValue { .. }
+                | StoreError::ValueRejected { .. }
+        ),
+        "got {error}"
+    );
+    assert!(
+        store.locate_value(&input.hash()).is_none(),
+        "the bad frame is forgotten so a re-store heals the address"
+    );
+    store.store_value(&input).unwrap();
+    assert_eq!(
+        store.load_value(&input.hash()).unwrap().hash(),
+        input.hash()
+    );
+}
+
+/// Backward compatibility of the blob codec (DECISIONS.md scheduler row:
+/// the store is append-only in format). `fixtures/pack-24d558b.bin` is the
+/// small-blob pack a pre-Solid engine (main @ 24d558b, the commit before
+/// `StoredValue::Solid` was appended) wrote for eight values of every
+/// older kind — Number, Integer, Text, Point, Curve, Domain, Mesh and a
+/// List with an axis and a hole holding four of them. The current engine
+/// must load each under its committed hash: the hashes below are the
+/// golden hashes from `cicada-core`'s own format tests, so a mismatch here
+/// is a codec regression, not a fixture problem.
+#[test]
+fn a_pre_solid_pack_still_loads_under_the_new_engine() {
+    const HASHES: &[(&str, &str)] = &[
+        (
+            "Number",
+            "193cb930efc458d6c52cd619c036f833da80d9404b8870becc567e0cbfa4ef03",
+        ),
+        (
+            "Integer",
+            "60ced3195113544317bb194858b019f3990038084598e7587e30293d5cf50c41",
+        ),
+        (
+            "Text",
+            "73f5bdd62a60e1e85c40115d5eeed5b25f0c15b57b7141cae00b6ce70eccdf6a",
+        ),
+        (
+            "Point",
+            "1a6f8073cd8ceb247b753adbb96e270c282cc660b09bb99c4719b64d687b1ca2",
+        ),
+        (
+            "Curve",
+            "84fe60ee77d6f05ff5ece9d26584295b0498fd7a1bb35c654f5f5991fe24c3ae",
+        ),
+        (
+            "Domain",
+            "dba4d84fdff1c8eb2e98a3f45c8e429fd320dc06d133f27120f7a5fd7c10e0f4",
+        ),
+        (
+            "Mesh",
+            "24e158394935257ec9efe9f0f7f98a3634774aa79eb78f595beb0179c95c7055",
+        ),
+        (
+            "List",
+            "74c38c5f487cb9cf0fa9502514e8b8f2d7c9feb7dec4acaf76b1260f00e10ea7",
+        ),
+    ];
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("values")).unwrap();
+    std::fs::copy(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/pack-24d558b.bin"
+        ),
+        dir.path().join("values").join("pack.bin"),
+    )
+    .unwrap();
+    // The fixture store carries the older engine's marker: a lower marker
+    // is raised, never refused.
+    std::fs::write(dir.path().join("format"), "2\n").unwrap();
+    let (store, report) = DiskStore::open(dir.path()).unwrap();
+    assert_eq!(report.pack_recovery, None, "the fixture pack is intact");
+    assert_eq!(report.packed_values, HASHES.len());
+    for (kind, hex) in HASHES {
+        let hash = parse_hash(hex);
+        let loaded = store
+            .load_value(&hash)
+            .unwrap_or_else(|error| panic!("{kind} blob from the pre-Solid pack: {error}"));
+        assert_eq!(loaded.hash(), hash, "{kind}: re-hashed under its address");
+        assert_eq!(loaded.data().kind_name(), *kind);
+    }
+    let list = store.load_value(&parse_hash(HASHES[7].1)).unwrap();
+    let ValueData::List(list) = list.data() else {
+        panic!("a list");
+    };
+    assert_eq!(list.axis.as_deref(), Some("parts"));
+    assert_eq!(list.slots.len(), 5);
+    assert!(list.slots[1].is_none(), "the hole survives");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("format"))
+            .unwrap()
+            .trim(),
+        LOG_FORMAT.to_string(),
+        "the marker is raised to this engine's format"
+    );
+}
+
+fn parse_hash(hex: &str) -> cicada_core::hash::ValueHash {
+    let mut raw = [0u8; 32];
+    for (i, byte) in raw.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap();
+    }
+    cicada_core::hash::ValueHash::from_bytes(raw)
 }
 
 #[test]

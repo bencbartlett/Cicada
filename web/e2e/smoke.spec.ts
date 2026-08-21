@@ -73,11 +73,12 @@ test("serve → load → place → wire → drag → screenshot asserts geometry
   await expect(page.getByTestId("app")).toBeVisible();
 
   // ---- load: the canvas shows every binding, the viewport draws the solids.
-  // 10 = the bindings of examples/02-solids.cic (the served scratch copy);
-  // a change to that example updates this count in the same commit.
+  // 12 = the bindings of examples/02-solids.cic (the served scratch copy;
+  // B-rep solids since WP-C — the multi-output `volume` binding is one
+  // node); a change to that example updates this count in the same commit.
   const initial = await debugState(page);
-  expect(initial.graph.nodes.length).toBe(10);
-  await expect(page.locator(".react-flow__node")).toHaveCount(10);
+  expect(initial.graph.nodes.length).toBe(12);
+  await expect(page.locator(".react-flow__node")).toHaveCount(12);
   await expect
     .poll(async () => (await scene(page)).framesReceived, { timeout: 20_000 })
     .toBeGreaterThan(0);

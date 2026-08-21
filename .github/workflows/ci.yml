@@ -1,6 +1,20 @@
 # Per-PR/push gates (doc 14 §CI pipeline). Nightly jobs live in nightly.yml.
 # --locked everywhere: a Cargo.toml/Cargo.lock desync fails loudly instead of
 # silently re-resolving to a graph that is not the committed one.
+#
+# OCCT (docs/17 Item 3 WP-C; docs/03 §The seam): since the product's
+# `box`/`extrude`/… nodes are OCCT-backed, cicada-geom's `occt` feature is ON
+# by default and EVERY job that builds or runs the workspace links the
+# kernel. Each such job therefore starts with the same three steps:
+# setup-python, the actions/cache of the prebuilt prefix (key = the pinned
+# manifest), and `tools/fetch_occt.py --github-env`, which fetches the
+# sha256-pinned conda-forge OCCT 7.8.1 prefix (+ the run-time closure its
+# libraries load) into the runner's temp dir and exports DEP_OCCT_ROOT, the
+# loader path (LD_LIBRARY_PATH / PATH) and CMAKE_POLICY_VERSION_MINIMUM for
+# every later step. macOS gets an rpath on the binaries instead of
+# DYLD_LIBRARY_PATH (SIP strips DYLD_* from the protected /bin/bash the
+# runner spawns, so a GITHUB_ENV entry would never reach cargo). The Linux
+# job also verifies the prefix's import closure statically.
 name: CI
 
 on:
@@ -24,21 +38,40 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Prime the Manifold kernel build (retry once — the clone flake was a Windows long-path bug, see AGENTS.md; runners have core.longpaths on, the retry is a belt)
+      - name: Cache the prebuilt OCCT prefix (key = the pinned manifest)
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/cicada-occt
+          key: cicada-occt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/fetch_occt_manifest.json') }}
+      - name: Fetch the prebuilt OCCT (sha256-pinned), verify its import closure, export its env
+        run: |
+          python -m pip install --quiet zstandard
+          python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --check-closure
+          python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --github-env
+      - name: Prime the kernel builds (retry once — the clone flake was a Windows long-path bug, see AGENTS.md; runners have core.longpaths on, the retry is a belt)
         run: cargo build --locked -p cicada-geom || cargo build --locked -p cicada-geom
       - run: cargo fmt --all --check
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace
+      - name: The kernel-free world still passes (every Solid call a typed refusal, docs/03 — cicada-geom's seam and, since the review closure of 2026-08-21, the stdlib's Solid nodes through their own `occt` feature)
+        run: |
+          cargo test --locked -p cicada-geom --no-default-features
+          cargo test --locked -p cicada-stdlib --no-default-features
       - name: Catalog freshness (stale CATALOG.md fails CI, doc 14)
         run: cargo run --locked -p cicada-cli -- catalog --check
 
   test-cross:
     # Full tests, not just check: the determinism-hash DoD is
     # cross-platform and should hold at merge time, not nightly-after.
+    # This is also where cross-OS identity of the Solid golden hashes is
+    # measured (per-OS goldens until the three agree — DECISIONS.md row 42).
     # Demote to `cargo check` when suite runtime demands (doc 14).
     name: cargo test (${{ matrix.os }})
     strategy:
@@ -48,50 +81,28 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Prime the Manifold kernel build (retry once — belt; see AGENTS.md)
-        run: cargo build --locked -p cicada-geom || cargo build --locked -p cicada-geom
-      - run: cargo test --locked --workspace
-
-  occt:
-    # The OCCT seam (docs/17 Item 3 WP-A; docs/03 §The seam): the ONLY per-PR
-    # job that compiles C++ against OCCT. tools/fetch_occt.py fetches the
-    # sha256-pinned conda-forge OCCT 7.8.1 prefix (+ the run-time closure its
-    # libraries load) into the runner's temp dir — cached by actions/cache on
-    # the manifest hash — verifies its import closure statically, and prints
-    # the env (DEP_OCCT_ROOT, LD_LIBRARY_PATH, CMAKE_POLICY_VERSION_MINIMUM)
-    # the cargo commands run under. Rule: nothing outside the occt jobs may
-    # run `--features occt` or `--all-features`; default builds compile no C++.
-    name: occt (ubuntu)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
       - uses: Swatinem/rust-cache@v2
-        with:
-          key: occt
       - name: Cache the prebuilt OCCT prefix (key = the pinned manifest)
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/cicada-occt
           key: cicada-occt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/fetch_occt_manifest.json') }}
-      - name: Prime the Manifold kernel build (retry once — belt; see AGENTS.md)
-        run: cargo build --locked -p cicada-geom || cargo build --locked -p cicada-geom
-      - name: Fetch the prebuilt OCCT (sha256-pinned) and verify its import closure
+      - name: Fetch the prebuilt OCCT (sha256-pinned) and export its env
+        shell: bash
         run: |
           python -m pip install --quiet zstandard
-          python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --check-closure
-      - name: Test + clippy the seam against the prebuilt
-        run: |
-          eval "$(python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --print-env bash --quiet)"
-          cargo test --locked -p cicada-geom --features occt
-          cargo clippy --locked -p cicada-geom --features occt --all-targets -- -D warnings
+          python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --github-env
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            eval "$(python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --print-env bash --quiet)"
+            echo "RUSTFLAGS=-C link-arg=-Wl,-rpath,$DEP_OCCT_ROOT/lib" >> "$GITHUB_ENV"
+          fi
+      - name: Prime the kernel builds (retry once — belt; see AGENTS.md)
+        run: cargo build --locked -p cicada-geom || cargo build --locked -p cicada-geom
+      - run: cargo test --locked --workspace
 
   web:
     name: web tsc · eslint · vitest
@@ -135,10 +146,15 @@ jobs:
   playwright-smoke:
     # doc 15 stage 5 DoD: serve → place → wire → drag → screenshot asserts
     # geometry changed, headless, against the RELEASE shape (SPA embedded).
+    # The engine Playwright starts links OCCT: the fetch step's loader path
+    # reaches it through the step environment.
     name: Playwright smoke (serve → place → wire → drag → screenshot)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -146,7 +162,16 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Prime the Manifold kernel build (retry once — belt; see AGENTS.md)
+      - name: Cache the prebuilt OCCT prefix (key = the pinned manifest)
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/cicada-occt
+          key: cicada-occt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/fetch_occt_manifest.json') }}
+      - name: Fetch the prebuilt OCCT (sha256-pinned) and export its env
+        run: |
+          python -m pip install --quiet zstandard
+          python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --github-env
+      - name: Prime the kernel builds (retry once — belt; see AGENTS.md)
         run: cargo build --locked -p cicada-geom || cargo build --locked -p cicada-geom
       - name: Build the SPA
         working-directory: web

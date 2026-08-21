@@ -466,3 +466,135 @@ fn calls_node_needs_an_identifier_boundary() {
         "line"
     ));
 }
+
+// ---------------------------------------------------------------------------
+// The signature ledger: a behavior change bumps `version`
+// ---------------------------------------------------------------------------
+
+/// The committed ledger of what every `(name, version)` pair has meant:
+/// `tests/signatures.tsv`, one row per pair — the catalog signature
+/// (ports, types, defaults) and the flags that enter the memo key or the
+/// scheduling (`uses_tolerance`, `effectful`, `volatile`). The memo key is
+/// `(op, version, tolerance, input hashes, fan)` and says nothing about
+/// what the op RETURNS, so a node whose meaning changes under an unchanged
+/// name and version is served its old values from any warm store — the
+/// tier flip did exactly that to `box` (Watertight<Mesh> → Solid, same
+/// ports, `version = 1`; WP-C's review blocker). The macro cannot see
+/// yesterday's signature; this file can.
+fn signature_ledger_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/signatures.tsv")
+}
+
+/// One ledger row's payload: the signature and the flags.
+fn signature_row(spec: &NodeSpec) -> String {
+    let mut flags = Vec::new();
+    if spec.uses_tolerance {
+        flags.push("uses_tolerance");
+    }
+    if !spec.pure {
+        flags.push("effectful");
+    }
+    if spec.volatile {
+        flags.push("volatile");
+    }
+    format!("{}\t{}", spec.signature(), flags.join(","))
+}
+
+/// The blessing switch: `CICADA_BLESS_SIGNATURES=1 cargo test -p
+/// cicada-stdlib --test conformance` rewrites the ledger from the registry
+/// (new rows added, rows of names no longer registered dropped, the
+/// history of older versions of living names kept). The blessed path for
+/// this file, as run-once is for golden hashes — never edit it by hand.
+const BLESS_SIGNATURES: &str = "CICADA_BLESS_SIGNATURES";
+
+#[test]
+fn a_signature_change_bumps_the_version() {
+    let path = signature_ledger_path();
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+    // (name, version) → "signature\tflags".
+    let mut committed: std::collections::BTreeMap<(String, u32), String> =
+        std::collections::BTreeMap::new();
+    for (number, line) in text.lines().enumerate() {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut fields = line.splitn(3, '\t');
+        let (Some(name), Some(version), Some(rest)) = (fields.next(), fields.next(), fields.next())
+        else {
+            panic!(
+                "{}:{}: a row is `name<TAB>version<TAB>signature<TAB>flags`",
+                path.display(),
+                number + 1
+            );
+        };
+        let version: u32 = version
+            .parse()
+            .unwrap_or_else(|e| panic!("{}:{}: version: {e}", path.display(), number + 1));
+        committed.insert((name.to_owned(), version), rest.to_owned());
+    }
+
+    let mut changed = Vec::new();
+    let mut missing = Vec::new();
+    for spec in registry() {
+        let row = signature_row(spec);
+        match committed.get(&(spec.name.to_owned(), spec.version)) {
+            Some(recorded) if *recorded == row => {}
+            Some(recorded) => changed.push(format!(
+                "`{}` at version {} meant\n      {}\n    and now means\n      {}\n    — a \
+                 behavior change: bump `version` (the memo key pins meaning to it), then bless \
+                 the new row",
+                spec.name,
+                spec.version,
+                recorded.replace('\t', "  flags: "),
+                row.replace('\t', "  flags: ")
+            )),
+            None => missing.push(format!("{}\t{}\t{row}", spec.name, spec.version)),
+        }
+    }
+
+    if std::env::var_os(BLESS_SIGNATURES).is_some() {
+        assert!(
+            changed.is_empty(),
+            "blessing cannot paper over a changed meaning at an unchanged version:\n  {}",
+            changed.join("\n  ")
+        );
+        let living: std::collections::BTreeSet<&str> = registry().iter().map(|s| s.name).collect();
+        let mut rows: Vec<String> = committed
+            .iter()
+            .filter(|((name, _), _)| living.contains(name.as_str()))
+            .map(|((name, version), rest)| format!("{name}\t{version}\t{rest}"))
+            .chain(missing.iter().cloned())
+            .collect();
+        rows.sort();
+        rows.dedup();
+        let mut out = String::from(
+            "# The signature ledger (cicada-stdlib/tests/conformance.rs): what each\n\
+             # (name, version) has meant — signature, then the key-relevant flags.\n\
+             # Regenerate with CICADA_BLESS_SIGNATURES=1; never by hand.\n\
+             # name\tversion\tsignature\tflags\n",
+        );
+        for row in &rows {
+            out.push_str(row);
+            out.push('\n');
+        }
+        std::fs::write(&path, out).unwrap_or_else(|e| panic!("writing {}: {e}", path.display()));
+        return;
+    }
+
+    assert!(
+        changed.is_empty(),
+        "{} node(s) changed meaning without a version bump:\n  {}",
+        changed.len(),
+        changed.join("\n  ")
+    );
+    assert!(
+        missing.is_empty(),
+        "{} (name, version) row(s) are not in {} — if the version was just bumped or the node \
+         is new, bless them: `{BLESS_SIGNATURES}=1 cargo test -p cicada-stdlib --test \
+         conformance`\n  {}",
+        missing.len(),
+        path.display(),
+        missing.join("\n  ")
+    );
+}

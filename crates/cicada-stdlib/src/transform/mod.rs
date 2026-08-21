@@ -8,6 +8,7 @@
 pub(crate) mod support;
 
 pub mod linear_array;
+pub mod mirror;
 pub mod r#move;
 pub mod orient;
 pub mod rotate;

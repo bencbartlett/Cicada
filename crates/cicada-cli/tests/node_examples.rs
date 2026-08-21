@@ -23,6 +23,15 @@
 //! pass. Display sinks (`panel`, `custom_preview`, `text_tag`) are pure and
 //! solve like any node.
 //!
+//! The examples run WHERE a pipeline runs: `cicada run` and `cicada serve`
+//! enter the pipeline's directory before solving, so a relative path in a
+//! node's example (`import_step(path="block.step")`) means "next to the
+//! pipeline". The runner mirrors that — it writes the examples into one
+//! scratch directory, copies the stdlib's committed `fixtures/` beside them
+//! and makes that directory the process's working directory for the run —
+//! so an example's path is a path a user can have, not one that happens to
+//! resolve from the test binary's CWD (WP-C review finding 8).
+//!
 //! One test, all nodes, all failures reported together: a tranche of new
 //! nodes gets one list, not one failure per rerun.
 
@@ -242,9 +251,45 @@ fn solve_checked(
     Ok(())
 }
 
+/// The stdlib's committed fixtures (`crates/cicada-stdlib/fixtures/`):
+/// the files the examples may name as "next to the pipeline".
+fn stdlib_fixtures() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../cicada-stdlib/fixtures")
+}
+
+/// Put the process where a pipeline in `dir` runs (the pipeline's own
+/// directory, as `cicada run` does), with the stdlib fixtures beside it;
+/// the guard restores the previous working directory so the scratch
+/// directory can be removed afterwards (Windows will not delete the CWD
+/// of a live process).
+struct InPipelineDir {
+    previous: std::path::PathBuf,
+}
+
+impl InPipelineDir {
+    fn enter(dir: &Path) -> Self {
+        for entry in std::fs::read_dir(stdlib_fixtures()).expect("the stdlib fixtures directory") {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_file() {
+                std::fs::copy(entry.path(), dir.join(entry.file_name())).unwrap();
+            }
+        }
+        let previous = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir).unwrap();
+        Self { previous }
+    }
+}
+
+impl Drop for InPipelineDir {
+    fn drop(&mut self) {
+        std::env::set_current_dir(&self.previous).unwrap();
+    }
+}
+
 #[test]
 fn every_registered_node_example_solves() {
     let dir = tempfile::tempdir().unwrap();
+    let _here = InPipelineDir::enter(dir.path());
     let mut failures: Vec<String> = Vec::new();
     let mut solved = 0_usize;
     let mut effectful_checked = 0_usize;

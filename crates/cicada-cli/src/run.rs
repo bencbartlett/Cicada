@@ -344,6 +344,7 @@ fn render_value(value: &HashedValue) -> String {
             mesh.vertex_count(),
             mesh.triangle_count()
         ),
+        ValueData::Solid(solid) => format!("Solid({} bytes)", solid.bytes().len()),
         ValueData::List(list) => {
             let shown: Vec<String> = list
                 .slots

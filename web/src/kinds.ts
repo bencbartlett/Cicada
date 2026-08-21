@@ -20,6 +20,9 @@ const FAMILY: Record<string, string> = {
   "Closed<Curve>": "curve",
   Mesh: "mesh",
   "Watertight<Mesh>": "mesh",
+  // The B-rep solid (v0.1 item 3): its own hue — it is not a mesh, and
+  // `tessellate` is the explicit bridge between the two tiers.
+  Solid: "solid",
   Geometry: "geometry",
 };
 

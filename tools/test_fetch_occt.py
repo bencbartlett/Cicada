@@ -5,6 +5,7 @@ uses, and the PE / ELF / Mach-O import readers on synthetic files. Offline,
 deterministic; nothing here touches the network or the real cache dir."""
 
 import hashlib
+import json
 import shutil
 import struct
 import tempfile
@@ -172,6 +173,26 @@ class EnvRenderingTest(unittest.TestCase):
         self.assertEqual(lines[1], f"$env:Path = '{root / 'occt-7.8.1-win-64' / 'Library' / 'bin'};' + $env:Path")
         with self.assertRaises(fo.FetchError):
             fo.env_lines(layout, "fish")
+
+    def test_mcp_json_carries_the_loader_path(self):
+        # The registration Claude Code reads: the binary's loader variable
+        # for THIS platform, the prefix's library dir first, the previous
+        # value appended through an unset-safe expansion.
+        win = fo.Layout(Path(r"C:\cache"), "win-64", "7.8.1")
+        text = fo.env_lines(win, "mcp")[0]
+        registration = json.loads(text)
+        server = registration["mcpServers"]["cicada"]
+        self.assertEqual(server["command"], "${CARGO_TARGET_DIR:-target}/debug/cicada")
+        self.assertEqual(server["args"], ["mcp", "--project", "examples"])
+        bin_dir = Path(r"C:\cache") / "occt-7.8.1-win-64" / "Library" / "bin"
+        self.assertEqual(server["env"], {"PATH": f"{bin_dir};${{PATH:-}}"})
+        linux = fo.Layout(Path("/c"), "linux-64", "7.8.1")
+        env = json.loads(fo.env_lines(linux, "mcp")[0])["mcpServers"]["cicada"]["env"]
+        self.assertEqual(list(env), ["LD_LIBRARY_PATH"])
+        self.assertTrue(env["LD_LIBRARY_PATH"].endswith(":${LD_LIBRARY_PATH:-}"))
+        self.assertIn(str(Path("/c/occt-7.8.1-linux-64/lib")), env["LD_LIBRARY_PATH"])
+        mac = fo.Layout(Path("/c"), "osx-arm64", "7.8.1")
+        self.assertIn("DYLD_LIBRARY_PATH", json.loads(fo.env_lines(mac, "mcp")[0])["mcpServers"]["cicada"]["env"])
 
     def test_github_env_entries(self):
         root = Path(r"C:\cache")

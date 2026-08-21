@@ -16,9 +16,11 @@ touching the committed examples — the app writes what you do.
 
 - **01-curves.cic** — params, analytic curves, curve division, an
   expression node.
-- **02-solids.cic** — mesh-backed solids (box/sphere), a Manifold carve,
-  and the debug OBJ exporter (open the written `.obj` in any mesh
-  viewer — F3D, MeshLab, Blender, even VS Code extensions).
+- **02-solids.cic** — B-rep solids, the default working mode: `box`,
+  `sphere`, a `solid_difference` in the OCCT kernel, `volume`, then one
+  `tessellate` for the debug OBJ exporter (open the written `.obj` in
+  any mesh viewer — F3D, MeshLab, Blender, even VS Code extensions).
+  The mesh tier continues under `mesh_*` names (03/04 stay on it).
 - **03-voronoi.cic** — the wall pipeline in miniature: seeded random
   points → Voronoi cells → extruded prisms (`each()` lift) → carve →
   OBJ.
@@ -40,6 +42,14 @@ touching the committed examples — the app writes what you do.
   (`scripts/pyramids.py`): Python returns watertight meshes through a
   multi-output node (`pyr.meshes`, `pyr.volumes`), and an effectful
   `-> None` node exports a CSV (`--node table`).
+- **07-simple-cad.cic** — simple traditional CAD (docs/01 use case 2):
+  a mounting bracket as exact B-rep solids — `box` plate, `cylinder`
+  boss, an `extrude`d gusset rib, one `solid_union`, a through-bore and
+  a `linear_array` of mounting holes removed by one `solid_difference`;
+  `volume`, a `section` through the plate (the holes come back as exact
+  circles), `bounding_box`; `export_step` writes the STEP on
+  `--node step`. Eight sliders to drag in the app; no fillets or
+  chamfers yet (v0.2).
 - **06-lists.cic** — lists 101 (docs/09): `range` → `sort` / `reverse`
   / `dispatch` / `group_by` with their index maps, the reducers
   (`mass_addition`, `average`), maths lifted with `each()` (`larger`,

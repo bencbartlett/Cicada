@@ -21,6 +21,11 @@ pub(crate) fn payload_bytes(value: &Transformable) -> usize {
         Transformable::Curve(Curve::Polyline(polyline)) => {
             size_of_val(polyline.vertices.as_slice())
         }
+        // A moved solid is a fresh B-rep of about its input's size: the
+        // canonical bytes are the honest per-copy estimate (the kernel's
+        // transient state during the transform is not charged here — it is
+        // freed before the next copy).
+        Transformable::Solid(solid) => solid.bytes().len(),
         Transformable::Point(_)
         | Transformable::Vector(_)
         | Transformable::Plane(_)

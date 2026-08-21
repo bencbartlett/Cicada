@@ -28,7 +28,9 @@ pub struct ScaleIn {
 /// # Panics
 ///
 /// Panics when `|factor|` is within tolerance of zero — geometry would
-/// collapse to a point.
+/// collapse to a point — or for a `Solid` the OCCT kernel refuses to transform (a
+/// `Solid` moves through the kernel — its B-rep geometry is rewritten, never a
+/// mesh in disguise).
 ///
 /// # Examples
 ///

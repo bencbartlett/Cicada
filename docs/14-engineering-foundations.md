@@ -87,12 +87,29 @@ struct Mesh {
   parameters (a Circle is a plane + radius; a Nurbs is control
   points/weights/knots/degree). Tessellation for display or meshing
   is a derived, cached, costed operation (doc 12).
-- **Solid is B-rep-backed (OCCT) from v0.1** (docs/08): an opaque
-  kernel shape handle wrapped with a content hash (hash of the
-  canonical serialized shape — serialization stability is a
-  spike-verify item). `Watertight<Mesh>` (Manifold-validated) is the
-  mesh-tier solid; the seams convert zero-copy where kernel layouts
-  allow.
+- **Solid is B-rep-backed (OCCT) from v0.1** (docs/08) — as shipped by
+  v0.1 item 3 WP-B: the value IS the kernel's canonical serialization,
+  not a handle:
+
+```rust
+struct Solid {
+    bytes: Arc<[u8]>,   // OCCT BinTools V4, no triangulation/normals,
+                        // history flags normalized (DECISIONS.md row 42)
+}                       // hash: KindTag::Solid over the length-prefixed bytes
+```
+
+  Core checks the V4 header (`SOLID_CANONICAL_HEADER`) and nothing more;
+  `cicada-geom::solid` is the value-level API (the same signatures in
+  every build — `GeomError::KernelUnavailable` without the `occt`
+  feature) over op-local, linear `occt::Handle`s that read the bytes,
+  run one kernel operation and serialize back (docs/03 §The sharing
+  model). Serialization stability was the probe's question; it held
+  across processes and builds, per-OS goldens until the CI matrix
+  agrees. `Watertight<Mesh>` (Manifold-validated) is the mesh-tier
+  solid; `tessellate: Solid → Watertight<Mesh>` is the explicit bridge
+  (closure required — the mesh tier needs it); display uses the sibling
+  `tessellate_display` through a hash-keyed, tiered cache (docs/12) and
+  draws the welded mesh whether or not it closed, reporting which.
 - Display buffers are derived f32 with origin-rebasing (doc 12);
   they live in the display cache, never in the value model.
 - **No dtype-generic geometry.** Values are f64-only; parameterizing
@@ -151,7 +168,11 @@ struct Mesh {
   Number, Integer, Boolean, Text, Point, Vector, Domain, Plane, Mesh,
   `Watertight<Mesh>`, Curve (polyline, line, circle, rectangle),
   `Closed<Curve>`, `[…]` to any depth, `?` optionality (Python `None` =
-  absent slot). Declared refinements are RE-CHECKED on the way back
+  absent slot). `Solid` does NOT cross (v0.1 item 3 WP-B): its bytes are
+  OCCT BinTools nothing on the Python side can read, so the host refuses
+  it with the typed `ScriptError::Unmarshallable` ("not marshallable to
+  Python yet") — bare or inside a list, never a hole — until a Solid ABI
+  exists; tessellate first. Declared refinements are RE-CHECKED on the way back
   from Python (an unwatertight mesh behind a `Watertight<Mesh>`
   annotation is red with counts) and dropped to the base kind on the
   way in. The `cicada` module offers `Mesh` (flat arrays +
@@ -256,27 +277,40 @@ review` / `--bless`), never by hand.
   the suite stays fast — the determinism-hash DoD is cross-platform, so
   it should hold at merge time, not nightly-after (demote to
   `cargo check` when suite runtime demands); web `tsc` + eslint +
-  vitest; WASM guest build check; Playwright smoke; **`occt (ubuntu)`**
-  — the one job that compiles C++: `tools/fetch_occt.py` installs the
+  vitest; WASM guest build check; Playwright smoke. Every job that
+  builds Rust first runs `tools/fetch_occt.py`, which installs the
   sha256-pinned prebuilt OCCT 7.8.1 (cached on the manifest hash) and
-  prints the env, then `cargo test` + `clippy -D warnings` run for
-  `-p cicada-geom --features occt`. Rust build caching via `rust-cache`.
-- **Nightly**: full test matrix (Linux/Windows/macOS); `occt (<os>)` on
-  the same three OSes (macOS arm64 with an rpath instead of
-  `DYLD_LIBRARY_PATH`) — where the canonical-bytes golden hashes'
-  cross-OS identity is measured; wall-corpus end-to-end with hash
-  comparison; criterion benchmarks against stored baselines (fail on
-  >10% regression); `cargo deny` + `cargo audit`.
-- **The `occt` feature rule**: default builds compile no C++ and link
-  no OCCT. Only the `occt` jobs pass `--features occt`; nothing in CI
-  runs `--all-features`. What default builds DO pay is the git clone of
-  the fork (cargo must load every locked manifest, optional or not):
-  6 MB in `~/.cargo/git` since the fork dropped the OCCT source
-  submodule — keep it that way (no submodules on branch `cicada`).
-  Locally: `python tools/fetch_occt.py
-  --print-env bash` (or `powershell`) gives the three lines a shell
-  needs (`DEP_OCCT_ROOT`, the loader path, `CMAKE_POLICY_VERSION_MINIMUM`);
-  cmake and a C++ toolchain must be on PATH.
+  exports the env — the kernel is a default feature of `cicada-geom`
+  since v0.1 item 3 WP-C, so every job compiles the two glue
+  translation units and links OCCT. The Linux job also runs
+  `cargo test -p cicada-geom --no-default-features` and `cargo test -p
+  cicada-stdlib --no-default-features`: the kernel-free world — every
+  Solid call a typed `KernelUnavailable`, every Solid NODE red with it —
+  is a tested contract in the two crates that have it, not a compile
+  check (the stdlib gained its own forwarding `occt` feature in the WP-C
+  review closure of 2026-08-21, when the review showed its "both
+  worlds" refusal arms had never executed; the server's and scheduler's
+  tests have no kernel-free arm since the same day: cicada-server links
+  the kernel unconditionally, so such arms were dead code asserted by no
+  run). Rust build caching via `rust-cache`.
+- **Nightly**: full test matrix (Linux/Windows/macOS) — where the
+  canonical-bytes golden hashes' cross-OS identity is measured (macOS
+  arm64 with an rpath instead of `DYLD_LIBRARY_PATH`); wall-corpus
+  end-to-end with hash comparison; criterion benchmarks against stored
+  baselines (fail on >10% regression); `cargo deny` + `cargo audit`.
+- **The `occt` feature rule**: the feature is ON by default (the
+  product's `box` / `extrude` / … nodes need the kernel); a kernel-free
+  build is `--no-default-features` on `cicada-geom` or `cicada-stdlib`
+  (whose `occt` forwards to geom's) and nothing in CI runs
+  `--all-features`. The cross-OS golden policy (DECISIONS.md row
+  42) has its mechanism in the tests: `platform_golden(win64)` in
+  `cicada-geom/src/occt/tests.rs` and `cicada-stdlib/src/solids/support.rs`
+  is the one door a second OS's arm enters by, and the three-OS verdict
+  is pending the first run of the matrix on the branch. Locally:
+  `python tools/fetch_occt.py --print-env bash` (or `powershell`) gives
+  the three lines a shell needs (`DEP_OCCT_ROOT`, the loader path,
+  `CMAKE_POLICY_VERSION_MINIMUM`); cmake and a C++ toolchain must be on
+  PATH.
 - The corpus's bulky inputs live in git LFS if they exceed tens of
   MB (flagged below).
 

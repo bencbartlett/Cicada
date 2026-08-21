@@ -78,4 +78,15 @@ pub enum ScriptError {
     /// from Python, malformed wire value).
     #[error("marshalling: {0}")]
     Marshal(String),
+    /// A kind that has no script ABI yet — the refusal is typed so callers
+    /// and tests can tell "not yet" from "malformed" (v0.1 item 3 WP-B:
+    /// `Solid`, until a Solid ABI exists). The kind is named and the reason
+    /// says what to do instead; a silent skip is never an option.
+    #[error("{kind} is not marshallable to Python yet (v0.1): {reason}")]
+    Unmarshallable {
+        /// The value kind that cannot cross.
+        kind: &'static str,
+        /// Why, and what to do instead.
+        reason: &'static str,
+    },
 }

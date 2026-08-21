@@ -134,6 +134,46 @@ fn eval_form(curve: &Curve, tolerance: f64) -> Result<Eval, GeomError> {
     }
 }
 
+/// The exact form a kernel wire is built from (the OCCT seam's
+/// `Handle::wire`): a vertex chain (lines, polylines, rectangles — the
+/// tolerance-deduped corners, closed or open) or an analytic circle with
+/// its orthonormal frame. Evaluation-only, like [`divide`]: the stored
+/// curve is never rewritten, and the same degenerate-curve refusals apply.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WireForm {
+    /// Straight segments through `vertices` in order; `closed` adds the
+    /// last → first segment (the closing vertex is not repeated).
+    Chain {
+        /// The distinct vertices.
+        vertices: Vec<Point>,
+        /// Whether the chain closes.
+        closed: bool,
+    },
+    /// A full circle of `radius` in `frame`'s xy plane, centred at its
+    /// origin, starting on its x axis.
+    Circle {
+        /// The circle's orthonormal frame.
+        frame: Frame,
+        /// The radius (> tolerance).
+        radius: f64,
+    },
+}
+
+/// The [`WireForm`] of a curve at `tolerance`.
+///
+/// # Errors
+///
+/// [`GeomError::DegenerateCurve`] / [`GeomError::DegenerateFrame`] as in
+/// [`divide`].
+pub fn wire_form(curve: &Curve, tolerance: f64) -> Result<WireForm, GeomError> {
+    Ok(match eval_form(curve, tolerance)? {
+        Eval::Chain {
+            vertices, closed, ..
+        } => WireForm::Chain { vertices, closed },
+        Eval::Circle { frame, radius } => WireForm::Circle { frame, radius },
+    })
+}
+
 /// Arc length of a curve at `tolerance` (used by division; exposed for the
 /// tier-1 Length node later).
 ///

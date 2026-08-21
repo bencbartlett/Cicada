@@ -7,15 +7,15 @@ use cicada_core::geometry::{Mesh, Watertight};
 use cicada_core::scalar::Domain;
 use cicada_core::spatial::{Plane, Point};
 
-use crate::solids::r#box::{BoxIn, box_};
+use crate::meshes::mesh_box::{MeshBoxIn, mesh_box};
 use crate::solids::support::config;
 
 /// A world-aligned box with its min corner at `origin` and the given
 /// positive extents.
 pub(crate) fn aligned_box(origin: [f64; 3], extents: [f64; 3]) -> Watertight<Mesh> {
-    box_(
+    mesh_box(
         &config(),
-        BoxIn {
+        MeshBoxIn {
             plane: Plane {
                 origin: Point::new(origin[0], origin[1], origin[2]),
                 ..Plane::world_xy()

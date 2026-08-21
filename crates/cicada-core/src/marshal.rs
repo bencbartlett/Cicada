@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use crate::geometry::{Closed, Curve, GeometryValue, Mesh, Transformable, Watertight};
+use crate::geometry::{Closed, Curve, GeometryValue, Mesh, Solid, Transformable, Watertight};
 use crate::scalar::{Color, Domain, IndexMap};
 use crate::spatial::{Plane, Point, Vector, Xform};
 use crate::value::{HashedValue, List, ValueData, ValueError};
@@ -246,6 +246,7 @@ impl_marshal_leaf!(Plane, Plane, "Plane");
 impl_marshal_leaf!(Xform, Xform, "Xform");
 impl_marshal_leaf!(Curve, Curve, "Curve");
 impl_marshal_leaf!(Mesh, Mesh, "Mesh");
+impl_marshal_leaf!(Solid, Solid, "Solid");
 
 // ------------------------------------------------- refinement wrappers --
 //
@@ -504,12 +505,13 @@ impl_marshal_geometry_enum!(
         (Plane, Plane),
         (Curve, Curve),
         (Mesh, Mesh),
+        (Solid, Solid),
     ]
 );
 impl_marshal_geometry_enum!(
     GeometryValue,
     "Geometry",
-    [(Point, Point), (Curve, Curve), (Mesh, Mesh)]
+    [(Point, Point), (Curve, Curve), (Mesh, Mesh), (Solid, Solid)]
 );
 
 /// Exact Integer → Number widening, or `None` when the conversion would
@@ -718,6 +720,53 @@ mod tests {
 
     fn integer(i: i64) -> Arc<HashedValue> {
         HashedValue::new(ValueData::Integer(i)).unwrap()
+    }
+
+    fn pseudo_solid() -> Solid {
+        let mut bytes = crate::geometry::SOLID_CANONICAL_HEADER.to_vec();
+        bytes.extend_from_slice(b"\nmarshal test");
+        Solid::from_canonical_bytes(bytes).unwrap()
+    }
+
+    // A Solid marshals as a leaf, rides the `T` and `Geometry` enums (the
+    // checker admits it there — TRANSFORMABLE_KINDS / GEOMETRY_KINDS), and
+    // never passes for a Mesh: `tessellate` is the only bridge.
+    #[test]
+    fn solid_marshals_as_leaf_and_through_the_geometry_enums() {
+        let solid = pseudo_solid();
+        let v = solid.clone().into_value().unwrap();
+        assert_eq!(Solid::from_value(&v).unwrap(), solid);
+        assert!(
+            Arc::ptr_eq(
+                Solid::from_value(&v).unwrap().shared_bytes(),
+                solid.shared_bytes()
+            ),
+            "the bytes are shared, never copied, through marshalling"
+        );
+        assert_eq!(
+            Transformable::from_value(&v).unwrap(),
+            Transformable::Solid(solid.clone())
+        );
+        assert_eq!(
+            GeometryValue::from_value(&v).unwrap(),
+            GeometryValue::Solid(solid.clone())
+        );
+        assert_eq!(
+            Transformable::Solid(solid).into_value().unwrap().hash(),
+            v.hash()
+        );
+        assert_eq!(
+            Mesh::from_value(&v),
+            Err(FromValueError::Kind {
+                expected: "Mesh".to_owned(),
+                got: "Solid"
+            })
+        );
+        assert!(matches!(
+            Watertight::<Mesh>::from_value(&v),
+            Err(FromValueError::Kind { got: "Solid", .. })
+        ));
+        assert_eq!(Solid::expected(), "Solid");
     }
 
     #[test]

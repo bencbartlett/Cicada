@@ -29,10 +29,10 @@ pub struct MeshIntersectionIn {
 ///
 /// ```cic
 /// span = construct_domain(start=0.0, end=2.0)
-/// first = box(x=span, y=span, z=span)
+/// first = mesh_box(x=span, y=span, z=span)
 /// at = construct_point(x=1.0, y=1.0, z=1.0)
 /// frame = xy_plane(origin=at)
-/// second = box(plane=frame, x=span, y=span, z=span)
+/// second = mesh_box(plane=frame, x=span, y=span, z=span)
 /// overlap = mesh_intersection(a=first, b=second)
 /// ```
 #[node(
@@ -60,16 +60,16 @@ mod tests {
     use cicada_geom::meshbuild::signed_volume;
 
     use super::*;
+    use crate::meshes::mesh_box::{MeshBoxIn, mesh_box};
     use crate::meshes::support::{aligned_box, overlap_volume};
-    use crate::solids::r#box::{BoxIn, box_};
     use crate::solids::support::config;
 
     #[test]
     fn mesh_intersection_table_cases() {
         let unit = |origin: f64| {
-            box_(
+            mesh_box(
                 &config(),
-                BoxIn {
+                MeshBoxIn {
                     plane: Plane {
                         origin: Point::new(origin, origin, origin),
                         ..Plane::world_xy()
@@ -136,9 +136,9 @@ mod tests {
     #[test]
     fn mesh_intersection_determinism_golden_hash() {
         let cube = |origin: f64| {
-            box_(
+            mesh_box(
                 &config(),
-                BoxIn {
+                MeshBoxIn {
                     plane: Plane {
                         origin: Point::new(origin, origin, origin),
                         ..Plane::world_xy()

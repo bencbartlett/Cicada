@@ -44,3 +44,4 @@ web/playwright-report/
 # Exporter outputs of the examples (explicit runs write here; the wall's production references live in examples/wall/golden/)
 examples/wall/out/
 examples/*.csv
+examples/*.step

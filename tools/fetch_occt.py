@@ -17,6 +17,7 @@ every library's import table.
 
     python tools/fetch_occt.py                      # fetch for this platform, print the env
     python tools/fetch_occt.py --print-env bash     # `export ...` lines   (also: powershell)
+    python tools/fetch_occt.py --print-env mcp      # a `.mcp.json` registering `cicada mcp` WITH the loader path
     python tools/fetch_occt.py --github-env         # append to $GITHUB_ENV / $GITHUB_PATH
     python tools/fetch_occt.py --dest DIR           # cache root (default below)
     python tools/fetch_occt.py --subdir linux-64    # another platform's prefix (prefetch / inspection)
@@ -215,7 +216,34 @@ def env_lines(layout: Layout, shell: str) -> list[str]:
             f"$env:{ps_var} = '{libdir}{separator}' + $env:{ps_var}",
             f"$env:CMAKE_POLICY_VERSION_MINIMUM = '{CMAKE_POLICY_VERSION_MINIMUM}'",
         ]
-    raise FetchError(f"unknown shell {shell!r}; use bash or powershell")
+    if shell == "mcp":
+        return [mcp_json(layout)]
+    raise FetchError(f"unknown shell {shell!r}; use bash, powershell or mcp")
+
+
+def mcp_json(layout: Layout) -> str:
+    """A `.mcp.json` for Claude Code that registers `cicada mcp` WITH this
+    machine's loader path in its `env`. The binary links OCCT, and a process
+    that cannot find the shared libraries dies before `main` with no message
+    at all (exit 127 / STATUS_DLL_NOT_FOUND as seen from a shell) — Claude
+    Code launches MCP servers from its own environment, not from a shell
+    that sourced `--print-env`, so the registration must carry the path
+    itself (WP-C review finding 4). `${VAR}` / `${VAR:-default}` are
+    expanded by Claude Code in `command`, `args` and `env`; the loader
+    variable's previous value is appended through `${VAR:-}` so an unset one
+    is not an error."""
+    var = layout.loader_variable
+    separator = ";" if layout.is_windows else ":"
+    registration = {
+        "mcpServers": {
+            "cicada": {
+                "command": "${CARGO_TARGET_DIR:-target}/debug/cicada",
+                "args": ["mcp", "--project", "examples"],
+                "env": {var: f"{layout.library_dir}{separator}${{{var}:-}}"},
+            }
+        }
+    }
+    return json.dumps(registration, indent=2)
 
 
 def github_env_entries(layout: Layout, existing_loader_value: str) -> tuple[list[str], list[str]]:
@@ -1006,7 +1034,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("command", nargs="?", choices=["fetch", "regenerate-manifest"], default="fetch")
     parser.add_argument("--dest", type=Path, help="cache root (default: the user cache dir, see above)")
     parser.add_argument("--subdir", choices=SUPPORTED_SUBDIRS, action="append", help="platform(s); default: this one")
-    parser.add_argument("--print-env", choices=["bash", "powershell"], help="emit shell lines instead of the summary")
+    parser.add_argument(
+        "--print-env", choices=["bash", "powershell", "mcp"], help="emit shell lines (or the .mcp.json) instead of the summary"
+    )
     parser.add_argument("--github-env", action="store_true", help="append to $GITHUB_ENV and $GITHUB_PATH")
     parser.add_argument("--check-closure", action="store_true", help="after fetching, verify the import closure")
     parser.add_argument("--manifest-hash", action="store_true", help="print the manifest sha256 and exit")

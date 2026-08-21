@@ -29,7 +29,9 @@ pub struct OrientIn {
 ///
 /// # Panics
 ///
-/// Panics when either plane is degenerate.
+/// Panics when either plane is degenerate, or for a `Solid` the OCCT kernel
+/// refuses to transform (a `Solid` moves through the kernel — its B-rep
+/// geometry is rewritten, never a mesh in disguise).
 ///
 /// # Examples
 ///

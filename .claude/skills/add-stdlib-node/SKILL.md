@@ -146,7 +146,17 @@ mod tests { /* table, property, golden hash */ }
    `"Domain Box"`, `"PolyLine"`); `gh = none` for a Cicada-only node
    (`as_closed`, the exporters). Choose honestly — the name feeds
    search-to-place for GH migrants. `version` is the semantic cache-key
-   version (doc 12): bump it on ANY behavior change. Extra flags:
+   version (doc 12): bump it on ANY behavior change — a different output
+   KIND under the same name and ports most of all (the memo key is
+   `(op, version, tolerance, inputs, fan)` and never looks at what the op
+   returns, so without the bump a warm store serves the old values: WP-C's
+   `box` went Watertight<Mesh> → Solid at `version = 1` and a pre-flip
+   cache handed the mesh to the Solid-typed node, green). The conformance
+   test holds every `(name, version)` to its recorded signature and flags
+   in `crates/cicada-stdlib/tests/signatures.tsv`: a changed meaning at an
+   unchanged version fails; a new node or a bumped version adds its row
+   through the blessed path, `CICADA_BLESS_SIGNATURES=1 cargo test -p
+   cicada-stdlib --test conformance` (never by hand). Extra flags:
    `effectful` (exporters), `uses_tolerance` (the fn then takes
    `config: &ProjectConfig` first — DECISIONS.md tolerance row),
    `name = "…"` (dialect-name override; note `fn move_` auto-registers as
@@ -201,8 +211,12 @@ mod tests { /* table, property, golden hash */ }
    bare `out` via `# Returns`), a `gh` answer, or an example that calls it
    (as a whole identifier — `polyline(` is not a call of `line`); and
    when its file is not `src/<category>/<node>.rs` with exactly one
-   `#[node]`, or lacks any of the three tests. Its `category_dir` table
-   maps category strings to directories — a new category adds a row.
+   `#[node]`, or lacks any of the three tests; and when a `(name, version)`
+   pair's signature or key-relevant flags differ from the committed
+   ledger `tests/signatures.tsv` (bless a new row as in step 3 — a new
+   node's first run of the test tells you the command). Its
+   `category_dir` table maps category strings to directories — a new
+   category adds a row.
    The runner (`crates/cicada-cli/tests/node_examples.rs`) parses,
    checks (zero diagnostics), lowers and solves every example with a
    fresh cache and reports all failing snippets in one list — it lives in

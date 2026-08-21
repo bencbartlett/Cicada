@@ -28,7 +28,7 @@ pub struct MeshUnionIn {
 ///
 /// ```cic
 /// span = construct_domain(start=0.0, end=2.0)
-/// block = box(x=span, y=span, z=span)
+/// block = mesh_box(x=span, y=span, z=span)
 /// shift = unit_x(factor=1.0)
 /// blocks = linear_array(geometry=block, direction=shift, count=2)
 /// fused = mesh_union(meshes=blocks)
@@ -50,17 +50,17 @@ mod tests {
     use cicada_geom::meshbuild::signed_volume;
 
     use super::*;
+    use crate::meshes::mesh_box::{MeshBoxIn, mesh_box};
     use crate::meshes::mesh_difference::{MeshDifferenceIn, mesh_difference};
     use crate::meshes::mesh_intersection::{MeshIntersectionIn, mesh_intersection};
-    use crate::solids::r#box::{BoxIn, box_};
     use crate::solids::support::config;
 
     #[test]
     fn mesh_union_table_cases() {
         let unit = |origin: f64| {
-            box_(
+            mesh_box(
                 &config(),
-                BoxIn {
+                MeshBoxIn {
                     plane: Plane {
                         origin: Point::new(origin, origin, origin),
                         ..Plane::world_xy()
@@ -88,18 +88,18 @@ mod tests {
             ax in 0.5..3.0_f64, ay in 0.5..3.0_f64, az in 0.5..3.0_f64,
             ox in -1.5..3.5_f64, oy in -1.5..3.5_f64, oz in -1.5..3.5_f64,
         ) {
-            let a = || box_(
+            let a = || mesh_box(
                 &config(),
-                BoxIn {
+                MeshBoxIn {
                     plane: Plane::world_xy(),
                     x: Domain::new(0.0, ax),
                     y: Domain::new(0.0, ay),
                     z: Domain::new(0.0, az),
                 },
             );
-            let b = || box_(
+            let b = || mesh_box(
                 &config(),
-                BoxIn {
+                MeshBoxIn {
                     plane: Plane {
                         origin: Point::new(ox, oy, oz),
                         ..Plane::world_xy()
@@ -127,9 +127,9 @@ mod tests {
     #[test]
     fn mesh_union_determinism_golden_hash() {
         let cube = |origin: f64| {
-            box_(
+            mesh_box(
                 &config(),
-                BoxIn {
+                MeshBoxIn {
                     plane: Plane {
                         origin: Point::new(origin, origin, origin),
                         ..Plane::world_xy()

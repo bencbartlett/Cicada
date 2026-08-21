@@ -30,7 +30,9 @@ pub struct RotateIn {
 ///
 /// # Panics
 ///
-/// Panics when the plane is degenerate (zero-length or parallel axes).
+/// Panics when the plane is degenerate (zero-length or parallel axes), or
+/// for a `Solid` the OCCT kernel refuses to transform (a `Solid` moves through
+/// the kernel — its B-rep geometry is rewritten, never a mesh in disguise).
 ///
 /// # Examples
 ///

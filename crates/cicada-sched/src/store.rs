@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-use cicada_core::geometry::{Circle, Curve, Line, Mesh, Polyline, Rectangle};
+use cicada_core::geometry::{Circle, Curve, Line, Mesh, Polyline, Rectangle, Solid};
 use cicada_core::hash::ValueHash;
 use cicada_core::scalar::{Color, Domain, IndexMap};
 use cicada_core::spatial::{Plane, Point, Vector, Xform};
@@ -197,9 +197,13 @@ pub struct OpenReport {
 /// before the marker existed does — switching such an engine onto a store
 /// written by a newer one drops the memo table once, loudly but with a
 /// misleading diagnosis). **Bump it in the same commit that adds a
-/// `LogRecord` variant.** History: 1 = `Memo`/`Sample`/`Unmemo` (the
-/// spike); 2 = `MemoCost` (v0.1 item 3b).
-pub const LOG_FORMAT: u32 = 2;
+/// `LogRecord` variant** — or a [`StoredValue`] variant: a value blob an
+/// older engine cannot decode is quarantined as corruption (moved aside,
+/// forgotten from the pack), which is the same misdiagnosis the marker
+/// exists to prevent. History: 1 = `Memo`/`Sample`/`Unmemo` (the spike);
+/// 2 = `MemoCost` (v0.1 item 3b); 3 = `StoredValue::Solid` (v0.1 item 3
+/// WP-B).
+pub const LOG_FORMAT: u32 = 3;
 
 /// Compressed blobs up to this size live in the append-only pack file
 /// (`values/pack.bin`) instead of one file each. A cold wall-scale solve
@@ -445,6 +449,11 @@ enum StoredValue {
         positions: Vec<f64>,
         indices: Vec<u32>,
     },
+    /// A B-rep solid's canonical bytes (v0.1 item 3 WP-B) — stored as the
+    /// value holds them; the kernel is never consulted to store or load.
+    Solid {
+        bytes: Vec<u8>,
+    },
 }
 
 /// On-disk curve encoding, one variant per analytic curve kind. Same
@@ -510,6 +519,9 @@ fn to_stored(data: &ValueData) -> StoredValue {
                 y: [rectangle.y.start, rectangle.y.end],
             },
         }),
+        ValueData::Solid(solid) => StoredValue::Solid {
+            bytes: solid.bytes().to_vec(),
+        },
         ValueData::Mesh(mesh) => StoredValue::Mesh {
             positions: mesh.positions().to_vec(),
             indices: mesh.indices().to_vec(),
@@ -1618,6 +1630,16 @@ impl DiskStore {
                 // way in) — surfaced as ValueRejected, quarantined by the
                 // caller like every bad blob.
                 ValueData::Mesh(Mesh::new(positions, indices).map_err(|error| {
+                    StoreError::ValueRejected {
+                        message: error.to_string(),
+                    }
+                })?)
+            }
+            StoredValue::Solid { bytes } => {
+                // The header check is all core can do without the kernel;
+                // a blob failing it is corruption, quarantined like a bad
+                // mesh. The hash check after hydration covers the rest.
+                ValueData::Solid(Solid::from_canonical_bytes(bytes).map_err(|error| {
                     StoreError::ValueRejected {
                         message: error.to_string(),
                     }

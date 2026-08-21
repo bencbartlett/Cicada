@@ -1,0 +1,136 @@
+# The signature ledger (cicada-stdlib/tests/conformance.rs): what each
+# (name, version) has meant — signature, then the key-relevant flags.
+# Regenerate with CICADA_BLESS_SIGNATURES=1; never by hand.
+# name	version	signature	flags
+absolute	1	absolute(x: Number) → Number	
+acos	1	acos(x: Number) → Number	
+add	1	add(a: Number, b: Number) → Number	
+and	1	and(a: Boolean, b: Boolean) → Boolean	
+area	1	area(curve: Closed<Curve>) → (area: Number, centroid: Point)	uses_tolerance
+as_closed	1	as_closed(curve: Curve) → Closed<Curve>	uses_tolerance
+as_watertight	1	as_watertight(mesh: Mesh) → Watertight<Mesh>	
+asin	1	asin(x: Number) → Number	
+atan	1	atan(x: Number) → Number	
+atan2	1	atan2(y: Number, x: Number) → Number	
+average	1	average(list: [Number]) → Number	
+bounding_box	1	bounding_box(geometry: [Geometry], plane: Plane = xy_plane) → Solid	uses_tolerance
+bounds	1	bounds(list: [Number]) → Domain	
+box	1	box(plane: Plane = xy_plane, x: Domain, y: Domain, z: Domain) → Watertight<Mesh>	uses_tolerance
+box	2	box(plane: Plane = xy_plane, x: Domain, y: Domain, z: Domain) → Solid	uses_tolerance
+ceiling	1	ceiling(x: Number) → Number	
+chunk	1	chunk(list: [E], size: Integer) → [[E]]	
+circle	1	circle(plane: Plane = xy_plane, radius: Number) → Closed<Curve>	uses_tolerance
+compact	1	compact(list: [E?]) → (values: [E], map: IndexMap)	
+concat	1	concat(a: [E], b: [E]) → [E]	
+cone	1	cone(plane: Plane = xy_plane, radius: Number, height: Number) → Solid	uses_tolerance
+construct_domain	1	construct_domain(start: Number, end: Number) → Domain	
+construct_plane	1	construct_plane(origin: Point = origin, x: Vector = unit_x, y: Vector = unit_y) → Plane	uses_tolerance
+construct_point	1	construct_point(x: Number = 0.0, y: Number = 0.0, z: Number = 0.0) → Point	
+cos	1	cos(x: Number) → Number	
+cull	1	cull(list: [E], pattern: [Boolean]) → (kept: [E], map: IndexMap)	
+custom_preview	1	custom_preview(geometry: Geometry, color: Color = white) → ()	
+cylinder	1	cylinder(plane: Plane = xy_plane, radius: Number, height: Number) → Solid	uses_tolerance
+deconstruct_domain	1	deconstruct_domain(domain: Domain) → (start: Number, end: Number)	
+deconstruct_point	1	deconstruct_point(point: Point) → (x: Number, y: Number, z: Number)	
+deconstruct_solid	1	deconstruct_solid(solid: Solid, deflection: Number = 0.01) → (edges: [Curve], vertices: [Point], face_count: Integer)	uses_tolerance
+degrees	1	degrees(radians: Number) → Number	
+dispatch	1	dispatch(list: [E], pattern: [Boolean]) → (a: [E], b: [E], map_a: IndexMap, map_b: IndexMap)	
+divide	1	divide(a: Number, b: Number) → Number	
+divide_curve	1	divide_curve(curve: Curve, count: Integer = 10) → (points: [Point], tangents: [Vector], parameters: [Number])	uses_tolerance
+duplicate	1	duplicate(item: E, count: Integer) → [E]	
+equals	1	equals(a: Number, b: Number, tolerance: Number = 0.0) → Boolean	
+exp	1	exp(x: Number) → Number	
+export_obj	1	export_obj(meshes: [Mesh], path: Text) → ()	effectful
+export_step	1	export_step(solids: [Solid], path: Text) → ()	uses_tolerance,effectful
+extrude	1	extrude(profile: Closed<Curve>, direction: Vector, segments: Integer = 64) → Watertight<Mesh>	uses_tolerance
+extrude	2	extrude(profile: Closed<Curve>, direction: Vector) → Solid	uses_tolerance
+extrude_to_point	1	extrude_to_point(profile: Closed<Curve>, apex: Point) → Solid	uses_tolerance
+flatten	1	flatten(list: [[E]]) → [E]	
+floor	1	floor(x: Number) → Number	
+group_by	1	group_by(keys: [Number], values: [E]) → (groups: [[E]], keys: [Number])	
+import_step	1	import_step(path: Text) → [Solid]	uses_tolerance,volatile
+insert_items	1	insert_items(list: [E], items: [E], indices: [Integer]) → [E]	
+item	2	item(list: [E], index: Integer, wrap: Boolean = false) → E	
+jitter	1	jitter(list: [E], strength: Number = 1.0, seed: Integer) → (list: [E], map: IndexMap)	
+larger	1	larger(a: Number, b: Number) → Boolean	
+length	1	length(list: [E]) → Integer	
+line	1	line(a: Point, b: Point) → Curve	
+linear_array	1	linear_array(geometry: T, direction: Vector, count: Integer) → [T]	
+ln	1	ln(x: Number) → Number	
+loft	1	loft(start: Closed<Curve>, end: Closed<Curve>, segments: Integer = 64) → Watertight<Mesh>	uses_tolerance
+loft	2	loft(profiles: [Closed<Curve>], ruled: Boolean = true) → Solid	uses_tolerance
+log	1	log(x: Number, base: Number = 10.0) → Number	
+mass_addition	1	mass_addition(list: [Number]) → (result: Number, partial: [Number])	
+max	1	max(a: Number, b: Number) → Number	
+mesh_box	1	mesh_box(plane: Plane = xy_plane, x: Domain, y: Domain, z: Domain) → Watertight<Mesh>	uses_tolerance
+mesh_difference	1	mesh_difference(mesh: Watertight<Mesh>, cutters: [Watertight<Mesh>]) → Watertight<Mesh>	
+mesh_extrude	1	mesh_extrude(profile: Closed<Curve>, direction: Vector, segments: Integer = 64) → Watertight<Mesh>	uses_tolerance
+mesh_intersection	1	mesh_intersection(a: Watertight<Mesh>, b: Watertight<Mesh>) → Watertight<Mesh>	
+mesh_loft	1	mesh_loft(start: Closed<Curve>, end: Closed<Curve>, segments: Integer = 64) → Watertight<Mesh>	uses_tolerance
+mesh_sphere	1	mesh_sphere(plane: Plane = xy_plane, radius: Number, segments: Integer = 32) → Watertight<Mesh>	uses_tolerance
+mesh_union	1	mesh_union(meshes: [Watertight<Mesh>]) → Watertight<Mesh>	
+min	1	min(a: Number, b: Number) → Number	
+mirror	1	mirror(geometry: T, plane: Plane = xy_plane) → T	uses_tolerance
+modulo	1	modulo(a: Number, b: Number) → Number	
+move	1	move(geometry: T, motion: Vector) → T	
+multiply	1	multiply(a: Number, b: Number) → Number	
+negative	1	negative(x: Number) → Number	
+nest	1	nest(list: [E]) → [[E]]	
+not	1	not(x: Boolean) → Boolean	
+or	1	or(a: Boolean, b: Boolean) → Boolean	
+orient	1	orient(geometry: T, source: Plane, target: Plane) → T	uses_tolerance
+pad_last	1	pad_last(list: [E], count: Integer) → [E]	
+panel	1	panel(data: Any) → ()	
+partition	1	partition(list: [E], sizes: [Integer]) → [[E]]	
+pick	1	pick(pattern: Boolean, true: E, false: E) → E	
+pipe	1	pipe(rail: Curve, radius: Number) → Solid	uses_tolerance
+polyline	1	polyline(vertices: [Point], closed: Boolean = false) → Curve	
+power	1	power(a: Number, b: Number) → Number	
+radians	1	radians(degrees: Number) → Number	
+random	1	random(domain: Domain, count: Integer, seed: Integer) → [Number]	
+range	1	range(domain: Domain, steps: Integer) → [Number]	
+rectangle	1	rectangle(plane: Plane = xy_plane, x: Domain, y: Domain) → Closed<Curve>	uses_tolerance
+remap	1	remap(value: Number, source: Domain, target: Domain) → Number	
+repeat	1	repeat(pattern: [E], count: Integer) → [E]	
+reverse	1	reverse(list: [E]) → [E]	
+revolve	1	revolve(profile: Closed<Curve>, axis: Curve, angle: Domain = full turn) → Solid	uses_tolerance
+rotate	1	rotate(geometry: T, angle: Number, plane: Plane = xy_plane) → T	uses_tolerance
+round	1	round(x: Number) → Number	
+scale	1	scale(geometry: T, center: Point = origin, factor: Number) → T	uses_tolerance
+section	1	section(solid: Solid, plane: Plane = xy_plane, deflection: Number = 0.01) → [Closed<Curve>]	uses_tolerance
+section	2	section(solid: Solid, plane: Plane = xy_plane, deflection: Number = 0.01) → [Closed<Curve>]	uses_tolerance
+series	1	series(start: Number = 0.0, step: Number = 1.0, count: Integer) → [Number]	
+shift_list	1	shift_list(list: [E], offset: Integer, wrap: Boolean = true) → [E]	
+sin	1	sin(x: Number) → Number	
+slider	1	slider(value: Number, min: Number = 0.0, max: Number = 10.0, step: Number = 0.0) → Number	
+smaller	1	smaller(a: Number, b: Number) → Boolean	
+solid_difference	1	solid_difference(solid: Solid, cutters: [Solid]) → Solid	
+solid_intersection	1	solid_intersection(a: Solid, b: Solid) → Solid	
+solid_union	1	solid_union(solids: [Solid]) → Solid	
+sort	1	sort(keys: [Number], values: [E]) → (keys: [Number], sorted: [E], map: IndexMap)	
+sphere	1	sphere(plane: Plane = xy_plane, radius: Number, segments: Integer = 32) → Watertight<Mesh>	uses_tolerance
+sphere	2	sphere(plane: Plane = xy_plane, radius: Number) → Solid	uses_tolerance
+split_list	1	split_list(list: [E], index: Integer) → (a: [E], b: [E])	
+sqrt	1	sqrt(x: Number) → Number	
+subtract	1	subtract(a: Number, b: Number) → Number	
+sweep	1	sweep(rail: Curve, profile: Closed<Curve>) → Solid	uses_tolerance
+tan	1	tan(x: Number) → Number	
+tessellate	1	tessellate(solid: Solid, deflection: Number = 0.01, angle: Number = 0.1) → Watertight<Mesh>	uses_tolerance
+tessellate	2	tessellate(solid: Solid, deflection: Number = 0.01, angle: Number = 0.1) → Watertight<Mesh>	
+text_outlines	1	text_outlines(text: Text, size: Number, plane: Plane = xy_plane, font: Text = "DejaVu Sans Bold", segments: Integer = 8, line_gap: Number = 1.35) → [Closed<Curve>]	uses_tolerance
+text_solids	1	text_solids(text: Text, size: Number, depth: Number, plane: Plane = xy_plane, font: Text = "DejaVu Sans Bold", segments: Integer = 8, line_gap: Number = 1.35) → [Watertight<Mesh>]	uses_tolerance
+text_tag	1	text_tag(location: Plane, text: Text, size: Number = 1.0) → ()	
+toggle	1	toggle(value: Boolean) → Boolean	
+transpose	1	transpose(list: [[E]]) → [[E]]	
+truncate	1	truncate(list: [E], count: Integer) → [E]	
+unit_x	1	unit_x(factor: Number = 1.0) → Vector	
+unit_y	1	unit_y(factor: Number = 1.0) → Vector	
+unit_z	1	unit_z(factor: Number = 1.0) → Vector	
+vector_2pt	1	vector_2pt(a: Point, b: Point, unitize: Boolean = false) → Vector	uses_tolerance
+volume	1	volume(solid: Solid) → (volume: Number, centroid: Point)	
+voronoi	1	voronoi(seeds: [Point], boundary: Closed<Curve>, segments: Integer = 64) → (cells: [Closed<Curve>])	uses_tolerance
+weave	1	weave(pattern: [Integer], a: [E], b: [E]) → [E]	
+xor	1	xor(a: Boolean, b: Boolean) → Boolean	
+xy_plane	1	xy_plane(origin: Point = origin) → Plane	
+xz_plane	1	xz_plane(origin: Point = origin) → Plane	
+yz_plane	1	yz_plane(origin: Point = origin) → Plane	

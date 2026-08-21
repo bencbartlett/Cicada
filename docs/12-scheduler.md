@@ -106,7 +106,11 @@ Two levels:
 an append-only record enum, so every older log replays under a newer
 engine. The other direction is guarded by a marker: the store root
 carries a `format` file naming the newest record kind the log may hold
-(`LOG_FORMAT`; 1 = the spike's records, 2 = entries with cost), and an
+(`LOG_FORMAT`; 1 = the spike's records, 2 = entries with cost, 3 = the
+`Solid` blob kind — a VALUE codec variant rather than a record variant,
+bumped for the same reason: an engine that cannot decode a Solid blob
+treats the memo that promised it as broken, tombstones it and
+recomputes — silently discarding a newer engine's valid work), and an
 engine that finds a higher number there refuses loudly ("written by a
 newer engine") instead of reading the records it cannot decode as
 corruption and truncating the log at the first of them. Adding a
@@ -142,6 +146,83 @@ What gets cached beyond outputs: node status (counts, warnings),
 measured cost samples (feeds ETA), and **display artifacts** —
 tessellations and GPU-ready buffers are themselves costed, cached
 operations keyed like everything else (display is a first-class edge).
+
+### Display cache (as shipped — v0.1 item 3 WP-B; tiers, the worker-pool warm-up and negative entries 2026-08-21)
+
+The first display artifact with a cache of its own is the **solid
+tessellation**: a `Solid` is its kernel's canonical bytes (DECISIONS.md
+row 42), so drawing one means asking OCCT to mesh those bytes at the
+generation's display tier (docs/03 §Display tessellation: the preview
+deflection for a slider drag's generations, the fine one for structural
+generations, the release, a joining client and the inspector). That
+work lives in `cicada-server::display::SolidCache`, one instance per
+session (`Core.solids`), NOT in the value store and NOT in the value:
+
+- **Key**: the solid's value hash plus the TIER deflection it was meshed
+  at (the deflection is a pure function of `ProjectConfig` and the tier,
+  so a tolerance or unit change misses exactly as it should; the
+  per-solid relative term is a function of the solid and needs no place
+  in the key; the bytes never learn about display).
+- **Value**: the welded display mesh sealed as a `HashedValue` (its hash
+  is the wire blob's key — see Frames), the face count, and whether the
+  mesh closed — one kernel reconstruction serves the frames and the
+  inspector summary ("Solid, N faces, bbox", `watertight`).
+- **Where it is computed**: by the solve loop, not the broadcaster. When
+  a generation completes, the session reads (under a short lock hold)
+  which outputs will draw and are not yet on screen at this tier, loads
+  their values, and tessellates every DISTINCT solid among them on the
+  scheduler's worker pool in parallel (`Scheduler::map_parallel`,
+  `display::distinct_solids`) — then takes its lock to encode and
+  broadcast, and every tessellation is a hit. Intents keep flowing
+  through the tessellation; the next generation waits for it (the loop
+  is sequential), which is the right order — a generation's display is
+  part of its work. Measured (release, the review's 300-hole bar, 303
+  distinct solids): a 5.26 s generation for a 0.5 s solve became 1.19 s
+  for a 0.34 s solve at the fine tier (docs/17 §Item 3 has the table).
+- **Tiers on screen**: the session records the tier each output was
+  drawn at; an output already showing this value at this tier or a finer
+  one is not re-sent, one showing it at the preview tier is redrawn by
+  the next fine generation (the release), and a joining client is
+  restreamed at whatever tier is on screen — all hits.
+- **Bound**: bytes of mesh buffers as uploaded, default 256 MiB,
+  evicted least-recently-used — a recency index (touch stamp → key in a
+  `BTreeMap`) makes every touch and every eviction O(log entries), so a
+  display pass over N distinct solids costs O(N log entries) however
+  full the cache is, never O(N × entries). Eviction costs a
+  re-tessellation, never correctness. A tessellation larger than the
+  whole budget is served but never kept (counted as `oversized`):
+  keeping it would evict everything else for an entry that still does
+  not fit. **Refusals are cached too** (negative entries under the same
+  key, sized by their text, evicted like any entry, counted as
+  `refusals`): a solid whose bytes the kernel refuses, or whose mesher
+  fails after doing its work, is refused from the cache on the next
+  pass instead of re-paying the kernel call — the earlier claim that "a
+  refusal fails at the read and is cheap" was false for the mesher
+  class, and a corrected value is a new hash that misses as it should.
+  A mesh that merely did not close is NOT a refusal: it is drawn and
+  reported (docs/03 §Display tessellation, closure policy).
+- **Observable**: `/debug/state` → `display_cache` carries `entries`,
+  `bytes`, `budget`, `hits`, `misses`, `evictions`, `oversized`,
+  `refusals` (additive; asserted by the session's debug-state test and
+  listed in docs/13); an output's display `stats` carry `tier`
+  (`preview` / `fine`, when a solid was drawn), `warnings` (a solid
+  drawn although its mesh did not close) and `errors` (a solid that
+  could not be drawn, with the kernel's reason) — never silently.
+- **Frames**: a tessellated solid emits the ordinary mesh frames
+  (`frames.rs` unchanged); the instancing/blob key is the DISPLAY MESH's
+  own value hash — content-addressed like a `Mesh` value's frames, so
+  identical solids at one tier travel once as a blob, the same solid at
+  another tier is another blob (the client caches blobs by hash forever
+  and drops a re-sent hash: a deflection-dependent mesh under a
+  deflection-independent key would have drawn stale), and a mesh-valued
+  twin of the tessellation would share the blob.
+
+It is the in-memory, per-session form of the "display is a first-class
+edge" idea above; promoting tessellations into the costed, persisted
+store (so a warm reopen draws without the kernel, and a superseded
+tick's tessellation can be cancelled like a node) is the follow-up
+named in docs/17, and the cache's key is already the one such a store
+would use.
 
 ## Solve generations
 
