@@ -453,7 +453,7 @@ mod tests {
         DiskStore, Input, MonotonicClock, NodeDecl, NodeOutcome, SchedulerConfig, SolveGraph,
     };
     use std::collections::{BTreeMap, HashMap};
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
 
     struct Recorder {
         starts: AtomicUsize,
@@ -624,12 +624,19 @@ mod tests {
         );
         let last = Last::new();
         let runs = Arc::new(AtomicUsize::new(0));
+        // The FIRST run blocks on this gate until the test has streamed the
+        // newer previews — no sleeps, no wall clock: the outcome is the
+        // same on a loaded CI runner as on the dev machine.
+        let gate = Arc::new(AtomicBool::new(false));
         let solve = SolveLoop::new(scheduler, last.clone());
-        let slow = |x: f64, runs: Arc<AtomicUsize>| -> Arc<Lowered> {
+        let slow = |x: f64, runs: Arc<AtomicUsize>, gate: Arc<AtomicBool>| -> Arc<Lowered> {
             let run: cicada_sched::NodeFn =
                 Arc::new(move |_ctx, inputs: &[Option<Arc<HashedValue>>]| {
-                    runs.fetch_add(1, Ordering::SeqCst);
-                    std::thread::sleep(std::time::Duration::from_millis(40));
+                    if runs.fetch_add(1, Ordering::SeqCst) == 0 {
+                        while !gate.load(Ordering::SeqCst) {
+                            std::thread::yield_now();
+                        }
+                    }
                     let a = inputs[0].as_ref().unwrap();
                     let ValueData::Number(a) = a.data() else {
                         panic!()
@@ -659,21 +666,25 @@ mod tests {
             })
         };
         solve.submit(Job {
-            lowered: slow(1.0, runs.clone()),
+            lowered: slow(1.0, runs.clone(), gate.clone()),
             targets: vec![NodeId(0)],
             kind: JobKind::Preview,
             submitted: Instant::now(),
         });
-        // Let it start, then stream newer previews: none may cancel it.
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        // Wait until the first generation is RUNNING (its node holds the
+        // gate), then stream newer previews: none may cancel it.
+        while runs.load(Ordering::SeqCst) == 0 {
+            std::thread::yield_now();
+        }
         for x in 2..6 {
             solve.submit(Job {
-                lowered: slow(f64::from(x), runs.clone()),
+                lowered: slow(f64::from(x), runs.clone(), gate.clone()),
                 targets: vec![NodeId(0)],
                 kind: JobKind::Preview,
                 submitted: Instant::now(),
             });
         }
+        gate.store(true, Ordering::SeqCst);
         solve.wait_idle();
         let report = last.report.lock().unwrap().clone().unwrap();
         assert!(!report.cancelled, "the newest preview ran to completion");

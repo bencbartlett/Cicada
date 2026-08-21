@@ -33,8 +33,8 @@ jobs:
   # DYLD_LIBRARY_PATH (SIP strips DYLD_* from protected processes, and conda's
   # dylibs carry @loader_path rpaths, so the executable's rpath is enough).
   # This is also where cross-OS identity of the canonical-bytes golden hashes
-  # is measured (per-OS goldens until the three agree — the policy drafted in
-  # docs/probes/occt-2026-08.md §4d; docs/17 Item 3 tracks its ledger row).
+  # is measured (per-OS goldens until the three agree — DECISIONS.md row 42,
+  # revised 2026-08-20; the probe memo docs/probes/occt-2026-08.md §4d drafted it).
   occt-matrix:
     name: occt (${{ matrix.os }})
     strategy:
@@ -144,6 +144,52 @@ jobs:
           name: corpus-report
           path: ${{ runner.temp }}/corpus-report.md
           retention-days: 14
+
+  # The wall-scale Playwright spec(s): minutes of solve and a ~350 MB display
+  # restream per page on a 2-vCPU runner — nightly, not per PR (the per-PR
+  # smoke skips them: CICADA_E2E_HEAVY gates them in the spec files).
+  playwright-heavy:
+    name: Playwright heavy (wall)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Prime the Manifold kernel build (retry once — belt; see AGENTS.md)
+        run: cargo build --locked -p cicada-geom || cargo build --locked -p cicada-geom
+      - name: Build the SPA
+        working-directory: web
+        run: npm ci && npm run build
+      - name: Build cicada with the SPA embedded (the release shape)
+        run: cargo build --locked -p cicada-cli --features embed
+      - name: Install the Playwright browser
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Heavy specs
+        working-directory: web
+        env:
+          CICADA_EMBEDDED: "1"
+          CICADA_E2E_HEAVY: "1"
+          CICADA_BIN: ${{ github.workspace }}/target/debug/cicada
+        run: npx playwright test e2e/compute_on_release.spec.ts
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        continue-on-error: true
+        with:
+          name: playwright-heavy-report
+          path: |
+            web/playwright-report
+            web/test-results
+          retention-days: 7
 
   benchmarks:
     name: criterion benchmarks (stub — stage 4+)

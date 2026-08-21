@@ -114,6 +114,42 @@ async function dragTo(page: Page, slider: ReturnType<Page["getByTestId"]>, x: nu
 
 test.describe.configure({ mode: "serial" });
 
+// Wall-scale: the 1,200-part carve solves for minutes on a 2-vCPU runner and
+// its display set (~350 MB of frames) streams to every page over the one
+// socket — the per-PR smoke is not the place for it. The nightly
+// `Playwright heavy (wall)` job sets CICADA_E2E_HEAVY=1.
+test.skip(
+  !process.env.CICADA_E2E_HEAVY,
+  "wall-scale spec — run with CICADA_E2E_HEAVY=1 (the nightly heavy job, or locally)",
+);
+
+/**
+ * Wait until the page has stopped receiving display frames for `quietMs`:
+ * a fresh page (writer or observer) receives the WHOLE display set on the
+ * socket it shares with the control plane, and text frames queue behind it
+ * (docs/17 §Follow-ups). The spec's preconditions are "the wall is solved
+ * AND its frames are in" — not "the machine is fast".
+ */
+async function waitForFramesToSettle(page: Page, quietMs: number, timeoutMs: number): Promise<void> {
+  const started = Date.now();
+  let last = -1;
+  let quietSince = Date.now();
+  for (;;) {
+    const counters = await page.evaluate(() => {
+      const handle = (window as unknown as { __cicada?: { frames?: () => { received: number } } }).__cicada;
+      return handle?.frames ? handle.frames().received : -1;
+    });
+    if (counters !== last) {
+      last = counters;
+      quietSince = Date.now();
+    } else if (Date.now() - quietSince >= quietMs) {
+      return;
+    }
+    if (Date.now() - started > timeoutMs) throw new Error(`display frames still arriving after ${timeoutMs} ms (received ${counters})`);
+    await page.waitForTimeout(250);
+  }
+}
+
 test("a deboss drag shows `pending · N s` while held, paints no computing preview, and solves once on release", async ({
   page,
 }, testInfo) => {
@@ -144,6 +180,9 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
   const baselineGeneration = initial.solve.last_complete_generation ?? 0;
   expect(baselineGeneration).toBeGreaterThan(0);
   expect(await storePending(page), "nothing pending before any drag").toBeNull();
+
+  // The display set must be IN before the drag (see waitForFramesToSettle).
+  await waitForFramesToSettle(page, 2_000, 180_000);
 
   // ---- the drag: the params panel's range input for `deboss`, a real
   // pointer drag from 30 % to 90 % of the track, held down at the end.
@@ -240,6 +279,8 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
   observer.on("pageerror", (error) => observerErrors.push(`pageerror: ${error.message}`));
   await observer.goto(`/?token=${TOKEN}&pipeline=${PIPELINE}`);
   await expect(observer.getByTestId("app")).toBeVisible();
+  // The observer, too, first receives the whole display set.
+  await waitForFramesToSettle(observer, 2_000, 180_000);
   await observer.getByTestId("insp-tab-params").click();
   await expect(observer.getByTestId("param-deboss")).toBeVisible();
   await expect(observer.getByTestId("widget-deboss"), "the second page observes").toBeDisabled();
