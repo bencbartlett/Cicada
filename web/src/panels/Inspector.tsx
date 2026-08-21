@@ -112,6 +112,9 @@ function NodeInspect({ name, extra }: { name: string; extra: number }) {
   const token = useCicada((s) => s.token);
   const selectNodes = useCicada((s) => s.selectNodes);
   const catalog = useCicada((s) => s.catalog);
+  // Until the catalog arrives, the snapshot's driven set stands in for its
+  // `transport_driven` flag (`transportDrivenSignal`); a constant afterwards.
+  const preCatalogDriven = useCicada((s) => (s.catalog === null ? s.transport?.view.driven : undefined));
   const setTab = useInspectorTab((s) => s.setTab);
   const [runBusy, setRunBusy] = useState(false);
   const inspected = useRef<string>("");
@@ -148,7 +151,12 @@ function NodeInspect({ name, extra }: { name: string; extra: number }) {
   const driven: [InputView, DrivenSignal][] = [];
   const inputs: InputView[] = [];
   for (const input of node.inputs) {
-    const signal = transportDrivenSignal(catalog, node.func, input.name);
+    const signal = transportDrivenSignal(
+      catalog,
+      node.func,
+      input.name,
+      preCatalogDriven?.find((d) => d.node === name && d.port === input.name),
+    );
     if (signal === undefined) inputs.push(input);
     else driven.push([input, signal]);
   }

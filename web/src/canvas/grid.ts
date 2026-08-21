@@ -5,7 +5,7 @@
  * lives in `state/literals.ts` — ONE rule for canvas and panels — and is
  * re-exported here for the canvas modules.
  */
-import type { Catalog, CatalogNode, DrivenSignal, NodeStatus, ProbeCatalogEntry } from "../protocol/messages";
+import type { Catalog, CatalogNode, DrivenSignal, DrivenView, NodeStatus, ProbeCatalogEntry } from "../protocol/messages";
 
 export { paramValueText } from "../state/literals";
 
@@ -179,12 +179,22 @@ export function outputDoc(catalog: Catalog | null, func: string | undefined, por
  * never a wire target (`probe_wire` answers `blocked`, `connect` refuses);
  * a kwarg or wire a human wrote for it by hand stays in the text as the
  * headless value / source, shown and removable, never edited here.
+ *
+ * Until the catalog has arrived — it is fetched over HTTP beside the
+ * socket's snapshot, so the first paint can precede it — the snapshot's
+ * own `driven` set stands in: `driving` is this port's entry in the last
+ * `TransportView` heard, and its `signal` is the answer, so a port the
+ * transport is feeding never paints as an ordinary input (handle, literal
+ * editor) for even one frame. Once the catalog is here it decides alone:
+ * a port of a red `cycle` is driven by nature, in the driven set or not.
  */
 export function transportDrivenSignal(
   catalog: Catalog | null,
   func: string | undefined,
   port: string,
+  driving?: DrivenView,
 ): DrivenSignal | undefined {
+  if (catalog === null) return driving?.signal;
   const entry = catalogEntry(catalog, func);
   return entry === undefined ? undefined : drivenSignalOf(entry, port);
 }

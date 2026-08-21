@@ -35,23 +35,36 @@ export function TransportBar() {
   // server's answer lands), else null = follow the view.
   const [scrub, setScrub] = useState<number | null>(null);
   const scrubbing = useRef(false);
-  // The intent id of the latest seek, and whether the server refused it
-  // (a refusal is unicast with the intent's id and broadcasts no view, so
-  // it is the one answer the `transport` effect below never sees).
-  const lastSeek = useRef<string | null>(null);
-  const lastSeekRefused = useRef(false);
+  // The latest seek: its intent id and frame, and whether the server has
+  // answered it — a `transport` broadcast naming its frame (accepted), or
+  // an `error` with its id (refused: unicast, and it broadcasts no view,
+  // so it is the one answer the `transport` effect below never sees).
+  // Answered is a sticky fact about THAT seek, not a comparison with the
+  // current view: a foreign view landing after the answer (a reload, a
+  // control by the client that took the lease) changes the view, not
+  // whether the seek was answered.
+  const lastSeek = useRef<{ id: string; frame: number } | null>(null);
+  const lastSeekAnswered = useRef(false);
 
   // A new view from the server (the seek's own broadcast, Esc, a reload)
-  // takes the thumb back unless the pointer is still down.
+  // takes the thumb back unless the pointer is still down — then it is
+  // noted as the latest seek's answer if it names the sought frame, for
+  // the release to act on.
   useEffect(() => {
-    if (!scrubbing.current) setScrub(null);
+    if (!scrubbing.current) {
+      setScrub(null);
+      return;
+    }
+    if (transport !== null && lastSeek.current !== null && transport.view.frame === lastSeek.current.frame) {
+      lastSeekAnswered.current = true;
+    }
   }, [transport]);
 
   // The latest seek was refused: the view stands, and so must the thumb —
   // back to the view now, or at the release if the pointer is still down.
   useEffect(() => {
-    if (lastError === null || lastError.intentId === undefined || lastError.intentId !== lastSeek.current) return;
-    lastSeekRefused.current = true;
+    if (lastError === null || lastError.intentId === undefined || lastError.intentId !== lastSeek.current?.id) return;
+    lastSeekAnswered.current = true;
     if (!scrubbing.current) setScrub(null);
   }, [lastError]);
 
@@ -64,16 +77,17 @@ export function TransportBar() {
   const play = () => send({ type: view.playing ? "transport_pause" : "transport_play", payload: {} });
   const seek = (next: number) => {
     setScrub(next);
-    lastSeekRefused.current = false;
-    lastSeek.current = send({ type: "transport_seek", payload: { frame: next } });
+    lastSeekAnswered.current = false;
+    lastSeek.current = { id: send({ type: "transport_seek", payload: { frame: next } }), frame: next };
   };
   // The pointer came up: hand the thumb back now if the server's answer to
-  // the last seek already landed while the pointer was down — the view
-  // names the sought frame, or the seek was refused — since nothing later
-  // would clear it; otherwise the answer clears it when it arrives.
+  // the last seek already landed while the pointer was down — accepted or
+  // refused — since nothing later would clear it, and whatever view stands
+  // now (the answer's, or a later one's) is the server's; otherwise the
+  // answer clears it when it arrives.
   const released = () => {
     scrubbing.current = false;
-    setScrub((held) => (held !== null && (held === view.frame || lastSeekRefused.current) ? null : held));
+    setScrub((held) => (held !== null && lastSeekAnswered.current ? null : held));
   };
   const drivenLabel =
     view.driven.length === 1

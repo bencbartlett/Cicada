@@ -13,8 +13,13 @@
  *     op, no delta;
  *   - the second pass of the loop is pure cache playback: 0 computed, every
  *     node `cached`;
- *   - Space pauses (the transport broadcast says so); `wait=true` is the
- *     quiet oracle only while paused, so every wait follows a pause;
+ *   - Esc pauses — on the WARM loop, with no generation running at the
+ *     keypress — and Space resumes / pauses (the transport broadcast says
+ *     so each time); `wait=true` is the quiet oracle only while paused, so
+ *     every wait follows a pause;
+ *   - Space typed into a text field plays nothing: the search box (its own
+ *     handler keeps the key) and the params panel's number input (whose
+ *     keydown reaches the window router — the text-entry gate alone stops it);
  *   - a scrub is a seek that paints the frame it names — the server's frame
  *     IS the thumb's, including on the frames a nominal seek used to land
  *     short of (the engine's `Playhead::at_frame`), and the display
@@ -170,6 +175,21 @@ test("play bar: play → frames advance, file untouched; second loop cached; Spa
     .poll(async () => lastFrameGeneration(page), { timeout: 20_000 })
     .toBeGreaterThan(0);
 
+  // ---- Space typed into a text field is typing, not the hotkey (the
+  // text-entry gate; docs/16 Space row): the search box takes "cycle " and
+  // nothing plays, no notice is raised.
+  await page.locator(".react-flow__pane").click({ position: { x: 20, y: 20 } });
+  await page.keyboard.press("Control+f");
+  const search = page.getByTestId("search-input");
+  await expect(search).toBeFocused();
+  await search.pressSequentially("cycle ");
+  await expect(search).toHaveValue("cycle ");
+  await page.keyboard.press("Escape");
+  await expect(search).toHaveCount(0);
+  expect((await debugState(page, true)).transport.playing, "typing a space played nothing").toBe(false);
+  await expect(transport).toHaveAttribute("data-playing", "false");
+  await expect(page.locator(".notice")).toHaveCount(0);
+
   // ---- the hidden port: `spin.frame` has no handle and no literal editor on
   // the node — its row shows the transport — and in the inspector it is under
   // `transport`, not `inputs`.
@@ -230,8 +250,25 @@ test("play bar: play → frames advance, file untouched; second loop cached; Spa
     )
     .toEqual({ computed: 0, cached: 15 });
 
-  // ---- Space pauses: the server says so, and the bar follows the broadcast.
+  // ---- Esc pauses (docs/13 §Animation transport; DECISIONS.md time row;
+  // the orbit's header) — on the WARM loop, where every frame is a
+  // sub-millisecond cache read and no generation is running at the instant
+  // of the keypress: the client sends `cancel` on the last view heard, the
+  // server pauses and broadcasts, the bar follows. (The review reproduced
+  // 5/5 presses leaving the loop playing when Esc was gated on `running`.)
   await page.locator(".react-flow__pane").click({ position: { x: 20, y: 20 } });
+  await page.keyboard.press("Escape");
+  await expect(transport).toHaveAttribute("data-playing", "false");
+  await expect(page.getByTestId("tr-play")).toHaveAttribute("aria-label", "play");
+  const escaped = await debugState(page, true);
+  expect(escaped.transport.playing, "Esc paused the server's transport").toBe(false);
+  expect(escaped.text_hash).toBe(textHash);
+
+  // ---- Space resumes; Space pauses: the server says so each time, and the
+  // bar follows the broadcast.
+  await page.keyboard.press("Space");
+  await expect(transport).toHaveAttribute("data-playing", "true");
+  expect((await debugState(page, false)).transport.playing).toBe(true);
   await page.keyboard.press("Space");
   await expect(transport).toHaveAttribute("data-playing", "false");
   await expect(page.getByTestId("tr-play")).toHaveAttribute("aria-label", "play");
@@ -388,6 +425,21 @@ test("two cycles and a clock: each inspector row shows its own loop's frame; a h
   });
   const textHash = rest.text_hash;
   await expect(page.getByTestId("tr-frame")).toHaveText("0 / 40");
+
+  // ---- Space typed into the params panel's number input (`n = 7`) is
+  // typing, not the hotkey. Unlike the search box, whose own handler stops
+  // the key, this input's keydown reaches the window router: the
+  // text-entry gate alone keeps it from the transport (a router that armed
+  // the tap before the gate would play here — review 2026-08-21).
+  await page.getByTestId("insp-tab-params").click();
+  const widget = page.getByTestId("widget-n");
+  await widget.focus();
+  await expect(widget).toBeFocused();
+  await page.keyboard.press("Space");
+  await expect(page.getByTestId("transport")).toHaveAttribute("data-playing", "false");
+  expect((await debugState(page, true, LOOPS)).transport.playing, "typing a space played nothing").toBe(false);
+  await expect(page.locator(".notice")).toHaveCount(0);
+  await page.getByTestId("insp-tab-inspect").click();
 
   // ---- the hand-wired port: the text's wire `n.out → fast.frame` is in the
   // graph AND drawn on the canvas — the driven row keeps a handle for it (not

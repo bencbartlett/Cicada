@@ -237,6 +237,22 @@ describe("transportDrivenSignal — the hidden-port rule", () => {
     expect(transportDrivenSignal(catalog, undefined, "frame")).toBeUndefined();
     expect(transportDrivenSignal(null, "cycle", "frame")).toBeUndefined();
   });
+  it("before the catalog arrives, the snapshot's driven entry for the port is the answer; once it is here the catalog decides alone", () => {
+    const frameEntry = { node: "spin", port: "frame", signal: "frame" as const, loop: { frames: 120, period_ms: 4000 } };
+    const timeEntry = { node: "tick", port: "t", signal: "time" as const };
+    // No catalog yet (the HTTP fetch races the socket's snapshot): the port
+    // the transport is feeding is driven — never an ordinary input, not
+    // even on the first paint (review 2026-08-21).
+    expect(transportDrivenSignal(null, "cycle", "frame", frameEntry)).toBe("frame");
+    expect(transportDrivenSignal(null, "clock", "t", timeEntry)).toBe("time");
+    expect(transportDrivenSignal(null, "cycle", "frames", undefined)).toBeUndefined();
+    // The catalog is the authority once here: a port of a red `cycle` is
+    // driven by nature (not in the driven set), and an entry cannot make an
+    // ordinary port driven.
+    expect(transportDrivenSignal(catalog, "cycle", "frame", undefined)).toBe("frame");
+    expect(transportDrivenSignal(catalog, "cycle", "frames", frameEntry)).toBeUndefined();
+    expect(transportDrivenSignal(catalog, "my_script", "frame", frameEntry)).toBeUndefined();
+  });
 });
 
 describe("ghHint", () => {

@@ -163,6 +163,77 @@ describe("TransportBar", () => {
     expect(scrub.value).toBe("90");
   });
 
+  it("a foreign view landing mid-drag AFTER the seek's answer is what the release shows — a held frame never outlives its answer", () => {
+    // Review 2026-08-21: the release handed back only when the CURRENT view
+    // named the held frame, so a reload / a control by the client that took
+    // the lease, landing after the seek's own broadcast, left the thumb and
+    // the counter on the sought frame until the next broadcast.
+    seed(orbit);
+    render(<TransportBar />);
+    const scrub = screen.getByTestId("tr-scrub") as HTMLInputElement;
+    fireEvent.pointerDown(scrub);
+    fireEvent.change(scrub, { target: { value: "57" } });
+    act(() => useCicada.getState().applyServerMessage(broadcast({ ...orbit, t_ms: 1900, frame: 57 })));
+    act(() => useCicada.getState().applyServerMessage(broadcast({ ...orbit, t_ms: 100, frame: 3 })));
+    expect(scrub.value, "the pointer still owns the thumb").toBe("57");
+    fireEvent.pointerUp(scrub);
+    expect(scrub.value, "answered, so the release shows the view that stands").toBe("3");
+    expect(screen.getByTestId("tr-frame").textContent).toBe("3 / 120");
+    // A foreign view BEFORE the answer is not the answer: the release still
+    // hands back once the answer has landed, to the view that stands (57).
+    fireEvent.pointerDown(scrub);
+    fireEvent.change(scrub, { target: { value: "80" } });
+    act(() => useCicada.getState().applyServerMessage(broadcast({ ...orbit, t_ms: 200, frame: 6 })));
+    fireEvent.pointerUp(scrub);
+    expect(scrub.value, "unanswered: the sought frame holds, no snap back to 6").toBe("80");
+    act(() => useCicada.getState().applyServerMessage(broadcast({ ...orbit, t_ms: 2666.7, frame: 80 })));
+    expect(scrub.value).toBe("80");
+  });
+
+  it("an arrow step (a change with no pointer) shows the sought frame, and the broadcast hands back — the playhead extrapolates again", () => {
+    // The `transport` effect is the only hand-back for a keyboard seek
+    // (no pointer-up to hand back on); a no-op there survived every other
+    // unit test (review 2026-08-21, mutation M4).
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "performance"] });
+    seed({ ...orbit, playing: true, t_ms: 0, frame: 0 }, nowMs());
+    render(<TransportBar />);
+    const scrub = screen.getByTestId("tr-scrub") as HTMLInputElement;
+    fireEvent.change(scrub, { target: { value: "57" } });
+    expect(sent).toEqual([{ type: "transport_seek", payload: { frame: 57 } }]);
+    expect(scrub.value).toBe("57");
+    expect(screen.getByTestId("tr-frame").textContent).toBe("57 / 120");
+    // Held, not extrapolated, until the answer: the ticks move nothing.
+    act(() => {
+      vi.advanceTimersByTime(DISPLAY_TICK_MS * 10);
+    });
+    expect(screen.getByTestId("tr-frame").textContent).toBe("57 / 120");
+    act(() => useCicada.getState().applyServerMessage(broadcast({ ...orbit, playing: true, t_ms: 1900, frame: 57 })));
+    expect(scrub.value).toBe("57");
+    // 30 ticks = 990 ms at 1× from 1.9 s → 2.89 s → frame 86: the playhead's again.
+    act(() => {
+      vi.advanceTimersByTime(DISPLAY_TICK_MS * 30);
+    });
+    expect(screen.getByTestId("tr-frame").textContent).toBe("86 / 120");
+    expect(scrub.value).toBe("86");
+  });
+
+  it("released before the answer, a broadcast naming a DIFFERENT frame moves the thumb to the view", () => {
+    seed(orbit);
+    render(<TransportBar />);
+    const scrub = screen.getByTestId("tr-scrub") as HTMLInputElement;
+    fireEvent.pointerDown(scrub);
+    fireEvent.change(scrub, { target: { value: "90" } });
+    fireEvent.pointerUp(scrub);
+    expect(scrub.value).toBe("90");
+    // Esc / another client's seek arrives first: the server's view is what
+    // the bar shows (the seek's own answer, when it comes, moves it again).
+    act(() => useCicada.getState().applyServerMessage(broadcast({ ...orbit, t_ms: 100, frame: 3 })));
+    expect(scrub.value).toBe("3");
+    expect(screen.getByTestId("tr-frame").textContent).toBe("3 / 120");
+    act(() => useCicada.getState().applyServerMessage(broadcast({ ...orbit, t_ms: 3000, frame: 90 })));
+    expect(scrub.value).toBe("90");
+  });
+
   it("a refused seek broadcasts nothing, so its error hands the thumb back to the view (after the release if the pointer is down)", () => {
     seed(orbit);
     render(<TransportBar />);

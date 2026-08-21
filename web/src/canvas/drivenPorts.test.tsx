@@ -248,6 +248,44 @@ describe("transport-driven ports are hidden", () => {
     expect(row.textContent).toMatch(/← transport \(not driving\)/);
     expect(row.textContent).not.toMatch(/frame 37/);
   });
+
+  // The catalog is fetched over HTTP beside the socket's snapshot, so the
+  // first paint can come before it. The snapshot's own driven set names the
+  // ports the transport is feeding, and both surfaces read it until the
+  // catalog arrives: a driven port never flashes as an ordinary input —
+  // a handle and a literal editor — for the catalog's latency (review
+  // 2026-08-21).
+  it("before the catalog arrives, a port in the snapshot's driven set is already hidden on the canvas; the catalog then takes over", () => {
+    useCicada.setState({ catalog: null });
+    const { container } = renderNode();
+    expect(container.querySelector('[data-port="spin.frame"]'), "no wire target, catalog or not").toBeNull();
+    expect(screen.queryByTestId("lit-spin-frame"), "no literal editor").toBeNull();
+    expect(screen.getByTestId("driven-spin-frame").dataset.driven).toBe("true");
+    // The ordinary ports are ordinary (handles; literal editors) without the catalog too.
+    expect(container.querySelector('[data-port="spin.period"]')).not.toBeNull();
+    expect(screen.getByTestId("lit-spin-frames")).toBeTruthy();
+    // The catalog arrives: the same row, now from the flag.
+    act(() => useCicada.getState().setCatalog(catalog));
+    expect(container.querySelector('[data-port="spin.frame"]')).toBeNull();
+    expect(screen.getByTestId("driven-spin-frame").dataset.signal).toBe("frame");
+    // With the catalog here, the driven set no longer decides the port's
+    // nature: a red `cycle` (out of the driven set) keeps its hidden port.
+    act(() => useCicada.setState({ transport: { view: { ...driving, driven: [] }, receivedAt: 0 } }));
+    expect(container.querySelector('[data-port="spin.frame"]')).toBeNull();
+    expect(screen.getByTestId("driven-spin-frame").dataset.driven).toBe("false");
+  });
+
+  it("before the catalog arrives, the inspector lists a port in the snapshot's driven set under transport, not inputs", () => {
+    useCicada.setState({ catalog: null });
+    render(<Inspector />);
+    expect(screen.queryByTestId("in-frame"), "not an input row").toBeNull();
+    expect(screen.queryByTestId("insp-lit-spin-frame"), "no editor").toBeNull();
+    expect(screen.getByTestId("in-period")).toBeTruthy();
+    expect(screen.getByTestId("driven-frame").textContent).toMatch(/← transport.*frame 37 of 120/);
+    act(() => useCicada.getState().setCatalog(catalog));
+    expect(screen.queryByTestId("in-frame")).toBeNull();
+    expect(screen.getByTestId("driven-frame").textContent).toMatch(/frame 37 of 120/);
+  });
 });
 
 // Two cycles and a clock: `slow = cycle(period=8.0, frames=40)` is the

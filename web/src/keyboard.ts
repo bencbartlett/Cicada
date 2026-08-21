@@ -122,8 +122,16 @@ export function handleHotkey(event: KeyboardEvent): boolean {
       state.closeCommitDialog();
       return true;
     }
-    if (state.summary.running) {
-      if (needsLease("cancel the solve")) return true;
+    // "Stop": a running solve, or a playing transport — the server's
+    // `cancel` does both (docs/13 §Animation transport: Esc pauses the
+    // transport along with cancelling the generation). The transport is
+    // checked on the LAST VIEW HEARD, not on `running`: on a warm loop every
+    // frame is a sub-millisecond cache read, so `running` is almost always
+    // false mid-playback and an Esc gated on it alone cleared the selection
+    // and let the loop run (review 2026-08-21).
+    const playing = state.transport?.view.playing ?? false;
+    if (state.summary.running || playing) {
+      if (needsLease(state.summary.running ? "cancel the solve" : "pause the transport")) return true;
       state.send({ type: "cancel", payload: {} });
       return true;
     }

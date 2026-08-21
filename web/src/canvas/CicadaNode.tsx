@@ -296,6 +296,11 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
   // carries none); the catalog object is replaced whole, never mutated, so
   // this subscription only fires once per load.
   const catalog = useCicada((s) => s.catalog);
+  // Until the catalog arrives, the snapshot's driven set stands in for its
+  // `transport_driven` flag (`transportDrivenSignal`). Read only while the
+  // catalog is missing: afterwards the selector is a constant, so a
+  // `transport` broadcast (every seek of a scrub) re-renders no node.
+  const preCatalogDriven = useCicada((s) => (s.catalog === null ? s.transport?.view.driven : undefined));
   const dragSource = useDragSource();
   const tier = useLodTier();
 
@@ -416,7 +421,14 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
         {Array.from({ length: rows }, (_, i) => {
           const input = view.inputs[i];
           const output = view.outputs[i];
-          const signal = input ? transportDrivenSignal(catalog, view.func, input.name) : undefined;
+          const signal = input
+            ? transportDrivenSignal(
+                catalog,
+                view.func,
+                input.name,
+                preCatalogDriven?.find((d) => d.node === name && d.port === input.name),
+              )
+            : undefined;
           return (
             <div className="cn-row" key={i}>
               {input && signal !== undefined ? (

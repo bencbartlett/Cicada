@@ -43,6 +43,7 @@ describe("handleHotkey", () => {
       notices: [],
       search: null,
       summary: { ...useCicada.getState().summary, running: false },
+      transport: null,
       graph: {
         nodes: [fakeNode("a"), fakeNode("b", { outputs: [{ name: "out", type: "Number", base: "Number", displayable: false }] })],
         wires: [{ id: "a.out->b.x", from: { node: "a", port: "out" }, to: { node: "b", port: "x" }, lift: 0, depth: 0, red: false }],
@@ -65,6 +66,60 @@ describe("handleHotkey", () => {
     expect(handleHotkey(key("Escape"))).toBe(true);
     expect(useCicada.getState().selection.nodes).toEqual([]);
     expect(useCicada.getState().search).toBeNull();
+  });
+
+  // Esc pauses the transport (docs/13 §Animation transport; docs/16 keyboard
+  // map; the orbit's header): the server's `cancel` pauses it along with
+  // the generation, so the key is sent whenever the LAST VIEW HEARD says
+  // playing — on a warm loop the frames are cache reads and `running` is
+  // false at almost every instant (the review reproduced 5/5 Esc presses
+  // leaving the loop playing when the arm was gated on `running` alone).
+  describe("Esc while the transport plays", () => {
+    const playing = {
+      view: {
+        playing: true,
+        speed: 1,
+        t_ms: 0,
+        frame: 0,
+        frames: 120,
+        period_ms: 4000,
+        driven: [{ node: "spin", port: "frame", signal: "frame" as const, loop: { frames: 120, period_ms: 4000 } }],
+      },
+      receivedAt: 0,
+    };
+
+    it("sends cancel even with no running solve, and leaves the selection alone", () => {
+      useCicada.setState({ transport: playing, summary: { ...useCicada.getState().summary, running: false } });
+      useCicada.getState().selectNodes(["a"]);
+      expect(handleHotkey(key("Escape"))).toBe(true);
+      expect(sent).toEqual([{ type: "cancel", payload: {} }]);
+      expect(useCicada.getState().selection.nodes, "Esc did one thing: it stopped the transport").toEqual(["a"]);
+      expect(useCicada.getState().notices).toEqual([]);
+    });
+
+    it("paused (the view says so): Esc is the ordinary one — no intent, the selection clears", () => {
+      useCicada.setState({ transport: { ...playing, view: { ...playing.view, playing: false } } });
+      useCicada.getState().selectNodes(["a"]);
+      expect(handleHotkey(key("Escape"))).toBe(true);
+      expect(sent).toEqual([]);
+      expect(useCicada.getState().selection.nodes).toEqual([]);
+    });
+
+    it("is a write: an observer (or a dropped socket) gets the lease notice naming the transport, no intent", () => {
+      useCicada.setState({ transport: playing, role: "observer" });
+      expect(handleHotkey(key("Escape"))).toBe(true);
+      useCicada.setState({ role: "writer", connection: "reconnecting" });
+      expect(handleHotkey(key("Escape"))).toBe(true);
+      expect(sent).toEqual([]);
+      const notices = useCicada.getState().notices;
+      expect(notices.map((n) => n.level)).toEqual(["warning", "warning"]);
+      expect(notices[0]?.message).toMatch(/read-only observer — take the lease to pause the transport/);
+      expect(notices[1]?.message).toMatch(/not connected.*to pause the transport/);
+      // With a solve running too, the notice names the solve (the cancel covers both).
+      useCicada.setState({ role: "observer", connection: "open", summary: { ...useCicada.getState().summary, running: true } });
+      expect(handleHotkey(key("Escape"))).toBe(true);
+      expect(useCicada.getState().notices.at(-1)?.message).toMatch(/take the lease to cancel the solve/);
+    });
   });
 
   it("Ctrl+S opens the commit dialog for writer and observer alike; a key repeat does nothing more", () => {
@@ -507,6 +562,166 @@ describe("createKeyRouter — Ctrl+S from every surface", () => {
     expect(isCommitChord({ key: "S", ctrlKey: false, metaKey: true })).toBe(true);
     expect(isCommitChord({ key: "s", ctrlKey: false, metaKey: false })).toBe(false);
     expect(isCommitChord({ key: "d", ctrlKey: true, metaKey: false })).toBe(false);
+  });
+});
+
+/**
+ * Space through the WINDOW routing — the task's "Space toggles play/pause
+ * when no text field has focus" is decided here, not in `handleHotkey`:
+ * the keydown must pass the text-entry gate before it arms the tap, and
+ * the keyup must come from no text field and no control. A mutation that
+ * armed the tap before the gate and dropped the keyup's target check left
+ * every `handleHotkey` test and the transport e2e green (review
+ * 2026-08-21: a Space typed into the search box, a literal input, the
+ * params panel or the commit message would have toggled playback), so
+ * this block drives the router itself with each of those targets.
+ */
+describe("createKeyRouter — Space is the transport's only from no text field and no control", () => {
+  const el = (tagName: string, extra: Record<string, unknown> = {}) =>
+    ({ tagName, isContentEditable: false, closest: () => null, ...extra }) as unknown as EventTarget;
+  const space = (target: EventTarget | null, mods: Partial<KeyboardEvent> = {}) => {
+    const preventDefault = vi.fn();
+    const event = {
+      key: " ",
+      code: "Space",
+      target,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      altKey: false,
+      repeat: false,
+      isComposing: false,
+      defaultPrevented: false,
+      preventDefault,
+      ...mods,
+    } as unknown as KeyboardEvent;
+    return { event, preventDefault };
+  };
+  const transport = {
+    view: {
+      playing: false,
+      speed: 1,
+      t_ms: 0,
+      frame: 0,
+      frames: 120,
+      period_ms: 4000,
+      driven: [{ node: "spin", port: "frame", signal: "frame" as const, loop: { frames: 120, period_ms: 4000 } }],
+    },
+    receivedAt: 0,
+  };
+  /** A full tap — keydown then keyup, both from `target` — through a fresh router; what it sent. */
+  const tap = (target: EventTarget | null, between?: (router: ReturnType<typeof createKeyRouter>) => void): ClientMessage[] => {
+    const sent: ClientMessage[] = [];
+    useCicada.getState().installSender((m) => {
+      sent.push(m);
+      return "id";
+    });
+    const router = createKeyRouter();
+    router.onKeyDown(space(target).event);
+    between?.(router);
+    router.onKeyUp(space(target).event);
+    return sent;
+  };
+  const TEXT_SURFACES: [string, EventTarget][] = [
+    ["a text input (the search box, the params panel's text widget)", el("INPUT", { type: "text" })],
+    ["an input with no type (text)", el("INPUT")],
+    ["a number input (a canvas literal, the params panel)", el("INPUT", { type: "number" })],
+    ["a search input", el("INPUT", { type: "search" })],
+    ["a textarea (the commit message)", el("TEXTAREA")],
+    ["a select (the speed menu)", el("SELECT")],
+    ["contenteditable", el("DIV", { isContentEditable: true })],
+    ["a data-no-hotkeys subtree (the commit dialog, the settings menu)", el("DIV", { closest: () => ({}) })],
+  ];
+  const CONTROLS: [string, EventTarget][] = [
+    ["a range slider (the scrubber, a param slider — the control's own handler answers)", el("INPUT", { type: "range" })],
+    ["a checkbox", el("INPUT", { type: "checkbox" })],
+    ["a button (the play button's native click answers)", el("BUTTON")],
+  ];
+
+  beforeEach(() => {
+    (globalThis as { window?: unknown }).window = { innerWidth: 1000, innerHeight: 800 };
+    useCicada.setState({ role: "writer", connection: "open", commitDialog: false, notices: [], transport });
+  });
+
+  it("a tap on the canvas (no target) or a plain element sends transport_play; the keyup is consumed", () => {
+    expect(tap(null)).toEqual([{ type: "transport_play", payload: {} }]);
+    expect(tap(el("DIV"))).toEqual([{ type: "transport_play", payload: {} }]);
+    const sent: ClientMessage[] = [];
+    useCicada.getState().installSender((m) => {
+      sent.push(m);
+      return "id";
+    });
+    const router = createKeyRouter();
+    const down = space(null);
+    router.onKeyDown(down.event);
+    expect(down.preventDefault, "the keydown is React Flow's (the pan key)").not.toHaveBeenCalled();
+    const up = space(null);
+    router.onKeyUp(up.event);
+    expect(up.preventDefault).toHaveBeenCalledTimes(1);
+    expect(sent).toEqual([{ type: "transport_play", payload: {} }]);
+    expect(useCicada.getState().notices).toEqual([]);
+  });
+
+  for (const [name, target] of TEXT_SURFACES) {
+    it(`typed into ${name}: nothing is sent and no notice is raised`, () => {
+      expect(tap(target)).toEqual([]);
+      expect(useCicada.getState().notices).toEqual([]);
+    });
+  }
+
+  for (const [name, target] of CONTROLS) {
+    it(`on ${name}: nothing from the router`, () => {
+      expect(tap(target)).toEqual([]);
+      expect(useCicada.getState().notices).toEqual([]);
+    });
+  }
+
+  it("a keydown that passed the gate and a keyup from a text field (focus moved mid-press) still sends nothing", () => {
+    const sent: ClientMessage[] = [];
+    useCicada.getState().installSender((m) => {
+      sent.push(m);
+      return "id";
+    });
+    const router = createKeyRouter();
+    router.onKeyDown(space(null).event);
+    router.onKeyUp(space(el("INPUT", { type: "text" })).event);
+    expect(sent).toEqual([]);
+    // The tap was spent: a second keyup alone is not one.
+    router.onKeyUp(space(null).event);
+    expect(sent).toEqual([]);
+  });
+
+  it("a pointer press between down and up is the Space+drag pan, not a tap; a key repeat does not re-arm it", () => {
+    expect(tap(null, (router) => router.onPointerDown())).toEqual([]);
+    expect(
+      tap(null, (router) => {
+        router.onPointerDown();
+        router.onKeyDown(space(null, { repeat: true }).event);
+      }),
+    ).toEqual([]);
+    // A window blur mid-press drops the tap (the keyup may never come, or come from elsewhere).
+    expect(tap(null, (router) => router.onBlur())).toEqual([]);
+    // A keyup with no keydown before it (the page gained focus mid-press) is not a tap either.
+    const sent: ClientMessage[] = [];
+    useCicada.getState().installSender((m) => {
+      sent.push(m);
+      return "id";
+    });
+    createKeyRouter().onKeyUp(space(null).event);
+    expect(sent).toEqual([]);
+    expect(useCicada.getState().notices).toEqual([]);
+  });
+
+  it("a Ctrl/Cmd+Space chord is not the tap (the hotkey map answers no Ctrl+Space)", () => {
+    const sent: ClientMessage[] = [];
+    useCicada.getState().installSender((m) => {
+      sent.push(m);
+      return "id";
+    });
+    const router = createKeyRouter();
+    router.onKeyDown(space(null, { ctrlKey: true }).event);
+    router.onKeyUp(space(null, { ctrlKey: true }).event);
+    expect(sent).toEqual([]);
   });
 });
 
