@@ -526,6 +526,35 @@ format, doc 08.
 Every node: the three tests, the doc format, catalog regenerated in the
 same commit (skill `add-stdlib-node`).
 
+## Follow-ups (found by the v0.1 reviews and measurements; scheduled, not yet placed)
+
+- **Control-plane priority over the display restream.** A client that joins
+  a session receives the whole display set on the one socket (the wall:
+  ~350 MB of binary frames, measured 2026-08-20) and every text frame —
+  `preview_policy`, deltas, statuses — queues behind it; on a loaded dev
+  machine `preview_policy` reached a fresh observer ~26 s after the drag.
+  doc 13 named head-of-line blocking as the trigger for a transport change:
+  the fix is a priority lane for text frames (two channels per client with
+  text-first draining — the frame bus already drops stale-generation frames
+  — or a second socket for binary), with a test that a text frame sent
+  behind a multi-hundred-MB restream arrives within the status cadence.
+  Protocol-change skill; one package. Until then
+  `web/e2e/compute_on_release.spec.ts` waits for delivery, not latency.
+- **A count/allocation guard for every count-taking node** (`series`,
+  `range`, `duplicate`, `repeat`, …): a slider wired into `count` can ask
+  for a capacity the allocator refuses, which aborts the process —
+  `catch_unwind` cannot catch it. A shared `checked_count(count,
+  bytes_per_slot)` that refuses loudly (red, with the number) before
+  allocating; one package in stdlib + a table test per node.
+- **CI solves every `examples/*.cic`.** Only `02-solids` is exercised (by
+  the Playwright smoke); a `cicada-cli` test that runs each example headless
+  with a fresh `--cache-dir` keeps `06-lists` and the rest solving.
+- **Renumber item 4's orbit example**: `examples/06-lists.cic` took the
+  number; the transport slice uses the next free one.
+- **Stale catalog on the client after a scripts-change reload**: the app
+  fetches `/api/catalog` once; search rows and port tooltips for script
+  nodes go stale until a reload. Refetch on the catalog-reload barrier.
+
 ## Gates that must not regress (re-measured at each geometry or scheduler landing)
 
 From doc 15 §Stage-6 results: cold wall carve < 10 s (6.5 s), warm

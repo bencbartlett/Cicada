@@ -356,7 +356,7 @@ fn build_router() -> anyhow::Result<ToolRouter<McpServer>> {
                  `/api/catalog` serves: `signature`; `title`; `description`; `category`; \
                  `tier` (S = spike set, 1 = v0.1, 2 = v0.2); `version` (semantic node \
                  version); `pure` and `effectful` (effectful nodes — exporters — never run \
-                 unless a human or `cicada run --node` names them); `uses_tolerance`; \
+                 unless a human or `cicada run --node` names them); `volatile` (never memoized — recomputed every generation); `uses_tolerance`; \
                  `panics` (the runtime contract: the conditions under which the node goes \
                  red); `gh` (the Grasshopper component it replaces, null for Cicada-only \
                  nodes); `examples` (runnable `.cic` snippets CI solves); `inputs` and \
@@ -692,7 +692,12 @@ struct NodeDocArgs {
 /// holds the two together: a field added to the catalog renderer must be
 /// described here, or the test says so.
 #[derive(JsonSchema)]
-#[allow(dead_code)] // schema-only: never constructed, the value comes from the renderer
+#[allow(dead_code)]
+// schema-only: never constructed, the value comes from the renderer
+// The flags mirror `/api/catalog`'s JSON object field for field; they are
+// booleans on the wire, so they are booleans here (a state enum would
+// misdescribe the contract this type exists to describe).
+#[allow(clippy::struct_excessive_bools)]
 struct NodeDoc {
     /// Dialect name — what you write before `(` in a binding.
     name: String,
@@ -711,6 +716,11 @@ struct NodeDoc {
     /// `!pure`: exporters and other side-effecting nodes — never run unless
     /// a human or `cicada run --node` names them.
     effectful: bool,
+    /// Volatile nodes (item 3b) are never memoized: the node recomputes
+    /// every generation and everything downstream sees its fresh value
+    /// (the `clock` time param is the intended user; no stdlib node sets it
+    /// yet).
+    volatile: bool,
     /// Whether the node's result depends on the project tolerance.
     uses_tolerance: bool,
     /// The runtime contract: the conditions under which the node goes red

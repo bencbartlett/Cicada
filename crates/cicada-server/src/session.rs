@@ -791,7 +791,7 @@ pub struct Session {
 /// lock, owned by the caller until [`Session::reload_from_disk_held`]
 /// consumes it (or it is dropped — on the error path of whatever the
 /// caller was doing to the files, which then simply never reloads).
-#[must_use = "dropping the hold lets writes through again; pass it to reload_from_disk_held"]
+#[must_use = "dropping the hold lets writes through again; hand it to the held reload"]
 pub struct WriteHold<'a>(std::sync::MutexGuard<'a, Inner>);
 
 impl std::fmt::Debug for WriteHold<'_> {

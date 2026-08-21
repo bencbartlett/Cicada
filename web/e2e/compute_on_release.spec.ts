@@ -267,8 +267,14 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
   await expect(page.getByTestId("pending-deboss")).toHaveText(await hint.innerText());
   await expect(page.getByTestId("slider-value-deboss")).toHaveText("1.1");
   // The observer hears the broadcast: the hint, the class, the entry.
+  // A freshly joined observer first receives the whole display set on the
+  // SAME socket (the wall: ~350 MB of binary frames, measured 2026-08-20),
+  // and text frames queue behind it — on a loaded machine `preview_policy`
+  // reached the observer ~26 s after the drag. That head-of-line blocking
+  // is a protocol work item (docs/17 §Follow-ups); this assertion waits for
+  // delivery, it does not assert latency.
   const observerHint = observer.getByTestId("param-pending-deboss");
-  await expect(observerHint).toBeVisible();
+  await expect(observerHint).toBeVisible({ timeout: 120_000 });
   await expect(observer.getByTestId("param-deboss")).toHaveClass(/pending/);
   expect(await storePending(observer)).toMatchObject({ node: "deboss", port: "value", mode: "compute_on_release" });
 
