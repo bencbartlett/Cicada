@@ -63,6 +63,17 @@ pub const MAX_SLOTS: i64 = 1 << 24;
 /// gates measure (docs/15) is two orders of magnitude below it.
 pub const MAX_BYTES: u64 = 1 << 30;
 
+/// What one vertex costs in a closed triangle mesh built from a count (a
+/// sphere's `segments × rings` vertices): its position (three `f64`) and
+/// its share of the triangles — a closed mesh has about two triangles per
+/// vertex, three `u32` each.
+pub(crate) const MESH_BYTES_PER_VERTEX: usize = 3 * 8 + 2 * 3 * 4;
+
+/// What one profile vertex costs in a capped prism (`extrude`, `loft`,
+/// `text_solids`): two mesh vertices (top and bottom), two wall triangles
+/// and one cap triangle per cap.
+pub(crate) const PRISM_BYTES_PER_PROFILE_VERTEX: usize = 2 * 3 * 8 + 4 * 3 * 4;
+
 /// A count port as the `usize` a node may allocate: red below `least` (`0`
 /// for a count, `1` for a step count, `3` for a tessellation), red above
 /// [`MAX_SLOTS`], and red when `count × bytes_per_slot` is above
@@ -72,7 +83,9 @@ pub const MAX_BYTES: u64 = 1 << 30;
 /// `Transformable` of a copy, a prism's cost per profile vertex) — the
 /// eager allocation the count sizes, not the payload behind it. Every node
 /// whose output length is a port goes through here (`series` is the
-/// original pattern).
+/// original pattern); a node whose allocation is a PRODUCT of inputs (the
+/// sphere, the text nodes) computes the product and goes through
+/// [`checked_size`].
 pub(crate) fn checked_count(
     node: &str,
     port: &str,
@@ -96,6 +109,30 @@ pub(crate) fn checked_count(
         bytes <= u128::from(MAX_BYTES),
         "{node}: {port} is {value} — {bytes} bytes at {bytes_per_slot} bytes a slot, above the \
          {MAX_BYTES}-byte (1 GiB) ceiling of one node allocation"
+    );
+    count
+}
+
+/// A derived slot count — a product of inputs, not one port: the sphere's
+/// `segments × rings` vertices, a text's `spans × segments` outline
+/// vertices — checked against both ceilings ([`MAX_SLOTS`] and, at
+/// `bytes_per_slot` each, [`MAX_BYTES`]) before the allocation it sizes;
+/// `what` names the quantity in the message ("vertices would be …"). The
+/// caller has already refused the negative and too-small ports with the
+/// node's own floor message; this is the ceiling.
+pub(crate) fn checked_size(node: &str, what: &str, slots: u128, bytes_per_slot: usize) -> usize {
+    assert!(
+        slots <= u128::from(MAX_SLOTS.unsigned_abs()),
+        "{node}: {what} would be {slots} — above the {MAX_SLOTS} (2^24) slot ceiling of one \
+         node output"
+    );
+    #[allow(clippy::cast_possible_truncation)] // slots <= 2^24
+    let count = slots as usize;
+    let bytes = bytes_of(count, bytes_per_slot);
+    assert!(
+        bytes <= u128::from(MAX_BYTES),
+        "{node}: {what} would be {slots} — {bytes} bytes at {bytes_per_slot} bytes each, above \
+         the {MAX_BYTES}-byte (1 GiB) ceiling of one node allocation"
     );
     count
 }
@@ -211,6 +248,49 @@ mod tests {
             message(fat),
             "linear_array: count is 1048577 — 1073742848 bytes at 1024 bytes a slot, above the \
              1073741824-byte (1 GiB) ceiling of one node allocation"
+        );
+    }
+
+    #[test]
+    fn checked_size_refuses_products_at_either_ceiling() {
+        assert_eq!(checked_size("sphere", "vertices", 0, 48), 0);
+        assert_eq!(
+            checked_size("sphere", "vertices", 1 << 24, 48),
+            16_777_216,
+            "2^24 vertices × 48 bytes is 768 MiB: under both ceilings"
+        );
+        let slots =
+            std::panic::catch_unwind(|| checked_size("sphere", "vertices", (1 << 24) + 1, 48))
+                .expect_err("above the slot ceiling refuses");
+        assert_eq!(
+            message(slots),
+            "sphere: vertices would be 16777217 — above the 16777216 (2^24) slot ceiling of one \
+             node output"
+        );
+        // A product far beyond u64 (a 2^40-segment sphere) is refused with
+        // the true product in the message, never an overflow.
+        let huge = std::panic::catch_unwind(|| {
+            checked_size("sphere", "vertices", (1u128 << 40) * (1u128 << 39), 48)
+        })
+        .expect_err("an astronomic product refuses");
+        let huge = message(huge);
+        assert!(
+            huge.starts_with("sphere: vertices would be 604462909807314587353088 —"),
+            "{huge}"
+        );
+        let bytes = std::panic::catch_unwind(|| {
+            checked_size("text_solids", "outline vertices", 11_184_811, 96)
+        })
+        .expect_err("above the byte ceiling refuses");
+        assert_eq!(
+            message(bytes),
+            "text_solids: outline vertices would be 11184811 — 1073741856 bytes at 96 bytes \
+             each, above the 1073741824-byte (1 GiB) ceiling of one node allocation"
+        );
+        assert_eq!(
+            checked_size("text_solids", "outline vertices", 11_184_810, 96),
+            11_184_810,
+            "one slot under the byte ceiling is allowed"
         );
     }
 

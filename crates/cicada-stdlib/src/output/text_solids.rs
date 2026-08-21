@@ -7,8 +7,8 @@ use cicada_geom::frame::orthonormal;
 use cicada_geom::text::{PlacedGlyph, glyph_solid, layout};
 use cicada_macros::{Ports, node};
 
-use super::support::bundled_font;
-use crate::red;
+use super::support::{bundled_font, outline_vertex_bound};
+use crate::{PRISM_BYTES_PER_PROFILE_VERTEX, checked_size, red};
 
 /// Inputs for [`text_solids`].
 #[derive(Ports, Clone, Debug)]
@@ -54,10 +54,12 @@ pub struct TextSolidsIn {
 /// Panics when `text_outlines` would (the font is not bundled — the message
 /// lists the bundled names —, `size` is not above tolerance, a glyph is
 /// missing from the font — names the character —, `segments < 1`, the
-/// plane is degenerate), when `depth` is within tolerance of zero, or when
-/// a glyph's contours cannot be triangulated into a watertight prism
-/// (touching or self-intersecting outlines — a font defect, named by
-/// character).
+/// plane is degenerate, the outline vertices the text would flatten to —
+/// its bézier spans × `segments` — would be above the shared ceilings:
+/// 2^24 slots, or 1 GiB of prisms at 96 bytes a vertex), when `depth` is
+/// within tolerance of zero, or when a glyph's contours cannot be
+/// triangulated into a watertight prism (touching or self-intersecting
+/// outlines — a font defect, named by character).
 ///
 /// # Examples
 ///
@@ -74,6 +76,18 @@ pub struct TextSolidsIn {
 pub fn text_solids(config: &ProjectConfig, input: TextSolidsIn) -> Vec<Watertight<Mesh>> {
     let font = bundled_font(&input.font);
     let frame = red(orthonormal(&input.plane, config.tol()));
+    // The vertex count is a PRODUCT of the text's spans and `segments`, and
+    // each outline vertex becomes a prism's worth of mesh: checked as the
+    // derived size before the layout allocates it (the layout keeps the
+    // floor, `segments < 1`).
+    if input.segments >= 1 {
+        let _ = checked_size(
+            "text_solids",
+            "outline vertices",
+            outline_vertex_bound(font, &input.text, input.segments),
+            PRISM_BYTES_PER_PROFILE_VERTEX,
+        );
+    }
     let glyphs: Vec<PlacedGlyph> = red(layout(
         font,
         &input.text,
@@ -100,6 +114,31 @@ mod tests {
     use crate::output::support::testing::{
         bbox, cap_crossings, config, outline_area, outlines, polyline_vertices, solids,
     };
+
+    // A solid's outline vertex costs a prism's worth of mesh (96 bytes), so
+    // the 1 GiB ceiling bites before the 2^24 slot ceiling: one chord past
+    // it for `A` is red with the bound, the bytes and the ceiling in the
+    // message, before a single glyph is laid out at that density.
+    #[test]
+    fn one_chord_past_the_byte_ceiling_is_refused_not_allocated() {
+        let font = bundled_font("DejaVu Sans Bold");
+        let spans = outline_vertex_bound(font, "A", 1); // the two-chord count
+        let slots_at_the_byte_ceiling =
+            u128::from(crate::MAX_BYTES) / (PRISM_BYTES_PER_PROFILE_VERTEX as u128);
+        let segments = i64::try_from(slots_at_the_byte_ceiling / spans + 1).unwrap();
+        let would_be = spans * u128::from(segments.unsigned_abs());
+        assert!(would_be <= u128::from(crate::MAX_SLOTS.unsigned_abs()));
+        let panic = std::panic::catch_unwind(|| solids("A", 5.0, 1.0, segments))
+            .expect_err("one chord past the byte ceiling refuses");
+        assert_eq!(
+            *panic.downcast_ref::<String>().unwrap(),
+            format!(
+                "text_solids: outline vertices would be {would_be} — {} bytes at 96 bytes each, \
+                 above the 1073741824-byte (1 GiB) ceiling of one node allocation",
+                would_be * 96
+            )
+        );
+    }
 
     #[test]
     #[should_panic(expected = "depth")]

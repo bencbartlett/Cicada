@@ -4,6 +4,8 @@ use cicada_core::config::ProjectConfig;
 use cicada_core::geometry::{Closed, Curve, Mesh, Watertight};
 use cicada_macros::{Ports, node};
 
+use crate::{PRISM_BYTES_PER_PROFILE_VERTEX, checked_count};
+
 /// Inputs for [`loft`].
 #[derive(Ports, Clone, Debug)]
 pub struct LoftIn {
@@ -42,7 +44,10 @@ pub struct LoftIn {
 /// section is open, degenerate at tolerance, non-planar, or
 /// self-intersecting, the sections wind in opposite directions, the
 /// sections coincide or are coplanar (zero volume), `segments < 3` for an
-/// analytic section, or the result is not watertight.
+/// analytic section, `segments` above the shared ceilings for an analytic
+/// section (2^24 slots, or 1 GiB of prism at 96 bytes a profile vertex:
+/// 11,184,810 is the last allowed; the message names the count and the
+/// ceiling that bit), or the result is not watertight.
 ///
 /// # Examples
 ///
@@ -62,6 +67,20 @@ pub struct LoftIn {
 )]
 #[must_use]
 pub fn loft(config: &ProjectConfig, input: LoftIn) -> Watertight<Mesh> {
+    // Only analytic sections (circle, rectangle) tessellate to `segments`
+    // vertices — polylines pair vertex to vertex and the port is unused —
+    // so only then does `segments` size an allocation; the kernel keeps
+    // the floor (`segments < 3`).
+    let analytic = |curve: &Curve| matches!(curve, Curve::Circle(_) | Curve::Rectangle(_));
+    if (analytic(&input.start.0) || analytic(&input.end.0)) && input.segments >= 3 {
+        let _ = checked_count(
+            "loft",
+            "segments",
+            input.segments,
+            3,
+            PRISM_BYTES_PER_PROFILE_VERTEX,
+        );
+    }
     match cicada_geom::meshbuild::loft(&input.start.0, &input.end.0, input.segments, config.tol()) {
         Ok(mesh) => Watertight(mesh),
         Err(error) => panic!("loft: {error}"),
@@ -169,6 +188,56 @@ mod tests {
                 segments: 64,
             },
         );
+    }
+
+    /// One profile vertex past the 1 GiB prism ceiling (96 bytes each):
+    /// the ceiling that bites first for a prism.
+    fn one_past_the_prism_ceiling() -> i64 {
+        let bytes = u64::try_from(PRISM_BYTES_PER_PROFILE_VERTEX).unwrap();
+        i64::try_from(crate::MAX_BYTES / bytes + 1).unwrap()
+    }
+
+    // Analytic sections tessellate to `segments` vertices each: one past
+    // the byte ceiling is red before either section is sampled, with the
+    // count, the bytes and the ceiling in the message.
+    #[test]
+    fn loft_analytic_one_past_the_ceiling_is_refused_not_allocated() {
+        let segments = one_past_the_prism_ceiling();
+        assert_eq!(segments, 11_184_811);
+        let panic = std::panic::catch_unwind(|| {
+            loft(
+                &config(),
+                LoftIn {
+                    start: unit_square_profile(),
+                    end: ring(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)], 2.0),
+                    segments,
+                },
+            )
+        })
+        .expect_err("one profile vertex past the byte ceiling refuses");
+        assert_eq!(
+            *panic.downcast_ref::<String>().unwrap(),
+            "loft: segments is 11184811 — 1073741856 bytes at 96 bytes a slot, above the \
+             1073741824-byte (1 GiB) ceiling of one node allocation"
+        );
+    }
+
+    // Polyline sections pair vertex to vertex — `segments` sizes nothing,
+    // so the same count lofts the same frustum it always did.
+    #[test]
+    fn loft_polyline_sections_ignore_segments_as_before() {
+        let base = [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)];
+        let top = [(0.5, 0.5), (1.5, 0.5), (1.5, 1.5), (0.5, 1.5)];
+        let frustum = loft(
+            &config(),
+            LoftIn {
+                start: ring(&base, 0.0),
+                end: ring(&top, 2.0),
+                segments: one_past_the_prism_ceiling(),
+            },
+        );
+        assert_eq!(frustum.0.triangle_count(), 12);
+        assert!((signed_volume(&frustum.0) - frustum_volume(4.0, 0.5, 2.0)).abs() < 1e-12);
     }
 
     #[test]

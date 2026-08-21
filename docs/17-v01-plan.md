@@ -623,12 +623,56 @@ same commit (skill `add-stdlib-node`).
   chunked/element-range frames; a per-output latest-wins display queue
   for display-vs-display blocking; the live `emit_frames` still encodes
   under the session lock (changed outputs only).
-- **A count/allocation guard for every count-taking node** (`series`,
-  `range`, `duplicate`, `repeat`, …): a slider wired into `count` can ask
-  for a capacity the allocator refuses, which aborts the process —
-  `catch_unwind` cannot catch it. A shared `checked_count(count,
-  bytes_per_slot)` that refuses loudly (red, with the number) before
-  allocating; one package in stdlib + a table test per node.
+- **A count/allocation guard for every count-taking node** — **done
+  2026-08-20** (`wt/hardening`, two commits; docs/08 rule 7 is the
+  contract). A slider wired into `count` could ask for a capacity the
+  allocator refuses, which aborts the process — `catch_unwind` cannot
+  catch it. The 2^24 slot ceiling (15112fb) already stood on eight count
+  ports; this package gave it its byte half and its product form, and
+  audited every node that allocates from a count. `slot_count` became
+  `checked_count(node, port, value, least, bytes_per_slot)`: the same
+  floor and slot ceiling with the same messages (the run_e2e regression
+  still matches), plus `MAX_BYTES` = 1 GiB on `count × bytes_per_slot`,
+  the slot size passed as `size_of::<T>()` at every call so it tracks
+  the types — `linear_array`'s 112-byte `Transformable` is where the
+  byte half bites first (9,586,980 copies; 2^24 of them was a 1.8 GiB
+  Vec the slot ceiling let through). `checked_size(node, what, slots:
+  u128, bytes_per_slot)` is the same check on a derived count, for the
+  nodes whose allocation is a PRODUCT of inputs and whose port alone
+  under the ceiling proves nothing: the sphere's `segments × rings`
+  vertices (5,793 segments is the last allowed, 5,794 the first refused
+  — 16,779,426 vertices; `segments = 10^14` is refused with its
+  5 × 10^27 in the message, u128 so no overflow), and the text nodes'
+  bézier spans × `segments`, bounded from a two-chord counting pass
+  (`points(2) × segments ≥ points(segments)`, asserted over all 4,699
+  glyphs the bundled face maps at 1, 3, 8 and 64 chords; the heaviest
+  glyph has 540 spans and a typical one 20, so the per-glyph constant
+  the first draft reached for would have refused honest paragraphs).
+  `extrude` / `loft` / `voronoi` police `segments` only where it sizes
+  an allocation (a circle profile, an analytic section, a circle
+  boundary); a chain profile never tessellates and its unused port is
+  not policed, which keeps every previously-valid input valid. Audited
+  and left alone, with the reason: `chunk`, `partition`, `truncate`,
+  `split_list`, `shift_list`, `item`, `weave`, `insert_items` allocate
+  no more than their input; `jitter`'s integer is a seed. Floors stay
+  where they were (the node's or the kernel's message). No version
+  bumps: every input that stays valid produces the same output (golden
+  hashes unchanged), and a memo hit in the refused band serves an old,
+  correct value. Tests: message-exact unit tests for both helpers at
+  both ceilings (inclusive bounds, the overflow-proof product); per node
+  a case one past the ceiling that bites first (red with the exact
+  message; for the sphere and the text nodes the count that would have
+  been built is the product in the message) plus, where the port is
+  unused for a chain input, the same count building the same mesh it
+  always did; the sphere's vertex formula pinned to the kernel's count
+  (266 at 24 segments, and per proptest draw); the text bound pinned
+  against what the layout really produces (within 4×). "No allocation"
+  is proven by construction and by the absurd-count cases (a
+  `100000000000` count is a 800 GB Vec the process could not survive —
+  the run_e2e regression asserts "memory allocation" never appears): a
+  test-only counting `#[global_allocator]` would have proven it at
+  exactly cap+1 but needs `unsafe` outside an FFI seam, which the rules
+  forbid — recorded as the one assertion not made.
 - **CI solves every `examples/*.cic`.** Only `02-solids` is exercised (by
   the Playwright smoke); a `cicada-cli` test that runs each example headless
   with a fresh `--cache-dir` keeps `06-lists` and the rest solving.

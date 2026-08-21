@@ -5,7 +5,7 @@ use cicada_core::geometry::{Closed, Curve, Mesh, Watertight};
 use cicada_core::spatial::Vector;
 use cicada_macros::{Ports, node};
 
-use crate::red;
+use crate::{PRISM_BYTES_PER_PROFILE_VERTEX, checked_count, red};
 
 /// Inputs for [`extrude`].
 #[derive(Ports, Clone, Debug)]
@@ -30,8 +30,12 @@ pub struct ExtrudeIn {
 /// # Panics
 ///
 /// Panics when the profile is degenerate or non-planar at tolerance, the
-/// direction lies in the profile plane, `segments < 3`, or the profile
-/// polygon is self-intersecting.
+/// direction lies in the profile plane, `segments < 3`, the profile
+/// polygon is self-intersecting, or — for a circle profile, the one that
+/// tessellates to `segments` vertices — `segments` is above the shared
+/// ceilings (2^24 slots, or 1 GiB of prism at 96 bytes a profile vertex:
+/// 11,184,810 is the last allowed; the message names the count and the
+/// ceiling that bit).
 ///
 /// # Examples
 ///
@@ -49,6 +53,19 @@ pub struct ExtrudeIn {
 )]
 #[must_use]
 pub fn extrude(config: &ProjectConfig, input: ExtrudeIn) -> Watertight<Mesh> {
+    // Only a circle profile tessellates to `segments` vertices (a polyline
+    // or rectangle is its own corner chain, the port unused), so only a
+    // circle's `segments` sizes an allocation; the kernel keeps the floor
+    // (`segments < 3`) for every profile.
+    if matches!(input.profile.0, Curve::Circle(_)) && input.segments >= 3 {
+        let _ = checked_count(
+            "extrude",
+            "segments",
+            input.segments,
+            3,
+            PRISM_BYTES_PER_PROFILE_VERTEX,
+        );
+    }
     Watertight(red(cicada_geom::meshbuild::extrude(
         &input.profile.0,
         input.direction,
@@ -78,6 +95,75 @@ mod tests {
                 segments: 64,
             },
         );
+        assert!((signed_volume(&prism.0) - 2.0).abs() < 1e-9);
+    }
+
+    fn unit_circle_profile() -> Closed<Curve> {
+        Closed(Curve::Circle(cicada_core::geometry::Circle {
+            plane: Plane::world_xy(),
+            radius: 1.0,
+        }))
+    }
+
+    /// One profile vertex past the 1 GiB prism ceiling (96 bytes each):
+    /// the ceiling that bites first for a prism.
+    fn one_past_the_prism_ceiling() -> i64 {
+        let bytes = u64::try_from(PRISM_BYTES_PER_PROFILE_VERTEX).unwrap();
+        i64::try_from(crate::MAX_BYTES / bytes + 1).unwrap()
+    }
+
+    #[test]
+    #[should_panic(expected = "segments = 2 is out of range: must be >= 3")]
+    fn extrude_too_few_segments_is_red() {
+        let _ = extrude(
+            &config(),
+            ExtrudeIn {
+                profile: unit_circle_profile(),
+                direction: Vector::new(0.0, 0.0, 1.0),
+                segments: 2,
+            },
+        );
+    }
+
+    // A circle profile tessellates to `segments` vertices: one past the
+    // byte ceiling is red — before the kernel samples a single point —
+    // with the count, the bytes and the ceiling in the message.
+    #[test]
+    fn extrude_circle_one_past_the_ceiling_is_refused_not_allocated() {
+        let segments = one_past_the_prism_ceiling();
+        assert_eq!(segments, 11_184_811);
+        let panic = std::panic::catch_unwind(|| {
+            extrude(
+                &config(),
+                ExtrudeIn {
+                    profile: unit_circle_profile(),
+                    direction: Vector::new(0.0, 0.0, 1.0),
+                    segments,
+                },
+            )
+        })
+        .expect_err("one profile vertex past the byte ceiling refuses");
+        assert_eq!(
+            *panic.downcast_ref::<String>().unwrap(),
+            "extrude: segments is 11184811 — 1073741856 bytes at 96 bytes a slot, above the \
+             1073741824-byte (1 GiB) ceiling of one node allocation"
+        );
+    }
+
+    // A rectangle (or polyline) profile is its own corner chain — the port
+    // sizes nothing there, so the same count builds the same prism it
+    // always did (the guard is on the allocation, not the port).
+    #[test]
+    fn extrude_chain_profile_ignores_segments_as_before() {
+        let prism = extrude(
+            &config(),
+            ExtrudeIn {
+                profile: unit_square_profile(),
+                direction: Vector::new(0.0, 0.0, 2.0),
+                segments: one_past_the_prism_ceiling(),
+            },
+        );
+        assert_eq!(prism.0.triangle_count(), 12);
         assert!((signed_volume(&prism.0) - 2.0).abs() < 1e-9);
     }
 

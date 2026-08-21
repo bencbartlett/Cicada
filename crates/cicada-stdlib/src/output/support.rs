@@ -1,5 +1,5 @@
-//! The bundled-font table shared by the text nodes, plus their test
-//! helpers.
+//! The bundled-font table shared by the text nodes, the outline-vertex
+//! bound their allocation guard checks, plus their test helpers.
 
 use std::sync::LazyLock;
 
@@ -42,6 +42,38 @@ pub(crate) fn bundled_font(name: &str) -> &'static Font<'static> {
                 .join(", ")
         ),
     }
+}
+
+/// The pass density [`outline_vertex_bound`] counts at: two chords a span,
+/// the fewest at which every contour a font draws survives the flattener
+/// (a contour needs three distinct vertices; two béziers give four).
+const COUNTING_CHORDS: i64 = 2;
+
+/// An upper bound on the outline vertices `text` flattens to at `segments`
+/// chords per bézier span, from a cheap pass at [`COUNTING_CHORDS`]: a
+/// span contributes at most `segments` vertices at the real density and
+/// at least one at two chords (a line its end, a curve its midpoint and
+/// end), so `points(2) × segments` bounds `points(segments)` — asserted
+/// over the whole bundled face below (`text_outlines`' guard is the
+/// text's, not a per-glyph constant: the heaviest glyph has 540 spans,
+/// a typical one 20, and a constant would refuse honest paragraphs). A
+/// contour that is one closed bézier loop (no real font draws one) is the
+/// one shape it would undercount. Only characters the face maps are
+/// counted — `layout` names a missing glyph itself, in its own order —
+/// and a newline is layout, not a glyph.
+pub(crate) fn outline_vertex_bound(font: &Font<'_>, text: &str, segments: i64) -> u128 {
+    let two_chord_vertices: usize = text
+        .chars()
+        .filter(|&c| c != '\n' && font.has_glyph(c))
+        .map(|c| {
+            red(font.glyph(c, COUNTING_CHORDS))
+                .contours
+                .iter()
+                .map(Vec::len)
+                .sum::<usize>()
+        })
+        .sum();
+    (two_chord_vertices as u128) * u128::from(segments.unsigned_abs())
 }
 
 #[cfg(test)]
@@ -168,6 +200,58 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The allocation guard's premise, over every glyph the bundled face
+    // maps in the Basic Multilingual Plane (4,699 of them): the vertices a
+    // glyph flattens to at 8 and at 64 chords a span never exceed the
+    // two-chord count times the density — so `outline_vertex_bound` is an
+    // upper bound on what `layout` allocates, for any text in this face.
+    #[test]
+    fn two_chord_count_times_density_bounds_every_glyph_of_the_bundled_face() {
+        let font = bundled_font("DejaVu Sans Bold");
+        let points = |c: char, segments: i64| -> usize {
+            font.glyph(c, segments)
+                .unwrap()
+                .contours
+                .iter()
+                .map(Vec::len)
+                .sum()
+        };
+        let mut glyphs = 0usize;
+        let mut heaviest = (' ', 0usize);
+        for c in (0x20u32..=0xFFFF).filter_map(char::from_u32) {
+            if !font.has_glyph(c) {
+                continue;
+            }
+            glyphs += 1;
+            let two = points(c, 2);
+            for density in [1i64, 3, 8, 64] {
+                let at = points(c, density);
+                assert!(
+                    at <= two * usize::try_from(density).unwrap(),
+                    "{c:?}: {at} vertices at {density} chords, two-chord count {two}"
+                );
+            }
+            if two > heaviest.1 {
+                heaviest = (c, two);
+            }
+        }
+        assert!(glyphs > 4000, "the face maps {glyphs} BMP characters");
+        assert!(
+            heaviest.1 >= 500,
+            "the heaviest glyph ({:?}) counts {} at two chords — a per-glyph constant would \
+             have to be that large for every character",
+            heaviest.0,
+            heaviest.1
+        );
+        // The bound is the text's: a newline and an unmapped character
+        // count nothing, the rest add up, and the density multiplies.
+        let a = outline_vertex_bound(font, "A", 1);
+        let b = outline_vertex_bound(font, "B", 1);
+        assert_eq!(outline_vertex_bound(font, "A\nB\u{1f41b}", 1), a + b);
+        assert_eq!(outline_vertex_bound(font, "AB", 8), 8 * (a + b));
+        assert_eq!(a, u128::try_from(points('A', 2)).unwrap());
+    }
 
     #[test]
     fn bundled_font_is_dejavu_sans_bold_with_a_cap_height() {

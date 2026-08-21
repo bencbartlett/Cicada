@@ -3794,7 +3794,7 @@
       "pure": true,
       "volatile": false,
       "uses_tolerance": true,
-      "panics": "the profile is degenerate or non-planar at tolerance, the direction lies in the profile plane, `segments < 3`, or the profile polygon is self-intersecting.",
+      "panics": "the profile is degenerate or non-planar at tolerance, the direction lies in the profile plane, `segments < 3`, the profile polygon is self-intersecting, or — for a circle profile, the one that tessellates to `segments` vertices — `segments` is above the shared ceilings (2^24 slots, or 1 GiB of prism at 96 bytes a profile vertex: 11,184,810 is the last allowed; the message names the count and the ceiling that bit).",
       "gh": "Extrude",
       "examples": [
         "ring = circle(radius=2.0)\nup = unit_z(factor=5.0)\nprism = extrude(profile=ring, direction=up)"
@@ -3847,7 +3847,7 @@
       "pure": true,
       "volatile": false,
       "uses_tolerance": true,
-      "panics": "the vertex counts differ (both counts in the message), a section is open, degenerate at tolerance, non-planar, or self-intersecting, the sections wind in opposite directions, the sections coincide or are coplanar (zero volume), `segments < 3` for an analytic section, or the result is not watertight.",
+      "panics": "the vertex counts differ (both counts in the message), a section is open, degenerate at tolerance, non-planar, or self-intersecting, the sections wind in opposite directions, the sections coincide or are coplanar (zero volume), `segments < 3` for an analytic section, `segments` above the shared ceilings for an analytic section (2^24 slots, or 1 GiB of prism at 96 bytes a profile vertex: 11,184,810 is the last allowed; the message names the count and the ceiling that bit), or the result is not watertight.",
       "gh": "Loft",
       "examples": [
         "base = circle(radius=2.0)\ntop_at = construct_point(x=0.0, y=0.0, z=4.0)\ntop_frame = xy_plane(origin=top_at)\ntop = circle(plane=top_frame, radius=1.0)\ncone = loft(start=base, end=top, segments=32)"
@@ -3900,7 +3900,7 @@
       "pure": true,
       "volatile": false,
       "uses_tolerance": true,
-      "panics": "the radius is not above tolerance, `segments < 3`, or the plane is degenerate.",
+      "panics": "the radius is not above tolerance, `segments < 3`, the plane is degenerate, or the sphere's vertex count (`segments × rings`, rings = `segments / 2`) would be above the shared ceilings (2^24 slots, or 1 GiB of mesh — the message names the count and the ceiling that bit; 5,794 segments is the first refused).",
       "gh": "Sphere",
       "examples": [
         "ball = sphere(radius=1.5, segments=24)"
@@ -4115,7 +4115,7 @@
       "pure": true,
       "volatile": false,
       "uses_tolerance": true,
-      "panics": "the boundary is open, non-convex, or degenerate; when a seed is off the boundary plane, coincides with another seed within tolerance, or owns no area inside the boundary; or when `seeds` is empty.",
+      "panics": "the boundary is open, non-convex, or degenerate; when a seed is off the boundary plane, coincides with another seed within tolerance, or owns no area inside the boundary; when `seeds` is empty; when `segments < 3`; or — for a circle boundary, the one that tessellates to `segments` vertices — when `segments` is above the shared ceilings (2^24 slots; the message names the count and the ceiling).",
       "gh": "Voronoi",
       "examples": [
         "bx = construct_domain(start=0.0, end=10.0)\nby = construct_domain(start=0.0, end=10.0)\nboard = rectangle(x=bx, y=by)\nxs = [2.0, 8.0, 5.0]\nys = [5.0, 4.0, 8.0]\nseeds = construct_point(x=each(xs), y=each(ys))\ncells = voronoi(seeds=seeds, boundary=board)"
@@ -4492,7 +4492,7 @@
       "pure": true,
       "volatile": false,
       "uses_tolerance": true,
-      "panics": "the font is not bundled (the message lists the bundled names), `size` is not above tolerance, a glyph is missing from the font (names the character), `segments < 1`, or the plane is degenerate.",
+      "panics": "the font is not bundled (the message lists the bundled names), `size` is not above tolerance, a glyph is missing from the font (names the character), `segments < 1`, the plane is degenerate, or the outline vertices the text would flatten to (its bézier spans × `segments`, bounded from a two-chord pass) would be above the shared ceilings (2^24 slots, or 1 GiB — the message names the count and the ceiling that bit).",
       "gh": null,
       "examples": [
         "glyphs = text_outlines(text=\"A12\", size=5.0)"
@@ -4573,7 +4573,7 @@
       "pure": true,
       "volatile": false,
       "uses_tolerance": true,
-      "panics": "`text_outlines` would (the font is not bundled — the message lists the bundled names —, `size` is not above tolerance, a glyph is missing from the font — names the character —, `segments < 1`, the plane is degenerate), when `depth` is within tolerance of zero, or when a glyph's contours cannot be triangulated into a watertight prism (touching or self-intersecting outlines — a font defect, named by character).",
+      "panics": "`text_outlines` would (the font is not bundled — the message lists the bundled names —, `size` is not above tolerance, a glyph is missing from the font — names the character —, `segments < 1`, the plane is degenerate, the outline vertices the text would flatten to — its bézier spans × `segments` — would be above the shared ceilings: 2^24 slots, or 1 GiB of prisms at 96 bytes a vertex), when `depth` is within tolerance of zero, or when a glyph's contours cannot be triangulated into a watertight prism (touching or self-intersecting outlines — a font defect, named by character).",
       "gh": null,
       "examples": [
         "labels = text_solids(text=\"A12\", size=5.0, depth=2.0)"

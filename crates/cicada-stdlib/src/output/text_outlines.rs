@@ -2,13 +2,13 @@
 
 use cicada_core::config::ProjectConfig;
 use cicada_core::geometry::{Closed, Curve, Polyline};
-use cicada_core::spatial::Plane;
+use cicada_core::spatial::{Plane, Point};
 use cicada_geom::frame::orthonormal;
 use cicada_geom::text::layout;
 use cicada_macros::{Ports, node};
 
-use super::support::bundled_font;
-use crate::red;
+use super::support::{bundled_font, outline_vertex_bound};
+use crate::{checked_size, red};
 
 /// Inputs for [`text_outlines`].
 #[derive(Ports, Clone, Debug)]
@@ -50,7 +50,11 @@ pub struct TextOutlinesIn {
 ///
 /// Panics when the font is not bundled (the message lists the bundled
 /// names), `size` is not above tolerance, a glyph is missing from the font
-/// (names the character), `segments < 1`, or the plane is degenerate.
+/// (names the character), `segments < 1`, the plane is degenerate, or the
+/// outline vertices the text would flatten to (its bézier spans ×
+/// `segments`, bounded from a two-chord pass) would be above the shared
+/// ceilings (2^24 slots, or 1 GiB — the message names the count and the
+/// ceiling that bit).
 ///
 /// # Examples
 ///
@@ -67,6 +71,17 @@ pub struct TextOutlinesIn {
 pub fn text_outlines(config: &ProjectConfig, input: TextOutlinesIn) -> Vec<Closed<Curve>> {
     let font = bundled_font(&input.font);
     let frame = red(orthonormal(&input.plane, config.tol()));
+    // The vertex count is a PRODUCT of the text's spans and `segments`, so
+    // it is checked as the derived size before the layout allocates it
+    // (the layout keeps the floor, `segments < 1`).
+    if input.segments >= 1 {
+        let _ = checked_size(
+            "text_outlines",
+            "outline vertices",
+            outline_vertex_bound(font, &input.text, input.segments),
+            size_of::<Point>(),
+        );
+    }
     let glyphs = red(layout(
         font,
         &input.text,
@@ -95,7 +110,6 @@ pub fn text_outlines(config: &ProjectConfig, input: TextOutlinesIn) -> Vec<Close
 // `text_solids.rs`.
 #[cfg(test)]
 mod tests {
-    use cicada_core::spatial::Point;
     use cicada_core::value::{HashedValue, List, ValueData};
     use glam::DVec3;
 
@@ -128,6 +142,74 @@ mod tests {
     #[should_panic(expected = "(U+1F41B) in the font")]
     fn missing_glyph_names_the_character() {
         let _ = outlines("A\u{1f41b}", 5.0);
+    }
+
+    // One chord past the slot ceiling for this text: the two-chord count
+    // of `A` times `segments` crosses 2^24 — red with the bound in the
+    // message, before a single outline is laid out at that density.
+    #[test]
+    fn one_chord_past_the_vertex_ceiling_is_refused_not_allocated() {
+        let font = bundled_font("DejaVu Sans Bold");
+        let spans = outline_vertex_bound(font, "A", 1); // the two-chord count
+        let segments =
+            i64::try_from(u128::from(crate::MAX_SLOTS.unsigned_abs()) / spans + 1).unwrap();
+        let would_be = spans * u128::from(segments.unsigned_abs());
+        assert!(would_be > u128::from(crate::MAX_SLOTS.unsigned_abs()));
+        let panic = std::panic::catch_unwind(|| {
+            text_outlines(
+                &config(),
+                TextOutlinesIn {
+                    text: "A".to_owned(),
+                    size: 5.0,
+                    plane: Plane::world_xy(),
+                    font: "DejaVu Sans Bold".to_owned(),
+                    segments,
+                    line_gap: 1.35,
+                },
+            )
+        })
+        .expect_err("one chord past the ceiling refuses");
+        assert_eq!(
+            *panic.downcast_ref::<String>().unwrap(),
+            format!(
+                "text_outlines: outline vertices would be {would_be} — above the 16777216 (2^24) \
+                 slot ceiling of one node output"
+            )
+        );
+        // One chord fewer is under the ceiling: the boundary is exact.
+        assert!(spans * u128::from((segments - 1).unsigned_abs()) <= 1 << 24);
+    }
+
+    // The guard's bound is a bound: what the node really produces at the
+    // default density never exceeds it (two lines, a hole-bearing glyph,
+    // whitespace).
+    #[test]
+    fn the_vertex_bound_covers_what_the_layout_produces() {
+        let font = bundled_font("DejaVu Sans Bold");
+        let text = "A12 B\n@g%";
+        let produced: usize = text_outlines(
+            &config(),
+            TextOutlinesIn {
+                text: text.to_owned(),
+                size: 5.0,
+                plane: Plane::world_xy(),
+                font: "DejaVu Sans Bold".to_owned(),
+                segments: 8,
+                line_gap: 1.35,
+            },
+        )
+        .iter()
+        .map(|curve| polyline_vertices(curve).len())
+        .sum();
+        let bound = outline_vertex_bound(font, text, 8);
+        assert!(
+            u128::try_from(produced).unwrap() <= bound,
+            "{produced} vertices produced, bound {bound}"
+        );
+        assert!(
+            u128::try_from(produced).unwrap() * 4 >= bound,
+            "the bound is within 4× of the truth: {produced} vs {bound}"
+        );
     }
 
     #[test]
