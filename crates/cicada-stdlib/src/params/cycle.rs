@@ -25,7 +25,8 @@ pub struct CycleIn {
 }
 
 /// Cycle — looping time `0 → 1`, frame-quantized and driven by the
-/// transport, never by an ambient clock.
+/// transport, never by an ambient clock (Grasshopper's Timer has no
+/// counterpart: a Cycle is a value, not a re-solve trigger).
 ///
 /// The value is `(frame mod frames) / frames`; the transport advances
 /// `frame` at `frames / period` per second while playing (docs/13

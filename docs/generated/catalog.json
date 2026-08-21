@@ -4,7 +4,7 @@
     {
       "name": "clock",
       "title": "Clock",
-      "description": "unbounded time `0 → ∞` in seconds, driven by the transport and uncached by design.",
+      "description": "unbounded time `0 → ∞` in seconds, driven by the transport and uncached by design (Grasshopper's Timer has no counterpart: a Clock is a value, not a re-solve trigger).",
       "category": "Params & input",
       "tier": "1",
       "version": 1,
@@ -51,7 +51,7 @@
     {
       "name": "cycle",
       "title": "Cycle",
-      "description": "looping time `0 → 1`, frame-quantized and driven by the transport, never by an ambient clock.",
+      "description": "looping time `0 → 1`, frame-quantized and driven by the transport, never by an ambient clock (Grasshopper's Timer has no counterpart: a Cycle is a value, not a re-solve trigger).",
       "category": "Params & input",
       "tier": "1",
       "version": 1,

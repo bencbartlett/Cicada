@@ -18,7 +18,8 @@ pub struct ClockIn {
 }
 
 /// Clock — unbounded time `0 → ∞` in seconds, driven by the transport and
-/// uncached by design.
+/// uncached by design (Grasshopper's Timer has no counterpart: a Clock is a
+/// value, not a re-solve trigger).
 ///
 /// Volatile (docs/12 §Volatile nodes): it recomputes in every generation
 /// and is never memoized — the escape hatch for animation that does not

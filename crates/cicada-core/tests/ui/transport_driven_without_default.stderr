@@ -1,0 +1,5 @@
+error: transport-driven port `frame` needs a default — headless runs evaluate it as written (`#[port(default = 0, transport_driven = …)]`)
+ --> tests/ui/transport_driven_without_default.rs:8:5
+  |
+8 |     /// The current frame.
+  |     ^^^^^^^^^^^^^^^^^^^^^^
