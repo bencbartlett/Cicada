@@ -276,6 +276,29 @@ fn a_kernel_exception_arrives_as_an_error_not_an_abort() {
 }
 
 #[test]
+fn every_clause_of_the_exception_boundary_is_active_in_this_build() {
+    // The fork's trycatch hook has three clauses (Standard_Failure,
+    // std::exception, catch (...)); `cicada_selftest_throw` throws one
+    // exception of each kind. Before the catch (...) clause a thrown int
+    // unwound into Rust and killed the process (0xC0000409, measured with
+    // the clause removed) — the same failure mode the probe saw for
+    // Standard_Failure. This pins the boundary for THIS build of the glue,
+    // not for the header as read.
+    let occt = glue::cicada_selftest_throw(0).expect_err("Standard_Failure must be Err");
+    assert!(
+        occt.what().starts_with("Standard_DomainError: "),
+        "{}",
+        occt.what()
+    );
+    let std_error = glue::cicada_selftest_throw(1).expect_err("std::exception must be Err");
+    assert_eq!(std_error.what(), "cicada_selftest_throw: std::exception");
+    let foreign =
+        glue::cicada_selftest_throw(2).expect_err("a thrown non-exception value must be Err");
+    assert_eq!(foreign.what(), "unknown C++ exception");
+    glue::cicada_selftest_throw(3).expect("kind 3 returns normally");
+}
+
+#[test]
 fn degenerate_profiles_are_refused_with_the_mesh_tier_errors() {
     let up = Vector::new(0.0, 0.0, 1.0);
     // Too few points.
@@ -352,4 +375,171 @@ fn garbage_bytes_are_a_serialization_error() {
 fn solid_is_send() {
     fn assert_send<T: Send>() {}
     assert_send::<Solid>();
+}
+
+#[test]
+fn related_solids_are_safe_to_use_from_two_threads() {
+    // The module docs' hazard: `box − prism` shares its untouched faces'
+    // TShapes with `box`. Thread A serializes the input (the canonical
+    // writer rewrites and restores the shared history flags) while thread
+    // B tessellates the result (attaches triangulation, flips the same
+    // flags) — the shape of work the rayon wavefront does for sibling
+    // nodes. Under the kernel lock both are serialized; the bytes stay the
+    // golden ones and the mesh stays the analytic one, every iteration.
+    // (No sleeps, no timing: the assertion is on the results.)
+    // `Solid` is Send, not Sync: each thread OWNS its solid (moved in,
+    // handed back) — the sharing is inside OCCT, invisible to the types.
+    const ROUNDS: usize = 64;
+    let block = probe_box();
+    let hole = block.difference(&probe_prism()).expect("cut");
+    let golden = block.canonical_bytes().expect("bytes");
+    let (block, hole) = std::thread::scope(|scope| {
+        let golden = &golden;
+        let writer = scope.spawn(move || {
+            for _ in 0..ROUNDS {
+                assert_eq!(&block.canonical_bytes().expect("bytes"), golden);
+            }
+            block
+        });
+        let mesher = scope.spawn(move || {
+            for _ in 0..ROUNDS {
+                let mesh = hole.tessellate(DEFLECTION, ANGULAR).expect("mesh").0;
+                assert_eq!(mesh.triangle_count(), 32);
+                assert!((signed_volume(&mesh) - 5280.0).abs() < 1e-6);
+            }
+            hole
+        });
+        (
+            writer.join().expect("writer thread"),
+            mesher.join().expect("mesher thread"),
+        )
+    });
+    // And neither side's identity moved.
+    assert_eq!(block.canonical_bytes().expect("bytes"), golden);
+    assert_eq!(
+        hole.canonical_bytes().expect("bytes"),
+        probe_box()
+            .difference(&probe_prism())
+            .expect("cut")
+            .canonical_bytes()
+            .expect("bytes")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// weld(): the pure-Rust half of tessellate, on synthetic per-face buffers
+// ---------------------------------------------------------------------------
+
+/// A unit cube the way OCCT hands it over: 6 faces × 4 nodes (24 positions,
+/// no sharing) and 6 × 2 triangles, counter-clockwise seen from outside.
+fn unwelded_cube() -> (Vec<f64>, Vec<u32>) {
+    // (origin, u, v) per face; quad = o, o+u, o+u+v, o+v; outward = u × v.
+    let faces: [([f64; 3], [f64; 3], [f64; 3]); 6] = [
+        ([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]), // z = 0, normal −z
+        ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]), // z = 1, normal +z
+        ([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]), // y = 0, normal −y
+        ([0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]), // y = 1, normal +y
+        ([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]), // x = 0, normal −x
+        ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]), // x = 1, normal +x
+    ];
+    let mut positions = Vec::with_capacity(24 * 3);
+    let mut indices = Vec::with_capacity(12 * 3);
+    for (face, (o, u, v)) in faces.iter().enumerate() {
+        let base = u32::try_from(face * 4).expect("small");
+        for corner in [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]] {
+            for axis in 0..3 {
+                positions.push(o[axis] + corner[0] * u[axis] + corner[1] * v[axis]);
+            }
+        }
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    (positions, indices)
+}
+
+#[test]
+fn weld_merges_per_face_nodes_into_a_watertight_mesh() {
+    let (positions, indices) = unwelded_cube();
+    let mesh = weld(&positions, &indices).expect("closed").0;
+    assert_eq!(mesh.vertex_count(), 8, "24 per-face nodes → 8 corners");
+    assert_eq!(mesh.triangle_count(), 12);
+    assert!(mesh.is_watertight());
+    assert!((signed_volume(&mesh) - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn weld_refuses_an_open_shell() {
+    // Eleven of the twelve triangles: welded, consistent, but not closed.
+    // Without the is_watertight check this would come back as a leaky
+    // `Watertight<Mesh>` — the refusal IS the contract.
+    let (positions, mut indices) = unwelded_cube();
+    indices.truncate(11 * 3);
+    let error = weld(&positions, &indices).expect_err("an open shell must be refused");
+    assert!(
+        matches!(&error, GeomError::NotWatertight { reason } if reason.contains("not closed")),
+        "{error}"
+    );
+}
+
+#[test]
+fn weld_drops_triangles_that_collapse_onto_one_vertex() {
+    // A sliver whose two nodes sit on the same position (a shared edge's
+    // duplicate, as meshers produce them): distinct indices before welding,
+    // a repeated index after. Kept, it would fail core's Mesh::new
+    // (DegenerateTriangle) or break closure; weld drops it and the rest is
+    // the same watertight cube.
+    let (mut positions, mut indices) = unwelded_cube();
+    let duplicate_of_zero = u32::try_from(positions.len() / 3).expect("small");
+    positions.extend_from_slice(&[0.0, 0.0, 0.0]); // same point as node 0
+    indices.extend_from_slice(&[0, duplicate_of_zero, 1]);
+    let mesh = weld(&positions, &indices).expect("the sliver is dropped").0;
+    assert_eq!(mesh.triangle_count(), 12);
+    assert_eq!(mesh.vertex_count(), 8);
+    assert!(mesh.is_watertight());
+}
+
+#[test]
+fn weld_treats_negative_zero_as_zero() {
+    // One face's zeros written as -0.0 (OCCT's transforms produce them):
+    // bit-different, same point; they must weld or the cube leaks.
+    let (mut positions, indices) = unwelded_cube();
+    for value in positions.iter_mut().take(12) {
+        if *value == 0.0 {
+            *value = -0.0;
+        }
+    }
+    assert!(positions.iter().any(|v| v.to_bits() == (-0.0f64).to_bits()));
+    let mesh = weld(&positions, &indices).expect("welds").0;
+    assert_eq!(mesh.vertex_count(), 8);
+    assert!(mesh.is_watertight());
+    assert!(
+        mesh.positions()
+            .iter()
+            .all(|v| v.to_bits() != (-0.0f64).to_bits()),
+        "the welded positions are canonical (+0.0)"
+    );
+}
+
+#[test]
+fn weld_refuses_ragged_and_non_finite_buffers() {
+    let (positions, indices) = unwelded_cube();
+    assert!(matches!(
+        weld(&positions[..positions.len() - 1], &indices),
+        Err(GeomError::Kernel { .. })
+    ));
+    assert!(matches!(
+        weld(&positions, &indices[..indices.len() - 1]),
+        Err(GeomError::Kernel { .. })
+    ));
+    let mut poisoned = positions.clone();
+    poisoned[4] = f64::NAN;
+    assert!(matches!(
+        weld(&poisoned, &indices),
+        Err(GeomError::Kernel { .. })
+    ));
+    let mut out_of_range = indices;
+    out_of_range[0] = 24;
+    assert!(matches!(
+        weld(&positions, &out_of_range),
+        Err(GeomError::Kernel { .. })
+    ));
 }

@@ -1217,7 +1217,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 [[package]]
 name = "opencascade-sys"
 version = "0.2.0"
-source = "git+https://github.com/bencbartlett/opencascade-rs?rev=38ed25e1dd61b5798f257269397571f7b6f8ba48#38ed25e1dd61b5798f257269397571f7b6f8ba48"
+source = "git+https://github.com/bencbartlett/opencascade-rs?rev=960a8bcb9e3dbf1916778dabb8288c1bda4c6d91#960a8bcb9e3dbf1916778dabb8288c1bda4c6d91"
 dependencies = [
  "cmake",
  "cxx",
