@@ -24,7 +24,7 @@ pub struct RangeIn {
 /// # Panics
 ///
 /// Panics when `steps < 1` — a domain cannot be divided into no steps — or
-/// when `steps` is above the 2^24 slot ceiling (16,777,216 slots).
+/// when `steps` is above the 2^22 slot ceiling (4,194,304 slots).
 ///
 /// # Examples
 ///
@@ -32,7 +32,7 @@ pub struct RangeIn {
 /// span = construct_domain(start=0.0, end=1.0)
 /// ticks = range(domain=span, steps=4)
 /// ```
-#[node(category = "Sequences & random", tier = "1", version = 1, gh = "Range")]
+#[node(category = "Sequences & random", tier = "1", version = 2, gh = "Range")]
 #[must_use]
 pub fn range(input: RangeIn) -> Vec<f64> {
     let count = checked_count("range", "steps", input.steps, 1, size_of::<f64>());
@@ -40,7 +40,7 @@ pub fn range(input: RangeIn) -> Vec<f64> {
     let span = end - start;
     // Per-element form (never accumulation) keeps every value independent
     // of evaluation order; the ends are the domain's own numbers, exactly.
-    #[allow(clippy::cast_precision_loss)] // step counts stay below 2^24
+    #[allow(clippy::cast_precision_loss)] // step counts stay below 2^22
     let steps = count as f64;
     (0..=count)
         .map(|i| {
@@ -109,7 +109,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "range: steps is 16777217 — above the 16777216 (2^24) slot ceiling")]
+    #[should_panic(expected = "range: steps is 4194305 — above the 4194304 (2^22) slot ceiling")]
     fn range_absurd_steps_is_refused_not_allocated() {
         let _ = range(RangeIn {
             domain: Domain::new(0.0, 1.0),

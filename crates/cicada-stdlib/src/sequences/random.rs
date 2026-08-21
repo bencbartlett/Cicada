@@ -30,8 +30,8 @@ pub struct RandomIn {
 ///
 /// # Panics
 ///
-/// Panics when `count` is negative or above the 2^24 slot ceiling
-/// (16,777,216 slots).
+/// Panics when `count` is negative or above the 2^22 slot ceiling
+/// (4,194,304 slots).
 ///
 /// # Examples
 ///
@@ -42,7 +42,7 @@ pub struct RandomIn {
 #[node(
     category = "Sequences & random",
     tier = "S",
-    version = 1,
+    version = 2,
     gh = "Random"
 )]
 #[must_use]
@@ -107,7 +107,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "random: count is 16777217 — above the 16777216 (2^24) slot ceiling")]
+    #[should_panic(expected = "random: count is 4194305 — above the 4194304 (2^22) slot ceiling")]
     fn random_absurd_count_is_refused_not_allocated() {
         let _ = random(RandomIn {
             domain: cicada_core::scalar::Domain::new(0.0, 1.0),

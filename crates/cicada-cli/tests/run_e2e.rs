@@ -393,7 +393,7 @@ n = length(list=nums)
     );
     assert!(err.contains("red: `nums`"), "{err}");
     assert!(
-        err.contains("count is 100000000000 — above the 16777216 (2^24) slot ceiling"),
+        err.contains("count is 100000000000 — above the 4194304 (2^22) slot ceiling"),
         "the ceiling and the count are in the message: {err}"
     );
     assert!(err.contains("blocked: `n` — fed by red `nums`"), "{err}");

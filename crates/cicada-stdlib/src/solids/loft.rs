@@ -45,8 +45,8 @@ pub struct LoftIn {
 /// self-intersecting, the sections wind in opposite directions, the
 /// sections coincide or are coplanar (zero volume), `segments < 3` for an
 /// analytic section, `segments` above the shared ceilings for an analytic
-/// section (2^24 slots, or 1 GiB of prism at 96 bytes a profile vertex:
-/// 11,184,810 is the last allowed; the message names the count and the
+/// section (2^22 slots, or 1 GiB of prism at 96 bytes a profile vertex;
+/// 4,194,304 is the last allowed; the message names the count and the
 /// ceiling that bit), or the result is not watertight.
 ///
 /// # Examples
@@ -61,7 +61,7 @@ pub struct LoftIn {
 #[node(
     category = "Surface & solid",
     tier = "S",
-    version = 1,
+    version = 2,
     gh = "Loft",
     uses_tolerance
 )]
@@ -194,16 +194,18 @@ mod tests {
     /// the ceiling that bites first for a prism.
     fn one_past_the_prism_ceiling() -> i64 {
         let bytes = u64::try_from(PRISM_BYTES_PER_PROFILE_VERTEX).unwrap();
-        i64::try_from(crate::MAX_BYTES / bytes + 1).unwrap()
+        assert!(u64::try_from(crate::MAX_SLOTS).unwrap() * bytes <= crate::MAX_BYTES);
+        crate::MAX_SLOTS + 1
     }
 
     // Analytic sections tessellate to `segments` vertices each: one past
-    // the byte ceiling is red before either section is sampled, with the
-    // count, the bytes and the ceiling in the message.
+    // the slot ceiling (the one that bites first for a prism: 2^22 vertices
+    // at 96 bytes is 384 MiB) is red before either section is sampled,
+    // with the count and the ceiling in the message.
     #[test]
     fn loft_analytic_one_past_the_ceiling_is_refused_not_allocated() {
         let segments = one_past_the_prism_ceiling();
-        assert_eq!(segments, 11_184_811);
+        assert_eq!(segments, 4_194_305);
         let panic = std::panic::catch_unwind(|| {
             loft(
                 &config(),
@@ -214,11 +216,11 @@ mod tests {
                 },
             )
         })
-        .expect_err("one profile vertex past the byte ceiling refuses");
+        .expect_err("one profile vertex past the slot ceiling refuses");
         assert_eq!(
             *panic.downcast_ref::<String>().unwrap(),
-            "loft: segments is 11184811 — 1073741856 bytes at 96 bytes a slot, above the \
-             1073741824-byte (1 GiB) ceiling of one node allocation"
+            "loft: segments is 4194305 — above the 4194304 (2^22) slot ceiling of one node \
+             output"
         );
     }
 

@@ -29,8 +29,8 @@ pub struct PadLastIn {
 /// # Panics
 ///
 /// Panics when `count` is below the list's slot count (`pad_last` only
-/// lengthens — `truncate` shortens) or above the 2^24 slot ceiling
-/// (16,777,216 slots), or when the list is empty and `count` is positive (no
+/// lengthens — `truncate` shortens) or above the 2^22 slot ceiling
+/// (4,194,304 slots), or when the list is empty and `count` is positive (no
 /// last slot to repeat).
 ///
 /// # Examples
@@ -42,7 +42,7 @@ pub struct PadLastIn {
 /// padded = pad_last(list=few, count=n)
 /// sums = add(a=each(padded), b=each(many))
 /// ```
-#[node(category = "List & axis", tier = "S", version = 1, gh = "Longest List")]
+#[node(category = "List & axis", tier = "S", version = 2, gh = "Longest List")]
 #[must_use]
 pub fn pad_last(input: PadLastIn) -> Vec<ElemSlot> {
     let mut list = input.list;
@@ -124,9 +124,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "pad_last: count is 16777217 — above the 16777216 (2^24) slot ceiling"
-    )]
+    #[should_panic(expected = "pad_last: count is 4194305 — above the 4194304 (2^22) slot ceiling")]
     fn pad_last_absurd_count_is_refused_not_allocated() {
         let _ = pad_last(PadLastIn {
             list: numbers(&[1.0]),

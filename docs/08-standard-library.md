@@ -39,35 +39,56 @@ long tail stays a non-goal.
 7. **Loud refusal.** A node missing required inputs or shown invalid data
    is red with a reason and IDs; it never guesses (wall lesson 13). Every
    count that sizes an allocation shares one **two-part ceiling**, checked
-   before the allocation: 2^24 = 16,777,216 slots
-   (`cicada_stdlib::MAX_SLOTS`) and 1 GiB of the buffer the count sizes
-   (`MAX_BYTES`, at the size of the element the node's buffer holds) —
-   whichever bites first is red with the count, the bytes and the ceiling
-   in the message, never an allocation attempt (an unbounded `count` once
-   aborted the whole engine on allocation failure, which is not a panic
-   and so could not go red — C1 review; one 112-byte slot type later the
-   slot ceiling alone was an allocation the allocator may refuse, hence
-   the byte half — v0.1 follow-up 2). Count ports go through
-   `checked_count` (`series`, `random`, `range`, `repeat`, `duplicate`,
-   `pad_last`, `linear_array`, `divide_curve`; and `segments` where it is
-   the vertex count an allocation takes: `extrude`'s circle profile,
-   `loft`'s analytic sections, `voronoi`'s circle boundary — a chain
-   profile never tessellates, so its unused port is not policed);
-   allocations that are a PRODUCT of inputs go through `checked_size` on
-   the derived count (`sphere`: `segments × rings` vertices, 5,794
-   segments is the first refused; `text_outlines` / `text_solids`: the
-   text's bézier spans × `segments`, bounded from a two-chord counting
-   pass — the heaviest bundled glyph has 540 spans, so a per-glyph
-   constant would have refused honest paragraphs). The floors
-   (`count < 0`, `segments < 3`, `segments < 1`) stay where they were —
-   the node's or the kernel's own message. It is a ceiling on the eager
-   buffer, not a memory bound: a million copies of a mesh are a million
-   meshes, and what a node computes per element is the cost model's
-   business (docs/12). No version bumps for the ceilings: every input
-   that stays valid produces the same output, and a memo hit in the
-   refused band serves an old, correct value. Chunkers (`chunk`,
-   `partition`, `truncate`, `split_list`) allocate no more than their
-   input and need no ceiling.
+   before the allocation: 2^22 = 4,194,304 slots
+   (`cicada_stdlib::MAX_SLOTS`) and 1 GiB of what the count makes the node
+   allocate (`MAX_BYTES`, at `bytes_per_slot` = the element the buffer
+   holds PLUS whatever the node builds per slot) — whichever bites first
+   is red with the count, the bytes and the ceiling in the message, never
+   an allocation attempt (an unbounded `count` once aborted the whole
+   engine on allocation failure, which is not a panic and so could not go
+   red — C1 review; one fat slot type later the slot ceiling alone was an
+   allocation the allocator may refuse, hence the byte half — v0.1
+   follow-up 2). The two halves bound different things. The SLOT half
+   bounds what a slot costs beyond the node's buffer — the value model
+   hashes every slot, the memo log serialises it, zstd compresses it —
+   and that cost is measured, not assumed: `series` at 2^24 slots peaked
+   at 9.76 GB of working set and wrote 1.4 GB to the cache (~580 bytes a
+   slot end to end, for a 128 MiB `Vec<f64>`), which is why the ceiling
+   is 2^22 and not the 15112fb 2^24: at 2^22 the process peaks at
+   2,478 MiB, what an 8 GB machine survives with room for the rest of
+   the pipeline (the measurements live on the constant's doc comment).
+   The BYTE half bounds the node's own allocation, per slot at
+   what a slot really costs: `linear_array` charges each copy its
+   `Transformable` AND the mesh or polyline it transforms (every copy is
+   a distinct geometry; a million-vertex mesh is refused at 30 copies),
+   while `duplicate`'s `Arc`-shared slots cost the slot alone. Count
+   ports go through `checked_count` (`series`, `random`, `range`,
+   `repeat`, `duplicate`, `pad_last`, `linear_array`, `divide_curve`;
+   and `segments` where it is the vertex count an allocation takes:
+   `extrude`'s circle profile, `loft`'s analytic sections, `voronoi`'s
+   circle boundary — a chain profile never tessellates, so its unused
+   port is not policed); allocations that are a PRODUCT of inputs go
+   through `checked_size` on the derived count (`sphere`: `segments ×
+   rings` vertices, 2,898 segments is the first refused; `text_outlines`
+   / `text_solids`: the text's span bound from the font's outline spans
+   without flattening — a contour start or a line span is one vertex at
+   any density, a bézier span `segments` — so a line-only glyph is never
+   refused for its density and the bound holds by construction of the
+   flattener). The floors (`count < 0`, `segments < 3`, `segments < 1`)
+   stay where they were — the node's or the kernel's own message.
+   Chunkers (`chunk`, `partition`, `truncate`, `split_list`) allocate no
+   more than their input and need no ceiling. **Versions bump with the
+   ceilings** when the newly refused band previously produced output
+   (docs/12: any behaviour change; a memo hit must not serve what a cold
+   solve refuses) — the fourteen nodes above went to version 2 with the
+   2^22 ceiling and the payload charge; 15112fb's 2^24 landed without a
+   bump only because its refused band had never produced anything (it
+   aborted). The ceilings bound memory, not time: a prism or loft
+   profile of a few hundred thousand `segments` passes them and is an
+   O(n²) ear clip that Esc cannot interrupt today (measured: 50k
+   segments 2.0 s, 100k 8.7 s, 200k 37 s) — that is the cost model's
+   and the cancellable kernel worker's business (docs/12), named in
+   docs/17 as a follow-up.
 8. **Conversions are explicit, costed nodes** (`Tessellate`, `As Closed`,
    `As Solid`) — never silent coercions. Only total, lossless upcasts
    (Circle → Curve) are implicit.

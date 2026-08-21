@@ -26,7 +26,7 @@ pub struct DuplicateIn {
 /// # Panics
 ///
 /// Panics when `count` is negative (`0` is the empty list) or above the
-/// 2^24 slot ceiling (16,777,216 slots).
+/// 2^22 slot ceiling (4,194,304 slots).
 ///
 /// # Examples
 ///
@@ -37,7 +37,7 @@ pub struct DuplicateIn {
 #[node(
     category = "List & axis",
     tier = "1",
-    version = 1,
+    version = 2,
     gh = "Duplicate Data"
 )]
 #[must_use]
@@ -101,7 +101,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "duplicate: count is 16777217 — above the 16777216 (2^24) slot ceiling"
+        expected = "duplicate: count is 4194305 — above the 4194304 (2^22) slot ceiling"
     )]
     fn duplicate_absurd_count_is_refused_not_allocated() {
         let _ = duplicate(DuplicateIn {

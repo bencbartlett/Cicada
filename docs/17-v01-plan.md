@@ -624,55 +624,93 @@ same commit (skill `add-stdlib-node`).
   for display-vs-display blocking; the live `emit_frames` still encodes
   under the session lock (changed outputs only).
 - **A count/allocation guard for every count-taking node** — **done
-  2026-08-20** (`wt/hardening`, two commits; docs/08 rule 7 is the
+  2026-08-20** (`wt/hardening`, three commits; docs/08 rule 7 is the
   contract). A slider wired into `count` could ask for a capacity the
   allocator refuses, which aborts the process — `catch_unwind` cannot
   catch it. The 2^24 slot ceiling (15112fb) already stood on eight count
-  ports; this package gave it its byte half and its product form, and
-  audited every node that allocates from a count. `slot_count` became
+  ports; this package gave it its byte half and its product form,
+  audited every node that allocates from a count, and then — after the
+  adversarial review measured what the ceilings really admitted —
+  lowered the slot half, charged per-copy payloads, counted text spans
+  instead of flattening, and bumped the versions. `slot_count` became
   `checked_count(node, port, value, least, bytes_per_slot)`: the same
-  floor and slot ceiling with the same messages (the run_e2e regression
-  still matches), plus `MAX_BYTES` = 1 GiB on `count × bytes_per_slot`,
-  the slot size passed as `size_of::<T>()` at every call so it tracks
-  the types — `linear_array`'s 112-byte `Transformable` is where the
-  byte half bites first (9,586,980 copies; 2^24 of them was a 1.8 GiB
-  Vec the slot ceiling let through). `checked_size(node, what, slots:
-  u128, bytes_per_slot)` is the same check on a derived count, for the
-  nodes whose allocation is a PRODUCT of inputs and whose port alone
-  under the ceiling proves nothing: the sphere's `segments × rings`
-  vertices (5,793 segments is the last allowed, 5,794 the first refused
-  — 16,779,426 vertices; `segments = 10^14` is refused with its
-  5 × 10^27 in the message, u128 so no overflow), and the text nodes'
-  bézier spans × `segments`, bounded from a two-chord counting pass
-  (`points(2) × segments ≥ points(segments)`, asserted over all 4,699
-  glyphs the bundled face maps at 1, 3, 8 and 64 chords; the heaviest
-  glyph has 540 spans and a typical one 20, so the per-glyph constant
-  the first draft reached for would have refused honest paragraphs).
-  `extrude` / `loft` / `voronoi` police `segments` only where it sizes
-  an allocation (a circle profile, an analytic section, a circle
-  boundary); a chain profile never tessellates and its unused port is
-  not policed, which keeps every previously-valid input valid. Audited
+  floor with the same messages (the run_e2e regression still matches),
+  `MAX_SLOTS` = 2^22 (4,194,304), and `MAX_BYTES` = 1 GiB on `count ×
+  bytes_per_slot`. Why 2^22 and not 2^24: the review measured the
+  end-to-end cost of a slot (value-model hashing + memo log + zstd) —
+  `series` at 2^24 peaked at 9,763 MiB of working set and wrote 1.4 GB
+  to the cache, ~580 bytes a slot for an 8-byte element — so the 2^24
+  band let a slider reach the allocator-failure abort on an 8–16 GB
+  machine a few million slots UNDER the ceiling; at 2^22 the process
+  peaks at 2,478 MiB in 4.1 s (measured the same way; the numbers are
+  on the constant). `bytes_per_slot` is what a slot makes the node
+  allocate, not the element's `size_of` alone: `linear_array` charges
+  each copy its `Transformable` plus the mesh or polyline it transforms
+  (`transform::support::payload_bytes`; every copy is a fresh geometry —
+  the review measured 3.5 GB committed for 100 copies of a 24 MB sphere
+  against a guard counting 11,200 bytes), so a million-vertex mesh is
+  refused at 30 copies; `duplicate`'s `Arc`-shared slots stay the slot
+  alone. `checked_size(node, what, slots: u128, bytes_per_slot)` is the
+  same check on a derived count, for the nodes whose allocation is a
+  PRODUCT of inputs: the sphere's `segments × rings` vertices (2,897
+  segments is the last allowed, 2,898 the first refused — 4,196,306
+  vertices; `segments = 10^14` is refused with its 5 × 10^27 in the
+  message, u128 so no overflow), and the text nodes' span bound — now
+  from `Font::outline_spans` (cicada-geom), which counts the outline
+  callbacks without flattening: a contour start or a line span is at
+  most one vertex at any density, a bézier span at most `segments`, so
+  the bound holds by construction of the flattener (it only ever drops
+  vertices), a line-only glyph (`A`) is never refused for its density,
+  and the single-closed-loop contour a two-chord counting pass dropped
+  is counted like any other span; asserted over every glyph of every
+  bundled face at 1, 2, 3, 8 and 64 chords, and against a synthetic
+  loop / square / degenerate span in the geom tests. `extrude` / `loft`
+  / `voronoi` police `segments` only where it sizes an allocation (a
+  circle profile, an analytic section, a circle boundary); a chain
+  profile never tessellates and its unused port is not policed. Audited
   and left alone, with the reason: `chunk`, `partition`, `truncate`,
   `split_list`, `shift_list`, `item`, `weave`, `insert_items` allocate
   no more than their input; `jitter`'s integer is a seed. Floors stay
-  where they were (the node's or the kernel's message). No version
-  bumps: every input that stays valid produces the same output (golden
-  hashes unchanged), and a memo hit in the refused band serves an old,
-  correct value. Tests: message-exact unit tests for both helpers at
-  both ceilings (inclusive bounds, the overflow-proof product); per node
-  a case one past the ceiling that bites first (red with the exact
-  message; for the sphere and the text nodes the count that would have
-  been built is the product in the message) plus, where the port is
-  unused for a chain input, the same count building the same mesh it
-  always did; the sphere's vertex formula pinned to the kernel's count
-  (266 at 24 segments, and per proptest draw); the text bound pinned
-  against what the layout really produces (within 4×). "No allocation"
-  is proven by construction and by the absurd-count cases (a
-  `100000000000` count is a 800 GB Vec the process could not survive —
-  the run_e2e regression asserts "memory allocation" never appears): a
+  where they were (the node's or the kernel's message). **Versions
+  bumped to 2** on the fourteen nodes whose previously-valid band is now
+  red (`series`, `range`, `random`, `repeat`, `duplicate`, `pad_last`,
+  `divide_curve`, `linear_array`, `sphere`, `extrude`, `loft`,
+  `voronoi`, `text_outlines`, `text_solids`): docs/12 says any behaviour
+  change, and the review reproduced the alternative — one binary serving
+  a memo hit for `text_outlines(segments=2000000)` that a cold solve
+  refuses; the wall recomputes once (cold carve 3.8 s). Golden hashes
+  unchanged (value hashes, not keys). Tests: message-exact unit tests
+  for both helpers at both ceilings (inclusive bounds, the overflow-proof
+  product); per node a case one past the ceiling that bites first (red
+  with the exact message) plus, where the port is unused for a chain
+  input, the same count building the same mesh it always did; the
+  sphere's vertex formula pinned to the kernel's count; `linear_array`'s
+  fat-mesh case (36 MB × 30 refused with the per-copy bytes in the
+  message, 2 copies built), its polyline-vs-circle case and its
+  slot-ceiling case; the text bound pinned within 2× of what the layout
+  produces. "No allocation" is proven by the absurd-count cases — with
+  the guard moved after the allocation, `series(10^11)`, `sphere(10^14)`,
+  `linear_array(10^11)` and now `text_outlines("O", 10^11)` /
+  `text_solids("O", 10^11)` (~10^12 outline vertices) cannot complete:
+  the review's mutation showed the earlier line-only `A` cases proved
+  nothing (an `A` is eleven line vertices at any density), and the `O`
+  mutation was re-run here — the test binary was still growing at
+  8.5 GB after 15 s and was killed. The cap+1 cases pin the boundary and
+  the message; only the absurd cases detect a guard-after mutation. A
   test-only counting `#[global_allocator]` would have proven it at
   exactly cap+1 but needs `unsafe` outside an FFI seam, which the rules
   forbid — recorded as the one assertion not made.
+- **Tessellation `segments` bound memory, not time** (found by the
+  guard review, verified 2026-08-20): `extrude` of a circle at 50k
+  segments takes 2.0 s, 100k 8.7 s, 200k 37 s (release; the cap ear clip
+  is O(n²)) — everything under the 2^22 ceiling is admitted and a slider
+  past ~10^5 is an hours-long, uncancellable solve (Esc cannot interrupt
+  an in-kernel call today). A `segments`-only ceiling would be partial
+  (a 200k-vertex polyline profile from `divide_curve` reaches the same
+  clipper), so this is the cost model's and the cancellable kernel
+  worker's (docs/12): a per-node cost estimate before the call, and a
+  convex fast path in the clipper. Until then, the numbers are in docs/08
+  rule 7.
 - **CI solves every `examples/*.cic`.** Only `02-solids` is exercised (by
   the Playwright smoke); a `cicada-cli` test that runs each example headless
   with a fresh `--cache-dir` keeps `06-lists` and the rest solving.

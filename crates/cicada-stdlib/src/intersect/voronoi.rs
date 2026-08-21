@@ -38,7 +38,7 @@ pub struct VoronoiOut {
 /// tolerance, or owns no area inside the boundary; when `seeds` is
 /// empty; when `segments < 3`; or — for a circle boundary, the one that
 /// tessellates to `segments` vertices — when `segments` is above the
-/// shared ceilings (2^24 slots; the message names the count and the
+/// shared ceilings (2^22 slots; the message names the count and the
 /// ceiling).
 ///
 /// # Examples
@@ -55,7 +55,7 @@ pub struct VoronoiOut {
 #[node(
     category = "Intersect & regions",
     tier = "S",
-    version = 1,
+    version = 2,
     gh = "Voronoi",
     uses_tolerance
 )]
@@ -152,7 +152,7 @@ mod tests {
     // slot ceiling is red before the boundary is sampled.
     #[test]
     #[should_panic(
-        expected = "voronoi: segments is 16777217 — above the 16777216 (2^24) slot ceiling"
+        expected = "voronoi: segments is 4194305 — above the 4194304 (2^22) slot ceiling"
     )]
     fn voronoi_circle_one_past_the_ceiling_is_refused_not_allocated() {
         let _ = voronoi(

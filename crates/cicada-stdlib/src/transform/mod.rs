@@ -5,7 +5,6 @@
 //! spike transform is a similarity, so analytic curves transform EXACTLY
 //! (`cicada_geom::transform`).
 
-#[cfg(test)]
 pub(crate) mod support;
 
 pub mod linear_array;

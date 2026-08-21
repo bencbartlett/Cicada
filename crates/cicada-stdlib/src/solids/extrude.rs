@@ -33,8 +33,8 @@ pub struct ExtrudeIn {
 /// direction lies in the profile plane, `segments < 3`, the profile
 /// polygon is self-intersecting, or — for a circle profile, the one that
 /// tessellates to `segments` vertices — `segments` is above the shared
-/// ceilings (2^24 slots, or 1 GiB of prism at 96 bytes a profile vertex:
-/// 11,184,810 is the last allowed; the message names the count and the
+/// ceilings (2^22 slots, or 1 GiB of prism at 96 bytes a profile vertex;
+/// 4,194,304 is the last allowed; the message names the count and the
 /// ceiling that bit).
 ///
 /// # Examples
@@ -47,7 +47,7 @@ pub struct ExtrudeIn {
 #[node(
     category = "Surface & solid",
     tier = "S",
-    version = 1,
+    version = 2,
     gh = "Extrude",
     uses_tolerance
 )]
@@ -105,11 +105,13 @@ mod tests {
         }))
     }
 
-    /// One profile vertex past the 1 GiB prism ceiling (96 bytes each):
-    /// the ceiling that bites first for a prism.
+    /// One profile vertex past the ceiling that bites first for a prism:
+    /// the slot ceiling (2^22 vertices at 96 bytes is 384 MiB, under the
+    /// byte ceiling).
     fn one_past_the_prism_ceiling() -> i64 {
         let bytes = u64::try_from(PRISM_BYTES_PER_PROFILE_VERTEX).unwrap();
-        i64::try_from(crate::MAX_BYTES / bytes + 1).unwrap()
+        assert!(u64::try_from(crate::MAX_SLOTS).unwrap() * bytes <= crate::MAX_BYTES);
+        crate::MAX_SLOTS + 1
     }
 
     #[test]
@@ -126,12 +128,12 @@ mod tests {
     }
 
     // A circle profile tessellates to `segments` vertices: one past the
-    // byte ceiling is red — before the kernel samples a single point —
-    // with the count, the bytes and the ceiling in the message.
+    // slot ceiling is red — before the kernel samples a single point —
+    // with the count and the ceiling in the message.
     #[test]
     fn extrude_circle_one_past_the_ceiling_is_refused_not_allocated() {
         let segments = one_past_the_prism_ceiling();
-        assert_eq!(segments, 11_184_811);
+        assert_eq!(segments, 4_194_305);
         let panic = std::panic::catch_unwind(|| {
             extrude(
                 &config(),
@@ -142,11 +144,11 @@ mod tests {
                 },
             )
         })
-        .expect_err("one profile vertex past the byte ceiling refuses");
+        .expect_err("one profile vertex past the slot ceiling refuses");
         assert_eq!(
             *panic.downcast_ref::<String>().unwrap(),
-            "extrude: segments is 11184811 — 1073741856 bytes at 96 bytes a slot, above the \
-             1073741824-byte (1 GiB) ceiling of one node allocation"
+            "extrude: segments is 4194305 — above the 4194304 (2^22) slot ceiling of one node \
+             output"
         );
     }
 

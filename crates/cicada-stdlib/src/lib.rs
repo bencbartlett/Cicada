@@ -38,29 +38,46 @@ pub(crate) fn red<T>(result: Result<T, cicada_geom::GeomError>) -> T {
     }
 }
 
-/// The most slots one count port may ask a node to produce: 2^24
-/// (16,777,216). A count above it is a red node, never an attempt to
+/// The most slots one count port may ask a node to produce: 2^22
+/// (4,194,304). A count above it is a red node, never an attempt to
 /// allocate it — an unbounded `count` once aborted the whole engine on
 /// allocation failure (`series(count=100000000000)`: "memory allocation of
 /// 800000000000 bytes failed", which is not a panic, so the scheduler could
 /// not turn it red and `cicada serve` would have died with it; C1 review).
-/// Why 2^24: no design asks one node for more elements than that (the
-/// production wall is 1,200 parts; a 4K-resolution point grid is 8M), and
-/// the value model hashes every slot on its way out (~100 bytes a slot), so
-/// 2^24 slots is already ~1.7 GB of list — beyond it the refusal is the
-/// useful answer. This is a SLOT ceiling — it keeps absurd counts loud, it
-/// does not bound memory: a million copies of a mesh are a million meshes.
-pub const MAX_SLOTS: i64 = 1 << 24;
+/// Why 2^22: the slot ceiling is the one that bounds what a slot costs
+/// BEYOND the node's own buffer — the value model hashes every slot on its
+/// way out, the memo log serialises it and zstd compresses it — and that
+/// cost was measured, not guessed (v0.1 follow-up 2, release engine, fresh
+/// cache, peak working set): `series` at 2^24 slots peaked at 9,763 MiB
+/// and wrote 1.4 GB to the cache (a 128 MiB `Vec<f64>` became ~580 bytes
+/// a slot end to end); at 2^22 it peaks at 2,478 MiB in 4.1 s and writes
+/// 348 MB (2^21: 1,249 MiB — the cost is linear), and the last allowed
+/// sphere (2,897 segments, 4.19M vertices) peaks at 650 MiB. 2^22 is the
+/// largest power of two whose end-to-end footprint an 8 GB machine
+/// survives with room for the rest of the pipeline; the earlier 2^24
+/// (15112fb) bounded the buffer and let the process reach the allocator
+/// failure a few million slots under its own ceiling. No design needs
+/// more elements in ONE list (the production wall is 1,200 parts; an 8M
+/// point grid is a fan-out or a mesh, not a list the value model hashes
+/// slot by slot). This is a SLOT ceiling — it keeps absurd counts loud and
+/// the per-slot overhead bounded; the bytes a fat slot allocates are the
+/// other half, [`MAX_BYTES`].
+pub const MAX_SLOTS: i64 = 1 << 22;
 
 /// The most bytes one count-driven buffer may take up front: 1 GiB. The
 /// second half of the cap ([`MAX_SLOTS`] is the first; whichever bites
-/// first refuses): it is what makes fat slots honest — 2^24 copies of a
-/// 112-byte `Transformable` or 2^24 profile vertices of a capped prism
-/// (96 bytes each) are several GiB the allocator may refuse, and an
+/// first refuses): it is what makes fat slots honest — thirty copies of a
+/// 36 MB mesh are already a GiB the allocator may refuse, and an
 /// allocation failure aborts the engine instead of going red. 1 GiB is the
-/// largest single buffer a node should build eagerly without the
-/// scheduler's cost model knowing about it; every legitimate output the
-/// gates measure (docs/15) is two orders of magnitude below it.
+/// largest single buffer a node may build eagerly without the scheduler's
+/// cost model knowing about it; what the process commits on top of that
+/// buffer is bounded by the slot half (see its measurements) — the two
+/// halves are read together. Under a 2^22 slot ceiling only a slot above
+/// 256 bytes can reach this half: the bare element types (`f64`,
+/// `ElemSlot`, the 112-byte `Transformable`, a 96-byte prism vertex) never
+/// do, a slot with a PAYLOAD does — so `bytes_per_slot` at every call site
+/// is what a slot really makes the node allocate (`linear_array` charges
+/// each copy its mesh or polyline), not the element's `size_of` alone.
 pub const MAX_BYTES: u64 = 1 << 30;
 
 /// What one vertex costs in a closed triangle mesh built from a count (a
@@ -78,10 +95,13 @@ pub(crate) const PRISM_BYTES_PER_PROFILE_VERTEX: usize = 2 * 3 * 8 + 4 * 3 * 4;
 /// for a count, `1` for a step count, `3` for a tessellation), red above
 /// [`MAX_SLOTS`], and red when `count × bytes_per_slot` is above
 /// [`MAX_BYTES`] — the port's name and value in the message either way,
-/// and never an allocation. `bytes_per_slot` is the size of the element the
-/// node's buffer holds (`size_of::<f64>()` for a number list, the
-/// `Transformable` of a copy, a prism's cost per profile vertex) — the
-/// eager allocation the count sizes, not the payload behind it. Every node
+/// and never an allocation. `bytes_per_slot` is what one slot makes the
+/// node allocate: the element the buffer holds (`size_of::<f64>()` for a
+/// number list, a prism's cost per profile vertex) PLUS whatever the node
+/// builds per slot behind it (`linear_array` transforms a fresh copy of its
+/// geometry per slot, so a copy costs the `Transformable` and its mesh or
+/// polyline payload — see [`transform::support::payload_bytes`]); a node
+/// whose slots share one value (`duplicate`) counts the slot alone. Every node
 /// whose output length is a port goes through here (`series` is the
 /// original pattern); a node whose allocation is a PRODUCT of inputs (the
 /// sphere, the text nodes) computes the product and goes through
@@ -99,10 +119,10 @@ pub(crate) fn checked_count(
     );
     assert!(
         value <= MAX_SLOTS,
-        "{node}: {port} is {value} — above the {MAX_SLOTS} (2^24) slot ceiling of one node \
+        "{node}: {port} is {value} — above the {MAX_SLOTS} (2^22) slot ceiling of one node \
          output"
     );
-    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)] // 0 <= value <= 2^24
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)] // 0 <= value <= 2^22
     let count = value as usize;
     let bytes = bytes_of(count, bytes_per_slot);
     assert!(
@@ -123,10 +143,10 @@ pub(crate) fn checked_count(
 pub(crate) fn checked_size(node: &str, what: &str, slots: u128, bytes_per_slot: usize) -> usize {
     assert!(
         slots <= u128::from(MAX_SLOTS.unsigned_abs()),
-        "{node}: {what} would be {slots} — above the {MAX_SLOTS} (2^24) slot ceiling of one \
+        "{node}: {what} would be {slots} — above the {MAX_SLOTS} (2^22) slot ceiling of one \
          node output"
     );
-    #[allow(clippy::cast_possible_truncation)] // slots <= 2^24
+    #[allow(clippy::cast_possible_truncation)] // slots <= 2^22
     let count = slots as usize;
     let bytes = bytes_of(count, bytes_per_slot);
     assert!(
@@ -221,8 +241,8 @@ mod tests {
         assert_eq!(checked_count("range", "steps", 1, 1, 8), 1);
         assert_eq!(
             checked_count("duplicate", "count", MAX_SLOTS, 0, 8),
-            16_777_216,
-            "the slot ceiling itself is allowed (2^24 × 8 bytes is 128 MiB)"
+            4_194_304,
+            "the slot ceiling itself is allowed (2^22 × 8 bytes is 32 MiB)"
         );
         assert_eq!(
             checked_count("linear_array", "count", 1 << 20, 1, 1024),
@@ -237,7 +257,7 @@ mod tests {
                 .expect_err("above the slot ceiling refuses");
         assert_eq!(
             message(above),
-            "repeat: count is 16777217 — above the 16777216 (2^24) slot ceiling of one node \
+            "repeat: count is 4194305 — above the 4194304 (2^22) slot ceiling of one node \
              output"
         );
         let fat = std::panic::catch_unwind(|| {
@@ -255,16 +275,16 @@ mod tests {
     fn checked_size_refuses_products_at_either_ceiling() {
         assert_eq!(checked_size("sphere", "vertices", 0, 48), 0);
         assert_eq!(
-            checked_size("sphere", "vertices", 1 << 24, 48),
-            16_777_216,
-            "2^24 vertices × 48 bytes is 768 MiB: under both ceilings"
+            checked_size("sphere", "vertices", 1 << 22, 48),
+            4_194_304,
+            "2^22 vertices × 48 bytes is 192 MiB: under both ceilings"
         );
         let slots =
-            std::panic::catch_unwind(|| checked_size("sphere", "vertices", (1 << 24) + 1, 48))
+            std::panic::catch_unwind(|| checked_size("sphere", "vertices", (1 << 22) + 1, 48))
                 .expect_err("above the slot ceiling refuses");
         assert_eq!(
             message(slots),
-            "sphere: vertices would be 16777217 — above the 16777216 (2^24) slot ceiling of one \
+            "sphere: vertices would be 4194305 — above the 4194304 (2^22) slot ceiling of one \
              node output"
         );
         // A product far beyond u64 (a 2^40-segment sphere) is refused with
@@ -278,19 +298,27 @@ mod tests {
             huge.starts_with("sphere: vertices would be 604462909807314587353088 —"),
             "{huge}"
         );
+        // The byte half, with a slot fat enough that it bites under the slot
+        // ceiling (1 GiB / 1024 bytes = 2^20 slots).
         let bytes = std::panic::catch_unwind(|| {
-            checked_size("text_solids", "outline vertices", 11_184_811, 96)
+            checked_size("linear_array", "copies", (1 << 20) + 1, 1024)
         })
         .expect_err("above the byte ceiling refuses");
         assert_eq!(
             message(bytes),
-            "text_solids: outline vertices would be 11184811 — 1073741856 bytes at 96 bytes \
-             each, above the 1073741824-byte (1 GiB) ceiling of one node allocation"
+            "linear_array: copies would be 1048577 — 1073742848 bytes at 1024 bytes each, \
+             above the 1073741824-byte (1 GiB) ceiling of one node allocation"
         );
         assert_eq!(
-            checked_size("text_solids", "outline vertices", 11_184_810, 96),
-            11_184_810,
-            "one slot under the byte ceiling is allowed"
+            checked_size("linear_array", "copies", 1 << 20, 1024),
+            1 << 20,
+            "the byte ceiling itself is allowed"
+        );
+        // Under the slot ceiling, a 96-byte prism vertex never reaches the
+        // byte half: 2^22 × 96 is 384 MiB.
+        assert_eq!(
+            checked_size("text_solids", "outline vertices", 1 << 22, 96),
+            1 << 22
         );
     }
 

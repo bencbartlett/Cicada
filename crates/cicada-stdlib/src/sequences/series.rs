@@ -27,7 +27,7 @@ pub struct SeriesIn {
 ///
 /// Panics when `count` is negative — loud refusal, never a silent empty
 /// list (the scheduler turns node panics into red nodes, stage 3) — or
-/// above the 2^24 slot ceiling (16,777,216 slots — an unbounded count once
+/// above the 2^22 slot ceiling (4,194,304 slots — an unbounded count once
 /// aborted the engine on allocation failure instead of going red).
 ///
 /// # Examples
@@ -38,7 +38,7 @@ pub struct SeriesIn {
 #[node(
     category = "Sequences & random",
     tier = "S",
-    version = 1,
+    version = 2,
     gh = "Series"
 )]
 #[must_use]
@@ -46,7 +46,7 @@ pub fn series(input: SeriesIn) -> Vec<f64> {
     let count = checked_count("series", "count", input.count, 0, size_of::<f64>());
     // Per-element multiply (not accumulation) keeps results exact-of-form
     // start + step·i and independent of evaluation order. Counts stay below
-    // 2^24 (the slot ceiling), so the cast is loss-free.
+    // 2^22 (the slot ceiling), so the cast is loss-free.
     #[allow(clippy::cast_precision_loss)]
     (0..count)
         .map(|i| input.start + input.step * i as f64)
@@ -102,7 +102,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "series: count is 100000000000 — above the 16777216 (2^24) slot ceiling"
+        expected = "series: count is 100000000000 — above the 4194304 (2^22) slot ceiling"
     )]
     fn absurd_count_is_refused_not_allocated() {
         let _ = series(SeriesIn {

@@ -34,8 +34,8 @@ pub struct DivideCurveOut {
 ///
 /// # Panics
 ///
-/// Panics when `count < 1`, when `count` is above the 2^24 slot ceiling
-/// (16,777,216 slots), or when the curve is degenerate at tolerance (no usable
+/// Panics when `count < 1`, when `count` is above the 2^22 slot ceiling
+/// (4,194,304 slots), or when the curve is degenerate at tolerance (no usable
 /// length, zero radius, collapsed frame).
 ///
 /// # Examples
@@ -47,7 +47,7 @@ pub struct DivideCurveOut {
 #[node(
     category = "Curve",
     tier = "S",
-    version = 1,
+    version = 2,
     gh = "Divide Curve",
     uses_tolerance
 )]
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "divide_curve: count is 16777217 — above the 16777216 (2^24) slot ceiling"
+        expected = "divide_curve: count is 4194305 — above the 4194304 (2^22) slot ceiling"
     )]
     fn divide_curve_absurd_count_is_refused_not_allocated() {
         let _ = divide_curve(

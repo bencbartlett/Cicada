@@ -26,8 +26,8 @@ pub struct RepeatIn {
 ///
 /// # Panics
 ///
-/// Panics when `count` is negative or above the 2^24 slot ceiling
-/// (16,777,216 slots), or when the pattern is empty and `count` is positive
+/// Panics when `count` is negative or above the 2^22 slot ceiling
+/// (4,194,304 slots), or when the pattern is empty and `count` is positive
 /// (nothing to repeat).
 ///
 /// # Examples
@@ -39,7 +39,7 @@ pub struct RepeatIn {
 #[node(
     category = "Sequences & random",
     tier = "1",
-    version = 1,
+    version = 2,
     gh = "Repeat Data"
 )]
 #[must_use]
@@ -116,7 +116,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "repeat: count is 16777217 — above the 16777216 (2^24) slot ceiling")]
+    #[should_panic(expected = "repeat: count is 4194305 — above the 4194304 (2^22) slot ceiling")]
     fn repeat_absurd_count_is_refused_not_allocated() {
         let _ = repeat(RepeatIn {
             pattern: numbers(&[1.0]),

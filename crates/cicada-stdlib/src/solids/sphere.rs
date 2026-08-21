@@ -32,9 +32,9 @@ pub struct SphereIn {
 ///
 /// Panics when the radius is not above tolerance, `segments < 3`, the
 /// plane is degenerate, or the sphere's vertex count (`segments × rings`,
-/// rings = `segments / 2`) would be above the shared ceilings (2^24 slots,
+/// rings = `segments / 2`) would be above the shared ceilings (2^22 slots,
 /// or 1 GiB of mesh — the message names the count and the ceiling that
-/// bit; 5,794 segments is the first refused).
+/// bit; 2,898 segments is the first refused).
 ///
 /// # Examples
 ///
@@ -44,7 +44,7 @@ pub struct SphereIn {
 #[node(
     category = "Surface & solid",
     tier = "S",
-    version = 1,
+    version = 2,
     gh = "Sphere",
     uses_tolerance
 )]
@@ -120,18 +120,19 @@ mod tests {
         );
     }
 
-    // The slot ceiling on the DERIVED vertex count: 5,793 segments is the
-    // last sphere under 2^24 vertices (16,770,737), 5,794 the first over
-    // (16,779,426) — red before the kernel allocates a single position.
+    // The slot ceiling on the DERIVED vertex count: 2,897 segments is the
+    // last sphere under 2^22 vertices (4,191,961), 2,898 the first over
+    // (4,196,306) — red before the kernel allocates a single position.
     #[test]
-    fn sphere_vertex_ceiling_sits_between_5793_and_5794_segments() {
-        assert!(sphere_vertex_count(5793) <= u128::from(crate::MAX_SLOTS.unsigned_abs()));
-        assert_eq!(sphere_vertex_count(5794), 16_779_426);
+    fn sphere_vertex_ceiling_sits_between_2897_and_2898_segments() {
+        assert_eq!(sphere_vertex_count(2897), 4_191_961);
+        assert!(sphere_vertex_count(2897) <= u128::from(crate::MAX_SLOTS.unsigned_abs()));
+        assert_eq!(sphere_vertex_count(2898), 4_196_306);
     }
 
     #[test]
     #[should_panic(
-        expected = "sphere: vertices would be 16779426 — above the 16777216 (2^24) slot ceiling"
+        expected = "sphere: vertices would be 4196306 — above the 4194304 (2^22) slot ceiling"
     )]
     fn sphere_one_segment_past_the_vertex_ceiling_is_refused_not_allocated() {
         let _ = sphere(
@@ -139,7 +140,7 @@ mod tests {
             SphereIn {
                 plane: Plane::world_xy(),
                 radius: 1.0,
-                segments: 5794,
+                segments: 2898,
             },
         );
     }
