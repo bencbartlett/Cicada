@@ -1205,8 +1205,9 @@ impl Session {
     /// of store reads and encoding, during which every other client's
     /// intent and every broadcast used to wait on `inner`, and the joiner's
     /// own `hello`/`snapshot` sat behind the build. Now the lock is held
-    /// three times briefly: to read the plan (the display table as of the
-    /// reset), per output to hand the frames over, and for the notices.
+    /// only briefly: to read the plan (the display table as of the reset),
+    /// per output twice — is the client still here, before its load and
+    /// encode; the hand-over after — and for the notices.
     /// The per-output hand-over is a compare-and-send: if the table no
     /// longer says what the plan read (hash AND generation), the live path
     /// already broadcast the newer frames — or the `clear` — to this
