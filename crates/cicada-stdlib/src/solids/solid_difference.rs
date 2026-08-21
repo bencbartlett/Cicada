@@ -63,11 +63,17 @@ mod tests {
 
     use super::*;
     use crate::solids::support::{
-        brep_box, close_rel, config, plane_at, platform_golden, solid_hash, volume_of, with_kernel,
+        brep_box, close_rel, config, expect_red, fixture, plane_at, platform_golden, solid_hash,
+        volume_of, with_kernel,
     };
 
     fn drill(x: f64, y: f64) -> Solid {
-        cicada_geom::solid::cylinder(&plane_at(x, y, -1.0), 0.5, 6.0, config().tol()).unwrap()
+        fixture(cicada_geom::solid::cylinder(
+            &plane_at(x, y, -1.0),
+            0.5,
+            6.0,
+            config().tol(),
+        ))
     }
 
     #[test]
@@ -112,43 +118,37 @@ mod tests {
 
     #[test]
     fn solid_difference_that_splits_or_empties_is_red() {
-        let Some(()) = with_kernel(|| {
-            let block = brep_box([0.0; 3], [4.0; 3]);
-            // The red text is the rule and the way out — the count says
-            // whether the cut split the solid or emptied it — never a glue
-            // identifier or a kernel enum number.
-            for (cutter, expected) in [
-                (
-                    brep_box([-1.0, 1.5, -1.0], [6.0, 1.0, 6.0]), // a slab through the middle
-                    "cut left 2 solids — a Solid is one body; change the inputs so one piece \
-                     remains, or build the pieces as separate solids",
-                ),
-                (
-                    brep_box([-1.0; 3], [6.0; 3]), // everything
-                    "cut left no solid — a Solid is one body, and nothing remains (the operands \
-                     do not overlap the way this operation needs)",
-                ),
-            ] {
-                let outcome = std::panic::catch_unwind(|| {
+        let block = brep_box([0.0; 3], [4.0; 3]);
+        // The red text is the rule and the way out — the count says whether
+        // the cut split the solid or emptied it — never a glue identifier or
+        // a kernel enum number. Both worlds: without the kernel the same
+        // calls are red with the typed kernel refusal.
+        for (cutter, expected) in [
+            (
+                brep_box([-1.0, 1.5, -1.0], [6.0, 1.0, 6.0]), // a slab through the middle
+                "cut left 2 solids — a Solid is one body; change the inputs so one piece \
+                 remains, or build the pieces as separate solids",
+            ),
+            (
+                brep_box([-1.0; 3], [6.0; 3]), // everything
+                "cut left no solid — a Solid is one body, and nothing remains (the operands \
+                 do not overlap the way this operation needs)",
+            ),
+        ] {
+            let message = expect_red(
+                || {
                     solid_difference(SolidDifferenceIn {
                         solid: block.clone(),
                         cutters: vec![cutter],
                     })
-                });
-                let payload = outcome.expect_err("not one solid");
-                let message = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .unwrap_or_default();
-                assert!(message.contains(expected), "{message}");
-                assert!(
-                    !message.contains("cicada_") && !message.contains("shape type"),
-                    "{message}"
-                );
-            }
-        }) else {
-            return;
-        };
+                },
+                expected,
+            );
+            assert!(
+                !message.contains("cicada_") && !message.contains("shape type"),
+                "{message}"
+            );
+        }
     }
 
     proptest::proptest! {

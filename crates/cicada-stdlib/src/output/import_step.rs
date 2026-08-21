@@ -66,10 +66,15 @@ mod tests {
     use super::*;
     use crate::solids::support::{bounds_of, brep_box, config, volume_of, with_kernel};
 
+    /// The file under test, written by the kernel; without the kernel the
+    /// path is returned unwritten, so the node under test — not this
+    /// fixture — is what refuses.
     fn write(dir: &tempfile::TempDir, name: &str, solids: &[Solid], mm: f64) -> String {
         let path = dir.path().join(name).to_string_lossy().into_owned();
-        cicada_geom::solid::write_step(solids, &path, mm, "t").unwrap();
-        path
+        match cicada_geom::solid::write_step(solids, &path, mm, "t") {
+            Ok(()) | Err(cicada_geom::GeomError::KernelUnavailable { .. }) => path,
+            Err(error) => panic!("fixture: {error}"),
+        }
     }
 
     #[test]

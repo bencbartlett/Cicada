@@ -1358,6 +1358,15 @@ pub fn write_step(
     millimeters: f64,
     name: &str,
 ) -> Result<(), GeomError> {
+    // An input refusal precedes the kernel: the same red in both worlds
+    // (the seam repeats the check for its own callers).
+    if solids.is_empty() {
+        return Err(GeomError::BadParameter {
+            name: "solids",
+            value: "[]".to_owned(),
+            requirement: "at least one solid to write",
+        });
+    }
     node_backend::write_step(solids, path, millimeters, name)
 }
 

@@ -283,13 +283,16 @@ review` / `--bless`), never by hand.
   exports the env — the kernel is a default feature of `cicada-geom`
   since v0.1 item 3 WP-C, so every job compiles the two glue
   translation units and links OCCT. The Linux job also runs
-  `cargo test -p cicada-geom --no-default-features`: the kernel-free
-  world — every Solid call a typed `KernelUnavailable` — is a tested
-  contract in the one crate that has it, not a compile check (the
-  server's and scheduler's tests have no kernel-free arm since
-  2026-08-21: cicada-server links the kernel unconditionally, so such
-  arms were dead code asserted by no run). Rust build caching via
-  `rust-cache`.
+  `cargo test -p cicada-geom --no-default-features` and `cargo test -p
+  cicada-stdlib --no-default-features`: the kernel-free world — every
+  Solid call a typed `KernelUnavailable`, every Solid NODE red with it —
+  is a tested contract in the two crates that have it, not a compile
+  check (the stdlib gained its own forwarding `occt` feature in the WP-C
+  review closure of 2026-08-21, when the review showed its "both
+  worlds" refusal arms had never executed; the server's and scheduler's
+  tests have no kernel-free arm since the same day: cicada-server links
+  the kernel unconditionally, so such arms were dead code asserted by no
+  run). Rust build caching via `rust-cache`.
 - **Nightly**: full test matrix (Linux/Windows/macOS) — where the
   canonical-bytes golden hashes' cross-OS identity is measured (macOS
   arm64 with an rpath instead of `DYLD_LIBRARY_PATH`); wall-corpus
@@ -297,8 +300,9 @@ review` / `--bless`), never by hand.
   baselines (fail on >10% regression); `cargo deny` + `cargo audit`.
 - **The `occt` feature rule**: the feature is ON by default (the
   product's `box` / `extrude` / … nodes need the kernel); a kernel-free
-  build is `--no-default-features` on `cicada-geom` alone and nothing in
-  CI runs `--all-features`. The cross-OS golden policy (DECISIONS.md row
+  build is `--no-default-features` on `cicada-geom` or `cicada-stdlib`
+  (whose `occt` forwards to geom's) and nothing in CI runs
+  `--all-features`. The cross-OS golden policy (DECISIONS.md row
   42) has its mechanism in the tests: `platform_golden(win64)` in
   `cicada-geom/src/occt/tests.rs` and `cicada-stdlib/src/solids/support.rs`
   is the one door a second OS's arm enters by, and the three-OS verdict

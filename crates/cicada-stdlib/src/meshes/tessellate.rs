@@ -82,7 +82,9 @@ mod tests {
     use cicada_geom::meshbuild::signed_volume;
 
     use super::*;
-    use crate::solids::support::{brep_box, close_rel, config, plane_at, with_kernel};
+    use crate::solids::support::{
+        brep_box, close_rel, config, expect_red, fixture, plane_at, with_kernel,
+    };
 
     #[test]
     fn tessellate_table_cases() {
@@ -102,8 +104,11 @@ mod tests {
         assert!(close_rel(signed_volume(&cube.0), 6.0, 1e-12));
         // A sphere: finer deflection, more triangles, volume closer to
         // 4/3 π r³ — and watertight both times.
-        let ball =
-            cicada_geom::solid::sphere(&plane_at(0.0, 0.0, 0.0), 2.0, config().tol()).unwrap();
+        let ball = fixture(cicada_geom::solid::sphere(
+            &plane_at(0.0, 0.0, 0.0),
+            2.0,
+            config().tol(),
+        ));
         let coarse = tessellate(TessellateIn {
             solid: ball.clone(),
             deflection: 0.5,
@@ -152,24 +157,24 @@ mod tests {
     /// meshed (the mesher's run is the part that does not finish).
     #[test]
     fn tessellate_finer_than_the_budget_is_red_before_the_mesher_runs() {
-        let Some(()) = with_kernel(|| {
-            let ball =
-                cicada_geom::solid::sphere(&plane_at(0.0, 0.0, 0.0), 1.0, config().tol()).unwrap();
-            for (deflection, angle) in [(1e-7, 0.1), (0.01, 1e-6)] {
-                let outcome = std::panic::catch_unwind(|| {
+        let ball = fixture(cicada_geom::solid::sphere(
+            &plane_at(0.0, 0.0, 0.0),
+            1.0,
+            config().tol(),
+        ));
+        for (deflection, angle) in [(1e-7, 0.1), (0.01, 1e-6)] {
+            let message = expect_red(
+                || {
                     tessellate(TessellateIn {
                         solid: ball.clone(),
                         deflection,
                         angle,
                     })
-                });
-                let payload = outcome.expect_err("finer than the budget must be red");
-                let message = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .unwrap_or_default();
+                },
+                "finer than the budget",
+            );
+            if cicada_geom::solid::kernel_available() {
                 for expected in [
-                    "finer than the budget",
                     "1000 facets per full turn",
                     "2 across",
                     "coarsen the request",
@@ -177,9 +182,7 @@ mod tests {
                     assert!(message.contains(expected), "{message}");
                 }
             }
-        }) else {
-            return;
-        };
+        }
     }
 
     proptest::proptest! {

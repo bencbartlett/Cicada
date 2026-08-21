@@ -78,7 +78,7 @@ mod tests {
     use cicada_core::config::Unit;
 
     use super::*;
-    use crate::solids::support::{brep_box, config, with_kernel};
+    use crate::solids::support::{brep_box, config, expect_red, with_kernel};
 
     fn path_in(dir: &tempfile::TempDir, name: &str) -> String {
         dir.path().join(name).to_string_lossy().into_owned()
@@ -148,8 +148,10 @@ mod tests {
 
     #[test]
     fn export_step_unwritable_path_is_red() {
-        let Some(()) = with_kernel(|| {
-            let outcome = std::panic::catch_unwind(|| {
+        // Both worlds: the kernel's write failure, or the typed kernel
+        // refusal.
+        expect_red(
+            || {
                 export_step(
                     &config(),
                     ExportStepIn {
@@ -157,16 +159,9 @@ mod tests {
                         path: "no/such/dir/anywhere/out.step".to_owned(),
                     },
                 );
-            });
-            let payload = outcome.expect_err("an unwritable path must be red");
-            let message = payload
-                .downcast_ref::<String>()
-                .cloned()
-                .unwrap_or_default();
-            assert!(message.contains("failed"), "{message}");
-        }) else {
-            return;
-        };
+            },
+            "failed",
+        );
     }
 
     #[test]

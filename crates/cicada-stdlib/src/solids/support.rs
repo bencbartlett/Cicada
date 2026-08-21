@@ -83,11 +83,19 @@ pub(crate) fn bounds_of(solid: &Solid) -> (Point, Point) {
     cicada_geom::solid::bounds(solid).unwrap()
 }
 
+/// The text every kernel refusal carries (`GeomError::KernelUnavailable`).
+pub(crate) const KERNEL_REFUSAL: &str = "needs the OCCT kernel";
+
 /// Run a Solid node in both worlds (docs/14: never a vacuous pass): with
 /// the kernel, `Some(output)`; without it, the node must be red with the
 /// typed `KernelUnavailable` text and the test gets `None` — asserting
 /// the refusal rather than silently passing. Every Solid node's table test
-/// starts here.
+/// starts here. The kernel-free world is real since the review closure of
+/// 2026-08-21: `cargo test -p cicada-stdlib --no-default-features` (the
+/// crate's own `occt` feature forwards to cicada-geom's), and a test's
+/// Solid INPUTS come from [`fixture`] / [`brep_box`] so that without the
+/// kernel the node under test is reached with a pseudo solid and the
+/// refusal asserted here is the node's own.
 pub(crate) fn with_kernel<T>(node: impl FnOnce() -> T + std::panic::UnwindSafe) -> Option<T> {
     if kernel_available() {
         return Some(node());
@@ -95,29 +103,79 @@ pub(crate) fn with_kernel<T>(node: impl FnOnce() -> T + std::panic::UnwindSafe) 
     let Err(payload) = std::panic::catch_unwind(node) else {
         panic!("without the kernel a Solid node must be red, never pass");
     };
-    let message = payload
-        .downcast_ref::<String>()
-        .cloned()
-        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
-        .expect("a message");
+    let message = panic_text(&payload);
     assert!(
-        message.contains("needs the OCCT kernel"),
+        message.contains(KERNEL_REFUSAL),
         "the refusal names the kernel: {message}"
     );
     None
 }
 
+/// Assert a node call is red in both worlds: with the kernel, for `reason`
+/// (a substring of the node's message — the input or kernel refusal under
+/// test); without it, with the typed kernel refusal. Returns the message
+/// for further, kernel-world-only assertions. Never vacuous in either
+/// world.
+pub(crate) fn expect_red<T>(
+    call: impl FnOnce() -> T + std::panic::UnwindSafe,
+    reason: &str,
+) -> String {
+    let Err(payload) = std::panic::catch_unwind(call) else {
+        panic!("the call must be red (expected: {reason})");
+    };
+    let message = panic_text(&payload);
+    let expected = if kernel_available() {
+        reason
+    } else {
+        KERNEL_REFUSAL
+    };
+    assert!(
+        message.contains(expected),
+        "expected `{expected}` in: {message}"
+    );
+    message
+}
+
+fn panic_text(payload: &Box<dyn std::any::Any + Send>) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+        .expect("a message")
+}
+
+/// A value that IS a `Solid` to the value model — the canonical header and
+/// nothing else — for the kernel-free world, where no real solid can be
+/// built: a node handed it reaches its kernel call and refuses there,
+/// typed. (With the kernel it is a serialization error, never a crash;
+/// the tests never hand it to the kernel.)
+pub(crate) fn pseudo_solid() -> Solid {
+    Solid::from_canonical_bytes(cicada_core::geometry::SOLID_CANONICAL_HEADER.to_vec())
+        .expect("the header is a valid value")
+}
+
+/// A test's Solid INPUT from a kernel constructor: the solid with the
+/// kernel; the [`pseudo_solid`] without it (so the node under test, not the
+/// fixture, is what refuses); any other failure is the fixture's bug.
+pub(crate) fn fixture(result: Result<Solid, cicada_geom::GeomError>) -> Solid {
+    match result {
+        Ok(solid) => solid,
+        Err(cicada_geom::GeomError::KernelUnavailable { .. }) => pseudo_solid(),
+        Err(error) => panic!("fixture: {error}"),
+    }
+}
+
 /// A world-aligned B-rep box with its min corner at `origin` and the given
-/// positive extents (the booleans' test fixture).
+/// positive extents (the booleans' test fixture); the [`pseudo_solid`]
+/// without the kernel.
 pub(crate) fn brep_box(origin: [f64; 3], extents: [f64; 3]) -> Solid {
-    cicada_geom::solid::box_in_plane(
+    fixture(cicada_geom::solid::box_in_plane(
         &plane_at(origin[0], origin[1], origin[2]),
         Domain::new(0.0, extents[0]),
         Domain::new(0.0, extents[1]),
         Domain::new(0.0, extents[2]),
         config().tol(),
-    )
-    .unwrap()
+    ))
 }
 
 /// `a` and `b` agree to a relative `rel` (absolute below 1).

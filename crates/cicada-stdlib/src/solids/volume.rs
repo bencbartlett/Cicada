@@ -56,7 +56,7 @@ mod tests {
     use cicada_geom::tol;
 
     use super::*;
-    use crate::solids::support::{brep_box, close_rel, config, plane_at, with_kernel};
+    use crate::solids::support::{brep_box, close_rel, config, fixture, plane_at, with_kernel};
 
     #[test]
     fn volume_table_cases() {
@@ -74,8 +74,11 @@ mod tests {
             1e-9
         ));
         // A sphere's volume and centre.
-        let ball =
-            cicada_geom::solid::sphere(&plane_at(0.0, 0.0, 5.0), 2.0, config().tol()).unwrap();
+        let ball = fixture(cicada_geom::solid::sphere(
+            &plane_at(0.0, 0.0, 5.0),
+            2.0,
+            config().tol(),
+        ));
         let out = volume(VolumeIn { solid: ball });
         assert!(close_rel(out.volume, 4.0 / 3.0 * PI * 8.0, 1e-9));
         assert!(tol::coincident(
@@ -84,8 +87,12 @@ mod tests {
             1e-9
         ));
         // A cone's centroid sits a quarter of the way up.
-        let cone =
-            cicada_geom::solid::cone(&plane_at(0.0, 0.0, 0.0), 3.0, 4.0, config().tol()).unwrap();
+        let cone = fixture(cicada_geom::solid::cone(
+            &plane_at(0.0, 0.0, 0.0),
+            3.0,
+            4.0,
+            config().tol(),
+        ));
         let out = volume(VolumeIn { solid: cone });
         assert!(close_rel(out.volume, PI * 9.0 * 4.0 / 3.0, 1e-9));
         assert!(tol::coincident(

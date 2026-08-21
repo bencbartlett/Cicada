@@ -54,7 +54,8 @@ mod tests {
 
     use super::*;
     use crate::solids::support::{
-        bounds_of, brep_box, close_rel, platform_golden, solid_hash, volume_of, with_kernel,
+        bounds_of, brep_box, close_rel, expect_red, platform_golden, solid_hash, volume_of,
+        with_kernel,
     };
 
     #[test]
@@ -87,28 +88,18 @@ mod tests {
 
     #[test]
     fn solid_intersection_of_disjoint_solids_is_red() {
-        let Some(()) = with_kernel(|| {
-            let outcome = std::panic::catch_unwind(|| {
+        // Both worlds: the kernel's "no common volume" text, or the typed
+        // kernel refusal.
+        let message = expect_red(
+            || {
                 solid_intersection(SolidIntersectionIn {
                     a: brep_box([0.0; 3], [1.0; 3]),
                     b: brep_box([5.0; 3], [1.0; 3]),
                 })
-            });
-            let payload = outcome.expect_err("no common volume is not a solid");
-            let message = payload
-                .downcast_ref::<String>()
-                .cloned()
-                .unwrap_or_default();
-            assert!(
-                message.contains(
-                    "intersection left no solid — a Solid is one body, and nothing remains"
-                ),
-                "{message}"
-            );
-            assert!(!message.contains("cicada_"), "{message}");
-        }) else {
-            return;
-        };
+            },
+            "intersection left no solid — a Solid is one body, and nothing remains",
+        );
+        assert!(!message.contains("cicada_"), "{message}");
     }
 
     proptest::proptest! {

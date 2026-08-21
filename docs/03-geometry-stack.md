@@ -40,11 +40,18 @@ WP-A and WP-B, **ON by default since WP-C (2026-08-20)**: the product's
 `box`/`extrude`/`loft`/… nodes are OCCT-backed, so the product build needs
 the kernel, every cargo command runs under `tools/fetch_occt.py`'s env, and
 every CI job that builds fetches the prebuilt first (the dedicated `occt`
-jobs folded into the standard matrix). `cargo check -p cicada-geom --no-default-features` is the
+jobs folded into the standard matrix). `--no-default-features` is the
 kernel-free build: the same signatures, every kernel call a typed
-`GeomError::KernelUnavailable`, and CI keeps it compiling (the crates
-above cicada-geom take its default features through the dependency
-edge, so only cicada-geom itself has a kernel-free world today).
+`GeomError::KernelUnavailable`. Two crates have that world and CI TESTS
+both (`cargo test -p cicada-geom --no-default-features`, `cargo test -p
+cicada-stdlib --no-default-features`): cicada-geom's seam, and — since the
+WP-C review closure of 2026-08-21 — the stdlib's Solid nodes, through the
+stdlib's own `occt` feature (a direct `default-features = false` edge to
+cicada-geom, forwarded; on by default), where every Solid node is red with
+the typed refusal and its tests assert exactly that (`with_kernel` /
+`expect_red` in `solids/support.rs`, the node reached with a pseudo solid
+so the refusal is the node's own). The server and the CLI link the kernel
+unconditionally — a kernel-free product build does not exist.
 
 - **Prebuilt, never the source build.** The binding links a prebuilt
   OpenCASCADE 7.8.1 found through `DEP_OCCT_ROOT`: conda-forge's `occt`

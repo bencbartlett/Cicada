@@ -103,14 +103,17 @@ mod tests {
     use cicada_geom::tol;
 
     use super::*;
-    use crate::solids::support::{brep_box, close_rel, config, plane_at, with_kernel};
+    use crate::solids::support::{brep_box, close_rel, config, fixture, plane_at, with_kernel};
 
     fn drilled_plate() -> Solid {
         let plate = brep_box([0.0; 3], [20.0, 20.0, 6.0]);
-        let drill =
-            cicada_geom::solid::cylinder(&plane_at(10.0, 10.0, -1.0), 3.0, 8.0, config().tol())
-                .unwrap();
-        cicada_geom::solid::difference_all(&plate, &[drill]).unwrap()
+        let drill = fixture(cicada_geom::solid::cylinder(
+            &plane_at(10.0, 10.0, -1.0),
+            3.0,
+            8.0,
+            config().tol(),
+        ));
+        fixture(cicada_geom::solid::difference_all(&plate, &[drill]))
     }
 
     #[test]

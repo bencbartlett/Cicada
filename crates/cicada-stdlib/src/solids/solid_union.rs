@@ -51,7 +51,8 @@ pub fn solid_union(input: SolidUnionIn) -> Solid {
 mod tests {
     use super::*;
     use crate::solids::support::{
-        brep_box, close_rel, config, platform_golden, solid_hash, volume_of, with_kernel,
+        brep_box, close_rel, config, expect_red, platform_golden, solid_hash, volume_of,
+        with_kernel,
     };
 
     #[test]
@@ -95,25 +96,17 @@ mod tests {
 
     #[test]
     fn solid_union_disjoint_bodies_are_red() {
-        let Some(()) = with_kernel(|| {
-            let outcome = std::panic::catch_unwind(|| {
+        // Both worlds: the kernel's "two bodies" text, or the typed kernel
+        // refusal.
+        let message = expect_red(
+            || {
                 solid_union(SolidUnionIn {
                     solids: vec![brep_box([0.0; 3], [1.0; 3]), brep_box([5.0; 3], [1.0; 3])],
                 })
-            });
-            let payload = outcome.expect_err("two bodies are not one solid");
-            let message = payload
-                .downcast_ref::<String>()
-                .cloned()
-                .unwrap_or_default();
-            assert!(
-                message.contains("union left 2 solids — a Solid is one body"),
-                "{message}"
-            );
-            assert!(!message.contains("cicada_"), "{message}");
-        }) else {
-            return;
-        };
+            },
+            "union left 2 solids — a Solid is one body",
+        );
+        assert!(!message.contains("cicada_"), "{message}");
     }
 
     proptest::proptest! {
