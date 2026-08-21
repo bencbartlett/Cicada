@@ -1,0 +1,88 @@
+# cicada 1
+# Simple traditional CAD (docs/01 use case 2): a mounting bracket as exact
+# B-rep solids — a plate with a boss, a gusset rib, a through-bore and a row
+# of mounting holes, all in the OCCT kernel — measured, sectioned and
+# exported to STEP on explicit action. No fillets or chamfers yet (they are
+# v0.2): every edge here is what the booleans left.
+# Solve only:        cargo run -p cicada-cli -- run examples/07-simple-cad.cic
+# Write the STEP:    cargo run -p cicada-cli -- run examples/07-simple-cad.cic --node step
+# (exporters are effectful: they NEVER run unless named with --node)
+
+# --- parameters (document units are millimetres) -------------------------
+width = slider(value=80.0, min=40.0, max=160.0)
+depth = slider(value=50.0, min=30.0, max=100.0)
+thickness = slider(value=8.0, min=4.0, max=20.0)
+boss_radius = slider(value=12.0, min=6.0, max=24.0)
+boss_height = slider(value=20.0, min=8.0, max=40.0)
+bore_radius = slider(value=5.0, min=2.0, max=5.5)
+hole_radius = slider(value=3.0, min=1.5, max=5.0)
+holes = 3
+
+# --- the plate ------------------------------------------------------------
+x_span = construct_domain(start=0.0, end=width)
+y_span = construct_domain(start=0.0, end=depth)
+z_span = construct_domain(start=0.0, end=thickness)
+plate = box(x=x_span, y=y_span, z=z_span)
+
+# --- the boss, standing on the plate's top face --------------------------
+half_width = divide(a=width, b=2.0)
+half_depth = divide(a=depth, b=2.0)
+boss_centre = construct_point(x=half_width, y=half_depth, z=thickness)
+boss_frame = xy_plane(origin=boss_centre)
+boss = cylinder(plane=boss_frame, radius=boss_radius, height=boss_height)
+
+# --- the gusset rib: a triangle in the xz plane, extruded 4 mm in y ------
+# Its right edge sits 4 mm INSIDE the boss (a tangent contact would be a
+# fragile boolean); its foot reaches 20 mm out along the plate.
+boss_left = subtract(a=half_width, b=boss_radius)
+rib_right = add(a=boss_left, b=4.0)
+x_offsets = [0.0, -24.0, 0.0]
+rib_xs = add(a=each(x_offsets), b=rib_right)
+rib_rise = multiply(a=boss_height, b=0.7)
+z_unit = [0.0, 0.0, 1.0]
+rib_heights = multiply(a=each(z_unit), b=rib_rise)
+rib_zs = add(a=each(rib_heights), b=thickness)
+rib_y = subtract(a=half_depth, b=2.0)
+rib_corners = construct_point(x=each(rib_xs), y=rib_y, z=each(rib_zs))
+rib_outline = polyline(vertices=rib_corners, closed=True)
+rib_profile = as_closed(curve=rib_outline)
+rib_direction = unit_y(factor=4.0)
+rib = extrude(profile=rib_profile, direction=rib_direction)
+
+# --- one body: plate ∪ boss ∪ rib (geometry lists come from nodes) -------
+plate_list = duplicate(item=plate, count=1)
+boss_list = duplicate(item=boss, count=1)
+rib_list = duplicate(item=rib, count=1)
+plate_and_boss = concat(a=plate_list, b=boss_list)
+parts = concat(a=plate_and_boss, b=rib_list)
+blank = solid_union(solids=parts)
+
+# --- the cutters: a through-bore down the boss, a row of mounting holes --
+total_height = add(a=thickness, b=boss_height)
+bore_height = add(a=total_height, b=2.0)
+bore_start = construct_point(x=half_width, y=half_depth, z=-1.0)
+bore_frame = xy_plane(origin=bore_start)
+bore = cylinder(plane=bore_frame, radius=bore_radius, height=bore_height)
+bore_list = duplicate(item=bore, count=1)
+hole_height = add(a=thickness, b=2.0)
+first_hole = construct_point(x=10.0, y=8.0, z=-1.0)
+hole_frame = xy_plane(origin=first_hole)
+drill = cylinder(plane=hole_frame, radius=hole_radius, height=hole_height)
+pitch = unit_x(factor=20.0)
+drills = linear_array(geometry=drill, direction=pitch, count=holes)
+cutters = concat(a=bore_list, b=drills)
+
+# --- the bracket, carved in one pass -------------------------------------
+bracket = solid_difference(solid=blank, cutters=cutters)
+
+# --- measure, section, bound -------------------------------------------
+material, centroid = volume(solid=bracket)
+mid_height = divide(a=thickness, b=2.0)
+mid = construct_point(z=mid_height)
+mid_plane = xy_plane(origin=mid)
+outline = section(solid=bracket, plane=mid_plane)
+bracket_list = duplicate(item=bracket, count=1)
+hull = bounding_box(geometry=bracket_list)
+
+# --- the deliverable: STEP, written only on explicit action --------------
+step = export_step(solids=bracket_list, path="07-simple-cad.step")

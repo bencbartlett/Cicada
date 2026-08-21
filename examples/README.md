@@ -42,6 +42,14 @@ touching the committed examples — the app writes what you do.
   (`scripts/pyramids.py`): Python returns watertight meshes through a
   multi-output node (`pyr.meshes`, `pyr.volumes`), and an effectful
   `-> None` node exports a CSV (`--node table`).
+- **07-simple-cad.cic** — simple traditional CAD (docs/01 use case 2):
+  a mounting bracket as exact B-rep solids — `box` plate, `cylinder`
+  boss, an `extrude`d gusset rib, one `solid_union`, a through-bore and
+  a `linear_array` of mounting holes removed by one `solid_difference`;
+  `volume`, a `section` through the plate (the holes come back as exact
+  circles), `bounding_box`; `export_step` writes the STEP on
+  `--node step`. Eight sliders to drag in the app; no fillets or
+  chamfers yet (v0.2).
 - **06-lists.cic** — lists 101 (docs/09): `range` → `sort` / `reverse`
   / `dispatch` / `group_by` with their index maps, the reducers
   (`mass_addition`, `average`), maths lifted with `each()` (`larger`,
