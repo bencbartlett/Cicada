@@ -82,10 +82,22 @@ Enforced by `crates/cicada-cli/tests/dependency_dag.rs`.
 
 ## Command palette
 
+**Every cargo command needs the OCCT env first** (since 2026-08-20, WP-C:
+`cicada-geom`'s `occt` feature is ON by default — the product's
+`box`/`extrude`/… nodes are OCCT-backed). Once per shell — Bash:
+`eval "$(python tools/fetch_occt.py --print-env bash --quiet)"`; PowerShell:
+`python tools/fetch_occt.py --print-env powershell | Invoke-Expression` —
+plus cmake and a C++ toolchain on PATH (Dev machine notes below). It exports
+`DEP_OCCT_ROOT` (build) and the loader path (run); without it the build
+stops at cicada-geom's `build.rs` with the message that says so, and a
+binary built elsewhere fails to load `TK*.dll`/`libTK*.so`. The kernel-free
+build is `--no-default-features` (same signatures, every kernel call a typed
+`KernelUnavailable`).
+
 | Task | Command |
 |---|---|
 | Build (all) | `cargo check --workspace --all-targets` |
-| Test (all) | `cargo test --workspace` |
+| Test (all) | `cargo test --workspace` (the kernel world — the only world now; `cargo check -p cicada-geom --no-default-features --all-targets` keeps the kernel-free build compiling, as CI does) |
 | Test (one crate) | `cargo test -p cicada-core` |
 | Lint | `cargo clippy --workspace --all-targets -- -D warnings` |
 | Format | `cargo fmt --all` (check: `--check`) |
@@ -100,7 +112,7 @@ Enforced by `crates/cicada-cli/tests/dependency_dag.rs`.
 | Headless run | `cargo run -p cicada-cli -- run <pipeline.cic> [--node <name>]… [--time] [--hashes] [--cache-dir <dir>] [--threads N]` — no `--node` = every leaf; `--hashes` prints stable hash lines INSTEAD of values; dialect syntax: [docs/10](docs/10-dialect-and-file-format.md); tests/CI always pass `--cache-dir` |
 | Bless insta snapshots (checker diagnostics) | `cargo insta review` (cargo-insta installed 2026-08-12) — or `$env:INSTA_UPDATE = "always"; cargo test -p cicada-lang; Remove-Item Env:\INSTA_UPDATE` |
 | Fetch the prebuilt OCCT (once per machine; `occt` feature) | `python tools/fetch_occt.py [--check-closure]` — sha256-pinned conda-forge OCCT 7.8.1 + its run-time closure into the user cache dir (`%LOCALAPPDATA%\cicada-occt`, `~/.cache/cicada-occt`; never a repo), prints `DEP_OCCT_ROOT` + the loader path; idempotent (the warm path re-verifies every shared library's presence and size, ~0.2 s; `--check-closure` also reads the import tables). Needs a zstd decoder (`pip install zstandard` on Python < 3.14). `--print-env bash\|powershell` emits the three lines a shell needs; `--manifest-hash` is the CI cache key; `regenerate-manifest` is maintainer-only (network, re-pins everything) |
-| Build/test the OCCT seam (`cicada-geom` feature `occt`, default OFF until WP-C flips it) | Bash: `eval "$(python tools/fetch_occt.py --print-env bash --quiet)"` (PowerShell: `python tools/fetch_occt.py --print-env powershell \| Invoke-Expression`), cmake + a C++ toolchain on PATH, then `cargo test -p cicada-geom --features occt` and `cargo clippy -p cicada-geom --features occt --all-targets -- -D warnings`; the whole workspace in the kernel world is `cargo test --workspace --features occt` (the root `--features occt` reaches `cicada-geom`, the one member that has it; every crate's Solid tests assert BOTH worlds, so run them both ways). Default builds never touch OCCT; nothing may run `--all-features`. CI: `occt (ubuntu)` per PR, `occt (<os>)` nightly. Golden hashes of the canonical bytes bless via run-once (`crates/cicada-geom/src/occt/tests.rs`; `CICADA_OCCT_DUMP=<dir>` writes the bytes). The seam's cost table: `cargo run --release -p cicada-geom --features occt --example solid_bench [parts…]` (docs/03 quotes it) |
+| The OCCT seam (`cicada-geom` feature `occt`, ON by default since WP-C) | Under the env above, the seam's tests are part of `cargo test -p cicada-geom` (kernel level `src/occt/tests.rs` + the node set `src/occt/node_set_tests.rs`; the stdlib's Solid nodes and the server's display tests run in the kernel world too). Every crate's Solid tests assert BOTH worlds: `cargo test -p cicada-geom --no-default-features` is the other one (the stdlib/server crates inherit the default, so their kernel-free world is `cargo test --workspace --no-default-features`). Nothing may run `--all-features`. CI: every building job fetches the prebuilt first (ci.yml `rust`/`test-cross`/`playwright-smoke`, nightly `test-matrix`/`wall-corpus`/`playwright-heavy`). Golden hashes of the canonical bytes bless via run-once (`CICADA_OCCT_DUMP=<dir>` writes the bytes). The seam's cost table: `cargo run --release -p cicada-geom --example solid_bench [parts…]` (docs/03 quotes it). The node-set glue is cicada-geom's own (`src/occt/glue.hxx` + `glue.rs`, compiled by `build.rs` with cxx-build against `DEP_OCCT_ROOT`); the fork carries the binding patches and the first glue |
 | Carve benchmark (kernel seam, release only) | `cargo run --release -p cicada-geom --example carve_bench [parts]` — see skill `perf-check` |
 | Wall carve (stage 6, release) | `cargo run --release -p cicada-cli -- run examples/wall/wall.cic --node carved --time --cache-dir <fresh>` (cold < 10 s; MEASURED 6.5 s). Exporters: `--node bambu --node dxf` (write to `examples/wall/out/`, gitignored) |
 | Offline tests (wall scripts + normalizer) | `python -m unittest discover -s tools -p "test_*.py"` (production cross-checks skip without the wall repo) |

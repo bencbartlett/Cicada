@@ -1,4 +1,11 @@
 # Nightly gates (doc 14 §CI pipeline): full matrix, corpus, benchmarks, audit.
+#
+# Every job that builds or runs the engine links OCCT (cicada-geom's `occt`
+# feature is on by default since docs/17 Item 3 WP-C) and starts with the
+# same fetch steps as ci.yml: setup-python, the cached prebuilt prefix,
+# `tools/fetch_occt.py --github-env` (DEP_OCCT_ROOT + the loader path for
+# every later step; macOS gets an rpath on the binaries instead of
+# DYLD_LIBRARY_PATH, which SIP strips from the runner's /bin/bash).
 name: Nightly
 
 on:
@@ -13,6 +20,13 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The whole workspace on all three OSes, against the kernel. This is also
+  # where cross-OS identity of the Solid canonical-bytes golden hashes is
+  # measured (per-OS goldens until the three agree — DECISIONS.md row 42,
+  # revised 2026-08-20; the probe memo docs/probes/occt-2026-08.md §4d
+  # drafted it). Linux takes LD_LIBRARY_PATH from the fetch step, Windows
+  # PATH, macOS an rpath (conda's dylibs carry @loader_path rpaths, so the
+  # executable's rpath is enough).
   test-matrix:
     name: cargo test (${{ matrix.os }})
     strategy:
@@ -22,31 +36,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --locked --workspace
-
-  # The OCCT seam on all three OSes (docs/17 Item 3 WP-A; the per-PR job is
-  # Linux only). Same fetch script, same pinned manifest, per-OS prefix. The
-  # loader path differs: Linux takes LD_LIBRARY_PATH from the script's env;
-  # Windows takes PATH; macOS gets an rpath on the test binaries instead of
-  # DYLD_LIBRARY_PATH (SIP strips DYLD_* from protected processes, and conda's
-  # dylibs carry @loader_path rpaths, so the executable's rpath is enough).
-  # This is also where cross-OS identity of the canonical-bytes golden hashes
-  # is measured (per-OS goldens until the three agree — DECISIONS.md row 42,
-  # revised 2026-08-20; the probe memo docs/probes/occt-2026-08.md §4d drafted it).
-  occt-matrix:
-    name: occt (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -54,28 +43,25 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-        with:
-          key: occt
       - name: Cache the prebuilt OCCT prefix (key = the pinned manifest)
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/cicada-occt
           key: cicada-occt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/fetch_occt_manifest.json') }}
-      - name: Prime the Manifold kernel build (retry once — belt; see AGENTS.md)
-        run: cargo build --locked -p cicada-geom || cargo build --locked -p cicada-geom
-      - name: Fetch the prebuilt OCCT (sha256-pinned) and verify its import closure
+      - name: Fetch the prebuilt OCCT (sha256-pinned), verify its import closure, export its env
+        shell: bash
         run: |
           python -m pip install --quiet zstandard
           python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --check-closure
-      - name: Test + clippy the seam against the prebuilt
-        run: |
-          eval "$(python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --print-env bash --quiet)"
+          python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --github-env
           if [ "$RUNNER_OS" = "macOS" ]; then
-            unset DYLD_LIBRARY_PATH
-            export RUSTFLAGS="-C link-arg=-Wl,-rpath,$DEP_OCCT_ROOT/lib"
+            eval "$(python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --print-env bash --quiet)"
+            echo "RUSTFLAGS=-C link-arg=-Wl,-rpath,$DEP_OCCT_ROOT/lib" >> "$GITHUB_ENV"
           fi
-          cargo test --locked -p cicada-geom --features occt
-          cargo clippy --locked -p cicada-geom --features occt --all-targets -- -D warnings
+      - name: Prime the kernel builds (retry once — belt; see AGENTS.md)
+        run: cargo build --locked -p cicada-geom || cargo build --locked -p cicada-geom
+      - run: cargo test --locked --workspace
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
   deny:
     name: cargo deny
@@ -108,12 +94,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Prime the Manifold kernel build (retry once — belt; see AGENTS.md)
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache the prebuilt OCCT prefix (key = the pinned manifest)
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/cicada-occt
+          key: cicada-occt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/fetch_occt_manifest.json') }}
+      - name: Fetch the prebuilt OCCT (sha256-pinned) and export its env
+        run: |
+          python -m pip install --quiet zstandard
+          python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --github-env
+      - name: Prime the kernel builds (retry once — belt; see AGENTS.md)
         run: cargo build --locked --release -p cicada-geom || cargo build --locked --release -p cicada-geom
       - name: Build the engine
         run: cargo build --locked --release -p cicada-cli
@@ -154,6 +149,9 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -161,10 +159,16 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-python@v5
+      - name: Cache the prebuilt OCCT prefix (key = the pinned manifest)
+        uses: actions/cache@v4
         with:
-          python-version: "3.12"
-      - name: Prime the Manifold kernel build (retry once — belt; see AGENTS.md)
+          path: ${{ runner.temp }}/cicada-occt
+          key: cicada-occt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/fetch_occt_manifest.json') }}
+      - name: Fetch the prebuilt OCCT (sha256-pinned) and export its env
+        run: |
+          python -m pip install --quiet zstandard
+          python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --github-env
+      - name: Prime the kernel builds (retry once — belt; see AGENTS.md)
         run: cargo build --locked -p cicada-geom || cargo build --locked -p cicada-geom
       - name: Build the SPA
         working-directory: web

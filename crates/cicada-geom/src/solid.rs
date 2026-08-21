@@ -34,10 +34,16 @@
 //! hash-keyed display cache, never in the value (docs/12).
 
 use cicada_core::config::ProjectConfig;
-use cicada_core::geometry::{Mesh, Solid, Watertight};
-use cicada_core::spatial::{Point, Vector};
+use cicada_core::geometry::{Curve, Mesh, Solid, Watertight};
+use cicada_core::scalar::Domain;
+use cicada_core::spatial::{Plane, Point, Vector};
+use glam::{DVec2, DVec3};
 
-use crate::GeomError;
+use crate::curve::{WireForm, wire_form};
+use crate::frame::{Frame, orthonormal, polygon_frame};
+use crate::transform::Similarity;
+use crate::triangulate::ear_clip;
+use crate::{GeomError, tol};
 
 /// The physical chord deviation of a display tessellation, in millimetres.
 pub const DISPLAY_DEFLECTION_MM: f64 = 0.02;
@@ -261,6 +267,870 @@ pub fn difference(solid: &Solid, cutter: &Solid) -> Result<Solid, GeomError> {
 /// [`GeomError::KernelUnavailable`] in a build without `occt`.
 pub fn tessellate(solid: &Solid, deflection: Deflection) -> Result<Tessellation, GeomError> {
     backend::tessellate(solid, deflection)
+}
+
+// ---------------------------------------------------------------------------
+// The node set (v0.1 item 3 WP-C)
+// ---------------------------------------------------------------------------
+
+/// What [`volume`] measures: the enclosed volume (document units³) and the
+/// volume centroid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VolumeProperties {
+    /// The enclosed volume.
+    pub volume: f64,
+    /// The volume centroid.
+    pub centroid: Point,
+}
+
+/// A validated closed planar profile: its wire form and the plane it lies
+/// in (origin, unit axes). Every sweep constructor starts here, so the
+/// refusals — open, degenerate, non-planar, self-intersecting — are the
+/// mesh tier's, word for word, before the kernel sees anything (OCCT
+/// accepts collinear points and returns a zero-volume solid; it is not the
+/// validator).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Profile {
+    /// The wire to build.
+    pub form: WireForm,
+    /// The profile's plane: the polygon's Newell frame, or the circle's.
+    pub frame: Frame,
+}
+
+impl Profile {
+    /// Validate a closed planar profile at `tolerance`.
+    ///
+    /// # Errors
+    ///
+    /// [`GeomError::OpenCurve`] for an open curve; [`GeomError::NotPlanar`],
+    /// [`GeomError::NotSimple`], [`GeomError::DegenerateCurve`] /
+    /// [`GeomError::DegenerateFrame`] for a bad loop.
+    pub fn closed(curve: &Curve, tolerance: f64) -> Result<Self, GeomError> {
+        if !curve.is_closed() {
+            return Err(GeomError::OpenCurve {
+                variant: curve.variant_name(),
+            });
+        }
+        let form = wire_form(curve, tolerance)?;
+        let frame = match &form {
+            WireForm::Chain { vertices, .. } => {
+                let frame = polygon_frame(vertices, tolerance)?;
+                let mut flat = Vec::with_capacity(vertices.len());
+                for (vertex, point) in vertices.iter().enumerate() {
+                    let local = frame.coordinates(*point);
+                    if !tol::near_zero(local.z, tolerance) {
+                        return Err(GeomError::NotPlanar {
+                            vertex,
+                            distance: local.z,
+                        });
+                    }
+                    flat.push(DVec2::new(local.x, local.y));
+                }
+                // Simplicity + non-zero area, with the mesh tier's refusals;
+                // the triangles themselves are not needed.
+                ear_clip(&flat, tolerance)?;
+                frame
+            }
+            WireForm::Circle { frame, .. } => *frame,
+        };
+        Ok(Self { form, frame })
+    }
+
+    /// The points of the profile's plane that `direction` must leave:
+    /// refuses a direction within `tolerance` of lying in the plane.
+    fn require_leaving(&self, direction: Vector, tolerance: f64) -> Result<(), GeomError> {
+        if !direction.0.is_finite() || tol::near_zero(direction.0.dot(self.frame.z), tolerance) {
+            return Err(GeomError::BadParameter {
+                name: "direction",
+                value: format!("{:?}", direction.0),
+                requirement: "must be finite and leave the profile plane (not be parallel to it)",
+            });
+        }
+        Ok(())
+    }
+}
+
+/// The wire form of a sweep rail: any curve with usable length, open or
+/// closed (a line, a polyline, a circle, a rectangle's corners).
+fn rail_form(rail: &Curve, tolerance: f64) -> Result<WireForm, GeomError> {
+    wire_form(rail, tolerance)
+}
+
+/// The start point and unit tangent of a rail (where a pipe's section
+/// sits and the direction it faces).
+fn rail_start(form: &WireForm) -> Result<(Point, DVec3), GeomError> {
+    match form {
+        WireForm::Chain { vertices, .. } => {
+            let (Some(&a), Some(&b)) = (vertices.first(), vertices.get(1)) else {
+                return Err(GeomError::DegenerateCurve {
+                    reason: "rail has fewer than two distinct vertices".to_owned(),
+                });
+            };
+            Ok((a, (b.0 - a.0).normalize()))
+        }
+        WireForm::Circle { frame, radius } => Ok((frame.point_at(*radius, 0.0), frame.y)),
+    }
+}
+
+/// A right-handed frame at `origin` whose z is `normal` (unit); the x axis
+/// is the world axis least aligned with the normal, projected — a
+/// deterministic choice with no preferred direction in the plane.
+#[cfg(feature = "occt")]
+fn frame_normal_to(origin: Point, normal: DVec3) -> Frame {
+    let candidates = [DVec3::X, DVec3::Y, DVec3::Z];
+    let mut best = DVec3::X;
+    let mut best_alignment = f64::INFINITY;
+    for candidate in candidates {
+        let alignment = candidate.dot(normal).abs();
+        if alignment < best_alignment {
+            best_alignment = alignment;
+            best = candidate;
+        }
+    }
+    let x = (best - normal * best.dot(normal)).normalize();
+    let y = normal.cross(x);
+    Frame {
+        origin,
+        x,
+        y,
+        z: normal,
+    }
+}
+
+/// The revolution axis as (origin, unit direction) from a `Line` curve;
+/// anything else is refused.
+fn axis_of(axis: &Curve, tolerance: f64) -> Result<(Point, DVec3), GeomError> {
+    let Curve::Line(line) = axis else {
+        return Err(GeomError::BadParameter {
+            name: "axis",
+            value: axis.variant_name().to_owned(),
+            requirement: "must be a Line (the `line` node)",
+        });
+    };
+    let direction = line.b.0 - line.a.0;
+    let length = direction.length();
+    if !(length.is_finite() && length > tolerance) {
+        return Err(GeomError::DegenerateCurve {
+            reason: format!("revolution axis has length {length} (tolerance {tolerance})"),
+        });
+    }
+    Ok((line.a, direction / length))
+}
+
+/// A profile may touch the revolution axis but never cross it: every
+/// vertex on one side (or on it), the circle not cut by it.
+fn require_one_side(
+    profile: &Profile,
+    origin: Point,
+    direction: DVec3,
+    tolerance: f64,
+) -> Result<(), GeomError> {
+    // The axis must lie in the profile plane.
+    let off_plane = |point: DVec3| (point - profile.frame.origin.0).dot(profile.frame.z);
+    for (what, point) in [("its start", origin.0), ("its end", origin.0 + direction)] {
+        let distance = off_plane(point);
+        if !tol::near_zero(distance, tolerance) {
+            return Err(GeomError::BadParameter {
+                name: "axis",
+                value: format!("{what} lies {distance} from the profile plane"),
+                requirement: "the revolution axis must lie in the profile's plane",
+            });
+        }
+    }
+    // In-plane side of each point: sign of (axis direction × offset) · normal.
+    let side = |point: DVec3| direction.cross(point - origin.0).dot(profile.frame.z);
+    match &profile.form {
+        WireForm::Chain { vertices, .. } => {
+            let mut positive = false;
+            let mut negative = false;
+            for vertex in vertices {
+                let s = side(vertex.0);
+                if s > tolerance {
+                    positive = true;
+                } else if s < -tolerance {
+                    negative = true;
+                }
+            }
+            if positive && negative {
+                return Err(GeomError::BadParameter {
+                    name: "profile",
+                    value: "vertices on both sides of the axis".to_owned(),
+                    requirement: "a revolved profile must stay on one side of its axis \
+                                  (it may touch it)",
+                });
+            }
+        }
+        WireForm::Circle { frame, radius } => {
+            let distance = side(frame.origin.0).abs();
+            if distance + tolerance < *radius {
+                return Err(GeomError::BadParameter {
+                    name: "profile",
+                    value: format!("circle centre {distance} from the axis, radius {radius}"),
+                    requirement: "a revolved circle must stay on one side of its axis",
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The sweep `angle` domain as (start, sweep) radians: a non-empty sweep
+/// of at most a full turn, in either direction.
+fn sweep_angle(angle: Domain, tolerance_angle: f64) -> Result<(f64, f64), GeomError> {
+    let sweep = angle.end - angle.start;
+    if !(sweep.is_finite() && angle.start.is_finite()) || sweep.abs() <= tolerance_angle {
+        return Err(GeomError::BadParameter {
+            name: "angle",
+            value: format!("{}..{}", angle.start, angle.end),
+            requirement: "must span a non-empty angle (radians)",
+        });
+    }
+    if sweep.abs() > std::f64::consts::TAU + tolerance_angle {
+        return Err(GeomError::BadParameter {
+            name: "angle",
+            value: format!("{}..{}", angle.start, angle.end),
+            requirement: "must span at most a full turn (2π radians)",
+        });
+    }
+    Ok((
+        angle.start,
+        sweep.clamp(-std::f64::consts::TAU, std::f64::consts::TAU),
+    ))
+}
+
+#[cfg(feature = "occt")]
+mod node_backend {
+    use super::{
+        Deflection, Profile, VolumeProperties, axis_of, frame_normal_to, rail_form, rail_start,
+        require_one_side, sweep_angle,
+    };
+    use crate::GeomError;
+    use crate::curve::WireForm;
+    use crate::frame::Frame;
+    use crate::occt::{Handle, Wire};
+    use crate::transform::Similarity;
+    use cicada_core::geometry::{Curve, Solid};
+    use cicada_core::scalar::Domain;
+    use cicada_core::spatial::{Point, Vector};
+    use glam::DVec3;
+
+    fn handles(solids: &[Solid]) -> Result<Vec<Handle>, GeomError> {
+        solids.iter().map(Handle::from_value).collect()
+    }
+
+    pub fn box_in_frame(frame: &Frame, extents: DVec3) -> Result<Solid, GeomError> {
+        Handle::box_in_frame(frame, extents)?.into_value()
+    }
+
+    pub fn sphere(frame: &Frame, radius: f64) -> Result<Solid, GeomError> {
+        Handle::sphere(frame, radius)?.into_value()
+    }
+
+    pub fn cylinder(frame: &Frame, radius: f64, height: f64) -> Result<Solid, GeomError> {
+        Handle::cylinder(frame, radius, height)?.into_value()
+    }
+
+    pub fn cone(
+        frame: &Frame,
+        radius1: f64,
+        radius2: f64,
+        height: f64,
+    ) -> Result<Solid, GeomError> {
+        Handle::cone(frame, radius1, radius2, height)?.into_value()
+    }
+
+    pub fn extrude(profile: &Profile, direction: Vector) -> Result<Solid, GeomError> {
+        let wire = Wire::from_form(&profile.form)?;
+        Handle::prism(&wire, direction)?.into_value()
+    }
+
+    pub fn extrude_to_point(profile: &Profile, apex: Point) -> Result<Solid, GeomError> {
+        let wire = Wire::from_form(&profile.form)?;
+        Handle::thru_sections(std::slice::from_ref(&wire), true, Some(apex))?.into_value()
+    }
+
+    pub fn loft(profiles: &[Profile], ruled: bool) -> Result<Solid, GeomError> {
+        let wires = profiles
+            .iter()
+            .map(|p| Wire::from_form(&p.form))
+            .collect::<Result<Vec<_>, _>>()?;
+        Handle::thru_sections(&wires, ruled, None)?.into_value()
+    }
+
+    pub fn revolve(
+        profile: &Profile,
+        axis: &Curve,
+        angle: Domain,
+        tolerance: f64,
+        tolerance_angle: f64,
+    ) -> Result<Solid, GeomError> {
+        let (origin, direction) = axis_of(axis, tolerance)?;
+        require_one_side(profile, origin, direction, tolerance)?;
+        let (start, sweep) = sweep_angle(angle, tolerance_angle)?;
+        let wire = Wire::from_form(&profile.form)?;
+        let swept = Handle::revolve(&wire, origin, Vector(direction), sweep.abs())?;
+        // A negative sweep turns the other way; `start` rotates the whole
+        // result into place. Both are one rigid kernel transform (exact on
+        // the analytic surfaces), applied only when needed.
+        let mut rotation = 0.0;
+        if sweep < 0.0 {
+            rotation += sweep; // the solid spans [0, |sweep|]; bring it to [sweep, 0]
+        }
+        rotation += start;
+        if crate::tol::near_zero(rotation, tolerance_angle) {
+            return swept.into_value();
+        }
+        let similarity = Similarity::rotation(&frame_normal_to(origin, direction), rotation);
+        swept.transformed(&similarity.coefficients())?.into_value()
+    }
+
+    pub fn sweep(rail: &Curve, profile: &Profile, tolerance: f64) -> Result<Solid, GeomError> {
+        let spine = Wire::from_form(&rail_form(rail, tolerance)?)?;
+        let wire = Wire::from_form(&profile.form)?;
+        Handle::sweep(&spine, &wire)?.into_value()
+    }
+
+    pub fn pipe(rail: &Curve, radius: f64, tolerance: f64) -> Result<Solid, GeomError> {
+        let form = rail_form(rail, tolerance)?;
+        let (start, tangent) = rail_start(&form)?;
+        let section = WireForm::Circle {
+            frame: frame_normal_to(start, tangent),
+            radius,
+        };
+        let spine = Wire::from_form(&form)?;
+        let wire = Wire::from_form(&section)?;
+        Handle::sweep(&spine, &wire)?.into_value()
+    }
+
+    pub fn union_all(solids: &[Solid]) -> Result<Solid, GeomError> {
+        let mut all = handles(solids)?;
+        let first = all.remove(0);
+        if all.is_empty() {
+            return first.into_value();
+        }
+        first.union(all)?.into_value()
+    }
+
+    pub fn difference_all(solid: &Solid, cutters: &[Solid]) -> Result<Solid, GeomError> {
+        let solid = Handle::from_value(solid)?;
+        if cutters.is_empty() {
+            return solid.into_value();
+        }
+        solid.difference_all(handles(cutters)?)?.into_value()
+    }
+
+    pub fn intersection(a: &Solid, b: &Solid) -> Result<Solid, GeomError> {
+        Handle::from_value(a)?
+            .intersection(Handle::from_value(b)?)?
+            .into_value()
+    }
+
+    pub fn volume(solid: &Solid) -> Result<VolumeProperties, GeomError> {
+        Handle::from_value(solid)?.volume()
+    }
+
+    pub fn bounds(solid: &Solid) -> Result<(Point, Point), GeomError> {
+        Handle::from_value(solid)?.bounds()
+    }
+
+    pub fn transform(solid: &Solid, similarity: &Similarity) -> Result<Solid, GeomError> {
+        Handle::from_value(solid)?
+            .transformed(&similarity.coefficients())?
+            .into_value()
+    }
+
+    pub fn section(
+        solid: &Solid,
+        frame: &Frame,
+        tolerance: f64,
+        deflection: Deflection,
+    ) -> Result<Vec<Curve>, GeomError> {
+        Handle::from_value(solid)?.section(frame, tolerance, deflection)
+    }
+
+    pub fn edges_and_vertices(
+        solid: &Solid,
+        deflection: Deflection,
+    ) -> Result<(Vec<Curve>, Vec<Point>, usize), GeomError> {
+        let handle = Handle::from_value(solid)?;
+        let (edges, faces) = handle.edges(deflection)?;
+        let vertices = handle.vertices()?;
+        Ok((edges, vertices, faces))
+    }
+
+    pub fn write_step(
+        solids: &[Solid],
+        path: &str,
+        millimeters: f64,
+        name: &str,
+    ) -> Result<(), GeomError> {
+        Handle::write_step(handles(solids)?, path, millimeters, name)
+    }
+
+    pub fn read_step(path: &str, millimeters: f64) -> Result<Vec<Solid>, GeomError> {
+        Handle::read_step(path, millimeters)?
+            .into_iter()
+            .map(Handle::into_value)
+            .collect()
+    }
+}
+
+#[cfg(not(feature = "occt"))]
+mod node_backend {
+    use super::{Deflection, Profile, VolumeProperties};
+    use crate::GeomError;
+    use crate::frame::Frame;
+    use crate::transform::Similarity;
+    use cicada_core::geometry::{Curve, Solid};
+    use cicada_core::scalar::Domain;
+    use cicada_core::spatial::{Point, Vector};
+    use glam::DVec3;
+
+    const fn unavailable<T>(operation: &'static str) -> Result<T, GeomError> {
+        Err(GeomError::KernelUnavailable {
+            kernel: "OCCT",
+            feature: "occt",
+            operation,
+        })
+    }
+
+    pub fn box_in_frame(_frame: &Frame, _extents: DVec3) -> Result<Solid, GeomError> {
+        unavailable("box")
+    }
+
+    pub fn sphere(_frame: &Frame, _radius: f64) -> Result<Solid, GeomError> {
+        unavailable("sphere")
+    }
+
+    pub fn cylinder(_frame: &Frame, _radius: f64, _height: f64) -> Result<Solid, GeomError> {
+        unavailable("cylinder")
+    }
+
+    pub fn cone(_frame: &Frame, _r1: f64, _r2: f64, _height: f64) -> Result<Solid, GeomError> {
+        unavailable("cone")
+    }
+
+    pub fn extrude(_profile: &Profile, _direction: Vector) -> Result<Solid, GeomError> {
+        unavailable("extrude")
+    }
+
+    pub fn extrude_to_point(_profile: &Profile, _apex: Point) -> Result<Solid, GeomError> {
+        unavailable("extrude_to_point")
+    }
+
+    pub fn loft(_profiles: &[Profile], _ruled: bool) -> Result<Solid, GeomError> {
+        unavailable("loft")
+    }
+
+    pub fn revolve(
+        _profile: &Profile,
+        _axis: &Curve,
+        _angle: Domain,
+        _tolerance: f64,
+        _tolerance_angle: f64,
+    ) -> Result<Solid, GeomError> {
+        unavailable("revolve")
+    }
+
+    pub fn sweep(_rail: &Curve, _profile: &Profile, _tolerance: f64) -> Result<Solid, GeomError> {
+        unavailable("sweep")
+    }
+
+    pub fn pipe(_rail: &Curve, _radius: f64, _tolerance: f64) -> Result<Solid, GeomError> {
+        unavailable("pipe")
+    }
+
+    pub fn union_all(_solids: &[Solid]) -> Result<Solid, GeomError> {
+        unavailable("solid_union")
+    }
+
+    pub fn difference_all(_solid: &Solid, _cutters: &[Solid]) -> Result<Solid, GeomError> {
+        unavailable("solid_difference")
+    }
+
+    pub fn intersection(_a: &Solid, _b: &Solid) -> Result<Solid, GeomError> {
+        unavailable("solid_intersection")
+    }
+
+    pub fn volume(_solid: &Solid) -> Result<VolumeProperties, GeomError> {
+        unavailable("volume")
+    }
+
+    pub fn bounds(_solid: &Solid) -> Result<(Point, Point), GeomError> {
+        unavailable("bounding_box")
+    }
+
+    pub fn transform(_solid: &Solid, _similarity: &Similarity) -> Result<Solid, GeomError> {
+        unavailable("transform")
+    }
+
+    pub fn section(
+        _solid: &Solid,
+        _frame: &Frame,
+        _tolerance: f64,
+        _deflection: Deflection,
+    ) -> Result<Vec<Curve>, GeomError> {
+        unavailable("section")
+    }
+
+    pub fn edges_and_vertices(
+        _solid: &Solid,
+        _deflection: Deflection,
+    ) -> Result<(Vec<Curve>, Vec<Point>, usize), GeomError> {
+        unavailable("deconstruct_solid")
+    }
+
+    pub fn write_step(
+        _solids: &[Solid],
+        _path: &str,
+        _millimeters: f64,
+        _name: &str,
+    ) -> Result<(), GeomError> {
+        unavailable("export_step")
+    }
+
+    pub fn read_step(_path: &str, _millimeters: f64) -> Result<Vec<Solid>, GeomError> {
+        unavailable("import_step")
+    }
+}
+
+/// A box in a plane's frame spanning the three domains along its axes
+/// (decreasing domains normalized; the box's minimum corner is at the
+/// domains' starts). `BRepPrimAPI_MakeBox` in the frame — in the world
+/// frame the bytes equal [`box_at`]'s.
+///
+/// # Errors
+///
+/// [`GeomError::DegenerateFrame`] for a bad plane; [`GeomError::BadParameter`]
+/// for an extent empty at `tolerance`; the kernel's errors;
+/// [`GeomError::KernelUnavailable`] without `occt`.
+pub fn box_in_plane(
+    plane: &Plane,
+    x: Domain,
+    y: Domain,
+    z: Domain,
+    tolerance: f64,
+) -> Result<Solid, GeomError> {
+    let frame = orthonormal(plane, tolerance)?;
+    let mut extents = DVec3::ZERO;
+    let mut starts = DVec3::ZERO;
+    for (index, (name, domain)) in [("x", x), ("y", y), ("z", z)].into_iter().enumerate() {
+        let (start, end) = (domain.start.min(domain.end), domain.start.max(domain.end));
+        let extent = end - start;
+        if !(extent.is_finite() && extent > tolerance) {
+            return Err(GeomError::BadParameter {
+                name,
+                value: format!("{}..{}", domain.start, domain.end),
+                requirement: "box extent must be above tolerance",
+            });
+        }
+        extents[index] = extent;
+        starts[index] = start;
+    }
+    let origin = frame.point_at_3(starts.x, starts.y, starts.z);
+    let frame = Frame { origin, ..frame };
+    node_backend::box_in_frame(&frame, extents)
+}
+
+/// A sphere centred at the plane's origin.
+///
+/// # Errors
+///
+/// [`GeomError::DegenerateFrame`] for a bad plane; [`GeomError::BadParameter`]
+/// for a radius not above `tolerance`; the kernel's errors;
+/// [`GeomError::KernelUnavailable`] without `occt`.
+pub fn sphere(plane: &Plane, radius: f64, tolerance: f64) -> Result<Solid, GeomError> {
+    let frame = orthonormal(plane, tolerance)?;
+    above("radius", radius, tolerance)?;
+    node_backend::sphere(&frame, radius)
+}
+
+/// A cylinder standing on the plane, `height` along its normal.
+///
+/// # Errors
+///
+/// As [`sphere`], plus a height not above `tolerance`.
+pub fn cylinder(
+    plane: &Plane,
+    radius: f64,
+    height: f64,
+    tolerance: f64,
+) -> Result<Solid, GeomError> {
+    let frame = orthonormal(plane, tolerance)?;
+    above("radius", radius, tolerance)?;
+    above("height", height, tolerance)?;
+    node_backend::cylinder(&frame, radius, height)
+}
+
+/// A cone standing on the plane: `radius` at the base, the apex `height`
+/// along the normal.
+///
+/// # Errors
+///
+/// As [`cylinder`].
+pub fn cone(plane: &Plane, radius: f64, height: f64, tolerance: f64) -> Result<Solid, GeomError> {
+    let frame = orthonormal(plane, tolerance)?;
+    above("radius", radius, tolerance)?;
+    above("height", height, tolerance)?;
+    node_backend::cone(&frame, radius, 0.0, height)
+}
+
+/// A closed planar profile extruded along `direction` — exact edges for
+/// every curve kind (a circle becomes a cylinder, a polyline a prism).
+///
+/// # Errors
+///
+/// [`Profile::closed`]'s refusals; [`GeomError::BadParameter`] for a
+/// direction in the profile plane; the kernel's errors;
+/// [`GeomError::KernelUnavailable`] without `occt`.
+pub fn extrude(profile: &Curve, direction: Vector, tolerance: f64) -> Result<Solid, GeomError> {
+    let profile = Profile::closed(profile, tolerance)?;
+    profile.require_leaving(direction, tolerance)?;
+    node_backend::extrude(&profile, direction)
+}
+
+/// A closed planar profile tapered to `apex` (a pyramid over a polygon, a
+/// cone over a circle).
+///
+/// # Errors
+///
+/// [`Profile::closed`]'s refusals; [`GeomError::BadParameter`] for an apex
+/// in the profile plane; the kernel's errors;
+/// [`GeomError::KernelUnavailable`] without `occt`.
+pub fn extrude_to_point(profile: &Curve, apex: Point, tolerance: f64) -> Result<Solid, GeomError> {
+    let profile = Profile::closed(profile, tolerance)?;
+    let height = (apex.0 - profile.frame.origin.0).dot(profile.frame.z);
+    if !apex.0.is_finite() || tol::near_zero(height, tolerance) {
+        return Err(GeomError::BadParameter {
+            name: "apex",
+            value: format!("{:?}", apex.0),
+            requirement: "must be finite and off the profile plane",
+        });
+    }
+    node_backend::extrude_to_point(&profile, apex)
+}
+
+/// A solid through two or more closed profiles in order, ruled (straight
+/// between consecutive profiles) or smooth.
+///
+/// # Errors
+///
+/// [`GeomError::BadParameter`] for fewer than two profiles;
+/// [`Profile::closed`]'s refusals (the message names the profile's index);
+/// the kernel's errors; [`GeomError::KernelUnavailable`] without `occt`.
+pub fn loft(profiles: &[Curve], ruled: bool, tolerance: f64) -> Result<Solid, GeomError> {
+    if profiles.len() < 2 {
+        return Err(GeomError::BadParameter {
+            name: "profiles",
+            value: profiles.len().to_string(),
+            requirement: "a loft needs at least two profiles",
+        });
+    }
+    let profiles = profiles
+        .iter()
+        .enumerate()
+        .map(|(index, curve)| {
+            Profile::closed(curve, tolerance).map_err(|error| GeomError::DegenerateCurve {
+                reason: format!("profile {index}: {error}"),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    node_backend::loft(&profiles, ruled)
+}
+
+/// A closed planar profile revolved about `axis` (a `Line` in the
+/// profile's plane, not crossing the profile) through the `angle` domain
+/// (radians; at most a full turn).
+///
+/// # Errors
+///
+/// [`Profile::closed`]'s refusals; [`GeomError::BadParameter`] for a
+/// non-line axis, an axis off the profile plane or crossing it, or an empty
+/// / over-full angle; the kernel's errors; [`GeomError::KernelUnavailable`]
+/// without `occt`.
+pub fn revolve(
+    profile: &Curve,
+    axis: &Curve,
+    angle: Domain,
+    tolerance: f64,
+    tolerance_angle: f64,
+) -> Result<Solid, GeomError> {
+    let profile = Profile::closed(profile, tolerance)?;
+    // Validate before the backend so a kernel-free build reports the input
+    // errors it can see, and `KernelUnavailable` only for valid input.
+    let (origin, direction) = axis_of(axis, tolerance)?;
+    require_one_side(&profile, origin, direction, tolerance)?;
+    sweep_angle(angle, tolerance_angle)?;
+    node_backend::revolve(&profile, axis, angle, tolerance, tolerance_angle)
+}
+
+/// A closed profile swept along a rail (GH Sweep1): the profile keeps its
+/// orientation relative to the rail's tangent; corners are mitred.
+///
+/// # Errors
+///
+/// [`Profile::closed`]'s refusals; the rail's degenerate-curve refusals;
+/// the kernel's errors; [`GeomError::KernelUnavailable`] without `occt`.
+pub fn sweep(rail: &Curve, profile: &Curve, tolerance: f64) -> Result<Solid, GeomError> {
+    let profile = Profile::closed(profile, tolerance)?;
+    rail_form(rail, tolerance)?;
+    node_backend::sweep(rail, &profile, tolerance)
+}
+
+/// A circle of `radius` swept along a rail, the section perpendicular to
+/// the rail at its start.
+///
+/// # Errors
+///
+/// The rail's degenerate-curve refusals; [`GeomError::BadParameter`] for a
+/// radius not above `tolerance`; the kernel's errors;
+/// [`GeomError::KernelUnavailable`] without `occt`.
+pub fn pipe(rail: &Curve, radius: f64, tolerance: f64) -> Result<Solid, GeomError> {
+    above("radius", radius, tolerance)?;
+    rail_start(&rail_form(rail, tolerance)?)?;
+    node_backend::pipe(rail, radius, tolerance)
+}
+
+/// The union of one or more solids (one general-fuse pass, coplanar faces
+/// merged). A single solid passes through unchanged (re-serialized).
+///
+/// # Errors
+///
+/// [`GeomError::BadParameter`] for an empty list; [`GeomError::Kernel`]
+/// when the fuse fails or the operands are disjoint (several bodies);
+/// [`GeomError::KernelUnavailable`] without `occt`.
+pub fn union_all(solids: &[Solid]) -> Result<Solid, GeomError> {
+    if solids.is_empty() {
+        return Err(GeomError::BadParameter {
+            name: "solids",
+            value: "[]".to_owned(),
+            requirement: "a union needs at least one solid",
+        });
+    }
+    node_backend::union_all(solids)
+}
+
+/// `solid` minus every cutter (one pass, coplanar faces merged). No
+/// cutters: the solid, re-serialized.
+///
+/// # Errors
+///
+/// [`GeomError::Kernel`] when the cut fails, splits the solid or empties
+/// it; [`GeomError::KernelUnavailable`] without `occt`.
+pub fn difference_all(solid: &Solid, cutters: &[Solid]) -> Result<Solid, GeomError> {
+    node_backend::difference_all(solid, cutters)
+}
+
+/// The common volume of two solids.
+///
+/// # Errors
+///
+/// [`GeomError::Kernel`] when the intersection fails, is empty or is
+/// several bodies; [`GeomError::KernelUnavailable`] without `occt`.
+pub fn intersection(a: &Solid, b: &Solid) -> Result<Solid, GeomError> {
+    node_backend::intersection(a, b)
+}
+
+/// Volume and centroid.
+///
+/// # Errors
+///
+/// The kernel's errors; [`GeomError::KernelUnavailable`] without `occt`.
+pub fn volume(solid: &Solid) -> Result<VolumeProperties, GeomError> {
+    node_backend::volume(solid)
+}
+
+/// The tight world-aligned bounds (min corner, max corner).
+///
+/// # Errors
+///
+/// The kernel's errors; [`GeomError::KernelUnavailable`] without `occt`.
+pub fn bounds(solid: &Solid) -> Result<(Point, Point), GeomError> {
+    node_backend::bounds(solid)
+}
+
+/// The solid under a similarity (rigid motion × uniform scale, reflections
+/// included): the kernel rewrites the geometry, so a moved solid's bytes
+/// describe the moved geometry.
+///
+/// # Errors
+///
+/// The kernel's errors; [`GeomError::KernelUnavailable`] without `occt`.
+pub fn transform(solid: &Solid, similarity: &Similarity) -> Result<Solid, GeomError> {
+    node_backend::transform(solid, similarity)
+}
+
+/// The planar section of a solid through `plane`: one closed curve per
+/// loop (circles exact, the rest polylines at `deflection`); empty when
+/// the plane misses the solid.
+///
+/// # Errors
+///
+/// [`GeomError::DegenerateFrame`] for a bad plane; the kernel's errors;
+/// [`GeomError::KernelUnavailable`] without `occt`.
+pub fn section(
+    solid: &Solid,
+    plane: &Plane,
+    tolerance: f64,
+    deflection: Deflection,
+) -> Result<Vec<Curve>, GeomError> {
+    let frame = orthonormal(plane, tolerance)?;
+    node_backend::section(solid, &frame, tolerance, deflection)
+}
+
+/// A solid's distinct edges (lines and full circles exact, the rest
+/// polylines at `deflection`), distinct vertices, and face count.
+///
+/// # Errors
+///
+/// The kernel's errors; [`GeomError::KernelUnavailable`] without `occt`.
+pub fn edges_and_vertices(
+    solid: &Solid,
+    deflection: Deflection,
+) -> Result<(Vec<Curve>, Vec<Point>, usize), GeomError> {
+    node_backend::edges_and_vertices(solid, deflection)
+}
+
+/// Write solids to a STEP AP214 file, byte-deterministic for the same
+/// solids (fixed header, `crate::occt::STEP_TIMESTAMP`); `millimeters` is
+/// the document unit's size, declared in the file; `name` is the header's
+/// product/file name.
+///
+/// # Errors
+///
+/// [`GeomError::BadParameter`] for an empty list; the kernel's errors
+/// (including an unwritable path); [`GeomError::KernelUnavailable`] without
+/// `occt`.
+pub fn write_step(
+    solids: &[Solid],
+    path: &str,
+    millimeters: f64,
+    name: &str,
+) -> Result<(), GeomError> {
+    node_backend::write_step(solids, path, millimeters, name)
+}
+
+/// Every solid of a STEP file, scaled into a document whose unit is
+/// `millimeters` long.
+///
+/// # Errors
+///
+/// The kernel's errors (an unreadable file, no solids);
+/// [`GeomError::KernelUnavailable`] without `occt`.
+pub fn read_step(path: &str, millimeters: f64) -> Result<Vec<Solid>, GeomError> {
+    node_backend::read_step(path, millimeters)
+}
+
+fn above(name: &'static str, value: f64, tolerance: f64) -> Result<(), GeomError> {
+    if value.is_finite() && value > tolerance {
+        Ok(())
+    } else {
+        Err(GeomError::BadParameter {
+            name,
+            value: format!("{value}"),
+            requirement: "must be finite and above tolerance",
+        })
+    }
 }
 
 #[cfg(test)]

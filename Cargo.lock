@@ -334,6 +334,7 @@ dependencies = [
  "blake3",
  "cicada-core",
  "cxx",
+ "cxx-build",
  "glam",
  "manifold-csg",
  "opencascade-sys",

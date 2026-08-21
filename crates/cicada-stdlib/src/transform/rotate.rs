@@ -31,9 +31,8 @@ pub struct RotateIn {
 /// # Panics
 ///
 /// Panics when the plane is degenerate (zero-length or parallel axes), or
-/// when a `Solid` is the geometry — B-rep transforms run in the OCCT kernel and
-/// arrive with the OCCT-backed solid nodes (v0.1 item 3 WP-C); until then a
-/// Solid input is a loud refusal, never a silent pass-through.
+/// for a `Solid` the OCCT kernel refuses to transform (a `Solid` moves through
+/// the kernel — its B-rep geometry is rewritten, never a mesh in disguise).
 ///
 /// # Examples
 ///

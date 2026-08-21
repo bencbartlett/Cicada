@@ -22,9 +22,9 @@ pub struct MoveIn {
 ///
 /// # Panics
 ///
-/// Panics when a `Solid` is the geometry — B-rep transforms run in the OCCT kernel and
-/// arrive with the OCCT-backed solid nodes (v0.1 item 3 WP-C); until then a
-/// Solid input is a loud refusal, never a silent pass-through.
+/// Panics when the geometry is a `Solid` the OCCT kernel refuses to transform (a
+/// `Solid` moves through the kernel — its B-rep geometry is rewritten, never a
+/// mesh in disguise).
 ///
 /// # Examples
 ///
@@ -102,28 +102,51 @@ mod tests {
     }
 
     #[test]
-    fn a_solid_input_is_the_documented_red_path() {
-        // The `# Panics` contract above (and the catalog's "Red when") names
-        // the Solid refusal; this pins that the NODE — not just
-        // `Similarity::apply` — goes red with exactly that message. The
-        // same `Similarity` path serves rotate / scale / orient /
-        // linear_array, whose contracts say the same sentence.
+    fn a_solid_moves_through_the_kernel_or_is_the_documented_red_path() {
+        // The same `Similarity` path serves rotate / scale / orient /
+        // linear_array; this pins it at the NODE for one of them. With the
+        // kernel a real box moves (its bounds shift, its volume stays);
+        // without it the node is red with the typed refusal — both worlds
+        // asserted, never a vacuous pass (docs/14).
         use cicada_core::geometry::{SOLID_CANONICAL_HEADER, Solid};
-        use cicada_geom::transform::SOLID_TRANSFORM_DEFERRED;
-        let solid = Solid::from_canonical_bytes(SOLID_CANONICAL_HEADER.to_vec()).unwrap();
-        let outcome = std::panic::catch_unwind(|| {
-            move_(MoveIn {
-                geometry: Transformable::Solid(solid),
-                motion: Vector::new(1.0, 0.0, 0.0),
-            })
-        });
-        let payload = outcome.expect_err("a Solid must be refused, never passed through");
-        let message = payload
-            .downcast_ref::<String>()
-            .cloned()
-            .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
-            .expect("a message");
-        assert_eq!(message, SOLID_TRANSFORM_DEFERRED);
-        assert!(message.contains("WP-C"), "{message}");
+        use cicada_core::scalar::Domain;
+        use cicada_core::spatial::Plane;
+        if cicada_geom::solid::kernel_available() {
+            let block = cicada_geom::solid::box_in_plane(
+                &Plane::world_xy(),
+                Domain::new(0.0, 1.0),
+                Domain::new(0.0, 2.0),
+                Domain::new(0.0, 3.0),
+                1e-6,
+            )
+            .unwrap();
+            let moved = move_(MoveIn {
+                geometry: Transformable::Solid(block),
+                motion: Vector::new(10.0, 0.0, -1.0),
+            });
+            let Transformable::Solid(moved) = moved else {
+                panic!("a Solid stays a Solid")
+            };
+            let (min, max) = cicada_geom::solid::bounds(&moved).unwrap();
+            assert!(tol::coincident(min, Point::new(10.0, 0.0, -1.0), 1e-9));
+            assert!(tol::coincident(max, Point::new(11.0, 2.0, 2.0), 1e-9));
+            let volume = cicada_geom::solid::volume(&moved).unwrap().volume;
+            assert!((volume - 6.0).abs() < 1e-9, "{volume}");
+        } else {
+            let solid = Solid::from_canonical_bytes(SOLID_CANONICAL_HEADER.to_vec()).unwrap();
+            let outcome = std::panic::catch_unwind(|| {
+                move_(MoveIn {
+                    geometry: Transformable::Solid(solid),
+                    motion: Vector::new(1.0, 0.0, 0.0),
+                })
+            });
+            let payload = outcome.expect_err("a Solid must be refused, never passed through");
+            let message = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+                .expect("a message");
+            assert!(message.contains("needs the OCCT kernel"), "{message}");
+        }
     }
 }

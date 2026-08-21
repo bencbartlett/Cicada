@@ -35,8 +35,14 @@ Conversions are explicit, costed nodes (`tessellate: Solid → Mesh`,
 
 The probe (`docs/probes/occt-2026-08.md`) decided the shape; this is what
 shipped. Everything below lives behind the `occt` Cargo feature of
-`cicada-geom` (default OFF — default builds compile no C++ and link no
-OCCT) in `crates/cicada-geom/src/occt/`.
+`cicada-geom` in `crates/cicada-geom/src/occt/` — OFF by default through
+WP-A and WP-B, **ON by default since WP-C (2026-08-20)**: the product's
+`box`/`extrude`/`loft`/… nodes are OCCT-backed, so the product build needs
+the kernel, every cargo command runs under `tools/fetch_occt.py`'s env, and
+every CI job that builds fetches the prebuilt first (the dedicated `occt`
+jobs folded into the standard matrix). `--no-default-features` is the
+kernel-free build: the same signatures, every kernel call a typed
+`GeomError::KernelUnavailable`, and CI keeps it compiling.
 
 - **Prebuilt, never the source build.** The binding links a prebuilt
   OpenCASCADE 7.8.1 found through `DEP_OCCT_ROOT`: conda-forge's `occt`
@@ -97,9 +103,90 @@ OCCT) in `crates/cicada-geom/src/occt/`.
   refusal, never a mesh-tier fallback. Stdlib nodes (WP-C) and the
   server's display path use the value level only. Errors are
   `GeomError` (+ `Serialization`, `NotWatertight`, `KernelUnavailable`).
-  WP-C adds the rest of the node set on the same pattern: one glue
+  WP-C added the rest of the node set on the same pattern — one glue
   function per kernel operation, declared `Result`, one value-level
-  function over it.
+  function over it — see the next bullet.
+- **The node-set glue (WP-C, 2026-08-20) lives in cicada-geom.** The
+  fork carries the binding patches and the FIRST glue (box, prism, cut,
+  canonical bytes, tessellate, the boundary self-test); the operations
+  the stdlib's Solid nodes need beyond it are
+  `crates/cicada-geom/src/occt/glue.hxx` (C++ bodies, header-only like
+  the fork's) + `glue.rs` (the `#[cxx::bridge]`, namespace
+  `cicada_geom`, every function `Result`, the crate's only
+  `unsafe` — the bridge block, under a `// SAFETY:` note), compiled by
+  cicada-geom's own `build.rs` with `cxx-build` against the same
+  `DEP_OCCT_ROOT` prefix the fork links (`-std=c++17`,
+  `$DEP_OCCT_ROOT/include/opencascade`, the toolkits it uses named on
+  the link line). The header repeats the fork's `rust::behavior::trycatch`
+  hook (it is `static`, instantiated per translation unit) so the
+  boundary stays total here too; `TopoDS_Shape` is the fork's type
+  shared across the two bridges, so handles flow between the glues
+  without conversion. Why here and not the fork: the fork is pinned by
+  rev and every patch to it is a release of a second repository, while
+  these functions are Cicada's own kernel calls — they change with the
+  node set and are reviewed where Cicada's code is. What it wraps, all at
+  the kernel level on `occt::Handle` / `occt::Wire` and at the value
+  level in `cicada_geom::solid` (same signatures in every build):
+  primitives in a frame (`BRepPrimAPI_MakeBox/Sphere/Cylinder/Cone` over a
+  `gp_Ax2`; a box in the world frame is byte-identical to WP-A's
+  `box_at`); wires from a curve's `WireForm` (straight edges through a
+  chain's vertices — the fork's edge-by-edge construction, so `extrude`
+  of a rectangle equals `extrude_polygon`'s bytes — or one circular edge,
+  so a circle extrudes to an exact cylinder); `prism`, `thru_sections`
+  (ruled or smooth, `CheckCompatibility` on, an optional apex vertex for
+  `extrude_to_point`), `revolve` (`BRepPrimAPI_MakeRevol`; the angle
+  domain's start and a negative sweep are one rigid kernel transform),
+  `sweep` (`BRepOffsetAPI_MakePipeShell`, corrected Frenet, `RightCorner`
+  = mitred transitions, `MakeSolid`; `pipe` is a sweep of a circle
+  normal to the rail at its start); the booleans `fuse` (n-ary: one
+  general-fuse pass over argument and tool lists), `cut` (one solid minus
+  a tool list), `common`, all with `RunParallel` off and followed by
+  `ShapeUpgrade_UnifySameDomain` (coplanar faces and collinear edges
+  merged — two fused cubes are a six-face box; GH's Solid Union does the
+  same; downstream booleans and STEP consumers prefer it), the result
+  required to be exactly one solid as in WP-B (a union of disjoint
+  bodies, a cut that splits or empties, an empty intersection are
+  refused, never returned as compounds); `volume_properties`
+  (`BRepGProp::VolumeProperties`, adaptive, `eps` 1e-9), `bounds`
+  (`BRepBndLib::AddOptimal`, no triangulation, no tolerance inflation);
+  `transform` (`gp_Trsf::SetValues` from a `Similarity`'s 12 row-major
+  coefficients — rotation × uniform scale, reflections as a negative
+  scale, translation — then `BRepBuilderAPI_Transform` with `Copy =
+  true`, so the result carries no `TopLoc_Location` and its bytes
+  describe the moved geometry; `Similarity::apply` takes this path for a
+  `Solid`, and the five transform nodes need no Solid arm of their own);
+  the topology readers `edges` (every distinct non-degenerate edge as a
+  curve record — lines and full circles exact, the rest discretized by
+  `GCPnts_TangentialDeflection` at a `Deflection` — plus the face count),
+  `vertices`, and `section` (`BRepAlgoAPI_Section` against a `gp_Pln`,
+  edges connected into loops by `ShapeAnalysis_FreeBounds` at the project
+  tolerance, one closed curve per loop — a single circular edge stays a
+  `Circle`); and STEP — `step_write` (AP214IS through the 7.8
+  `StepData_ConfParameters` per call, the document unit declared in the
+  file via `WriteUnit` + the model's local/write length units, and a
+  header normalized to FIXED fields: the name, `STEP_TIMESTAMP`
+  `2000-01-01T00:00:00`, author/organisation/authorisation `cicada`, and
+  every `PRODUCT` renumbered `<name> 1, 2, …` in file order — OCCT
+  numbers products from a PROCESS-WIDE counter, measured: the second
+  export of a session wrote `'parts 11'` where the first wrote
+  `'parts 1'` — so the same solids always give the same bytes, proved by
+  a write-twice test) and `step_read` (`STEPControl_Reader`, scaled into
+  the document unit through `SetSystemLengthUnit`; the Rust side
+  extracts every solid). **The STEP lock.** The STEP translators are the
+  one OCCT subsystem with mutable process-wide state (the work-session
+  controllers' one-time registration, `Interface_Static`, the
+  messenger); `step_read`/`step_write` and the once-per-process
+  `quiet_messenger` (OCCT's default printers lowered to failures — the
+  translators narrate every transfer at Info level on stdout, and a
+  headless `cicada run` must print its own output and nothing else) run
+  under `occt::STEP_LOCK`; nothing else in the seam takes it, and an
+  8-thread write/read test pins that the lock is enough. The
+  heap-independence shape of test WP-B asked for reran on the node set's
+  corpus in the stdlib's goldens (boxes, prisms, a unioned pair, a
+  drilled block, a ruled loft — transcendental-free), and the analytic
+  oracles (every primitive's, sweep's and boolean's volume against its
+  formula, by the integrator AND the tessellation) are the node set's
+  tests in `occt/node_set_tests.rs`.
 - **The `Solid` value (WP-B).** `core::Solid` holds the canonical bytes
   (`Arc<[u8]>`) and nothing else; core checks the `BinTools` V4 header
   (`SOLID_CANONICAL_HEADER`, the same constant the seam pins as
@@ -135,7 +222,8 @@ OCCT) in `crates/cicada-geom/src/occt/`.
   processes and two independent OCCT builds (probe Q2), a fixed point
   under read → write, unaffected by tessellation; golden blake3 hashes
   for the transcendental-free box and prism are in the seam's tests.
-  Cross-OS identity is measured by the nightly `occt (<os>)` jobs; until
+  Cross-OS identity is measured by the per-PR `cargo test` matrix and the
+  nightly three-OS matrix (every job links the kernel since WP-C); until
   the three agree the goldens are per-OS — DECISIONS.md rows 16 and 42,
   revised 2026-08-20 at the merge of WP-A from the probe memo's §4d
   drafts (`docs/probes/occt-2026-08.md`): they record the fork and its
@@ -183,7 +271,8 @@ OCCT) in `crates/cicada-geom/src/occt/`.
   `BOPAlgo_Options::GetParallelMode` — are never written). The one OCCT
   subsystem known to keep mutable globals is `Interface_Static` (the
   STEP reader/writer parameters): WP-C's `import_step` / `export_step`
-  run those calls under a lock of their own. Proof as shipped:
+  run those calls under a lock of their own (`STEP_LOCK`, above). Proof
+  as shipped:
   `related_solids_are_safe_across_rayon_workers` — 8 rayon threads,
   13 related values (a block, six cutters through it, their six
   differences), 1,560 tasks that re-serialize, tessellate or recompute a
@@ -220,8 +309,8 @@ OCCT) in `crates/cicada-geom/src/occt/`.
   is pristine only until its first kernel operation (rule 2), so such a
   cache could only ever serve the FIRST use of a value — and the re-read
   it would save is small next to the work it feeds. Measured with
-  `cargo run --release -p cicada-geom --features occt --example
-  solid_bench` (2026-08-20, Windows, release, single-threaded unless
+  `cargo run --release -p cicada-geom --example solid_bench`
+  (2026-08-20, Windows, release, single-threaded unless
   stated; the probe's 10 × 20 × 30 block and its 4 × 6 cutter, one pair
   per part):
 

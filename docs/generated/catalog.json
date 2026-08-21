@@ -4168,7 +4168,7 @@
       "pure": true,
       "volatile": false,
       "uses_tolerance": false,
-      "panics": "`count < 1` or `count` is above the 2^24 slot ceiling (16,777,216 slots), or when a `Solid` is the geometry — B-rep transforms run in the OCCT kernel and arrive with the OCCT-backed solid nodes (v0.1 item 3 WP-C); until then a Solid input is a loud refusal, never a silent pass-through.",
+      "panics": "`count < 1` or `count` is above the 2^24 slot ceiling (16,777,216 slots), or for a `Solid` the OCCT kernel refuses to transform (a `Solid` moves through the kernel — its B-rep geometry is rewritten, never a mesh in disguise).",
       "gh": "Linear Array",
       "examples": [
         "ring = circle(radius=1.0)\nstep = unit_x(factor=3.0)\nrow = linear_array(geometry=ring, direction=step, count=4)"
@@ -4220,7 +4220,7 @@
       "pure": true,
       "volatile": false,
       "uses_tolerance": false,
-      "panics": "a `Solid` is the geometry — B-rep transforms run in the OCCT kernel and arrive with the OCCT-backed solid nodes (v0.1 item 3 WP-C); until then a Solid input is a loud refusal, never a silent pass-through.",
+      "panics": "the geometry is a `Solid` the OCCT kernel refuses to transform (a `Solid` moves through the kernel — its B-rep geometry is rewritten, never a mesh in disguise).",
       "gh": "Move",
       "examples": [
         "corner = construct_point(x=1.0, y=2.0, z=3.0)\nshift = unit_x(factor=10.0)\nmoved = move(geometry=corner, motion=shift)"
@@ -4264,7 +4264,7 @@
       "pure": true,
       "volatile": false,
       "uses_tolerance": true,
-      "panics": "either plane is degenerate, or when a `Solid` is the geometry — B-rep transforms run in the OCCT kernel and arrive with the OCCT-backed solid nodes (v0.1 item 3 WP-C); until then a Solid input is a loud refusal, never a silent pass-through.",
+      "panics": "either plane is degenerate, or for a `Solid` the OCCT kernel refuses to transform (a `Solid` moves through the kernel — its B-rep geometry is rewritten, never a mesh in disguise).",
       "gh": "Orient",
       "examples": [
         "ring = circle(radius=2.0)\nsource = xy_plane()\nat = construct_point(x=10.0, y=0.0, z=5.0)\ntarget = xz_plane(origin=at)\nplaced = orient(geometry=ring, source=source, target=target)"
@@ -4316,7 +4316,7 @@
       "pure": true,
       "volatile": false,
       "uses_tolerance": true,
-      "panics": "the plane is degenerate (zero-length or parallel axes), or when a `Solid` is the geometry — B-rep transforms run in the OCCT kernel and arrive with the OCCT-backed solid nodes (v0.1 item 3 WP-C); until then a Solid input is a loud refusal, never a silent pass-through.",
+      "panics": "the plane is degenerate (zero-length or parallel axes), or for a `Solid` the OCCT kernel refuses to transform (a `Solid` moves through the kernel — its B-rep geometry is rewritten, never a mesh in disguise).",
       "gh": "Rotate",
       "examples": [
         "ring = circle(radius=2.0)\nturned = rotate(geometry=ring, angle=1.5707963267948966)"
@@ -4370,7 +4370,7 @@
       "pure": true,
       "volatile": false,
       "uses_tolerance": true,
-      "panics": "`|factor|` is within tolerance of zero — geometry would collapse to a point — or when a `Solid` is the geometry — B-rep transforms run in the OCCT kernel and arrive with the OCCT-backed solid nodes (v0.1 item 3 WP-C); until then a Solid input is a loud refusal, never a silent pass-through.",
+      "panics": "`|factor|` is within tolerance of zero — geometry would collapse to a point — or for a `Solid` the OCCT kernel refuses to transform (a `Solid` moves through the kernel — its B-rep geometry is rewritten, never a mesh in disguise).",
       "gh": "Scale",
       "examples": [
         "ring = circle(radius=2.0)\nabout = construct_point(x=1.0, y=0.0, z=0.0)\nbigger = scale(geometry=ring, center=about, factor=3.0)"

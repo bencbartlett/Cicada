@@ -11,6 +11,7 @@ use cicada_core::scalar::Domain;
 use cicada_core::spatial::{Plane, Point, Vector};
 use glam::{DMat3, DVec3};
 
+use crate::GeomError;
 use crate::frame::Frame;
 
 /// A similarity transform: `p ↦ linear·p + translation` with
@@ -160,35 +161,59 @@ impl Similarity {
             .unwrap_or_else(|error| unreachable!("transform preserves mesh structure: {error}"))
     }
 
+    /// The 12 row-major coefficients of the 3×4 affine matrix
+    /// `[linear | translation]` — what the OCCT kernel's `gp_Trsf` reads
+    /// (`crate::solid::transform`).
+    #[must_use]
+    pub fn coefficients(&self) -> [f64; 12] {
+        let r = |i: usize| self.linear.row(i);
+        let (r0, r1, r2) = (r(0), r(1), r(2));
+        let t = self.translation;
+        [
+            r0.x, r0.y, r0.z, t.x, //
+            r1.x, r1.y, r1.z, t.y, //
+            r2.x, r2.y, r2.z, t.z,
+        ]
+    }
+
     /// Transform any transformable value, preserving its kind (the runtime
     /// half of kind-preserving generics — the checker guarantees the
-    /// static half).
+    /// static half). A `Solid` goes through the OCCT kernel
+    /// (`crate::solid::transform`): the B-rep geometry is rewritten, so the
+    /// moved solid's bytes describe the moved geometry — never a mesh in
+    /// disguise.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics for a [`Transformable::Solid`]: a B-rep transform runs in the
-    /// OCCT kernel and lands with v0.1 item 3 WP-C (`SOLID_TRANSFORM_DEFERRED`
-    /// is the message). Until then the node goes red with that message —
-    /// a loud refusal, never a silent pass-through or a mesh in disguise.
-    #[must_use]
-    pub fn apply(&self, value: &Transformable) -> Transformable {
-        match value {
+    /// Only a `Solid` can fail: the kernel's errors, or
+    /// [`GeomError::KernelUnavailable`] in a build without the `occt`
+    /// feature. Every other kind is total.
+    pub fn try_apply(&self, value: &Transformable) -> Result<Transformable, GeomError> {
+        Ok(match value {
             Transformable::Point(p) => Transformable::Point(self.apply_point(*p)),
             Transformable::Vector(v) => Transformable::Vector(self.apply_vector(*v)),
             Transformable::Plane(p) => Transformable::Plane(self.apply_plane(p)),
             Transformable::Curve(c) => Transformable::Curve(self.apply_curve(c)),
             Transformable::Mesh(m) => Transformable::Mesh(self.apply_mesh(m)),
-            Transformable::Solid(_) => panic!("{SOLID_TRANSFORM_DEFERRED}"),
+            Transformable::Solid(s) => Transformable::Solid(crate::solid::transform(s, self)?),
+        })
+    }
+
+    /// [`Similarity::try_apply`] for the transform nodes: the one failing
+    /// case (a `Solid` the kernel refuses) is a red node.
+    ///
+    /// # Panics
+    ///
+    /// Panics with the kernel's message when a `Solid` cannot be
+    /// transformed (or the build links no kernel).
+    #[must_use]
+    pub fn apply(&self, value: &Transformable) -> Transformable {
+        match self.try_apply(value) {
+            Ok(transformed) => transformed,
+            Err(error) => panic!("{error}"),
         }
     }
 }
-
-/// The red-node message a transform of a `Solid` carries until the
-/// kernel-backed transforms ship (docs/17 Item 3 WP-C).
-pub const SOLID_TRANSFORM_DEFERRED: &str = "transforming a Solid (move / rotate / scale / \
-     orient / linear_array) is not available yet: B-rep transforms run in the OCCT kernel \
-     and arrive with the OCCT-backed solid nodes (v0.1 item 3 WP-C) — until then a Solid \
-     cannot be transformed";
 
 fn scale_domain(domain: &Domain, factor: f64) -> Domain {
     Domain::new(domain.start * factor, domain.end * factor)
@@ -213,19 +238,67 @@ mod tests {
     }
 
     #[test]
-    fn a_solid_transform_is_a_loud_refusal_until_wp_c() {
+    #[allow(clippy::float_cmp)] // exact: identity rows, a power-of-two scale, integer offsets
+    fn coefficients_are_the_row_major_affine_matrix() {
+        // Translation: identity rows, the motion in the fourth column.
+        let t = Similarity::translation(Vector::new(1.0, 2.0, 3.0));
+        assert_eq!(
+            t.coefficients(),
+            [1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 2.0, 0.0, 0.0, 1.0, 3.0]
+        );
+        // Scale about a centre: s on the diagonal, (1 - s)·c in the column.
+        let s = Similarity::scale_about(Point::new(1.0, 1.0, 1.0), 2.0);
+        assert_eq!(
+            s.coefficients(),
+            [
+                2.0, 0.0, 0.0, -1.0, 0.0, 2.0, 0.0, -1.0, 0.0, 0.0, 2.0, -1.0
+            ]
+        );
+        // The coefficients apply the same map the methods do.
+        let p = DVec3::new(0.5, -2.0, 4.0);
+        let c = s.coefficients();
+        let by_rows = DVec3::new(
+            c[0] * p.x + c[1] * p.y + c[2] * p.z + c[3],
+            c[4] * p.x + c[5] * p.y + c[6] * p.z + c[7],
+            c[8] * p.x + c[9] * p.y + c[10] * p.z + c[11],
+        );
+        assert!((by_rows - s.apply_point(Point(p)).0).length() < 1e-12);
+    }
+
+    #[test]
+    fn a_solid_transform_goes_through_the_kernel_or_refuses_loudly() {
+        // Both worlds asserted (docs/14): with the kernel a pseudo-solid made
+        // of a bare header is a serialization error from BinTools; without
+        // it the typed `KernelUnavailable` — and `apply` turns either into
+        // a red node carrying that message, never a pass-through.
         use cicada_core::geometry::{SOLID_CANONICAL_HEADER, Solid};
         let solid = Solid::from_canonical_bytes(SOLID_CANONICAL_HEADER.to_vec()).expect("solid");
         let s = Similarity::translation(Vector::new(1.0, 2.0, 3.0));
+        let error = s
+            .try_apply(&Transformable::Solid(solid.clone()))
+            .expect_err("a header is not a solid");
+        if crate::solid::kernel_available() {
+            assert!(matches!(error, GeomError::Serialization { .. }), "{error}");
+        } else {
+            assert!(
+                matches!(
+                    error,
+                    GeomError::KernelUnavailable {
+                        operation: "transform",
+                        ..
+                    }
+                ),
+                "{error}"
+            );
+        }
         let outcome = std::panic::catch_unwind(|| s.apply(&Transformable::Solid(solid)));
-        let payload = outcome.expect_err("the transform must refuse, never pass the bytes through");
+        let payload = outcome.expect_err("apply is the red path");
         let message = payload
             .downcast_ref::<String>()
             .cloned()
             .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
             .expect("a message");
-        assert_eq!(message, SOLID_TRANSFORM_DEFERRED);
-        assert!(message.contains("not available yet"));
+        assert_eq!(message, error.to_string());
     }
 
     #[test]
