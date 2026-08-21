@@ -41,6 +41,9 @@ Two planes over one WebSocket:
   sizes): versioned envelope `{v, seq, type, payload}`.
 - **Data plane — binary frames** for geometry buffers only.
 
+One socket, but not one queue: each plane has its own lane to every
+client and the control lane drains first (§Two lanes, one socket).
+
 The edit flow is **intent → authoritative delta**:
 
 1. The client sends a gesture-level intent matching doc 10's
@@ -227,6 +230,98 @@ normals arrive with the display-cost work if a use case needs them
   joining client receives `display_reset` plus a full re-stream.
   Element-range streaming waits on the executor's chunk-level
   persistence (the frame header already carries the range).
+
+## Two lanes, one socket
+
+*(Live, v0.1 hardening, 2026-08-20.)* Both planes share the WebSocket,
+not a queue. The server reaches every client through two lanes — the
+**control lane** (the JSON texts) and the **display lane** (the binary
+frames) — and the socket's write task drains control first (a `biased`
+select), the display lane in its own FIFO otherwise. Why: a page that
+joins receives the whole display set — the wall: ~350 MB of frames —
+and with one queue per client every text queued behind it:
+`preview_policy` reached a freshly joined observer ~26 s after the
+writer's drag (measured 2026-08-20), and a delta, a status or a lease
+change would have waited as long. With the lanes a text waits for at
+most the one frame already handed to the socket; the restream resumes
+behind it. Control texts are small and ≤ 10 Hz (statuses are
+coalesced), so the display lane is never starved in practice. Nothing
+on the wire changed — no message, no frame byte, `PROTOCOL_VERSION` —
+only the interleaving of two planes the client already keeps apart.
+
+**What stays ordered with the frames.** Two texts are display-plane by
+meaning and ride the display lane, FIFO with the frames:
+`display_reset`, the header of the restream it announces (the lane's
+order is what puts it ahead of them), and `screenshot_request`, which
+renders what the frames before it painted — `GET /debug/screenshot`
+after `/debug/state?wait=true` keeps meaning "the completed
+generation".
+
+**Why control overtaking display is harmless — by construction, not by
+luck.**
+
+1. The client keeps the planes apart. The store renders the graph,
+   statuses, history, lease and pending state from texts; the
+   viewport's ledger (`web/src/viewport/sceneStore.ts`, fed by the
+   frame bus) renders frames keyed by `(node ref, output)`. No code path
+   waits for a frame to apply a text, or for a text to apply a frame;
+   the one text the ledger reacts to is `display_reset`, which is
+   display-lane traffic.
+2. The display lane is FIFO and per-output generations are monotone,
+   so the ledger converges on the server's display table whatever texts
+   land between frames: a frame is replaced by the newer one behind it,
+   a vanished output is cleared by the `clear` behind it, a restream
+   re-applies idempotently (`web/src/state/frameBus.test.ts` drives the
+   interleavings, including a reset that overtook the frames queued
+   before it — the order a second socket would produce).
+3. What a user can see: a `delta` that removes a node may arrive before
+   the node's `clear` frame, so the viewport draws its last geometry a
+   moment longer — the same pixels it drew a moment before; a pick on
+   it resolves to no node and selects nothing. Statuses,
+   `preview_policy`, `drag_ended`, `lease`, `error` read nothing from
+   the scene.
+4. What would NOT be safe, recorded so nobody adds it: dropping frames
+   "older than the reset's generation". A restream carries each output
+   at the generation that last drew it and the reset's generation is
+   the newest of those, so unchanged outputs legitimately arrive below
+   it. Staleness is per output (§Binary frame format), never relative
+   to the reset.
+
+**Tests.** `http.rs`: the pump's priority and FIFO, and a 320 MiB
+synthetic restream queued to a real session's client followed by a
+slider tick — the tick's status goes out behind at most one frame
+(≈ 78 ms on the measured 13.5 MB/s effective link, within the status
+cadence; the remaining restream would have cost ~25 s, asserted so the
+test cannot pass vacuously) through a recording sink paced by permits —
+no sleeps, no wall clock. `tests/http_e2e.rs`: the join's wire order
+(`hello`, `snapshot`, then `display_reset` before any frame).
+
+**Measured** (the wall, `web/e2e/compute_on_release.spec.ts` under
+`CICADA_E2E_HEAVY=1`, debug engine, headless Chromium, Ben's machine,
+2026-08-20; the observer grabs while its restream streams): the
+observer's `preview_policy` after the writer's grab — **15.6 s** with
+one queue per client, landing after the LAST frame (26 of 26 frames,
+368 MB, were in when it arrived — the head-of-line signature); **8.9 s
+and 3.5 s** in two runs with the lanes, landing mid-restream (frame 12
+of 26, 212 MB; frame 17 of 26, 184 MB). The writer's own hint: 0.5 s /
+0.2 s. The residual is the page, not the socket: headless Chromium
+renders WebGL in software (SwiftShader), the
+wall's scene is ~13 M triangles, every arriving frame requests a render
+of ~1.5–2 s, and the text's message handler queues behind the renders
+of the frames the browser had already received (long-task trace:
+eight back-to-back tasks of 1.0–2.2 s; `renders: 12`). A GPU browser
+pays milliseconds per render; the spec therefore asserts the wire ORDER
+(the text lands before the restream's last frame — false for the one
+queue, true for the lanes, whatever the render speed) plus a 60 s sanity
+bound, and logs the times.
+
+**Still one socket.** A generation that completes while a client's
+restream is in flight queues its frames behind the rest of the restream
+(display-lane FIFO) — display-vs-display head-of-line blocking is not
+this fix's subject. If it shows up, the next step is a per-output
+latest-wins display queue (drop queued frames a newer generation has
+already superseded) before any transport change; WebTransport stays
+deferred (below).
 
 ## Solve streaming
 
@@ -461,5 +556,7 @@ initial load path; there is exactly one client-hydration code path.
 - **Remote auth story** (accounts, TLS termination) — deploys behind a
   proxy until then.
 - **WebTransport / QUIC** as a WebSocket upgrade path if head-of-line
-  blocking ever shows up in profiles; frame format is transport-
-  agnostic on purpose.
+  blocking shows up in profiles beyond what the two lanes answer (§Two
+  lanes, one socket: control-vs-display blocking did show up, at wall
+  scale, 2026-08-20, and the lanes answered it without a transport
+  change); frame format is transport-agnostic on purpose.

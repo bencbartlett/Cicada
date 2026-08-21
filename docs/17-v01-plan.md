@@ -564,18 +564,36 @@ same commit (skill `add-stdlib-node`).
 
 ## Follow-ups (found by the v0.1 reviews and measurements; scheduled, not yet placed)
 
-- **Control-plane priority over the display restream.** A client that joins
-  a session receives the whole display set on the one socket (the wall:
-  ~350 MB of binary frames, measured 2026-08-20) and every text frame —
-  `preview_policy`, deltas, statuses — queues behind it; on a loaded dev
-  machine `preview_policy` reached a fresh observer ~26 s after the drag.
-  doc 13 named head-of-line blocking as the trigger for a transport change:
-  the fix is a priority lane for text frames (two channels per client with
-  text-first draining — the frame bus already drops stale-generation frames
-  — or a second socket for binary), with a test that a text frame sent
-  behind a multi-hundred-MB restream arrives within the status cadence.
-  Protocol-change skill; one package. Until then
-  `web/e2e/compute_on_release.spec.ts` waits for delivery, not latency.
+- **Control-plane priority over the display restream** — **done
+  2026-08-20** (`wt/hardening`; docs/13 §Two lanes, one socket). A client
+  that joined received the whole display set on the one socket (the wall:
+  ~350 MB of binary frames) and every text — `preview_policy`, deltas,
+  statuses — queued behind it: `preview_policy` reached a fresh observer
+  ~26 s after the drag on a loaded dev machine. Shipped as the smaller of
+  the two options doc 13 named: two channels per client (`ClientLanes`:
+  control and display) and a write task that drains control first, the
+  display lane FIFO — `display_reset` and `screenshot_request` ride the
+  display lane because their meaning is their place among the frames;
+  nothing on the wire changed (`PROTOCOL_VERSION` unchanged). The "frame
+  bus drops stale-generation frames" premise was half right and is
+  recorded precisely in docs/13: staleness is per output, and a rule
+  keyed to the reset's generation would drop a restream's unchanged
+  outputs; the web test pins the interleavings that ARE safe. Tests: the
+  pump; a 320 MiB synthetic restream + a slider tick whose status goes out
+  behind at most one frame (a permit-paced recording sink — no sleeps);
+  the HTTP e2e's join order. Measured in `compute_on_release.spec.ts`
+  (the observer now grabs mid-restream; the spec asserts the wire ORDER —
+  the text lands before the restream's last frame — plus a 60 s sanity
+  bound): observer `preview_policy` 15.6 s after the grab before, landing
+  after the last of 26 frames (368 MB) → 8.9 s and 3.5 s in two runs
+  after, landing at frame 12 and 17 of 26. The residual is headless
+  Chromium's software WebGL
+  (SwiftShader: ~1.5–2 s per render of the wall's ~13 M triangles, one
+  render per arriving frame, the text's handler queued behind them) — a
+  GPU browser pays milliseconds; docs/13 has the trace. Residual, not
+  scheduled: display-vs-display blocking (a generation completing
+  mid-restream queues behind it) — a per-output latest-wins display queue
+  if it ever shows up.
 - **A count/allocation guard for every count-taking node** (`series`,
   `range`, `duplicate`, `repeat`, …): a slider wired into `count` can ask
   for a capacity the allocator refuses, which aborts the process —
