@@ -125,6 +125,44 @@ impl Playhead {
         let index = raw as i64;
         Some(index.rem_euclid(frames))
     }
+
+    /// The first representable playhead inside frame `frame` of a loop of
+    /// `frames` frames over `period` seconds — where `transport_seek`
+    /// lands. The frame's nominal start, `frame × period × 1000 / frames`,
+    /// is not exactly representable in general, and the rounded value can
+    /// sit a few ulps BELOW the boundary [`Self::frame`] quantizes at, so
+    /// that it reads one frame short (frames 31, 62 and 65 of the default
+    /// 120-frame / 4 s loop do). The nominal is nudged up one ulp at a
+    /// time until [`Self::frame`] agrees: the playhead returned is inside
+    /// the frame by the one arithmetic that matters, and a seek never
+    /// lands short. `None` when `frame` is not in `0..frames`, or when the
+    /// nudge does not converge within [`Self::SEEK_NUDGES`] ulps — a bug,
+    /// since the nominal is within four roundings of the boundary; never
+    /// silent. `a_seek_lands_inside_every_frame_of_many_loops` sweeps
+    /// every frame of a spread of loops.
+    #[must_use]
+    pub fn at_frame(frame: i64, frames: i64, period: f64) -> Option<Self> {
+        debug_assert!(frames > 0 && period > 0.0);
+        if frame < 0 || frame >= frames {
+            return None;
+        }
+        #[allow(clippy::cast_precision_loss)] // both < 2^53 (the literal read)
+        let mut t_ms = frame as f64 * (period * 1000.0) / frames as f64;
+        for _ in 0..Self::SEEK_NUDGES {
+            let playhead = Self { t_ms };
+            if playhead.frame(frames, period) == Some(frame) {
+                return Some(playhead);
+            }
+            t_ms = t_ms.next_up();
+        }
+        None
+    }
+
+    /// How many ulps [`Self::at_frame`] nudges at most: the nominal start
+    /// is within four roundings (each ≤ half an ulp) of the boundary, and
+    /// one ulp of `t_ms` moves the quantized ratio by at least half an ulp
+    /// — eight is twice the bound.
+    const SEEK_NUDGES: u32 = 8;
 }
 
 /// One transport-driven port the lowering filled from the playhead.
@@ -1385,6 +1423,61 @@ mod tests {
             &ValueData::Integer(30)
         );
         assert_eq!(defaults.driven[0].r#loop, Some((120, 4.0)));
+    }
+
+    // Where `transport_seek` lands must read back as the frame it asked
+    // for, by the one arithmetic the lowering uses (`Playhead::frame`).
+    // The nominal start `frame × period_ms / frames` does NOT: it rounds
+    // below the boundary for frames 31, 62 and 65 of the default loop, and
+    // the web's scrubber would land one frame short there (found by the
+    // play-bar package, 2026-08-20). The sweep covers every frame of loops
+    // with awkward periods and frame counts, and pins the nominal's
+    // failure so the nudge is never "simplified" away.
+    #[test]
+    fn a_seek_lands_inside_every_frame_of_many_loops() {
+        let loops: [(i64, f64); 10] = [
+            (120, 4.0),
+            (10, 1.0),
+            (24, 1.0),
+            (30, 1.0),
+            (60, 2.5),
+            (7, 0.3),
+            (3, 0.1),
+            (1, 4.0),
+            (1000, 33.3),
+            (360, 12.7),
+        ];
+        let mut nudged = 0usize;
+        for (frames, period) in loops {
+            for frame in 0..frames {
+                let playhead = Playhead::at_frame(frame, frames, period)
+                    .unwrap_or_else(|| panic!("frame {frame} of {frames} / {period} s"));
+                assert_eq!(
+                    playhead.frame(frames, period),
+                    Some(frame),
+                    "frame {frame} of {frames} / {period} s at t_ms {}",
+                    playhead.t_ms
+                );
+                #[allow(clippy::cast_precision_loss)]
+                let nominal = frame as f64 * (period * 1000.0) / frames as f64;
+                assert!(
+                    playhead.t_ms >= nominal,
+                    "a seek never lands before the frame's nominal start"
+                );
+                if playhead.t_ms > nominal {
+                    nudged += 1;
+                }
+            }
+            assert_eq!(Playhead::at_frame(frames, frames, period), None);
+            assert_eq!(Playhead::at_frame(-1, frames, period), None);
+        }
+        // The nudge exists for a reason: the nominal start of frame 31 of
+        // the default loop quantizes to 30.
+        let nominal = Playhead {
+            t_ms: 31.0 * 4000.0 / 120.0,
+        };
+        assert_eq!(nominal.frame(120, 4.0), Some(30));
+        assert!(nudged > 0, "some nominal start needed nudging");
     }
 
     // The one refusal the transport adds: a wired loop port. Red with the

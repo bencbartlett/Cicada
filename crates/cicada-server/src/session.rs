@@ -120,8 +120,10 @@ pub const DRAG_GAP_MS: u64 = 300;
 pub const TRANSPORT_TICK: Duration = Duration::from_micros(16_667);
 
 /// The loop the transport shows when no frame-driven node is solvable:
-/// `cycle`'s defaults — 120 frames over 4 s. (`frames`, `period_ms`.)
-const DEFAULT_LOOP: (u64, f64) = (120, 4000.0);
+/// `cycle`'s defaults — 120 frames over 4 s. (`frames`, `period` in
+/// seconds — the lowering's units, so seek and view quantize exactly as
+/// the injected frame does; the wire carries `period_ms`.)
+const DEFAULT_LOOP: (i64, f64) = (120, 4.0);
 
 /// Session construction options.
 #[derive(Clone)]
@@ -684,12 +686,13 @@ impl Transport {
     }
 }
 
-/// The primary loop of a lowered graph's driven ports — `(frames,
-/// period_ms)` of the frame-driven node with the longest period (ties:
-/// the first lowered, i.e. the first in the text), or [`DEFAULT_LOOP`]
-/// when none lowered. The loop a scrubber shows and `transport_seek`
-/// addresses; every other cycle loops inside it at its own rate.
-fn primary_loop(driven: &[DrivenPort]) -> (u64, f64) {
+/// The primary loop of a lowered graph's driven ports — `(frames, period
+/// seconds)` of the frame-driven node with the longest period (ties: the
+/// first lowered, i.e. the first in the text), exactly as the lowering
+/// injected it (`DrivenPort::loop`), or [`DEFAULT_LOOP`] when none
+/// lowered. The loop a scrubber shows and `transport_seek` addresses;
+/// every other cycle loops inside it at its own rate.
+fn primary_loop(driven: &[DrivenPort]) -> (i64, f64) {
     let mut best: Option<(i64, f64)> = None;
     for port in driven {
         if let Some((frames, period)) = port.r#loop
@@ -698,9 +701,7 @@ fn primary_loop(driven: &[DrivenPort]) -> (u64, f64) {
             best = Some((frames, period));
         }
     }
-    best.map_or(DEFAULT_LOOP, |(frames, period)| {
-        (frames.unsigned_abs(), period * 1000.0)
-    })
+    best.unwrap_or(DEFAULT_LOOP)
 }
 
 /// The driven ports' values at `playhead` — the tick position the
@@ -1512,15 +1513,25 @@ impl Session {
                 Ok(())
             }),
             ClientMessage::TransportSeek { frame } => {
-                self.transport_control(|transport, now, (frames, period_ms)| {
-                    if frame >= frames {
+                self.transport_control(|transport, now, (frames, period)| {
+                    if frame >= frames.unsigned_abs() {
                         return Err(IntentError::Transport(format!(
                             "frame {frame} is outside the loop (frames 0..{frames})"
                         )));
                     }
-                    #[allow(clippy::cast_precision_loss)] // frames < 2^53
-                    let t_ms = frame as f64 * period_ms / frames as f64;
-                    transport.seek_ms(now, t_ms);
+                    // The first playhead INSIDE the frame by the lowering's
+                    // own quantization — the nominal `frame × period_ms /
+                    // frames` rounds below the boundary for some frames
+                    // (31 of the default loop) and would paint one short.
+                    #[allow(clippy::cast_possible_wrap)] // frame < frames, an i64
+                    let playhead =
+                        Playhead::at_frame(frame as i64, frames, period).ok_or_else(|| {
+                            IntentError::Transport(format!(
+                                "frame {frame} of {frames} has no playhead inside it \
+                                 (period {period} s) — a quantization bug, not a refusal"
+                            ))
+                        })?;
+                    transport.seek_ms(now, playhead.t_ms);
                     Ok(())
                 })?;
                 // A paused scrub paints the frame it landed on; a playing
@@ -2529,7 +2540,7 @@ impl Session {
     /// sees, and the lease is the one arbiter of shared state.
     fn transport_control(
         &self,
-        apply: impl FnOnce(&mut Transport, f64, (u64, f64)) -> Result<(), IntentError>,
+        apply: impl FnOnce(&mut Transport, f64, (i64, f64)) -> Result<(), IntentError>,
     ) -> Result<(), IntentError> {
         let mut inner = self.core.lock_inner();
         let now = self.core.now_ms_f64();
@@ -3731,18 +3742,17 @@ impl Core {
     /// primary loop and the driven ports of the current graph.
     fn transport_view(&self, inner: &Inner) -> TransportView {
         let playhead = self.playhead(inner);
-        let (frames, period_ms) = primary_loop(&inner.lowered.driven);
-        #[allow(clippy::cast_possible_wrap)] // frames came from an i64
-        let frame = playhead
-            .frame(frames as i64, period_ms / 1000.0)
-            .map_or(0, i64::unsigned_abs);
+        let (frames, period) = primary_loop(&inner.lowered.driven);
+        // The same quantization the lowering injects (`Playhead::frame` on
+        // the loop's own seconds), so the view's frame IS the painted one.
+        let frame = playhead.frame(frames, period).map_or(0, i64::unsigned_abs);
         TransportView {
             playing: inner.transport.playing,
             speed: inner.transport.speed,
             t_ms: playhead.t_ms,
             frame,
-            frames,
-            period_ms,
+            frames: frames.unsigned_abs(),
+            period_ms: period * 1000.0,
             driven: inner
                 .lowered
                 .driven
@@ -9344,6 +9354,53 @@ size = slider(value=4.0, min=0.5, max=5.0)
 
         // Nothing above was an op: the transport is session state, not an edit.
         assert_eq!(history_of(&session)["depth"], 1, "only the set_param");
+    }
+
+    // A seek paints the frame it names — every frame. On `cycle`'s default
+    // loop (120 frames / 4 s) the nominal playhead `frame × 4000 / 120`
+    // rounds below the quantization boundary for frames 31, 62 and 65, so
+    // a seek there landed (and painted) one frame short; the scrubber of
+    // the web's play bar found it (2026-08-20). `Playhead::at_frame` is
+    // the fix; this pins it at the session level, view and paint alike.
+    #[test]
+    fn a_seek_paints_the_frame_it_names() {
+        let (_dir, config, _clock) = project_with_clock(
+            "# cicada 1\n\
+             spin = cycle()\n\
+             base = 1.0\n\
+             size = spin + base\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (writer, _) = session.connect(tx);
+        drain(&mut rx);
+        assert_eq!(
+            (session.transport().frames, session.transport().period_ms),
+            (120, 4000.0)
+        );
+
+        for frame in [31_u64, 62, 65, 0, 119, 1] {
+            session.handle(writer, None, ClientMessage::TransportSeek { frame });
+            session.wait_idle();
+            let heard = transport_messages(&drain(&mut rx));
+            assert_eq!(heard.len(), 1, "one broadcast per seek");
+            assert_eq!(
+                heard[0]["frame"], frame,
+                "the view after seeking to {frame}"
+            );
+            let view = session.transport();
+            assert_eq!((view.frame, view.playing), (frame, false));
+            #[allow(clippy::cast_possible_wrap)]
+            let expected = frame as i64;
+            assert_eq!(
+                painted_frame(&session),
+                expected,
+                "the paint after seeking to {frame}"
+            );
+        }
     }
 
     // docs/17 item 4 "done when": previews never write the file holds under
