@@ -18,7 +18,7 @@ runs in parallel from day 1:
 | 1 | Undo/redo — snapshot op log + atomic `batch`/`apply_text` path; riders `#off`, Backspace-no-delete | foreground (server/web) | days | **done** 2026-08-20 (merged) |
 | 2 | Git panel slice 1 — status strip, per-node change markers, commit, revert-to-HEAD | foreground (server/web) | ~1 week | **done** 2026-08-20 (wt/git-panel): `GET /api/git/status` + writer-gated `POST /api/git/commit` / `POST /api/git/revert` (docs/13), the web chip / Git tab / canvas badges / `Ctrl+S` commit dialog (docs/16); measured, debug builds: revert POST → barrier snapshot ≤ 35 ms (route test), Revert click → reloaded text in the store 69–81 ms across runs (Playwright) |
 | P | OCCT probe — prebuilt 7.8.x build/link on win/mac/linux, determinism, timings, license, CI shape | parallel worktree | hours, cap 1 day | **done** 2026-08-20 — GREEN on win-64 with one rename patch, byte-deterministic, ~3 ms/boolean; Linux/macOS measured by item 3 WP-A's CI job; memo `docs/probes/occt-2026-08.md` |
-| 3 | OCCT-backed Solid — the `Solid` kind, primitives/extrude/loft/revolve/sweep, booleans, `tessellate`, STEP; `mesh_*` renames in the same commit | main geometry track from week 3 | weeks | **WP-A done** 2026-08-20, review fixes applied the same day (fork `bencbartlett/opencascade-rs@960a8bc`, `occt` feature + seam in `cicada-geom`, `tools/fetch_occt.py`, CI jobs `occt (ubuntu)` per PR and `occt (<os>)` nightly — the non-Windows jobs await their first run); WP-B next |
+| 3 | OCCT-backed Solid — the `Solid` kind, primitives/extrude/loft/revolve/sweep, booleans, `tessellate`, STEP; `mesh_*` renames in the same commit | main geometry track from week 3 | weeks | **WP-A done** 2026-08-20, review fixes applied the same day (fork `bencbartlett/opencascade-rs@960a8bc`, `occt` feature + seam in `cicada-geom`, `tools/fetch_occt.py`, CI jobs `occt (ubuntu)` per PR and `occt (<os>)` nightly — the non-Windows jobs await their first run); **WP-B done** 2026-08-20 (`wt/solid`: the `Solid` kind end to end, the sharing model — op-local linear handles, no kernel lock — the value-level `cicada_geom::solid`, display through the session's `SolidCache`, the typed Python refusal, the store variant with a committed pre-change pack; the handle cache measured and NOT built); WP-C next |
 | 3b | Scheduler foundations — per-solve cancel handle, `volatile`, idle-class hypothetical solve — plus compute-on-release | parallel (sched/server) | ~1 week | **done** 2026-08-20 (`wt/sched`, eighteen commits after three review rounds: the engine half, then the web half — both sliders show the pending value + estimate from `preview_policy`, the release that writes nothing is `end_drag` and every announced drag's end is `drag_ended` — with a Playwright drag of the wall's `deboss`, an observer page watching, as its evidence) |
 | 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | pending |
 | 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | pending |
@@ -212,11 +212,58 @@ Design: DECISIONS.md rows 16 and 42 (revised 2026-08-19), doc 03, doc 08
   table takes a second source), `Message_Printer` redirection for the
   STEP writer, the patches for the static path (PR #216's system libs,
   cmake-rs `/O2`) if it is ever taken.
-- **WP-B the `Solid` kind**: canonical serialized bytes + blake3 at
-  construction, geom-side handle cache, append-only `StoredValue`
-  variant, script-boundary refusal (Python gets a typed "not
-  marshallable" until a Solid ABI exists), web hue; display through a
-  hash-keyed tessellation cache.
+- **WP-B the `Solid` kind** — **done 2026-08-20** (`wt/solid`, four
+  commits; docs/03 §The sharing model, §No handle cache, §Display
+  tessellation; docs/12 §Display cache; docs/14 §Value and geometry
+  representations; DECISIONS.md row 16 revised in place):
+  `core::Solid` = the canonical bytes in an `Arc<[u8]>` and nothing else
+  (header-checked; KindTag 20 over the length-prefixed bytes; goldens for
+  the probe box and prism through the new path equal WP-A's raw blake3
+  goldens, and their `HashedValue` hashes are blessed); `Solid` in
+  `TRANSFORMABLE_KINDS` / `GEOMETRY_KINDS` (the checker admits it into
+  `T` ports and display sinks; `Similarity::apply` on a Solid is a red
+  node with `SOLID_TRANSFORM_DEFERRED` until WP-C); `StoredValue::Solid`
+  appended with `LOG_FORMAT` 2 → 3 and `tests/fixtures/pack-24d558b.bin`
+  (a pre-Solid engine's pack, every blob loaded under its golden hash);
+  `ScriptError::Unmarshallable { kind: "Solid", .. }` at the Python
+  boundary, bare or in a list. **The sharing model**: op-local, LINEAR
+  handles — every `occt::Handle` owns its `TShape` graph (a `BinTools`
+  read is the deep copy), kernel operations consume their handles
+  (booleans raise input tolerances in place; the mesher keeps a finer
+  triangulation), results go back to bytes; the process-wide kernel lock
+  is retired (no OCCT global is written by the glue's calls;
+  `Interface_Static` for STEP is WP-C's to lock); proved by an 8-thread
+  rayon test over 13 related values against single-threaded goldens.
+  **No handle cache**, on numbers (release, 1,000 parts): a block's
+  re-read is 41 µs against a 3.1 ms boolean (1.3 %), the whole box →
+  extrude → difference → tessellate chain pays 5 % for re-reading at
+  every step (4.54 vs 4.30 ms per part), and on the rayon pool the same
+  chain runs 6.4× the serial rate (710 µs wall per part) — the lock would
+  have held it at 1×; `examples/solid_bench.rs` is the table. **Display**:
+  `cicada_geom::solid` (value level, same signatures in every build —
+  `GeomError::KernelUnavailable` without the feature, never a mesh-tier
+  fallback); the session's `display::SolidCache` keyed by value hash +
+  deflection, bounded (256 MiB), LRU, counters in `/debug/state` →
+  `display_cache`; `Deflection::display` = `max(0.02 mm / unit, tol)` and
+  `max(0.1 rad, tol_angle)`; the frames stay mesh frames keyed by the
+  Solid's hash; `DisplayStats.solids` / `.errors` additive; the summary is
+  "Solid, N faces, bbox"; web hue `--kind-solid`. `cargo test --workspace`
+  passes with and without `--features occt` (892 / 868 tests), and a
+  local flip of `default = ["occt"]` checks the whole workspace.
+  **Consequence WP-C acts on**: once `box` / `extrude` / … are
+  OCCT-backed stdlib nodes the product build needs the kernel, so WP-C
+  flips `occt` to a default feature of `cicada-geom` (and revises the
+  DECISIONS.md row-16 sentence "the `occt` cargo feature is OFF by
+  default and default builds never touch OCCT" in the same commit), and
+  every CI job runs `tools/fetch_occt.py` first; until then the
+  `occt (ubuntu)` job should add `cargo test --workspace --features occt`
+  so the server's Solid display tests run in the kernel world in CI
+  (today they run there only on this machine). Left for WP-C from WP-B:
+  the kernel-backed transforms (`Similarity::apply`'s Solid arm and the
+  `move`/`rotate`/`scale` `# Panics` docs), a `tessellate` node over
+  `solid::tessellate`, the STEP nodes' `Interface_Static` lock, and — if
+  a handle cache is ever wanted — `SetNonDestructive(true)` booleans plus
+  clean-before-mesh in the fork's glue (docs/03 records the conditions).
 - **WP-C nodes**: `box`, `sphere`, `cylinder`, `cone`, `extrude`,
   `extrude_to_point`, `loft`, `revolve`, `sweep`, `pipe`,
   `solid_union/difference/intersection`, `volume`, `bounding_box`,
@@ -590,6 +637,16 @@ same commit (skill `add-stdlib-node`).
 - **Stale catalog on the client after a scripts-change reload**: the app
   fetches `/api/catalog` once; search rows and port tooltips for script
   nodes go stale until a reload. Refetch on the catalog-reload barrier.
+- **Display tessellation under the session lock** (WP-B): a Solid's
+  first display tessellates inside `emit_frames`, under the session's
+  `inner` lock, like mesh encoding always has — fine at display
+  deflection for the parts WP-B measured (≈1 ms each), wrong for a
+  single giant solid. docs/12 names the fix: display as a costed,
+  persisted edge in the store (the cache key is already the one it
+  would use), computed by the solve loop, not the broadcaster.
+- **Mixed-age stores, again** (WP-B): `LOG_FORMAT` is 3 — an engine from
+  before `StoredValue::Solid` refuses a store this engine wrote; serve
+  scratch copies across worktrees, as AGENTS.md says.
 
 ## Gates that must not regress (re-measured at each geometry or scheduler landing)
 

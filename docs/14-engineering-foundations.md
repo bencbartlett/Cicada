@@ -87,12 +87,27 @@ struct Mesh {
   parameters (a Circle is a plane + radius; a Nurbs is control
   points/weights/knots/degree). Tessellation for display or meshing
   is a derived, cached, costed operation (doc 12).
-- **Solid is B-rep-backed (OCCT) from v0.1** (docs/08): an opaque
-  kernel shape handle wrapped with a content hash (hash of the
-  canonical serialized shape — serialization stability is a
-  spike-verify item). `Watertight<Mesh>` (Manifold-validated) is the
-  mesh-tier solid; the seams convert zero-copy where kernel layouts
-  allow.
+- **Solid is B-rep-backed (OCCT) from v0.1** (docs/08) — as shipped by
+  v0.1 item 3 WP-B: the value IS the kernel's canonical serialization,
+  not a handle:
+
+```rust
+struct Solid {
+    bytes: Arc<[u8]>,   // OCCT BinTools V4, no triangulation/normals,
+                        // history flags normalized (DECISIONS.md row 42)
+}                       // hash: KindTag::Solid over the length-prefixed bytes
+```
+
+  Core checks the V4 header (`SOLID_CANONICAL_HEADER`) and nothing more;
+  `cicada-geom::solid` is the value-level API (the same signatures in
+  every build — `GeomError::KernelUnavailable` without the `occt`
+  feature) over op-local, linear `occt::Handle`s that read the bytes,
+  run one kernel operation and serialize back (docs/03 §The sharing
+  model). Serialization stability was the probe's question; it held
+  across processes and builds, per-OS goldens until the CI matrix
+  agrees. `Watertight<Mesh>` (Manifold-validated) is the mesh-tier
+  solid; `tessellate: Solid → Watertight<Mesh>` is the explicit bridge
+  (display uses it through a hash-keyed cache, docs/12).
 - Display buffers are derived f32 with origin-rebasing (doc 12);
   they live in the display cache, never in the value model.
 - **No dtype-generic geometry.** Values are f64-only; parameterizing
@@ -151,7 +166,11 @@ struct Mesh {
   Number, Integer, Boolean, Text, Point, Vector, Domain, Plane, Mesh,
   `Watertight<Mesh>`, Curve (polyline, line, circle, rectangle),
   `Closed<Curve>`, `[…]` to any depth, `?` optionality (Python `None` =
-  absent slot). Declared refinements are RE-CHECKED on the way back
+  absent slot). `Solid` does NOT cross (v0.1 item 3 WP-B): its bytes are
+  OCCT BinTools nothing on the Python side can read, so the host refuses
+  it with the typed `ScriptError::Unmarshallable` ("not marshallable to
+  Python yet") — bare or inside a list, never a hole — until a Solid ABI
+  exists; tessellate first. Declared refinements are RE-CHECKED on the way back
   from Python (an unwatertight mesh behind a `Watertight<Mesh>`
   annotation is red with counts) and dropped to the base kind on the
   way in. The `cicada` module offers `Mesh` (flat arrays +
