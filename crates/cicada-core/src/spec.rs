@@ -370,6 +370,7 @@ impl_port_leaf!(crate::spatial::Plane, "Plane");
 impl_port_leaf!(crate::spatial::Xform, "Xform");
 impl_port_leaf!(crate::geometry::Curve, "Curve");
 impl_port_leaf!(crate::geometry::Mesh, "Mesh");
+impl_port_leaf!(crate::geometry::Solid, "Solid");
 // Refinement wrappers render as their refined base names — the checker's
 // two spike refinements (doc 15). The wire value is the plain base kind;
 // marshalling re-verifies the predicate (crate::marshal).

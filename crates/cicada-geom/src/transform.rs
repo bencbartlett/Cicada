@@ -163,6 +163,13 @@ impl Similarity {
     /// Transform any transformable value, preserving its kind (the runtime
     /// half of kind-preserving generics — the checker guarantees the
     /// static half).
+    ///
+    /// # Panics
+    ///
+    /// Panics for a [`Transformable::Solid`]: a B-rep transform runs in the
+    /// OCCT kernel and lands with v0.1 item 3 WP-C (`SOLID_TRANSFORM_DEFERRED`
+    /// is the message). Until then the node goes red with that message —
+    /// a loud refusal, never a silent pass-through or a mesh in disguise.
     #[must_use]
     pub fn apply(&self, value: &Transformable) -> Transformable {
         match value {
@@ -171,9 +178,17 @@ impl Similarity {
             Transformable::Plane(p) => Transformable::Plane(self.apply_plane(p)),
             Transformable::Curve(c) => Transformable::Curve(self.apply_curve(c)),
             Transformable::Mesh(m) => Transformable::Mesh(self.apply_mesh(m)),
+            Transformable::Solid(_) => panic!("{SOLID_TRANSFORM_DEFERRED}"),
         }
     }
 }
+
+/// The red-node message a transform of a `Solid` carries until the
+/// kernel-backed transforms ship (docs/17 Item 3 WP-C).
+pub const SOLID_TRANSFORM_DEFERRED: &str = "transforming a Solid (move / rotate / scale / \
+     orient / linear_array) is not available yet: B-rep transforms run in the OCCT kernel \
+     and arrive with the OCCT-backed solid nodes (v0.1 item 3 WP-C) — until then a Solid \
+     cannot be transformed";
 
 fn scale_domain(domain: &Domain, factor: f64) -> Domain {
     Domain::new(domain.start * factor, domain.end * factor)
@@ -195,6 +210,22 @@ mod tests {
             x: Vector::new(1.0, 0.0, 0.0),
             y: Vector::new(0.0, 1.0, 0.0),
         }
+    }
+
+    #[test]
+    fn a_solid_transform_is_a_loud_refusal_until_wp_c() {
+        use cicada_core::geometry::{SOLID_CANONICAL_HEADER, Solid};
+        let solid = Solid::from_canonical_bytes(SOLID_CANONICAL_HEADER.to_vec()).expect("solid");
+        let s = Similarity::translation(Vector::new(1.0, 2.0, 3.0));
+        let outcome = std::panic::catch_unwind(|| s.apply(&Transformable::Solid(solid)));
+        let payload = outcome.expect_err("the transform must refuse, never pass the bytes through");
+        let message = payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+            .expect("a message");
+        assert_eq!(message, SOLID_TRANSFORM_DEFERRED);
+        assert!(message.contains("not available yet"));
     }
 
     #[test]

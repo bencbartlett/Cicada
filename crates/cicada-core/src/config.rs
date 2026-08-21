@@ -28,6 +28,23 @@ pub enum Unit {
     Foot = 5,
 }
 
+impl Unit {
+    /// Millimetres per one document unit — the exact conversion factors
+    /// (an inch is 25.4 mm by definition). What a physical display policy
+    /// (the solid tessellation deflection, docs/03) reads to express a
+    /// length given in millimetres in document units.
+    #[must_use]
+    pub const fn millimeters(self) -> f64 {
+        match self {
+            Self::Millimeter => 1.0,
+            Self::Centimeter => 10.0,
+            Self::Meter => 1000.0,
+            Self::Inch => 25.4,
+            Self::Foot => 304.8,
+        }
+    }
+}
+
 /// Per-project configuration. One instance per project; the tolerance hash
 /// joins the `NodeKey` of every node that declares `uses_tolerance`
 /// (DECISIONS.md tolerance row).
@@ -153,6 +170,19 @@ mod tests {
         // A relabel (numbers untouched) must NOT dirty tolerance-keyed
         // caches (DECISIONS.md units row).
         assert_eq!(default.tolerance_hash(), relabeled.tolerance_hash());
+    }
+
+    #[test]
+    fn millimeters_per_unit_are_the_exact_definitions() {
+        // Exact `==` is sanctioned: these are definitions, not measurements.
+        #[allow(clippy::float_cmp)]
+        {
+            assert_eq!(Unit::Millimeter.millimeters(), 1.0);
+            assert_eq!(Unit::Centimeter.millimeters(), 10.0);
+            assert_eq!(Unit::Meter.millimeters(), 1000.0);
+            assert_eq!(Unit::Inch.millimeters(), 25.4);
+            assert_eq!(Unit::Foot.millimeters(), 304.8);
+        }
     }
 
     #[test]

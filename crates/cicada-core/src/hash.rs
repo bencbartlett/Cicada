@@ -57,6 +57,9 @@ pub enum KindTag {
     /// `node_version` = hash of the source file) — not a value; tagged
     /// here so every hash shares one versioned format.
     ScriptSource = 19,
+    /// `Solid` (B-rep, v0.1 item 3): the hash is over the kernel's
+    /// canonical bytes (DECISIONS.md row 42, revised 2026-08-20).
+    Solid = 20,
 }
 
 /// A 32-byte blake3 content hash.

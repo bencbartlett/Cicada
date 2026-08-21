@@ -21,7 +21,12 @@
 //! the wire carries the plain curve/mesh (same as every other boundary,
 //! core `marshal`); the script host re-checks the predicate on values
 //! coming back from Python where the output declares the refinement.
-//! Every other kind (Color, `IndexMap`, Xform, Nothing) refuses loudly.
+//! Every other kind (Color, `IndexMap`, Xform, Nothing) refuses loudly, and
+//! `Solid` refuses with the typed [`ScriptError::Unmarshallable`]: its
+//! canonical bytes are OCCT `BinTools` that nothing on the Python side can
+//! read, so handing them over would be a silent lie (v0.1 item 3 WP-B);
+//! a Solid ABI is future work, and until then solids are tessellated into
+//! `Watertight<Mesh>` before a script node.
 
 use std::sync::Arc;
 
@@ -126,10 +131,18 @@ fn mesh_wire(mesh: &Mesh) -> Wire {
     ])
 }
 
+/// The typed refusal a `Solid` earns at this boundary — one constant so the
+/// host, the catalog of script kinds and the tests agree on the words.
+pub const SOLID_REFUSAL: &str = "no Solid ABI exists; its canonical bytes are OCCT BinTools that \
+     nothing on the Python side can read — tessellate the solid into a Watertight<Mesh> \
+     before the script node";
+
 /// A Cicada value onto the wire.
 ///
 /// # Errors
 ///
+/// [`ScriptError::Unmarshallable`] for a `Solid` (no Solid ABI yet; see
+/// [`SOLID_REFUSAL`]), also when one sits inside a list;
 /// [`ScriptError::Marshal`] for kinds outside the marshallable set
 /// (Color, `IndexMap`, Xform, Nothing).
 pub fn to_wire(value: &HashedValue) -> Result<Wire, ScriptError> {
@@ -144,6 +157,14 @@ pub fn to_wire(value: &HashedValue) -> Result<Wire, ScriptError> {
         ValueData::Plane(plane) => plane_wire(plane),
         ValueData::Curve(curve) => curve_wire(curve),
         ValueData::Mesh(mesh) => mesh_wire(mesh),
+        // Explicit, not the catch-all: the refusal is typed and says why
+        // (a node author reading "does not cross" would look for a bug).
+        ValueData::Solid(_) => {
+            return Err(ScriptError::Unmarshallable {
+                kind: "Solid",
+                reason: SOLID_REFUSAL,
+            });
+        }
         ValueData::List(list) => {
             let mut items = Vec::with_capacity(list.slots.len());
             for slot in &list.slots {
@@ -508,6 +529,45 @@ mod tests {
             x: Vector::new(0.0, 1.0, 0.0),
             y: Vector::new(-1.0, 0.0, 0.0),
         }
+    }
+
+    // WP-B: a Solid never crosses — typed refusal, naming the kind and the
+    // way forward, bare or inside a list. Never a silent skip (a hole in
+    // the list would be a lie about the data).
+    #[test]
+    fn a_solid_is_refused_with_the_typed_not_yet_error() {
+        use cicada_core::geometry::{SOLID_CANONICAL_HEADER, Solid};
+        let mut bytes = SOLID_CANONICAL_HEADER.to_vec();
+        bytes.extend_from_slice(b"\nopaque kernel bytes");
+        let solid = seal(ValueData::Solid(
+            Solid::from_canonical_bytes(bytes).expect("header"),
+        ));
+        let error = to_wire(&solid).expect_err("a Solid must not cross");
+        assert!(
+            matches!(
+                &error,
+                ScriptError::Unmarshallable {
+                    kind: "Solid",
+                    reason
+                } if *reason == SOLID_REFUSAL
+            ),
+            "{error:?}"
+        );
+        let shown = error.to_string();
+        assert!(
+            shown.starts_with("Solid is not marshallable to Python yet (v0.1)"),
+            "{shown}"
+        );
+        assert!(shown.contains("Watertight<Mesh>"), "{shown}");
+        // Inside a list the refusal propagates; nothing is dropped.
+        let list = seal(ValueData::List(List {
+            axis: None,
+            slots: vec![Some(seal(ValueData::Number(1.0))), Some(solid)],
+        }));
+        assert!(matches!(
+            to_wire(&list),
+            Err(ScriptError::Unmarshallable { kind: "Solid", .. })
+        ));
     }
 
     /// Encode then decode through rmpv — the bytes that actually travel.
