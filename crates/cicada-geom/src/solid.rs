@@ -101,6 +101,24 @@ pub const MIN_LINEAR_DEFLECTION: f64 = 1e-7;
 /// `Precision::Angular()` (1e-12 rad), the mesher's other floor.
 pub const MIN_ANGULAR_DEFLECTION: f64 = 1e-12;
 
+/// The `tessellate` NODE's budget ([`tessellate_within_budget`]): the most
+/// facets the mesher may place around a full turn at the part's own scale.
+/// Both floors derive from it ([`Deflection::within_budget`]): the angular
+/// floor is `2π / N`; the linear floor is the chord deviation of the N-gon
+/// inscribed in a circle whose diameter is the solid's largest extent,
+/// `(L / 2) · (1 − cos(π / N))` ≈ 2.5e-6 · L at N = 1000 — so the default
+/// `deflection = 0.01` is admitted up to a 4 m part. The kernel's own
+/// floors ([`MIN_LINEAR_DEFLECTION`], [`MIN_ANGULAR_DEFLECTION`]) only say
+/// what the mesher will *accept*; below the budget its memory and time grow
+/// without bound — a unit sphere at 1e-7 (50× finer than this budget's
+/// floor for it) had 23 GB of mesher state after 25 s and did not finish
+/// (WP-C adversarial review), in one kernel call that nothing can
+/// interrupt. At the budget a full sphere the size of the part is on the
+/// order of 10⁶ triangles — seconds and a few hundred MB, the most a
+/// deliberate request is allowed to cost. Display tessellation never
+/// reaches this: its tiers are fixed and coarsened by the relative term.
+pub const TESSELLATE_MAX_FACETS_PER_TURN: f64 = 1000.0;
+
 /// A tessellation request: absolute linear deflection in document units
 /// and angular deflection in radians, both finite and at or above the
 /// kernel's floors ([`MIN_LINEAR_DEFLECTION`], [`MIN_ANGULAR_DEFLECTION`])
@@ -178,6 +196,49 @@ impl Deflection {
             linear: self.linear.max(DISPLAY_RELATIVE * extent),
             angular: self.angular,
         }
+    }
+
+    /// The budget's floors for a solid `extent` across — `(min linear,
+    /// min angular)`, the module docs' formulas over
+    /// [`TESSELLATE_MAX_FACETS_PER_TURN`].
+    #[must_use]
+    pub fn budget_floors(extent: f64) -> (f64, f64) {
+        let facets = TESSELLATE_MAX_FACETS_PER_TURN;
+        let min_linear = 0.5 * extent * (1.0 - (std::f64::consts::PI / facets).cos());
+        let min_angular = std::f64::consts::TAU / facets;
+        (min_linear, min_angular)
+    }
+
+    /// This request checked against the `tessellate` node's budget for a
+    /// solid `extent` across (its largest bounding-box extent): admitted
+    /// unchanged when both deflections are at or above the floors
+    /// [`Deflection::budget_floors`] gives, refused otherwise — before any
+    /// mesher runs.
+    ///
+    /// # Errors
+    ///
+    /// [`GeomError::BadParameter`] for a non-finite or non-positive extent;
+    /// [`GeomError::TessellationBudget`], naming the request, the extent
+    /// and both floors, for a request finer than the budget.
+    pub fn within_budget(self, extent: f64) -> Result<Self, GeomError> {
+        if !(extent.is_finite() && extent > 0.0) {
+            return Err(GeomError::BadParameter {
+                name: "extent",
+                value: format!("{extent}"),
+                requirement: "a solid's largest extent must be finite and positive",
+            });
+        }
+        let (min_linear, min_angular) = Self::budget_floors(extent);
+        if self.linear < min_linear || self.angular < min_angular {
+            return Err(GeomError::TessellationBudget {
+                linear: self.linear,
+                angular: self.angular,
+                extent,
+                min_linear,
+                min_angular,
+            });
+        }
+        Ok(self)
     }
 
     /// Absolute linear deflection, document units.
@@ -258,6 +319,19 @@ mod backend {
         Handle::from_value(solid)?.tessellate(deflection)
     }
 
+    pub fn tessellate_within_budget(
+        solid: &Solid,
+        deflection: Deflection,
+    ) -> Result<Tessellation, GeomError> {
+        let handle = Handle::from_value(solid)?;
+        // One reconstruction serves the bounds and the mesh; the budget
+        // check sits between them, so a refused request never reaches
+        // the mesher.
+        let (min, max) = handle.bounds()?;
+        let extent = (max.0 - min.0).max_element();
+        handle.tessellate(deflection.within_budget(extent)?)
+    }
+
     pub fn tessellate_display(
         solid: &Solid,
         tier: Deflection,
@@ -307,6 +381,13 @@ mod backend {
     }
 
     pub fn tessellate(_solid: &Solid, _deflection: Deflection) -> Result<Tessellation, GeomError> {
+        Err(unavailable("tessellate"))
+    }
+
+    pub fn tessellate_within_budget(
+        _solid: &Solid,
+        _deflection: Deflection,
+    ) -> Result<Tessellation, GeomError> {
         Err(unavailable("tessellate"))
     }
 
@@ -374,6 +455,24 @@ pub fn difference(solid: &Solid, cutter: &Solid) -> Result<Solid, GeomError> {
 /// [`GeomError::KernelUnavailable`] in a build without `occt`.
 pub fn tessellate(solid: &Solid, deflection: Deflection) -> Result<Tessellation, GeomError> {
     backend::tessellate(solid, deflection)
+}
+
+/// [`tessellate`] behind the `tessellate` node's budget: the solid's
+/// bounds are read first and the request is held to
+/// [`Deflection::within_budget`] for its largest extent, so a request the
+/// mesher would accept but never finish ([`TESSELLATE_MAX_FACETS_PER_TURN`])
+/// is refused before the mesher runs. One reconstruction of the handle
+/// serves the bounds and the mesh.
+///
+/// # Errors
+///
+/// [`GeomError::TessellationBudget`] for a request finer than the budget;
+/// otherwise [`tessellate`]'s errors.
+pub fn tessellate_within_budget(
+    solid: &Solid,
+    deflection: Deflection,
+) -> Result<Tessellation, GeomError> {
+    backend::tessellate_within_budget(solid, deflection)
 }
 
 /// Tessellate a solid for DISPLAY at a tier's deflection
@@ -1347,6 +1446,89 @@ mod tests {
             Deflection::new(MIN_LINEAR_DEFLECTION, MIN_ANGULAR_DEFLECTION).expect("the floor");
         assert!(crate::tol::close(floor.linear(), 1e-7, 1e-22));
         assert!(crate::tol::close(floor.angular(), 1e-12, 1e-27));
+    }
+
+    #[test]
+    fn the_tessellation_budget_floors_follow_the_documented_formula() {
+        // N = 1000 facets per turn: the angular floor is 2π/N; the linear
+        // floor is the chord deviation of the inscribed N-gon on a circle
+        // whose diameter is the extent — ≈ 2.47e-6 × extent.
+        let (min_linear, min_angular) = Deflection::budget_floors(2.0);
+        assert!(crate::tol::close(
+            min_angular,
+            std::f64::consts::TAU / 1000.0,
+            1e-15
+        ));
+        assert!(
+            crate::tol::close(min_linear, 4.934_8e-6, 1e-9),
+            "{min_linear}"
+        );
+        // Linear in the extent.
+        let (for_ten, _) = Deflection::budget_floors(10.0);
+        assert!(crate::tol::close(for_ten, 5.0 * min_linear, 1e-18));
+        // The default request (0.01 / 0.1 rad) is admitted for ordinary
+        // parts — up to a 4 m part in millimetres — and the display tiers'
+        // constants are admitted for anything a viewport draws.
+        let request = Deflection::new(0.01, 0.1).expect("valid");
+        assert!(request.within_budget(1.0).is_ok());
+        assert!(request.within_budget(4000.0).is_ok());
+        assert!(request.within_budget(4100.0).is_err());
+        let display = Deflection::display(&ProjectConfig::default());
+        assert!(display.within_budget(100.0).is_ok());
+    }
+
+    #[test]
+    fn the_tessellation_budget_refuses_the_unbounded_request_typed() {
+        // The review's case: a unit sphere (extent 2) at the kernel's bare
+        // floor, 1e-7 — the mesher accepted it and grew past 23 GB. The
+        // budget refuses it 50× above that floor, naming every number.
+        let error = Deflection::new(1e-7, 0.1)
+            .expect("the kernel admits it")
+            .within_budget(2.0)
+            .expect_err("the budget does not");
+        let GeomError::TessellationBudget {
+            linear,
+            angular,
+            extent,
+            min_linear,
+            min_angular,
+        } = &error
+        else {
+            panic!("{error:?}");
+        };
+        assert!(crate::tol::close(*linear, 1e-7, 1e-22));
+        assert!(crate::tol::close(*angular, 0.1, 1e-15));
+        assert!(crate::tol::close(*extent, 2.0, 1e-15));
+        assert!(*min_linear > *linear * 40.0, "{min_linear}");
+        assert!(crate::tol::close(
+            *min_angular,
+            std::f64::consts::TAU / 1000.0,
+            1e-15
+        ));
+        let text = error.to_string();
+        for expected in [
+            "finer than the budget",
+            "1000 facets per full turn",
+            "2 across",
+            "coarsen the request",
+        ] {
+            assert!(text.contains(expected), "{text}");
+        }
+        // The angular floor is a floor of its own: a coarse chord with an
+        // absurdly fine angle is the same unbounded mesher.
+        assert!(matches!(
+            Deflection::new(0.5, 1e-6)
+                .expect("admitted")
+                .within_budget(2.0),
+            Err(GeomError::TessellationBudget { .. })
+        ));
+        // A degenerate extent is a different, typed refusal.
+        assert!(matches!(
+            Deflection::new(0.01, 0.1)
+                .expect("admitted")
+                .within_budget(0.0),
+            Err(GeomError::BadParameter { name: "extent", .. })
+        ));
     }
 
     #[test]

@@ -141,6 +141,45 @@ pub enum GeomError {
         /// The operation that was asked for.
         operation: &'static str,
     },
+    /// A tessellation request finer than the `tessellate` node's budget
+    /// ([`solid::TESSELLATE_MAX_FACETS_PER_TURN`]): at the part's own
+    /// scale the mesher would place more facets around a full turn than
+    /// the budget allows, and below that line its memory and time grow
+    /// without bound (a unit sphere at the kernel's bare floor of 1e-7
+    /// took 23 GB and did not finish — WP-C review). Refused before the
+    /// mesher runs, with the floors for THIS part spelled out.
+    #[error("{}", tessellation_budget_message(*linear, *angular, *extent, *min_linear, *min_angular))]
+    TessellationBudget {
+        /// The requested chord deviation (document units).
+        linear: f64,
+        /// The requested angular deviation (radians).
+        angular: f64,
+        /// The solid's largest bounding-box extent.
+        extent: f64,
+        /// The finest chord deviation the budget admits for this extent.
+        min_linear: f64,
+        /// The finest angular deviation the budget admits.
+        min_angular: f64,
+    },
+}
+
+/// The user-facing text of [`GeomError::TessellationBudget`]: the request,
+/// the part's size, the floors, the reason and the way out.
+fn tessellation_budget_message(
+    linear: f64,
+    angular: f64,
+    extent: f64,
+    min_linear: f64,
+    min_angular: f64,
+) -> String {
+    format!(
+        "tessellation finer than the budget: deflection {linear} / angle {angular} rad on a solid \
+         {extent} across would mesh finer than {} facets per full turn at the part's own scale — \
+         the floors for this part are deflection {min_linear:.3e} and angle {min_angular:.3e} rad \
+         (the mesher's memory grows without bound below them); coarsen the request, or keep the \
+         Solid exact (section, export_step)",
+        solid::TESSELLATE_MAX_FACETS_PER_TURN
+    )
 }
 
 /// The user-facing text of [`GeomError::NotOneSolid`]: what happened, the

@@ -4876,14 +4876,14 @@
     {
       "name": "tessellate",
       "title": "Tessellate",
-      "description": "mesh a B-rep solid into the mesh tier's watertight solid: OCCT's mesher at the given chord and angular deflections, per-face vertices welded, the result checked watertight and accepted by Manifold — so it feeds `mesh_union` / `mesh_difference` / the exporters directly. The explicit, costed bridge (docs/08 rule 8): a `Solid` never becomes a mesh on its own.",
+      "description": "mesh a B-rep solid into the mesh tier's watertight solid: OCCT's mesher at the given chord and angular deflections, per-face vertices welded, the result checked watertight and accepted by Manifold — so it feeds `mesh_union` / `mesh_difference` / the exporters directly. The explicit, costed bridge (docs/08 rule 8): a `Solid` never becomes a mesh on its own, and the cost is bounded — a request finer than the budget for the part's size is refused before the mesher runs (below it the mesher's memory grows without limit, in one kernel call nothing can interrupt).",
       "category": "Mesh & field",
       "tier": "1",
-      "version": 1,
+      "version": 2,
       "pure": true,
       "volatile": false,
-      "uses_tolerance": true,
-      "panics": "the deflection is below 1e-7 or the angle below 1e-12 rad (the kernel's own floors: the mesher refuses anything finer), when the mesher fails or its output is not closed after welding, when Manifold refuses the welded mesh, or the kernel refuses.",
+      "uses_tolerance": false,
+      "panics": "the deflection is below 1e-7 or the angle below 1e-12 rad (the kernel's own floors: the mesher refuses anything finer), when either is finer than the budget for this solid's size (1000 facets per full turn at its largest extent — the message names the floors for the part), when the mesher fails or its output is not closed after welding, when Manifold refuses the welded mesh, or the kernel refuses.",
       "gh": "Mesh Brep",
       "examples": [
         "ball = sphere(radius=1.5)\nshell = tessellate(solid=ball, deflection=0.05)"
@@ -4904,7 +4904,7 @@
           "list_depth": 0,
           "optional": false,
           "default": "0.01",
-          "doc": "The chord deviation: the largest distance between the mesh and the true surface, in document units (the display uses 0.02 mm).",
+          "doc": "The chord deviation: the largest distance between the mesh and the true surface, in document units (the display uses 0.02 mm). Held to the node's budget for the part's size — never finer than 1000 facets per full turn at the solid's largest extent, about one 400,000th of it (0.01 is admitted up to a 4 m part).",
           "dimension": "length"
         },
         {
@@ -4914,7 +4914,7 @@
           "list_depth": 0,
           "optional": false,
           "default": "0.1",
-          "doc": "The angular deviation between adjacent facets, in radians (0.1 rad ≈ 5.7°, about 63 facets per full turn).",
+          "doc": "The angular deviation between adjacent facets, in radians (0.1 rad ≈ 5.7°, about 63 facets per full turn; the budget's floor is 2π/1000 ≈ 0.0063 rad).",
           "dimension": "angle"
         }
       ],

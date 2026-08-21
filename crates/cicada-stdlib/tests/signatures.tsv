@@ -115,6 +115,7 @@ subtract	1	subtract(a: Number, b: Number) → Number
 sweep	1	sweep(rail: Curve, profile: Closed<Curve>) → Solid	uses_tolerance
 tan	1	tan(x: Number) → Number	
 tessellate	1	tessellate(solid: Solid, deflection: Number = 0.01, angle: Number = 0.1) → Watertight<Mesh>	uses_tolerance
+tessellate	2	tessellate(solid: Solid, deflection: Number = 0.01, angle: Number = 0.1) → Watertight<Mesh>	
 text_outlines	1	text_outlines(text: Text, size: Number, plane: Plane = xy_plane, font: Text = "DejaVu Sans Bold", segments: Integer = 8, line_gap: Number = 1.35) → [Closed<Curve>]	uses_tolerance
 text_solids	1	text_solids(text: Text, size: Number, depth: Number, plane: Plane = xy_plane, font: Text = "DejaVu Sans Bold", segments: Integer = 8, line_gap: Number = 1.35) → [Watertight<Mesh>]	uses_tolerance
 text_tag	1	text_tag(location: Plane, text: Text, size: Number = 1.0) → ()	

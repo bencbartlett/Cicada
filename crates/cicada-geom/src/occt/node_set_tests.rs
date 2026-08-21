@@ -769,6 +769,43 @@ fn a_moved_sphere_minus_a_cylinder_through_its_poles_meshes_closed() {
     );
 }
 
+/// The review's unbounded request — a unit sphere at the kernel's bare
+/// floor, 1e-7 — through the budgeted entry point: refused typed, before
+/// the mesher runs (the mesher's run is the 23 GB that never finished; this
+/// test finishes in milliseconds BECAUSE the refusal precedes it). An
+/// admitted request is `tessellate`'s mesh exactly.
+#[test]
+fn the_budgeted_tessellation_refuses_before_the_mesher_and_is_the_nodes_mesh_otherwise() {
+    let ball = solid::sphere(&Plane::world_xy(), 1.0, TOL).expect("sphere");
+    let hostile = Deflection::new(1e-7, 0.1).expect("the kernel admits it");
+    let error = solid::tessellate_within_budget(&ball, hostile).expect_err("the budget refuses");
+    let GeomError::TessellationBudget { extent, .. } = &error else {
+        panic!("{error:?}");
+    };
+    assert_close(*extent, 2.0, 1e-9);
+    assert!(
+        error.to_string().contains("finer than the budget"),
+        "{error}"
+    );
+    // Admitted: the same mesh as the plain entry point.
+    let admitted = Deflection::new(0.05, 0.2).expect("valid");
+    let budgeted = solid::tessellate_within_budget(&ball, admitted).expect("meshes");
+    let plain = solid::tessellate(&ball, admitted).expect("meshes");
+    assert_eq!(budgeted, plain);
+    assert!(budgeted.mesh.0.is_watertight());
+    // A box never needs the budget — and is held to it all the same: the
+    // rule is about the request's density at the part's scale, not about
+    // what a given solid would have cost.
+    let block = solid::box_at(Point::origin(), Vector::new(4000.0, 10.0, 10.0)).expect("box");
+    assert!(
+        solid::tessellate_within_budget(&block, Deflection::new(0.01, 0.1).expect("valid")).is_ok()
+    );
+    assert!(matches!(
+        solid::tessellate_within_budget(&block, Deflection::new(1e-5, 0.1).expect("valid")),
+        Err(GeomError::TessellationBudget { .. })
+    ));
+}
+
 // ---------------------------------------------------------------------------
 // Sections and topology
 // ---------------------------------------------------------------------------
