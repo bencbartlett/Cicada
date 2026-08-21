@@ -246,8 +246,23 @@ def mcp_json(layout: Layout) -> str:
     return json.dumps(registration, indent=2)
 
 
-def github_env_entries(layout: Layout, existing_loader_value: str) -> tuple[list[str], list[str]]:
-    """(lines for $GITHUB_ENV, lines for $GITHUB_PATH)."""
+def github_env_entries(
+    layout: Layout, existing_loader_value: str, existing_rustflags: str = ""
+) -> tuple[list[str], list[str]]:
+    """(lines for $GITHUB_ENV, lines for $GITHUB_PATH).
+
+    How a job's binaries find the shared libraries differs per OS, and the
+    difference is load-bearing: Windows gets the DLL directory on PATH;
+    Linux gets LD_LIBRARY_PATH (ld.so has no way to give the test binaries'
+    transitive dependencies an rpath of their own); macOS gets an **rpath on
+    the binaries** (RUSTFLAGS) and NEVER a job-wide DYLD_LIBRARY_PATH — the
+    conda prefix carries its own libiconv, libstdc++-class and codec dylibs,
+    and a loader variable exported for the whole job makes every process
+    (cargo, git, Python) load them ahead of the system's: the first macOS CI
+    run with OCCT linked (2026-08-21) segfaulted `cargo build` and then
+    killed `git` on conda's libiconv. The conda dylibs carry @loader_path
+    rpaths themselves, so the executable's rpath is enough for the closure.
+    """
     env = [
         f"DEP_OCCT_ROOT={layout.dep_occt_root}",
         f"CMAKE_POLICY_VERSION_MINIMUM={CMAKE_POLICY_VERSION_MINIMUM}",
@@ -255,6 +270,10 @@ def github_env_entries(layout: Layout, existing_loader_value: str) -> tuple[list
     path: list[str] = []
     if layout.is_windows:
         path.append(str(layout.library_dir))
+    elif layout.is_macos:
+        rpath = f"-C link-arg=-Wl,-rpath,{layout.library_dir}"
+        value = f"{existing_rustflags} {rpath}".strip() if existing_rustflags else rpath
+        env.append(f"RUSTFLAGS={value}")
     else:
         value = str(layout.library_dir)
         if existing_loader_value:
@@ -1073,7 +1092,11 @@ def main(argv: list[str]) -> int:
                 path_file = os.environ.get("GITHUB_PATH")
                 if not env_file or not path_file:
                     raise FetchError("--github-env needs GITHUB_ENV and GITHUB_PATH in the environment")
-                env, path = github_env_entries(layout, os.environ.get(layout.loader_variable, ""))
+                env, path = github_env_entries(
+                    layout,
+                    os.environ.get(layout.loader_variable, ""),
+                    os.environ.get("RUSTFLAGS", ""),
+                )
                 with open(env_file, "a", encoding="utf-8") as handle:
                     handle.write("".join(line + "\n" for line in env))
                 with open(path_file, "a", encoding="utf-8") as handle:

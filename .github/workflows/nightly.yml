@@ -4,8 +4,9 @@
 # feature is on by default since docs/17 Item 3 WP-C) and starts with the
 # same fetch steps as ci.yml: setup-python, the cached prebuilt prefix,
 # `tools/fetch_occt.py --github-env` (DEP_OCCT_ROOT + the loader path for
-# every later step; macOS gets an rpath on the binaries instead of
-# DYLD_LIBRARY_PATH, which SIP strips from the runner's /bin/bash).
+# every later step; macOS gets an rpath on the binaries — never a
+# job-wide DYLD_LIBRARY_PATH, which made every process load conda's
+# libiconv ahead of the system's, ci.yml's header has the run).
 name: Nightly
 
 on:
@@ -54,10 +55,6 @@ jobs:
           python -m pip install --quiet zstandard
           python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --check-closure
           python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --github-env
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            eval "$(python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --print-env bash --quiet)"
-            echo "RUSTFLAGS=-C link-arg=-Wl,-rpath,$DEP_OCCT_ROOT/lib" >> "$GITHUB_ENV"
-          fi
       - name: Prime the kernel builds (retry once — belt; see AGENTS.md)
         run: cargo build --locked -p cicada-geom || cargo build --locked -p cicada-geom
       - run: cargo test --locked --workspace

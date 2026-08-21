@@ -11,10 +11,11 @@
 # sha256-pinned conda-forge OCCT 7.8.1 prefix (+ the run-time closure its
 # libraries load) into the runner's temp dir and exports DEP_OCCT_ROOT, the
 # loader path (LD_LIBRARY_PATH / PATH) and CMAKE_POLICY_VERSION_MINIMUM for
-# every later step. macOS gets an rpath on the binaries instead of
-# DYLD_LIBRARY_PATH (SIP strips DYLD_* from the protected /bin/bash the
-# runner spawns, so a GITHUB_ENV entry would never reach cargo). The Linux
-# job also verifies the prefix's import closure statically.
+# every later step. macOS gets an rpath on the binaries (RUSTFLAGS) and
+# NEVER a job-wide DYLD_LIBRARY_PATH: the conda prefix ships its own
+# libiconv and codec dylibs, and a loader variable for the whole job made
+# cargo segfault and git die on them (run 32506547681, 2026-08-21). The
+# Linux job also verifies the prefix's import closure statically.
 name: CI
 
 on:
@@ -96,10 +97,6 @@ jobs:
         run: |
           python -m pip install --quiet zstandard
           python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --github-env
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            eval "$(python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --print-env bash --quiet)"
-            echo "RUSTFLAGS=-C link-arg=-Wl,-rpath,$DEP_OCCT_ROOT/lib" >> "$GITHUB_ENV"
-          fi
       - name: Prime the kernel builds (retry once — belt; see AGENTS.md)
         run: cargo build --locked -p cicada-geom || cargo build --locked -p cicada-geom
       - run: cargo test --locked --workspace

@@ -200,10 +200,21 @@ class EnvRenderingTest(unittest.TestCase):
         env, path = fo.github_env_entries(win, "")
         self.assertEqual(env[0], f"DEP_OCCT_ROOT={root / 'occt-7.8.1-win-64' / 'Library'}")
         self.assertEqual(path, [str(root / 'occt-7.8.1-win-64' / 'Library' / 'bin')])
-        mac = fo.Layout(Path("/c"), "osx-64", "7.8.1")
-        env, path = fo.github_env_entries(mac, "/already/there")
-        self.assertIn(f"DYLD_LIBRARY_PATH={Path('/c/occt-7.8.1-osx-64/lib')}:/already/there", env)
+        linux = fo.Layout(Path("/c"), "linux-64", "7.8.1")
+        env, path = fo.github_env_entries(linux, "/already/there")
+        self.assertIn(f"LD_LIBRARY_PATH={Path('/c/occt-7.8.1-linux-64/lib')}:/already/there", env)
         self.assertEqual(path, [])
+        # macOS: an rpath on the binaries, and NO job-wide loader variable —
+        # conda's libiconv shadowed the system's for cargo and git (2026-08-21).
+        mac = fo.Layout(Path("/c"), "osx-arm64", "7.8.1")
+        env, path = fo.github_env_entries(mac, "/already/there", "-C debuginfo=1")
+        self.assertFalse(any(line.startswith("DYLD_LIBRARY_PATH=") for line in env), env)
+        self.assertIn(
+            f"RUSTFLAGS=-C debuginfo=1 -C link-arg=-Wl,-rpath,{Path('/c/occt-7.8.1-osx-arm64/lib')}", env
+        )
+        self.assertEqual(path, [])
+        env, _ = fo.github_env_entries(mac, "", "")
+        self.assertIn(f"RUSTFLAGS=-C link-arg=-Wl,-rpath,{Path('/c/occt-7.8.1-osx-arm64/lib')}", env)
 
 
 class VerificationTest(unittest.TestCase):
