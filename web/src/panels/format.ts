@@ -151,6 +151,7 @@ export function factsList(facts: Record<string, unknown> | undefined): [string, 
     "segments",
     "points",
     "watertight",
+    "unclosed",
     "closed",
     "bytes",
   ];

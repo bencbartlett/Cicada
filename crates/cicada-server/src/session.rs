@@ -35,6 +35,7 @@ use bytes::Bytes;
 use cicada_core::config::ProjectConfig;
 use cicada_core::hash::ValueHash;
 use cicada_core::spec::NodeSpec;
+use cicada_core::value::HashedValue;
 use cicada_lang::ast::Rhs;
 use cicada_lang::check::BindingType;
 use cicada_lang::diag::{Diagnostic, DiagnosticKind};
@@ -48,7 +49,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::atomic::write_atomic;
 use crate::compile::{self, Loaded};
-use crate::display::{self, DisplayContext, DisplayStats, PickTable, SolidCache};
+use crate::display::{self, DisplayContext, DisplayStats, DisplayTier, PickTable, SolidCache};
 use crate::lower::{Lowered, LoweredBinding, lower, lower_partial};
 use crate::protocol::{
     Actor, ApplyTextRequest, ClientMessage, DeltaSource, HistoryView, LeaseView, NodeState,
@@ -531,6 +532,11 @@ struct Displayed {
     hash: ValueHash,
     generation: u64,
     stats: DisplayStats,
+    /// The tier its solids were tessellated at: a preview-tier drawing of
+    /// a value is redrawn by the next fine-tier generation of the same
+    /// value (docs/03 §Display tessellation), a fine one never by a
+    /// preview.
+    tier: DisplayTier,
 }
 
 /// A generation's report kept for the inspector.
@@ -538,6 +544,18 @@ struct Kept {
     generation: u64,
     lowered: Arc<Lowered>,
     report: Arc<SolveReport>,
+    /// The display tier its generation drew at (a preview generation's
+    /// re-emission — a preview toggle mid-drag — stays at its tier).
+    tier: DisplayTier,
+}
+
+/// The display tier of a generation: a slider drag's generations draw
+/// coarse, everything structural draws fine.
+fn tier_of(kind: JobKind) -> DisplayTier {
+    match kind {
+        JobKind::Structural => DisplayTier::Fine,
+        JobKind::Preview => DisplayTier::Preview,
+    }
 }
 
 struct Inner {
@@ -1148,19 +1166,21 @@ impl Session {
             &ServerMessage::DisplayReset { generation },
         )));
         let store = Arc::clone(self.core.scheduler.store());
-        let context = self.core.display_context();
         let keys: Vec<((u32, u32), Displayed)> =
             inner.display.iter().map(|(k, v)| (*k, v.clone())).collect();
         for ((node, output), displayed) in keys {
             match store.load_value(&displayed.hash) {
                 Ok(value) => {
+                    // At the tier it was drawn at: a cache hit, whatever the
+                    // tier (a joining client mid-drag sees the preview mesh
+                    // the others see; the release refines for everyone).
                     let frames = display::frames_for_value(
                         &value,
                         displayed.generation,
                         node,
                         output,
                         &mut inner.picks,
-                        &context,
+                        &self.core.display_context(displayed.tier),
                     );
                     for frame in frames.frames {
                         let _ = tx.send(Outgoing::Binary(Bytes::from(frame)));
@@ -2568,8 +2588,11 @@ impl Session {
             .store()
             .load_value(&ValueHash::from_bytes(raw))
             .map_err(|e| e.to_string())?;
-        serde_json::to_value(display::summarize(&value, &self.core.display_context()))
-            .map_err(|e| e.to_string())
+        serde_json::to_value(display::summarize(
+            &value,
+            &self.core.display_context(DisplayTier::Fine),
+        ))
+        .map_err(|e| e.to_string())
     }
 
     // ------------------------------------------------------------ debug --
@@ -3280,11 +3303,13 @@ fn debounce_loop(core: &Core) {
 
 impl Core {
     /// What the display path needs from the session: the project
-    /// configuration and the solid tessellation cache.
-    fn display_context(&self) -> DisplayContext<'_> {
+    /// configuration, the solid tessellation cache, and the tier of the
+    /// pass (summaries pass `Fine` and read whatever tier is cached).
+    fn display_context(&self, tier: DisplayTier) -> DisplayContext<'_> {
         DisplayContext {
             config: &self.config.project,
             solids: &self.solids,
+            tier,
         }
     }
 
@@ -3710,25 +3735,19 @@ impl Core {
         let generation = kept.generation;
         let lowered = Arc::clone(&kept.lowered);
         let report = Arc::clone(&kept.report);
-        self.emit_frames(inner, generation, &lowered, &report);
+        let tier = kept.tier;
+        self.emit_frames(inner, generation, &lowered, &report, tier, &HashMap::new());
     }
 
-    /// The core of display: for every previewed, displayable output in the
-    /// graph, compare the generation's output hash to the last broadcast
-    /// and send frames when it changed; send clears for outputs that
-    /// stopped drawing.
-    #[allow(clippy::too_many_lines)] // want-set, clears, sends: one pass in one place
-    fn emit_frames(
-        &self,
-        inner: &mut Inner,
-        generation: u64,
+    /// Which `(node ref, output, value hash)` triples a generation should
+    /// draw: every previewed, displayable output the report produced a
+    /// value for. A pure read of the graph and the report — the emit path
+    /// and the pre-lock warm-up share it.
+    fn display_wants(
+        inner: &Inner,
         lowered: &Lowered,
         report: &SolveReport,
-    ) -> usize {
-        let mut bytes_sent = 0_usize;
-        let store = Arc::clone(self.scheduler.store());
-        let context = self.display_context();
-        // Which (ref, output) should draw now?
+    ) -> Vec<(u32, u32, ValueHash)> {
         let mut wanted: Vec<(u32, u32, ValueHash)> = Vec::new();
         for node in &inner.graph.nodes {
             if !node.preview {
@@ -3779,6 +3798,99 @@ impl Core {
                 wanted.push((node.node_ref, output_u32, hash));
             }
         }
+        wanted
+    }
+
+    /// Is this output already on screen as this value, at this tier or a
+    /// finer one? (The emit path skips it; the warm-up does not load it.)
+    fn already_displayed(
+        inner: &Inner,
+        node_ref: u32,
+        output: u32,
+        hash: ValueHash,
+        tier: DisplayTier,
+    ) -> bool {
+        inner
+            .display
+            .get(&(node_ref, output))
+            .is_some_and(|d| d.hash == hash && d.tier >= tier)
+    }
+
+    /// The values a generation will draw that are not yet on screen at its
+    /// tier, loaded from the store — what the solve loop warms the solid
+    /// cache with BEFORE the session lock is taken for the broadcast
+    /// (docs/12 §Display cache). A short lock hold: the graph and the
+    /// display map are read, nothing is sent.
+    fn display_pending(
+        &self,
+        generation_tier: DisplayTier,
+        lowered: &Lowered,
+        report: &SolveReport,
+    ) -> HashMap<ValueHash, Arc<HashedValue>> {
+        let wanted: Vec<(u32, u32, ValueHash)> = {
+            let inner = self.lock_inner();
+            Self::display_wants(&inner, lowered, report)
+                .into_iter()
+                .filter(|(node_ref, output, hash)| {
+                    !Self::already_displayed(&inner, *node_ref, *output, *hash, generation_tier)
+                })
+                .collect()
+        };
+        let store = self.scheduler.store();
+        let mut loaded = HashMap::new();
+        for (_, _, hash) in wanted {
+            if loaded.contains_key(&hash) {
+                continue;
+            }
+            // A value that cannot be loaded is reported by the emit path,
+            // which tries again under the lock and broadcasts the notice.
+            if let Ok(value) = store.load_value(&hash) {
+                loaded.insert(hash, value);
+            }
+        }
+        loaded
+    }
+
+    /// Tessellate every distinct solid among `values` at `tier` on the
+    /// scheduler's worker pool, in parallel, into the solid cache — the
+    /// display edge computed by the solve loop, not the broadcaster. The
+    /// emit that follows under the lock only hits.
+    fn warm_solids(&self, values: &HashMap<ValueHash, Arc<HashedValue>>, tier: DisplayTier) {
+        let values: Vec<Arc<HashedValue>> = values.values().cloned().collect();
+        let distinct = display::distinct_solids(&values);
+        if distinct.is_empty() {
+            return;
+        }
+        let context = self.display_context(tier);
+        let deflection = context.deflection();
+        let cache = context.solids;
+        self.scheduler.map_parallel(distinct, |(hash, solid)| {
+            // The result — mesh or refusal — lives in the cache; the emit
+            // path reads it there and attaches the output and element.
+            let _ = cache.tessellation(hash, &solid, deflection);
+        });
+    }
+
+    /// The core of display: for every previewed, displayable output in the
+    /// graph, compare the generation's output hash to the last broadcast
+    /// and send frames when it changed (or when it was last drawn at a
+    /// coarser tier); send clears for outputs that stopped drawing.
+    /// `preloaded` holds values the caller already loaded (the warm-up);
+    /// anything else is loaded here.
+    #[allow(clippy::too_many_lines)] // want-set, clears, sends: one pass in one place
+    fn emit_frames(
+        &self,
+        inner: &mut Inner,
+        generation: u64,
+        lowered: &Lowered,
+        report: &SolveReport,
+        tier: DisplayTier,
+        preloaded: &HashMap<ValueHash, Arc<HashedValue>>,
+    ) -> usize {
+        let mut bytes_sent = 0_usize;
+        let store = Arc::clone(self.scheduler.store());
+        let context = self.display_context(tier);
+        let wanted = Self::display_wants(inner, lowered, report);
         // Clears: displayed before, not wanted now (preview off, red, gone).
         let wanted_keys: HashSet<(u32, u32)> = wanted.iter().map(|(n, o, _)| (*n, *o)).collect();
         let stale: Vec<(u32, u32)> = inner
@@ -3807,14 +3919,14 @@ impl Core {
             );
         }
         for (node_ref, output, hash) in wanted {
-            if inner
-                .display
-                .get(&(node_ref, output))
-                .is_some_and(|d| d.hash == hash)
-            {
+            if Self::already_displayed(inner, node_ref, output, hash, tier) {
                 continue;
             }
-            match store.load_value(&hash) {
+            let loaded = match preloaded.get(&hash) {
+                Some(value) => Ok(Arc::clone(value)),
+                None => store.load_value(&hash),
+            };
+            match loaded {
                 Ok(value) => {
                     let frames = display::frames_for_value(
                         &value,
@@ -3834,6 +3946,7 @@ impl Core {
                             hash,
                             generation,
                             stats: frames.stats,
+                            tier,
                         },
                     );
                 }
@@ -3903,7 +4016,7 @@ impl Core {
                 store
                     .load_value(&hash)
                     .ok()
-                    .map(|v| display::summarize(&v, &self.display_context()))
+                    .map(|v| display::summarize(&v, &self.display_context(DisplayTier::Fine)))
             });
             outputs.push((output.name.clone(), summary));
         }
@@ -4256,6 +4369,21 @@ impl Core {
         self.finish_statuses(generation, &job.lowered, report, true);
         let began = Instant::now();
         let mut frame_bytes = 0;
+        let tier = tier_of(job.kind);
+        // The display edge, off the session lock: the values this
+        // generation will draw are loaded and their distinct solids
+        // tessellated on the worker pool (docs/12 §Display cache) while
+        // intents keep flowing. A cancelled generation paints nothing and
+        // warms nothing. Between this and the broadcast below the graph may
+        // change under an intent; the broadcast recomputes what it wants
+        // and merely finds the cache warm.
+        let preloaded = if report.cancelled {
+            HashMap::new()
+        } else {
+            let pending = self.display_pending(tier, &job.lowered, report);
+            self.warm_solids(&pending, tier);
+            pending
+        };
         {
             let mut inner = self.lock_inner();
             let newer = inner
@@ -4267,6 +4395,7 @@ impl Core {
                     generation,
                     lowered: Arc::clone(&job.lowered),
                     report: Arc::clone(report),
+                    tier,
                 });
             }
             if newer && !report.cancelled {
@@ -4279,7 +4408,14 @@ impl Core {
                 // wall cutters stood between cancel() and idle — stage-6
                 // measurement.) The completed work is memoized; the next
                 // generation paints it in milliseconds.
-                frame_bytes = self.emit_frames(&mut inner, generation, &job.lowered, report);
+                frame_bytes = self.emit_frames(
+                    &mut inner,
+                    generation,
+                    &job.lowered,
+                    report,
+                    tier,
+                    &preloaded,
+                );
             }
         }
         let elapsed = {
@@ -4426,14 +4562,17 @@ mod tests {
             state["display_cache"],
             serde_json::json!({
                 "entries": 0, "bytes": 0, "budget": display::SOLID_CACHE_BUDGET,
-                "hits": 0, "misses": 0, "evictions": 0, "oversized": 0,
+                "hits": 0, "misses": 0, "evictions": 0, "oversized": 0, "refusals": 0,
             })
         );
-        // And a mesh output's display stats carry no solid fields: `solids`
-        // and `errors` are omitted when zero/empty (additive, never noise).
+        // And a mesh output's display stats carry no solid fields: `solids`,
+        // `tier`, `errors` and `warnings` are omitted when zero/empty
+        // (additive, never noise).
         let block_stats = &state["display"]["block.out"]["stats"];
         assert!(block_stats.get("solids").is_none(), "{block_stats}");
+        assert!(block_stats.get("tier").is_none(), "{block_stats}");
         assert!(block_stats.get("errors").is_none(), "{block_stats}");
+        assert!(block_stats.get("warnings").is_none(), "{block_stats}");
 
         // Slider drag: preview streams, then the real set_param on release.
         session.handle(
@@ -6392,6 +6531,114 @@ size = slider(value=4.0, min=0.5, max=5.0)
             frames(&drain(&mut rx)).is_empty(),
             "(frames were drained with the texts above — sanity)"
         );
+    }
+
+    /// The display tiers (docs/03 §Display tessellation; the review's
+    /// finding on the 02-solids slider): a drag's preview generations draw
+    /// a Solid coarse, the release's structural generation redraws the SAME
+    /// value fine — the "already displayed" rule compares tiers, not just
+    /// hashes — and the tessellation happens on the solve loop's workers
+    /// before the lock, so the broadcast under the lock only hits.
+    #[test]
+    fn preview_generations_draw_solids_coarse_and_the_release_refines() {
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             ball = sphere(radius=size)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let _ = drain(&mut rx);
+        let stats_of =
+            |session: &Session| session.debug_state(false)["display"]["ball.out"]["stats"].clone();
+        let cache_of = |session: &Session| session.debug_state(false)["display_cache"].clone();
+        // The load is structural: fine tier, warmed once (one miss), then
+        // read by the broadcast under the lock (a hit).
+        let loaded = stats_of(&session);
+        assert_eq!(loaded["tier"], "fine", "{loaded}");
+        assert_eq!(loaded["solids"], 1);
+        let fine_triangles = loaded["triangles"].as_u64().unwrap();
+        let cache = cache_of(&session);
+        assert_eq!(cache["misses"], 1, "{cache}");
+        assert!(
+            cache["hits"].as_u64().unwrap() >= 1,
+            "the emit hit the warmed entry: {cache}"
+        );
+        assert_eq!(cache["entries"], 1);
+        // A preview tick: a new value, drawn at the preview tier — coarser.
+        preview(&session, id, "2.5");
+        session.wait_idle();
+        let previewed = stats_of(&session);
+        assert_eq!(previewed["tier"], "preview", "{previewed}");
+        let preview_triangles = previewed["triangles"].as_u64().unwrap();
+        assert!(
+            preview_triangles < fine_triangles,
+            "preview {preview_triangles} vs fine {fine_triangles}"
+        );
+        let cache = cache_of(&session);
+        assert_eq!(cache["misses"], 2, "one more kernel call: {cache}");
+        assert_eq!(cache["entries"], 2);
+        let frames_after_preview = frames(&drain(&mut rx))
+            .iter()
+            .filter(|f| f.header().kind == FrameKind::Mesh)
+            .count();
+        assert_eq!(frames_after_preview, 1, "the preview drew the ball");
+        // The release writes the SAME value: the same hash, already on
+        // screen — but at the preview tier, so the structural generation
+        // redraws it fine.
+        session.handle(
+            id,
+            Some("release".into()),
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "2.5".into(),
+            },
+        );
+        session.wait_idle();
+        let released = stats_of(&session);
+        assert_eq!(released["tier"], "fine", "{released}");
+        assert!(
+            released["triangles"].as_u64().unwrap() > preview_triangles,
+            "the release refined: {released}"
+        );
+        let frames_after_release = frames(&drain(&mut rx))
+            .iter()
+            .filter(|f| f.header().kind == FrameKind::Mesh)
+            .count();
+        assert_eq!(frames_after_release, 1, "the release redrew the ball");
+        let cache = cache_of(&session);
+        assert_eq!(cache["misses"], 3, "{cache}");
+        assert_eq!(cache["entries"], 3);
+        // And a second structural generation of the same value draws
+        // nothing new: fine is already on screen.
+        session.handle(
+            id,
+            Some("again".into()),
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "2.5".into(),
+            },
+        );
+        session.wait_idle();
+        assert!(
+            frames(&drain(&mut rx)).is_empty(),
+            "a value already displayed at the fine tier is not re-sent"
+        );
+        assert_eq!(cache_of(&session)["misses"], 3);
+        // A joining client is restreamed at the tier on screen: all hits.
+        let (tx2, mut rx2) = unbounded_channel();
+        let (id2, _) = session.connect(tx2);
+        session.restream_display(id2);
+        let restreamed = frames(&drain(&mut rx2))
+            .iter()
+            .filter(|f| f.header().kind == FrameKind::Mesh)
+            .count();
+        assert_eq!(restreamed, 1);
+        assert_eq!(cache_of(&session)["misses"], 3, "a restream never meshes");
     }
 
     #[test]

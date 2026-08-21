@@ -7,10 +7,12 @@
 //! graph's nodes are closures over the value-level API, exactly what those
 //! nodes will be.
 //!
-//! Both worlds are asserted: with the kernel every hash matches the
-//! single-threaded run and the direct computation; without it the first
-//! kernel call is a red node carrying `KernelUnavailable`'s text and the
-//! cone below it is blocked — never a silent pass, never a vacuous test.
+//! Every hash matches the single-threaded run and the direct computation.
+//! The kernel is the product (cicada-geom's `occt` feature is on by
+//! default and cicada-server links it unconditionally), so there is no
+//! kernel-free arm here: the test asserts the kernel is present rather than
+//! passing vacuously in a build that lacks it. The kernel-free world is
+//! `cargo test -p cicada-geom --no-default-features`.
 //!
 //! This lives in `cicada-server` because it is the lowest crate that
 //! depends on both `cicada-geom` and `cicada-sched` (the dependency DAG
@@ -240,35 +242,13 @@ fn solve_with(threads: usize) -> Run {
 
 #[test]
 fn related_solids_are_safe_under_the_scheduler_with_threads_above_one() {
-    if !solid::kernel_available() {
-        // Without the kernel the first kernel call is red with the typed
-        // reason, and everything below it is blocked — asserted, so the
-        // default build runs a real test here too.
-        let run = solve_with(4);
-        let NodeOutcome::Failed(failure) = run.report.outcome(NodeId(0)) else {
-            panic!(
-                "block must be red without the kernel: {:?}",
-                run.report.outcome(NodeId(0))
-            );
-        };
-        assert!(
-            failure.message.contains("feature `occt`"),
-            "{}",
-            failure.message
-        );
-        assert!(
-            matches!(run.report.outcome(NodeId(1)), NodeOutcome::Failed(_)),
-            "cutters call the kernel per element and are red too"
-        );
-        for id in 2..6 {
-            assert!(
-                matches!(run.report.outcome(NodeId(id)), NodeOutcome::Blocked { .. }),
-                "node {id} must be blocked, got {:?}",
-                run.report.outcome(NodeId(id))
-            );
-        }
-        return;
-    }
+    // cicada-server links the kernel (cicada-geom's `occt` is a default
+    // feature since WP-C); a build without it would make this test
+    // vacuous, so it fails loudly instead.
+    assert!(
+        solid::kernel_available(),
+        "this test needs the OCCT kernel (cicada-geom feature `occt`)"
+    );
 
     let serial = solve_with(1);
     let parallel = solve_with(8);

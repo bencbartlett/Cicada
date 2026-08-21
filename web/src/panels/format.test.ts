@@ -178,6 +178,20 @@ describe("values", () => {
       ["triangles", "12"],
       ["bytes", "4494"],
     ]);
+    // A Solid whose kernel mesh did not close says so beside the mesh
+    // counts (bare: `watertight false`; in a list: `unclosed N`), before
+    // the byte count — drawn all the same, never hidden.
+    expect(factsList({ bytes: 939, watertight: false, faces: 2, triangles: 7713 })).toEqual([
+      ["faces", "2"],
+      ["triangles", "7713"],
+      ["watertight", "false"],
+      ["bytes", "939"],
+    ]);
+    expect(factsList({ unclosed: 1, solids: 2, faces: 4 })).toEqual([
+      ["faces", "4"],
+      ["solids", "2"],
+      ["unclosed", "1"],
+    ]);
     expect(factsList({ bytes: 25, error: "tessellate needs the OCCT kernel" })[0]).toEqual([
       "error",
       "tessellate needs the OCCT kernel",

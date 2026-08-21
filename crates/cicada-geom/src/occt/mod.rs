@@ -115,7 +115,7 @@ use opencascade_sys::{bin_tools, cicada as fork};
 
 use crate::curve::WireForm;
 use crate::frame::{Frame, polygon_frame};
-use crate::solid::{Deflection, Tessellation, VolumeProperties};
+use crate::solid::{Deflection, DisplayTessellation, Tessellation, VolumeProperties};
 use crate::triangulate::ear_clip;
 use crate::{GeomError, tol};
 
@@ -165,19 +165,60 @@ mod not_sync {
 }
 const _: fn() = <Handle as not_sync::NotSync<_>>::check;
 
-/// A kernel failure attributed to the operation that hit it.
+/// A kernel failure attributed to the operation that hit it. The glue's
+/// own messages lead with the bridge function's name (`cicada_cut: …`,
+/// `make_box: …`) because one C++ header serves many callers; a node's red
+/// text names the OPERATION the user asked for instead, so that prefix is
+/// dropped here — a C++ identifier is never the diagnostic.
 fn kernel(operation: &str, error: &cxx::Exception) -> GeomError {
     GeomError::Kernel {
-        reason: format!("OCCT {operation}: {}", error.what()),
+        reason: format!("OCCT {operation}: {}", without_glue_prefix(error.what())),
     }
+}
+
+/// `what()` without a leading `<glue_function>: ` — an identifier made of
+/// lowercase letters, digits and underscores followed by a colon and a
+/// space. Anything else is returned unchanged.
+fn without_glue_prefix(what: &str) -> &str {
+    let Some((head, tail)) = what.split_once(": ") else {
+        return what;
+    };
+    let is_glue_identifier = !head.is_empty()
+        && head
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && head.contains('_');
+    if is_glue_identifier { tail } else { what }
 }
 
 impl Handle {
     /// Wrap a kernel result, unwrapping a single-solid compound and refusing
-    /// everything that is not exactly one solid.
+    /// everything that is not exactly one solid — typed
+    /// ([`GeomError::NotOneSolid`] carries the count and the operation), so
+    /// a splitting cut or a disjoint union is red with the rule, not with
+    /// a glue identifier and a `TopAbs_ShapeEnum` number.
     fn from_shape(shape: &TopoDS_Shape, operation: &str) -> Result<Self, GeomError> {
+        let found = usize::try_from(fork::cicada_count_solids(shape)).unwrap_or(0);
+        if found != 1 {
+            return Err(GeomError::NotOneSolid {
+                operation: operation.to_owned(),
+                found,
+            });
+        }
         let inner = fork::cicada_single_solid(shape).map_err(|error| kernel(operation, &error))?;
         Ok(Self { inner })
+    }
+
+    /// `BRepCheck_Analyzer`'s verdict on the solid: the kernel's own notion
+    /// of a valid B-rep (topology and geometry controls). Diagnostic — the
+    /// tests use it to tell an invalid boolean result from a valid one whose
+    /// mesh the mesher still cannot close.
+    ///
+    /// # Errors
+    ///
+    /// [`GeomError::Kernel`] if the analyzer itself fails.
+    pub fn is_valid(&self) -> Result<bool, GeomError> {
+        glue::is_valid(&self.inner).map_err(|error| kernel("check", &error))
     }
 
     /// An axis-aligned box with its minimum corner at `min_corner` and
@@ -216,8 +257,8 @@ impl Handle {
             extents.0.y,
             extents.0.z,
         )
-        .map_err(|error| kernel("make_box", &error))?;
-        Self::from_shape(&shape, "make_box")
+        .map_err(|error| kernel("box", &error))?;
+        Self::from_shape(&shape, "box")
     }
 
     /// A closed planar polygon (vertices in order; the closing edge is
@@ -273,8 +314,8 @@ impl Handle {
             xyz.extend_from_slice(&[point.0.x, point.0.y, point.0.z]);
         }
         let shape = fork::cicada_extrude_polygon(&xyz, direction.0.x, direction.0.y, direction.0.z)
-            .map_err(|error| kernel("extrude_polygon", &error))?;
-        Self::from_shape(&shape, "extrude_polygon")
+            .map_err(|error| kernel("extrude", &error))?;
+        Self::from_shape(&shape, "extrude")
     }
 
     /// `self` minus `cutter` (`BRepAlgoAPI_Cut`), consuming both: the
@@ -324,12 +365,36 @@ impl Handle {
     /// not closed is an error, never a leaky mesh. The face count rides
     /// along so the display path reconstructs once for both.
     ///
+    /// This is the `tessellate` NODE's contract (`Watertight<Mesh>` out:
+    /// the mesh tier needs closure). Display does not need it and uses
+    /// [`Handle::tessellate_display`], which returns the welded mesh either
+    /// way and says whether it closed.
+    ///
     /// # Errors
     ///
     /// [`GeomError::Kernel`] if the mesher fails; [`GeomError::NotWatertight`]
     /// if the welded result is not closed. (A non-positive deflection cannot
     /// reach here: [`Deflection`] is validated at construction.)
     pub fn tessellate(self, deflection: Deflection) -> Result<Tessellation, GeomError> {
+        closed_or_refused(self.tessellate_display(deflection)?)
+    }
+
+    /// The display tessellation: the same mesher and weld as
+    /// [`Handle::tessellate`], but closure is REPORTED, not required — a
+    /// valid solid whose per-face triangulations do not conform along an
+    /// edge (measured: a sphere moved by a kernel transform, minus a
+    /// cylinder through both its poles) still draws, with
+    /// `watertight == false` for the summary to show. Consumes the handle
+    /// (rule 2).
+    ///
+    /// # Errors
+    ///
+    /// [`GeomError::Kernel`] if the mesher fails or hands back malformed
+    /// buffers.
+    pub fn tessellate_display(
+        self,
+        deflection: Deflection,
+    ) -> Result<DisplayTessellation, GeomError> {
         let faces = self.face_count();
         let mut positions = Vec::new();
         let mut indices = Vec::new();
@@ -344,7 +409,13 @@ impl Handle {
         drop(self);
         // Welding is pure Rust over our own buffers.
         let mesh = weld(&positions, &indices)?;
-        Ok(Tessellation { mesh, faces })
+        let watertight = mesh.is_watertight();
+        Ok(DisplayTessellation {
+            mesh,
+            watertight,
+            faces,
+            deflection,
+        })
     }
 
     /// The canonical serialization — see the module docs. Side-effect free
@@ -381,7 +452,7 @@ impl Handle {
             bin_tools::read_brep_binary_bytes(bytes).map_err(|error| GeomError::Serialization {
                 reason: format!("OCCT BinTools read: {}", error.what()),
             })?;
-        Self::from_shape(&shape, "from_canonical_bytes")
+        Self::from_shape(&shape, "read")
     }
 
     /// The handle for a value: its canonical bytes read into a fresh graph.
@@ -492,11 +563,11 @@ impl Wire {
         let inner = match form {
             WireForm::Chain { vertices, closed } => {
                 glue::make_polyline_wire(&xyz_of(vertices), *closed)
-                    .map_err(|error| kernel("make_polyline_wire", &error))?
+                    .map_err(|error| kernel("polyline wire", &error))?
             }
             WireForm::Circle { frame, radius } => {
                 glue::make_circle_wire(&frame_doubles(frame), *radius)
-                    .map_err(|error| kernel("make_circle_wire", &error))?
+                    .map_err(|error| kernel("circle wire", &error))?
             }
         };
         Ok(Self { inner })
@@ -509,10 +580,10 @@ fn compound_of<I>(shapes: I) -> Result<UniquePtr<TopoDS_Shape>, GeomError>
 where
     I: IntoIterator<Item = UniquePtr<TopoDS_Shape>>,
 {
-    let mut compound = glue::make_compound().map_err(|error| kernel("make_compound", &error))?;
+    let mut compound = glue::make_compound().map_err(|error| kernel("compound", &error))?;
     for shape in shapes {
         glue::compound_add(compound.pin_mut(), &shape)
-            .map_err(|error| kernel("compound_add", &error))?;
+            .map_err(|error| kernel("compound", &error))?;
     }
     Ok(compound)
 }
@@ -608,8 +679,8 @@ impl Handle {
             }
         }
         let shape = glue::make_box(&frame_doubles(frame), extents.x, extents.y, extents.z)
-            .map_err(|error| kernel("make_box", &error))?;
-        Self::from_shape(&shape, "make_box")
+            .map_err(|error| kernel("box", &error))?;
+        Self::from_shape(&shape, "box")
     }
 
     /// A sphere centred at the frame's origin (`BRepPrimAPI_MakeSphere`).
@@ -621,8 +692,8 @@ impl Handle {
     pub fn sphere(frame: &Frame, radius: f64) -> Result<Self, GeomError> {
         positive("radius", radius)?;
         let shape = glue::make_sphere(&frame_doubles(frame), radius)
-            .map_err(|error| kernel("make_sphere", &error))?;
-        Self::from_shape(&shape, "make_sphere")
+            .map_err(|error| kernel("sphere", &error))?;
+        Self::from_shape(&shape, "sphere")
     }
 
     /// A cylinder standing on the frame's xy plane, `height` along its z
@@ -636,8 +707,8 @@ impl Handle {
         positive("radius", radius)?;
         positive("height", height)?;
         let shape = glue::make_cylinder(&frame_doubles(frame), radius, height)
-            .map_err(|error| kernel("make_cylinder", &error))?;
-        Self::from_shape(&shape, "make_cylinder")
+            .map_err(|error| kernel("cylinder", &error))?;
+        Self::from_shape(&shape, "cylinder")
     }
 
     /// A cone (or frustum) from `radius1` at the frame's xy plane to
@@ -672,8 +743,8 @@ impl Handle {
             });
         }
         let shape = glue::make_cone(&frame_doubles(frame), radius1, radius2, height)
-            .map_err(|error| kernel("make_cone", &error))?;
-        Self::from_shape(&shape, "make_cone")
+            .map_err(|error| kernel("cone", &error))?;
+        Self::from_shape(&shape, "cone")
     }
 
     /// A closed planar wire extruded along `direction` into a prism (the
@@ -685,8 +756,8 @@ impl Handle {
     /// [`GeomError::Kernel`] if the face or the prism cannot be built.
     pub fn prism(profile: &Wire, direction: Vector) -> Result<Self, GeomError> {
         let shape = glue::prism(&profile.inner, direction.0.x, direction.0.y, direction.0.z)
-            .map_err(|error| kernel("prism", &error))?;
-        Self::from_shape(&shape, "prism")
+            .map_err(|error| kernel("extrude", &error))?;
+        Self::from_shape(&shape, "extrude")
     }
 
     /// `BRepOffsetAPI_ThruSections` through `sections` in order, as a
@@ -702,16 +773,15 @@ impl Handle {
         ruled: bool,
         apex: Option<Point>,
     ) -> Result<Self, GeomError> {
-        let mut compound =
-            glue::make_compound().map_err(|error| kernel("make_compound", &error))?;
+        let mut compound = glue::make_compound().map_err(|error| kernel("compound", &error))?;
         for section in sections {
             glue::compound_add(compound.pin_mut(), &section.inner)
-                .map_err(|error| kernel("compound_add", &error))?;
+                .map_err(|error| kernel("compound", &error))?;
         }
         let apex: Vec<f64> = apex.map_or_else(Vec::new, |p| vec![p.0.x, p.0.y, p.0.z]);
-        let shape = glue::thru_sections(&compound, ruled, &apex)
-            .map_err(|error| kernel("thru_sections", &error))?;
-        Self::from_shape(&shape, "thru_sections")
+        let shape =
+            glue::thru_sections(&compound, ruled, &apex).map_err(|error| kernel("loft", &error))?;
+        Self::from_shape(&shape, "loft")
     }
 
     /// A closed planar wire revolved by `angle` radians about the axis
@@ -763,8 +833,8 @@ impl Handle {
     pub fn union(self, others: Vec<Self>) -> Result<Self, GeomError> {
         let arguments = compound_of([self.inner])?;
         let tools = compound_of(others.into_iter().map(|h| h.inner))?;
-        let shape = glue::fuse(&arguments, &tools).map_err(|error| kernel("fuse", &error))?;
-        Self::from_shape(&shape, "fuse")
+        let shape = glue::fuse(&arguments, &tools).map_err(|error| kernel("union", &error))?;
+        Self::from_shape(&shape, "union")
     }
 
     /// `self` minus every cutter in one pass, coplanar faces merged;
@@ -791,11 +861,11 @@ impl Handle {
     /// one solid.
     #[allow(clippy::needless_pass_by_value)] // consumption is the sharing model's rule 2
     pub fn intersection(self, other: Self) -> Result<Self, GeomError> {
-        let shape =
-            glue::common(&self.inner, &other.inner).map_err(|error| kernel("common", &error))?;
+        let shape = glue::common(&self.inner, &other.inner)
+            .map_err(|error| kernel("intersection", &error))?;
         drop(other);
         drop(self);
-        Self::from_shape(&shape, "common")
+        Self::from_shape(&shape, "intersection")
     }
 
     /// Volume and centroid (`BRepGProp::VolumeProperties`, adaptive).
@@ -806,7 +876,7 @@ impl Handle {
     pub fn volume(&self) -> Result<VolumeProperties, GeomError> {
         let mut out = Vec::with_capacity(4);
         glue::volume_properties(&self.inner, 1e-9, &mut out)
-            .map_err(|error| kernel("volume_properties", &error))?;
+            .map_err(|error| kernel("volume", &error))?;
         let [volume, x, y, z] = out[..] else {
             return Err(GeomError::Kernel {
                 reason: "volume_properties returned a malformed record".to_owned(),
@@ -976,7 +1046,7 @@ impl Handle {
         let _guard = step_guard();
         quiet_messenger();
         glue::step_write(&compound, path, millimeters, name, STEP_TIMESTAMP)
-            .map_err(|error| kernel("step_write", &error))
+            .map_err(|error| kernel("STEP write", &error))
     }
 
     /// Read every solid of a STEP file, scaled to the document unit
@@ -991,7 +1061,7 @@ impl Handle {
         let shape = {
             let _guard = step_guard();
             quiet_messenger();
-            glue::step_read(path, millimeters).map_err(|error| kernel("step_read", &error))?
+            glue::step_read(path, millimeters).map_err(|error| kernel("STEP read", &error))?
         };
         let count = fork::cicada_count_solids(&shape);
         if count <= 0 {
@@ -1002,8 +1072,8 @@ impl Handle {
         (0..count)
             .map(|index| {
                 let solid =
-                    glue::nth_solid(&shape, index).map_err(|error| kernel("nth_solid", &error))?;
-                Self::from_shape(&solid, "step_read")
+                    glue::nth_solid(&shape, index).map_err(|error| kernel("STEP read", &error))?;
+                Self::from_shape(&solid, "STEP read")
             })
             .collect()
     }
@@ -1029,9 +1099,35 @@ fn quiet_messenger() {
     });
 }
 
-/// Weld per-face vertices on bit-identical positions, drop the zero-area
-/// triangles this can create, and require the result to be watertight.
-fn weld(positions: &[f64], indices: &[u32]) -> Result<Watertight<Mesh>, GeomError> {
+/// The `tessellate` node's half of the contract: a display tessellation
+/// that closed becomes the `Watertight<Mesh>` the mesh tier needs; one that
+/// did not is refused with the text a user can act on — the solid, the
+/// deflection, the counts — never the weld's internals.
+fn closed_or_refused(display: DisplayTessellation) -> Result<Tessellation, GeomError> {
+    if !display.watertight {
+        return Err(GeomError::NotWatertight {
+            reason: format!(
+                "the kernel's mesh of this solid does not close at deflection {} / {} rad ({} \
+                 faces, {} vertices, {} triangles after welding) — the solid itself may be \
+                 valid; try another deflection, or keep it as a Solid (display draws it as is)",
+                display.deflection.linear(),
+                display.deflection.angular(),
+                display.faces,
+                display.mesh.vertex_count(),
+                display.mesh.triangle_count()
+            ),
+        });
+    }
+    Ok(Tessellation {
+        mesh: Watertight(display.mesh),
+        faces: display.faces,
+    })
+}
+
+/// Weld per-face vertices on bit-identical positions and drop the zero-area
+/// triangles this can create. Closure is the caller's question
+/// (`Mesh::is_watertight`): the node requires it, display reports it.
+fn weld(positions: &[f64], indices: &[u32]) -> Result<Mesh, GeomError> {
     let mut remap: HashMap<[u64; 3], u32> = HashMap::with_capacity(positions.len() / 3);
     let mut welded_positions: Vec<f64> = Vec::with_capacity(positions.len());
     let mut vertex_of: Vec<u32> = Vec::with_capacity(positions.len() / 3);
@@ -1089,17 +1185,7 @@ fn weld(positions: &[f64], indices: &[u32]) -> Result<Watertight<Mesh>, GeomErro
         }
         welded_indices.extend_from_slice(&mapped);
     }
-    let mesh = Mesh::new(welded_positions, welded_indices)?;
-    if !mesh.is_watertight() {
-        return Err(GeomError::NotWatertight {
-            reason: format!(
-                "OCCT tessellation is not closed after welding ({} vertices, {} triangles)",
-                mesh.vertex_count(),
-                mesh.triangle_count()
-            ),
-        });
-    }
-    Ok(Watertight(mesh))
+    Ok(Mesh::new(welded_positions, welded_indices)?)
 }
 
 #[cfg(test)]

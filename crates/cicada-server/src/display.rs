@@ -4,15 +4,24 @@
 //! read cached values only — display never re-solves anything.
 //!
 //! A `Solid` (v0.1 item 3 WP-B) draws through tessellation — the kernel
-//! meshes its canonical bytes at the project's display deflection
-//! (`cicada_geom::solid::Deflection::display`, docs/03) — cached by the
-//! solid's VALUE hash in the session's [`SolidCache`] (docs/12 §Display
-//! cache): a hit is a map lookup, a miss is one kernel call, and the
-//! frames are the ordinary mesh frames (`frames.rs` is unchanged; the
-//! instancing key is the solid's hash, so identical solids travel once).
-//! A solid that cannot be tessellated — a build without the kernel, bytes
-//! the kernel refuses — draws nothing and says why in the output's
-//! [`DisplayStats::errors`] and in its summary; never a silent skip.
+//! meshes its canonical bytes at the generation's display TIER
+//! ([`DisplayTier`]: the preview deflection for a slider drag's
+//! generations, the fine one for structural generations and the viewport
+//! at rest; `cicada_geom::solid::Deflection`, docs/03) — cached by the
+//! solid's VALUE hash + the tier's deflection in the session's
+//! [`SolidCache`] (docs/12 §Display cache): a hit is a map lookup, a miss
+//! is one kernel call. The session warms the cache for a generation's
+//! distinct solids on the solve loop's workers BEFORE taking its lock
+//! ([`distinct_solids`] + `Scheduler::map_parallel`), so the broadcast
+//! under the lock only hits. The frames are the ordinary mesh frames
+//! (`frames.rs` is unchanged) keyed by the DISPLAY MESH's own value hash
+//! — content-addressed, so a solid drawn at two deflections travels as two
+//! blobs and identical solids at one deflection travel once. A mesh the
+//! kernel could not close still draws (a green Solid never vanishes from
+//! the viewport) and says so in [`DisplayStats::warnings`] and the summary's
+//! `watertight` fact; a solid that cannot be tessellated at all — bytes the
+//! kernel refuses — draws nothing and says why in [`DisplayStats::errors`]
+//! and its summary; never a silent skip.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -23,7 +32,7 @@ use cicada_core::geometry::{Curve, Mesh, Solid};
 use cicada_core::hash::ValueHash;
 use cicada_core::value::{HashedValue, ValueData};
 use cicada_geom::curve::tessellate_closed;
-use cicada_geom::solid::{self as solids, Deflection, Tessellation};
+use cicada_geom::solid::{self as solids, Deflection};
 
 use crate::frames::{
     Batch, FrameKind, Header, IDENTITY, Instance, encode_batch, encode_clear, encode_instances,
@@ -71,29 +80,60 @@ impl PickTable {
 /// eviction only costs a re-tessellation.
 pub const SOLID_CACHE_BUDGET: usize = 256 * 1024 * 1024;
 
+/// Which deflection a display pass tessellates solids at (docs/03 §Display
+/// tessellation): `Preview` for the generations of a slider drag — coarse,
+/// what a drag can afford — and `Fine` for structural generations, the
+/// release, a joining client and the inspector. Ordered: a fine drawing
+/// satisfies a preview request, never the reverse, so an output drawn at
+/// `Preview` is redrawn by the next `Fine` generation of the same value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DisplayTier {
+    /// The coarse tier (`Deflection::preview`).
+    Preview,
+    /// The fine tier (`Deflection::display`).
+    Fine,
+}
+
+impl DisplayTier {
+    /// The tier's deflection for a project.
+    #[must_use]
+    pub fn deflection(self, config: &ProjectConfig) -> Deflection {
+        match self {
+            Self::Preview => Deflection::preview(config),
+            Self::Fine => Deflection::display(config),
+        }
+    }
+}
+
 /// What the session passes the display path: the project configuration
 /// (tolerance for curve tessellation, tolerance + unit for the solid
-/// display deflection) and the solid tessellation cache.
+/// display deflection), the solid tessellation cache, and the tier this
+/// pass draws at.
 #[derive(Clone, Copy)]
 pub struct DisplayContext<'a> {
     /// The project's configuration.
     pub config: &'a ProjectConfig,
     /// The session's tessellation cache.
     pub solids: &'a SolidCache,
+    /// The tier of this pass.
+    pub tier: DisplayTier,
 }
 
 impl DisplayContext<'_> {
-    /// The display deflection for this project (docs/03 formula).
+    /// The display deflection of this pass (the tier's, for this project;
+    /// docs/03 formula — the relative term is applied per solid below it).
     #[must_use]
     pub fn deflection(&self) -> Deflection {
-        Deflection::display(self.config)
+        self.tier.deflection(self.config)
     }
 }
 
-/// The key of a cached tessellation: the solid's value hash plus the
+/// The key of a cached tessellation: the solid's value hash plus the tier
 /// deflection it was meshed at (bit patterns — the deflection is a pure
-/// function of the project configuration, and a configuration change is
-/// exactly what must miss).
+/// function of the project configuration and the tier, and a configuration
+/// change is exactly what must miss; the per-solid relative term is a
+/// function of the solid, so it needs no place in the key).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct TessellationKey {
     hash: ValueHash,
@@ -111,9 +151,73 @@ impl TessellationKey {
     }
 }
 
-/// One cached tessellation and its place in the recency order.
+/// One solid's display mesh, as the cache holds it and the frames draw it.
+#[derive(Debug)]
+pub struct DisplayMesh {
+    /// The welded display mesh, sealed as a value: its hash is the frames'
+    /// content key (the blob a group of identical solids shares), so two
+    /// deflections of one solid are two blobs and a mesh-valued twin of the
+    /// tessellation would share one.
+    sealed: Arc<HashedValue>,
+    /// B-rep faces in the solid.
+    pub faces: usize,
+    /// Did the kernel's mesh close? `false` draws all the same and is
+    /// reported (the summary's `watertight`, the stats' `warnings`).
+    pub watertight: bool,
+    /// The deflection the mesher ran at (the tier's, raised by the relative
+    /// term for this solid's extent).
+    pub deflection: Deflection,
+}
+
+impl DisplayMesh {
+    fn new(tessellation: solids::DisplayTessellation) -> Result<Self, String> {
+        let solids::DisplayTessellation {
+            mesh,
+            watertight,
+            faces,
+            deflection,
+        } = tessellation;
+        let sealed = HashedValue::new(ValueData::Mesh(mesh))
+            .map_err(|error| format!("display mesh could not be sealed as a value: {error}"))?;
+        Ok(Self {
+            sealed,
+            faces,
+            watertight,
+            deflection,
+        })
+    }
+
+    /// The mesh.
+    #[must_use]
+    pub fn mesh(&self) -> &Mesh {
+        match self.sealed.data() {
+            ValueData::Mesh(mesh) => mesh,
+            other => unreachable!(
+                "DisplayMesh seals a Mesh by construction, found {}",
+                other.kind_name()
+            ),
+        }
+    }
+
+    /// The content hash of the mesh — the frames' blob key.
+    #[must_use]
+    pub fn hash(&self) -> ValueHash {
+        self.sealed.hash()
+    }
+}
+
+/// A cache entry: the display mesh, or the kernel's refusal of these bytes
+/// at this deflection (kept so an undrawable solid is not re-meshed on every
+/// redraw — docs/12 §Display cache).
+#[derive(Debug)]
+enum Cached {
+    Mesh(Arc<DisplayMesh>),
+    Refused(Arc<str>),
+}
+
+/// One cached entry and its place in the recency order.
 struct Entry {
-    tessellation: Arc<Tessellation>,
+    cached: Cached,
     /// Its footprint, as counted against the budget.
     size: usize,
     /// Its stamp in `CacheState::recency` (the key there).
@@ -131,6 +235,8 @@ struct CacheState {
     recency: BTreeMap<u64, TessellationKey>,
     clock: u64,
     bytes: usize,
+    /// Refusals held (a subset of `entries`).
+    refusals: usize,
 }
 
 impl CacheState {
@@ -142,15 +248,18 @@ impl CacheState {
 
 /// The hash-keyed solid tessellation cache (docs/12 §Display cache; DECISIONS.md
 /// row 42: "display tessellates Solids through a hash-keyed cache").
-/// Internally synchronized so the frame path and the summary path share
-/// one instance behind `&`; bounded by bytes, evicted least-recently-used
-/// in O(log n) per touch; hit/miss/eviction counts are observable in
-/// `/debug/state` (additive). Errors are not cached: a solid the kernel
-/// refuses is refused again on the next display pass (the refusal itself
-/// is cheap — it fails at the read), so a fixed build or a corrected value
-/// recovers by itself. A tessellation larger than the whole budget is
-/// served but never kept (`oversized` counts them): keeping it would
-/// evict everything else for one entry the budget cannot hold anyway.
+/// Internally synchronized so the solve loop's workers (warming it in
+/// parallel), the frame path and the summary path share one instance
+/// behind `&`; bounded by bytes, evicted least-recently-used in O(log n)
+/// per touch; hit/miss/eviction counts are observable in `/debug/state`
+/// (additive). Refusals are cached too, as small negative entries under
+/// the same key and the same eviction: a solid whose bytes the kernel
+/// refuses, or whose mesher fails after doing its work, is refused from the
+/// cache on the next pass instead of re-paying the kernel call — a
+/// corrected value is a new hash and misses as it should. A tessellation
+/// larger than the whole budget is served but never kept (`oversized`
+/// counts them): keeping it would evict everything else for one entry the
+/// budget cannot hold anyway.
 pub struct SolidCache {
     state: std::sync::Mutex<CacheState>,
     budget: usize,
@@ -163,21 +272,24 @@ pub struct SolidCache {
 /// The cache's counters, as `/debug/state` → `display_cache` reports them.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SolidCacheStats {
-    /// Tessellations held.
+    /// Entries held (meshes and refusals).
     pub entries: usize,
-    /// Bytes held (mesh buffers as uploaded) — never above `budget`.
+    /// Bytes held (mesh buffers as uploaded; a refusal counts its text) —
+    /// never above `budget`.
     pub bytes: usize,
     /// The byte budget.
     pub budget: usize,
-    /// Lookups served from the cache.
+    /// Lookups served from the cache (a cached refusal is a hit too).
     pub hits: u64,
-    /// Lookups that tessellated.
+    /// Lookups that called the kernel.
     pub misses: u64,
     /// Entries evicted to stay within budget.
     pub evictions: u64,
     /// Tessellations larger than the whole budget: served to the caller,
     /// never kept (each is a miss every time it is drawn).
     pub oversized: u64,
+    /// Refusals held (negative entries; a subset of `entries`).
+    pub refusals: usize,
 }
 
 impl Default for SolidCache {
@@ -196,6 +308,7 @@ impl SolidCache {
                 recency: BTreeMap::new(),
                 clock: 0,
                 bytes: 0,
+                refusals: 0,
             }),
             budget,
             hits: AtomicU64::new(0),
@@ -205,50 +318,98 @@ impl SolidCache {
         }
     }
 
-    /// The tessellation of `solid` (whose sealed value hash is `hash`) at
-    /// `deflection`: the cached one, or the kernel's, which is then cached.
-    /// The error is the kernel's reason, rendered for the stats and the
-    /// summary — the caller attaches the output and element.
+    /// The display mesh of `solid` (whose sealed value hash is `hash`) at a
+    /// tier's `deflection`: the cached one, or the kernel's, which is then
+    /// cached — and so is a refusal. The error is the kernel's reason,
+    /// rendered for the stats and the summary — the caller attaches the
+    /// output and element.
     ///
     /// # Errors
     ///
-    /// The `GeomError` of `cicada_geom::solid::tessellate`, rendered:
-    /// `KernelUnavailable` in a build without `occt`, `Serialization` for
-    /// bytes the kernel cannot read, the mesher's and the weld's refusals.
+    /// The `GeomError` of `cicada_geom::solid::tessellate_display`,
+    /// rendered: `KernelUnavailable` in a build without `occt`,
+    /// `Serialization` for bytes the kernel cannot read, the mesher's
+    /// failures. Never "not watertight" — closure is reported on the mesh.
     pub fn tessellation(
         &self,
         hash: ValueHash,
         solid: &Solid,
         deflection: Deflection,
-    ) -> Result<Arc<Tessellation>, String> {
+    ) -> Result<Arc<DisplayMesh>, String> {
         let key = TessellationKey::new(hash, deflection);
         if let Some(found) = self.lookup(key) {
             self.hits.fetch_add(1, Ordering::Relaxed);
-            return Ok(found);
+            return match found {
+                Cached::Mesh(mesh) => Ok(mesh),
+                Cached::Refused(reason) => Err(reason.to_string()),
+            };
         }
         self.misses.fetch_add(1, Ordering::Relaxed);
-        let tessellation =
-            Arc::new(solids::tessellate(solid, deflection).map_err(|e| e.to_string())?);
-        self.insert(key, Arc::clone(&tessellation));
-        Ok(tessellation)
+        let result = solids::tessellate_display(solid, deflection)
+            .map_err(|error| error.to_string())
+            .and_then(DisplayMesh::new);
+        match result {
+            Ok(mesh) => {
+                let mesh = Arc::new(mesh);
+                self.insert(key, Cached::Mesh(Arc::clone(&mesh)));
+                Ok(mesh)
+            }
+            Err(reason) => {
+                self.insert(key, Cached::Refused(Arc::from(reason.as_str())));
+                Err(reason)
+            }
+        }
     }
 
-    fn lookup(&self, key: TessellationKey) -> Option<Arc<Tessellation>> {
+    /// The display mesh a SUMMARY should read: whatever is cached for this
+    /// solid at either tier (the fine one preferred), or the fine one
+    /// computed — so an inspector read during a drag costs a lookup, not a
+    /// fine tessellation under the session lock.
+    ///
+    /// # Errors
+    ///
+    /// As [`SolidCache::tessellation`].
+    pub fn tessellation_for_summary(
+        &self,
+        hash: ValueHash,
+        solid: &Solid,
+        config: &ProjectConfig,
+    ) -> Result<Arc<DisplayMesh>, String> {
+        for tier in [DisplayTier::Fine, DisplayTier::Preview] {
+            let key = TessellationKey::new(hash, tier.deflection(config));
+            if let Some(found) = self.lookup(key) {
+                self.hits.fetch_add(1, Ordering::Relaxed);
+                return match found {
+                    Cached::Mesh(mesh) => Ok(mesh),
+                    Cached::Refused(reason) => Err(reason.to_string()),
+                };
+            }
+        }
+        self.tessellation(hash, solid, DisplayTier::Fine.deflection(config))
+    }
+
+    fn lookup(&self, key: TessellationKey) -> Option<Cached> {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let stamp = state.stamp();
         let entry = state.entries.get_mut(&key)?;
-        let found = Arc::clone(&entry.tessellation);
+        let found = match &entry.cached {
+            Cached::Mesh(mesh) => Cached::Mesh(Arc::clone(mesh)),
+            Cached::Refused(reason) => Cached::Refused(Arc::clone(reason)),
+        };
         let previous = std::mem::replace(&mut entry.touched, stamp);
         state.recency.remove(&previous);
         state.recency.insert(stamp, key);
         Some(found)
     }
 
-    fn insert(&self, key: TessellationKey, tessellation: Arc<Tessellation>) {
-        let size = mesh_bytes(&tessellation.mesh.0);
+    fn insert(&self, key: TessellationKey, cached: Cached) {
+        let size = match &cached {
+            Cached::Mesh(mesh) => mesh_bytes(mesh.mesh()),
+            Cached::Refused(reason) => reason.len(),
+        };
         if size > self.budget {
             // Nothing in the cache could make room for this; evicting
             // everything for an entry that still does not fit would only
@@ -271,14 +432,20 @@ impl SolidCache {
             };
             if let Some(evicted) = state.entries.remove(&oldest) {
                 state.bytes -= evicted.size;
+                if matches!(evicted.cached, Cached::Refused(_)) {
+                    state.refusals -= 1;
+                }
                 self.evictions.fetch_add(1, Ordering::Relaxed);
             }
+        }
+        if matches!(cached, Cached::Refused(_)) {
+            state.refusals += 1;
         }
         let touched = state.stamp();
         state.entries.insert(
             key,
             Entry {
-                tessellation,
+                cached,
                 size,
                 touched,
             },
@@ -302,6 +469,7 @@ impl SolidCache {
             misses: self.misses.load(Ordering::Relaxed),
             evictions: self.evictions.load(Ordering::Relaxed),
             oversized: self.oversized.load(Ordering::Relaxed),
+            refusals: state.refusals,
         }
     }
 }
@@ -310,6 +478,35 @@ impl SolidCache {
 /// and u32 indices.
 fn mesh_bytes(mesh: &Mesh) -> usize {
     std::mem::size_of_val(mesh.positions()) + std::mem::size_of_val(mesh.indices())
+}
+
+/// Every distinct `Solid` inside `values` (bare or in lists, by value
+/// hash), for the session to warm the cache with on the solve loop's
+/// workers before it takes its lock: `Scheduler::map_parallel` over this
+/// list, each item one `SolidCache::tessellation` at the pass's tier. A
+/// `Solid` is an `Arc` over its bytes, so the clones are cheap.
+#[must_use]
+pub fn distinct_solids(values: &[Arc<HashedValue>]) -> Vec<(ValueHash, Solid)> {
+    let mut seen: BTreeMap<ValueHash, Solid> = BTreeMap::new();
+    for value in values {
+        let (mut points, mut curves, mut meshes, mut solids) =
+            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        collect(
+            value,
+            None,
+            &mut points,
+            &mut curves,
+            &mut meshes,
+            &mut solids,
+        );
+        for (_, solid_value) in solids {
+            if let ValueData::Solid(solid) = solid_value.data() {
+                seen.entry(solid_value.hash())
+                    .or_insert_with(|| solid.clone());
+            }
+        }
+    }
+    seen.into_iter().collect()
 }
 
 /// What one output's frames contained (the `/debug/state` display report
@@ -339,11 +536,19 @@ pub struct DisplayStats {
     /// `triangles` too; additive, v0.1 item 3 WP-B).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub solids: usize,
+    /// The tier the solids were tessellated at (additive; present when a
+    /// solid was drawn).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<DisplayTier>,
     /// Elements that could not be drawn, with the reason (a solid in a
     /// build without the kernel, bytes the kernel refused). Additive;
     /// empty means everything drawable was drawn.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<String>,
+    /// Elements drawn with a caveat: a solid whose kernel mesh did not
+    /// close (drawn as is). Additive; empty means every solid's mesh closed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if signature
@@ -482,10 +687,14 @@ pub fn frames_for_value(
         }
     }
 
-    // Solids: tessellated through the cache, then drawn as meshes under
-    // their own value hash (identical solids instance like identical
-    // meshes). A solid that cannot be tessellated is reported, not drawn.
-    let mut tessellated: Vec<(u32, ValueHash, Arc<Tessellation>)> = Vec::new();
+    // Solids: tessellated through the cache at this pass's tier (a hit
+    // when the session warmed the cache on the solve loop's workers), then
+    // drawn as meshes under the DISPLAY MESH's value hash — identical
+    // solids at one deflection instance like identical meshes, and the same
+    // solid at another deflection is another blob. A mesh that did not
+    // close draws all the same, with a warning on record; a solid that
+    // cannot be tessellated is reported, not drawn.
+    let mut tessellated: Vec<(u32, Arc<DisplayMesh>)> = Vec::new();
     if !solids.is_empty() {
         let deflection = context.deflection();
         for (element, value) in &solids {
@@ -493,7 +702,15 @@ pub fn frames_for_value(
                 continue;
             };
             match context.solids.tessellation(value.hash(), solid, deflection) {
-                Ok(tessellation) => tessellated.push((*element, value.hash(), tessellation)),
+                Ok(mesh) => {
+                    if !mesh.watertight {
+                        out.stats.warnings.push(format!(
+                            "element {element} (Solid): the kernel's mesh does not close at \
+                             this deflection; drawn as is"
+                        ));
+                    }
+                    tessellated.push((*element, mesh));
+                }
                 Err(reason) => out
                     .stats
                     .errors
@@ -501,6 +718,9 @@ pub fn frames_for_value(
             }
         }
         out.stats.solids = tessellated.len();
+        if !tessellated.is_empty() {
+            out.stats.tier = Some(context.tier);
+        }
     }
 
     // Meshes: hash-driven instancing — a hash seen once goes inline; a
@@ -508,7 +728,8 @@ pub fn frames_for_value(
     // instances frame (identity transforms in the spike).
     if !meshes.is_empty() || !tessellated.is_empty() {
         // The element's VALUE hash is the interning key (docs/12) — no
-        // re-hashing: list slots are already-hashed values.
+        // re-hashing: list slots are already-hashed values, and a display
+        // mesh is sealed once when it is tessellated.
         let mut by_hash: BTreeMap<ValueHash, Vec<(u32, &Mesh)>> = BTreeMap::new();
         for (element, value) in &meshes {
             if let ValueData::Mesh(mesh) = value.data() {
@@ -518,11 +739,11 @@ pub fn frames_for_value(
                     .push((*element, mesh));
             }
         }
-        for (element, hash, tessellation) in &tessellated {
+        for (element, display) in &tessellated {
             by_hash
-                .entry(*hash)
+                .entry(display.hash())
                 .or_default()
-                .push((*element, &tessellation.mesh.0));
+                .push((*element, display.mesh()));
         }
         let mut batch = Batch::new();
         for (hash, group) in &by_hash {
@@ -786,6 +1007,7 @@ fn summarize_list(
         }
     }
     let mut faces = 0;
+    let mut unclosed = 0;
     let mut errors = Vec::new();
     for (element, value) in &solids {
         let ValueData::Solid(solid) = value.data() else {
@@ -793,12 +1015,15 @@ fn summarize_list(
         };
         match context
             .solids
-            .tessellation(value.hash(), solid, context.deflection())
+            .tessellation_for_summary(value.hash(), solid, context.config)
         {
-            Ok(tessellation) => {
-                stats.grow(tessellation.mesh.0.positions());
-                triangles += tessellation.mesh.0.triangle_count();
-                faces += tessellation.faces;
+            Ok(display) => {
+                stats.grow(display.mesh().positions());
+                triangles += display.mesh().triangle_count();
+                faces += display.faces;
+                if !display.watertight {
+                    unclosed += 1;
+                }
             }
             Err(reason) => errors.push(format!("element {element} (Solid): {reason}")),
         }
@@ -815,6 +1040,11 @@ fn summarize_list(
         summary
             .facts
             .insert("faces".to_owned(), serde_json::json!(faces));
+        if unclosed > 0 {
+            summary
+                .facts
+                .insert("unclosed".to_owned(), serde_json::json!(unclosed));
+        }
     }
     if !errors.is_empty() {
         summary
@@ -825,35 +1055,37 @@ fn summarize_list(
 }
 
 /// The solid arm of [`summarize`] — "Solid, N faces, bbox": the facts come
-/// from the display tessellation (a cache hit when the value is on screen);
-/// a solid the kernel cannot tessellate says why instead.
+/// from the display tessellation (a cache hit when the value is on screen,
+/// at whichever tier drew it); a solid the kernel cannot tessellate says
+/// why instead, and one whose mesh did not close says `watertight: false`.
 fn summarize_solid(
     value: &HashedValue,
     solid: &Solid,
     summary: &mut ValueSummary,
     context: &DisplayContext<'_>,
 ) {
-    // "Solid, N faces, bbox": the facts come from the display
-    // tessellation (a cache hit when the value is on screen); a
-    // solid the kernel cannot tessellate says why instead.
     summary.samples = vec![render(value)];
     summary
         .facts
         .insert("bytes".to_owned(), serde_json::json!(solid.bytes().len()));
     match context
         .solids
-        .tessellation(value.hash(), solid, context.deflection())
+        .tessellation_for_summary(value.hash(), solid, context.config)
     {
-        Ok(tessellation) => {
+        Ok(display) => {
             summary
                 .facts
-                .insert("faces".to_owned(), serde_json::json!(tessellation.faces));
+                .insert("faces".to_owned(), serde_json::json!(display.faces));
             summary.facts.insert(
                 "triangles".to_owned(),
-                serde_json::json!(tessellation.mesh.0.triangle_count()),
+                serde_json::json!(display.mesh().triangle_count()),
+            );
+            summary.facts.insert(
+                "watertight".to_owned(),
+                serde_json::json!(display.watertight),
             );
             let mut stats = DisplayStats::default();
-            stats.grow(tessellation.mesh.0.positions());
+            stats.grow(display.mesh().positions());
             summary.bounds = stats.bounds;
         }
         Err(reason) => {
@@ -934,7 +1166,7 @@ pub fn render(value: &HashedValue) -> String {
 mod tests {
     use super::*;
     use crate::frames::{Frame, decode};
-    use cicada_core::spatial::Point;
+    use cicada_core::spatial::{Plane, Point};
     use cicada_core::value::List;
     use std::sync::Arc;
 
@@ -942,7 +1174,8 @@ mod tests {
         HashedValue::new(ValueData::Point(Point::new(x, 0.0, 0.0))).unwrap()
     }
 
-    /// A default project and a fresh cache — what the session hands in.
+    /// A default project and a fresh cache — what the session hands in —
+    /// at a tier.
     struct TestContext {
         config: ProjectConfig,
         solids: SolidCache,
@@ -964,17 +1197,21 @@ mod tests {
         }
 
         fn context(&self) -> DisplayContext<'_> {
+            self.at(DisplayTier::Fine)
+        }
+
+        fn at(&self, tier: DisplayTier) -> DisplayContext<'_> {
             DisplayContext {
                 config: &self.config,
                 solids: &self.solids,
+                tier,
             }
         }
     }
 
     /// The probe's 10 × 20 × 30 box at the origin: real canonical bytes
     /// (WP-A's golden `e220198a…`), committed so these tests draw a real
-    /// solid when the kernel is linked and assert the typed refusal when
-    /// it is not.
+    /// solid.
     fn probe_box() -> Arc<HashedValue> {
         let bytes = include_bytes!("../tests/fixtures/box-10x20x30.brep.bin");
         assert_eq!(bytes.len(), 4494);
@@ -982,6 +1219,20 @@ mod tests {
             Solid::from_canonical_bytes(bytes.to_vec()).unwrap(),
         ))
         .unwrap()
+    }
+
+    /// A curved solid — radius 1, height 2 — whose display mesh depends on
+    /// the deflection (a box's does not).
+    fn cylinder() -> Arc<HashedValue> {
+        let solid = solids::cylinder(&Plane::world_xy(), 1.0, 2.0, 1e-6).unwrap();
+        HashedValue::new(ValueData::Solid(solid)).unwrap()
+    }
+
+    fn solid_of(value: &HashedValue) -> &Solid {
+        let ValueData::Solid(solid) = value.data() else {
+            panic!("solid")
+        };
+        solid
     }
 
     fn tetra(offset: f64) -> Mesh {
@@ -1003,6 +1254,18 @@ mod tests {
             vec![0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3],
         )
         .unwrap()
+    }
+
+    #[test]
+    fn the_server_tests_run_in_the_kernel_world() {
+        // cicada-server depends on cicada-geom with its default features,
+        // and `occt` is a default feature since WP-C: every solid test below
+        // draws through the real kernel. A build that turned it off would
+        // make them vacuous — this says so instead of passing quietly.
+        assert!(
+            solids::kernel_available(),
+            "cicada-server's display tests need the OCCT kernel (cicada-geom feature `occt`)"
+        );
     }
 
     #[test]
@@ -1107,13 +1370,11 @@ mod tests {
 
     // ------------------------------------------------------------ solids --
 
-    /// One element of a drawn list, or one bare value: the box as the
-    /// display path reports it. Both worlds are asserted — with the kernel
-    /// a real cube; without, the typed refusal in the stats — so the test
-    /// never passes vacuously.
+    /// One bare solid: the box as the display path reports it — a real
+    /// cube through the kernel, one miss for the frames, hits after.
     #[test]
     #[allow(clippy::float_cmp)] // exact bounds from exact planar geometry
-    fn a_solid_draws_as_mesh_frames_through_the_cache_or_says_why() {
+    fn a_solid_draws_as_mesh_frames_through_the_cache() {
         let test = TestContext::new();
         let solid = probe_box();
         assert!(is_drawable(&solid));
@@ -1123,68 +1384,51 @@ mod tests {
         assert_eq!(summary.kind, "Solid");
         assert_eq!(summary.facts["bytes"], 4494);
         assert_eq!(summary.samples, vec!["Solid(4494 bytes)"]);
-        if solids::kernel_available() {
-            assert_eq!(out.stats.kinds, vec!["mesh"]);
-            assert_eq!(out.stats.solids, 1);
-            assert_eq!(out.stats.elements, 1);
-            assert_eq!(out.stats.triangles, 12);
-            assert_eq!(out.stats.vertices, 8);
-            assert!(out.stats.errors.is_empty(), "{:?}", out.stats.errors);
-            assert_eq!(
-                out.stats.bounds,
-                Some([[0.0, 0.0, 0.0], [10.0, 20.0, 30.0]])
-            );
-            let Frame::Batch { header, batch } = decode(&out.frames[0]).unwrap() else {
-                panic!("mesh batch")
-            };
-            assert_eq!(header.kind, FrameKind::Mesh);
-            assert_eq!((header.node, header.output), (7, 0));
-            assert_eq!(batch.elements.len(), 1);
-            assert_eq!(picks.resolve(batch.elements[0].pick_id), Some((7, 0, 0)));
-            // The summary: "Solid, N faces, bbox".
-            assert_eq!(summary.facts["faces"], 6);
-            assert_eq!(summary.facts["triangles"], 12);
-            assert_eq!(summary.bounds, Some([[0.0, 0.0, 0.0], [10.0, 20.0, 30.0]]));
-            assert!(!summary.facts.contains_key("error"));
-            // One miss for the frames, one hit for the summary.
-            let stats = test.solids.stats();
-            assert_eq!((stats.misses, stats.hits, stats.entries), (1, 1, 1));
-            assert_eq!(stats.bytes, 8 * 3 * 8 + 12 * 3 * 4);
-            // Drawing it again is a hit, not a kernel call.
-            let again = frames_for_value(&solid, 2, 7, 0, &mut picks, &test.context());
-            assert_eq!(again.stats.triangles, 12);
-            assert_eq!(test.solids.stats().hits, 2);
-            assert_eq!(test.solids.stats().misses, 1);
-        } else {
-            // No kernel: nothing drawn, the reason on record, a clear frame.
-            assert_eq!(out.stats.kinds, vec!["clear"]);
-            assert_eq!(out.stats.solids, 0);
-            assert_eq!(out.stats.elements, 0);
-            assert_eq!(out.stats.errors.len(), 1);
-            assert!(
-                out.stats.errors[0].contains("element 0 (Solid)")
-                    && out.stats.errors[0].contains("OCCT")
-                    && out.stats.errors[0].contains("feature `occt`"),
-                "{}",
-                out.stats.errors[0]
-            );
-            assert!(
-                summary.facts["error"]
-                    .as_str()
-                    .unwrap()
-                    .contains("feature `occt`"),
-                "{:?}",
-                summary.facts
-            );
-            assert!(summary.bounds.is_none());
-            // Errors are not cached: two misses, no entries.
-            let stats = test.solids.stats();
-            assert_eq!((stats.misses, stats.hits, stats.entries), (2, 0, 0));
-        }
+        assert_eq!(out.stats.kinds, vec!["mesh"]);
+        assert_eq!(out.stats.solids, 1);
+        assert_eq!(out.stats.tier, Some(DisplayTier::Fine));
+        assert_eq!(out.stats.elements, 1);
+        assert_eq!(out.stats.triangles, 12);
+        assert_eq!(out.stats.vertices, 8);
+        assert!(out.stats.errors.is_empty(), "{:?}", out.stats.errors);
+        assert!(out.stats.warnings.is_empty(), "{:?}", out.stats.warnings);
+        assert_eq!(
+            out.stats.bounds,
+            Some([[0.0, 0.0, 0.0], [10.0, 20.0, 30.0]])
+        );
+        let Frame::Batch { header, batch } = decode(&out.frames[0]).unwrap() else {
+            panic!("mesh batch")
+        };
+        assert_eq!(header.kind, FrameKind::Mesh);
+        assert_eq!((header.node, header.output), (7, 0));
+        assert_eq!(batch.elements.len(), 1);
+        assert_eq!(picks.resolve(batch.elements[0].pick_id), Some((7, 0, 0)));
+        // The summary: "Solid, N faces, bbox", closed.
+        assert_eq!(summary.facts["faces"], 6);
+        assert_eq!(summary.facts["triangles"], 12);
+        assert_eq!(summary.facts["watertight"], true);
+        assert_eq!(summary.bounds, Some([[0.0, 0.0, 0.0], [10.0, 20.0, 30.0]]));
+        assert!(!summary.facts.contains_key("error"));
+        // One miss for the frames, one hit for the summary.
+        let stats = test.solids.stats();
+        assert_eq!((stats.misses, stats.hits, stats.entries), (1, 1, 1));
+        assert_eq!(stats.bytes, 8 * 3 * 8 + 12 * 3 * 4);
+        assert_eq!(stats.refusals, 0);
+        // Drawing it again is a hit, not a kernel call.
+        let again = frames_for_value(&solid, 2, 7, 0, &mut picks, &test.context());
+        assert_eq!(again.stats.triangles, 12);
+        assert_eq!(test.solids.stats().hits, 2);
+        assert_eq!(test.solids.stats().misses, 1);
+        // The JSON the debug state carries: `tier` is a lowercase word,
+        // `warnings` is omitted when empty.
+        let json = serde_json::to_value(&out.stats).unwrap();
+        assert_eq!(json["tier"], "fine");
+        assert!(json.get("warnings").is_none());
+        assert!(json.get("errors").is_none());
     }
 
     #[test]
-    fn identical_solids_in_a_list_instance_under_their_value_hash() {
+    fn identical_solids_in_a_list_instance_under_the_display_meshs_hash() {
         let test = TestContext::new();
         let solid = probe_box();
         let list = HashedValue::new(ValueData::List(List {
@@ -1199,70 +1443,296 @@ mod tests {
         assert_eq!(summary.count, Some(3));
         assert_eq!(summary.facts["element_kind"], "Solid");
         assert_eq!(summary.facts["solids"], 2);
-        if solids::kernel_available() {
-            assert_eq!(out.stats.solids, 2);
-            assert_eq!(out.stats.instanced, 2);
-            assert_eq!(out.stats.triangles, 24);
-            let kinds: Vec<FrameKind> = out
-                .frames
+        assert!(!summary.facts.contains_key("unclosed"));
+        assert_eq!(out.stats.solids, 2);
+        assert_eq!(out.stats.instanced, 2);
+        assert_eq!(out.stats.triangles, 24);
+        let kinds: Vec<FrameKind> = out
+            .frames
+            .iter()
+            .map(|bytes| decode(bytes).unwrap().header().kind)
+            .collect();
+        assert_eq!(kinds, vec![FrameKind::MeshBlob, FrameKind::Instances]);
+        let Frame::MeshBlob { hash, .. } = decode(&out.frames[0]).unwrap() else {
+            panic!("blob")
+        };
+        // The blob is keyed by the DISPLAY MESH's content hash — the hash
+        // the same mesh would have as a Mesh value — not by the solid's
+        // (whose content is independent of the deflection).
+        assert_ne!(hash, solid.hash(), "not the Solid's hash");
+        let cached = test
+            .solids
+            .tessellation(solid.hash(), solid_of(&solid), test.context().deflection())
+            .unwrap();
+        assert_eq!(hash, cached.hash());
+        let as_mesh_value = HashedValue::new(ValueData::Mesh(cached.mesh().clone())).unwrap();
+        assert_eq!(hash, as_mesh_value.hash(), "content-addressed like a Mesh");
+        let Frame::Instances { instances, .. } = decode(&out.frames[1]).unwrap() else {
+            panic!("instances")
+        };
+        assert_eq!(
+            instances
                 .iter()
-                .map(|bytes| decode(bytes).unwrap().header().kind)
-                .collect();
-            assert_eq!(kinds, vec![FrameKind::MeshBlob, FrameKind::Instances]);
+                .map(|i| i.element_index)
+                .collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+        assert_eq!(summary.facts["faces"], 12);
+        assert_eq!(summary.facts["triangles"], 24);
+        // The two elements share one value: one miss, then hits.
+        let stats = test.solids.stats();
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.entries, 1);
+    }
+
+    /// The review's protocol finding: the client caches blobs by hash
+    /// forever, so a blob's hash must BE its content. A curved solid drawn
+    /// at the preview tier and again at the fine tier is two meshes → two
+    /// blob hashes; a box's mesh is the same at any deflection → one.
+    #[test]
+    fn two_deflections_of_one_solid_are_two_blobs() {
+        let test = TestContext::new();
+        let round = cylinder();
+        let list = HashedValue::new(ValueData::List(List {
+            axis: None,
+            slots: vec![Some(round.clone()), Some(round.clone())],
+        }))
+        .unwrap();
+        let mut picks = PickTable::default();
+        let blob_hash = |out: &DisplayFrames| {
             let Frame::MeshBlob { hash, .. } = decode(&out.frames[0]).unwrap() else {
                 panic!("blob")
             };
-            assert_eq!(
-                hash,
-                solid.hash(),
-                "the blob is keyed by the SOLID's value hash"
-            );
-            let Frame::Instances { instances, .. } = decode(&out.frames[1]).unwrap() else {
-                panic!("instances")
-            };
-            assert_eq!(
-                instances
-                    .iter()
-                    .map(|i| i.element_index)
-                    .collect::<Vec<_>>(),
-                vec![0, 2]
-            );
-            assert_eq!(summary.facts["faces"], 12);
-            assert_eq!(summary.facts["triangles"], 24);
-            // The two elements share one value: one miss, then hits.
-            let stats = test.solids.stats();
-            assert_eq!(stats.misses, 1);
-            assert_eq!(stats.entries, 1);
-        } else {
-            assert_eq!(out.stats.errors.len(), 2);
-            assert_eq!(out.stats.kinds, vec!["clear"]);
-            assert!(summary.facts["error"].as_str().unwrap().contains("occt"));
-        }
+            hash
+        };
+        let preview = frames_for_value(&list, 1, 1, 0, &mut picks, &test.at(DisplayTier::Preview));
+        let fine = frames_for_value(&list, 2, 1, 0, &mut picks, &test.at(DisplayTier::Fine));
+        assert_eq!(preview.stats.tier, Some(DisplayTier::Preview));
+        assert_eq!(fine.stats.tier, Some(DisplayTier::Fine));
+        assert!(
+            preview.stats.triangles < fine.stats.triangles,
+            "preview {} vs fine {} triangles",
+            preview.stats.triangles,
+            fine.stats.triangles
+        );
+        assert_ne!(
+            blob_hash(&preview),
+            blob_hash(&fine),
+            "two deflections, two blobs"
+        );
+        assert_eq!(test.solids.stats().entries, 2, "two keys in the cache");
+        // A second fine pass is the same blob: content-addressed both ways.
+        let fine_again = frames_for_value(&list, 3, 1, 0, &mut picks, &test.at(DisplayTier::Fine));
+        assert_eq!(blob_hash(&fine), blob_hash(&fine_again));
+        // The box: deflection-independent mesh, one blob hash at both tiers.
+        let flat = probe_box();
+        let boxes = HashedValue::new(ValueData::List(List {
+            axis: None,
+            slots: vec![Some(flat.clone()), Some(flat)],
+        }))
+        .unwrap();
+        let a = frames_for_value(&boxes, 4, 2, 0, &mut picks, &test.at(DisplayTier::Preview));
+        let b = frames_for_value(&boxes, 5, 2, 0, &mut picks, &test.at(DisplayTier::Fine));
+        assert_eq!(blob_hash(&a), blob_hash(&b));
+        // The summary reads whatever tier is cached, the fine one first.
+        let before = test.solids.stats();
+        let summary = summarize(&round, &test.context());
+        assert_eq!(summary.facts["triangles"], fine.stats.triangles / 2);
+        assert_eq!(test.solids.stats().misses, before.misses, "no kernel call");
+    }
+
+    /// The display deflection's relative term: a solid 4 m long is meshed
+    /// at 1/1000 of its extent (4 mm), not at 0.02 mm — the deflection the
+    /// cache entry records says so.
+    #[test]
+    fn giant_solids_are_meshed_at_the_relative_deflection() {
+        let test = TestContext::new();
+        let bar = solids::box_at(
+            Point::origin(),
+            cicada_core::spatial::Vector::new(4000.0, 40.0, 10.0),
+        )
+        .unwrap();
+        let value = HashedValue::new(ValueData::Solid(bar.clone())).unwrap();
+        let cached = test
+            .solids
+            .tessellation(value.hash(), &bar, test.context().deflection())
+            .unwrap();
+        assert!((cached.deflection.linear() - 4.0).abs() < 1e-12);
+        assert!((cached.deflection.angular() - 0.1).abs() < 1e-12);
+        // The probe box is 30 long: 0.03, just above the physical floor.
+        let medium = probe_box();
+        let cached = test
+            .solids
+            .tessellation(
+                medium.hash(),
+                solid_of(&medium),
+                test.context().deflection(),
+            )
+            .unwrap();
+        assert!((cached.deflection.linear() - 0.03).abs() < 1e-12);
+        // A small part keeps the physical floor (0.02 mm in a mm document).
+        let small = solids::box_at(
+            Point::origin(),
+            cicada_core::spatial::Vector::new(5.0, 5.0, 5.0),
+        )
+        .unwrap();
+        let value = HashedValue::new(ValueData::Solid(small.clone())).unwrap();
+        let cached = test
+            .solids
+            .tessellation(value.hash(), &small, test.context().deflection())
+            .unwrap();
+        assert!((cached.deflection.linear() - 0.02).abs() < 1e-12);
+        // And the preview tier's floor is 0.1 mm / 0.3 rad.
+        let cached = test
+            .solids
+            .tessellation(
+                value.hash(),
+                &small,
+                test.at(DisplayTier::Preview).deflection(),
+            )
+            .unwrap();
+        assert!((cached.deflection.linear() - 0.1).abs() < 1e-12);
+        assert!((cached.deflection.angular() - 0.3).abs() < 1e-12);
+    }
+
+    /// An open display mesh — the tetrahedron minus one face — inserted
+    /// under a solid's key: the display path draws it (a green Solid never
+    /// vanishes), the stats warn, the summary says `watertight: false`.
+    #[test]
+    fn an_unclosed_mesh_still_draws_with_a_warning() {
+        let test = TestContext::new();
+        let solid = probe_box();
+        let context = test.context();
+        let open = Mesh::new(
+            vec![
+                0.0, 0.0, 0.0, //
+                1.0, 0.0, 0.0, //
+                0.0, 1.0, 0.0, //
+                0.0, 0.0, 1.0,
+            ],
+            vec![0, 2, 1, 0, 1, 3, 0, 3, 2],
+        )
+        .unwrap();
+        assert!(!open.is_watertight());
+        test.solids.insert(
+            TessellationKey::new(solid.hash(), context.deflection()),
+            Cached::Mesh(Arc::new(
+                DisplayMesh::new(solids::DisplayTessellation {
+                    mesh: open,
+                    watertight: false,
+                    faces: 6,
+                    deflection: context.deflection(),
+                })
+                .unwrap(),
+            )),
+        );
+        let out = frames_for_value(&solid, 1, 3, 0, &mut PickTable::default(), &context);
+        assert_eq!(out.stats.kinds, vec!["mesh"], "drawn");
+        assert_eq!(out.stats.solids, 1);
+        assert_eq!(out.stats.triangles, 3);
+        assert!(out.stats.errors.is_empty());
+        assert_eq!(
+            out.stats.warnings,
+            vec![
+                "element 0 (Solid): the kernel's mesh does not close at this deflection; drawn \
+                 as is"
+            ]
+        );
+        let summary = summarize(&solid, &context);
+        assert_eq!(summary.facts["watertight"], false);
+        assert_eq!(summary.facts["triangles"], 3);
+        assert!(!summary.facts.contains_key("error"));
+        // In a list the caveat is a count.
+        let list = HashedValue::new(ValueData::List(List {
+            axis: None,
+            slots: vec![Some(solid.clone()), Some(solid)],
+        }))
+        .unwrap();
+        let out = frames_for_value(&list, 2, 3, 0, &mut PickTable::default(), &context);
+        assert_eq!(out.stats.warnings.len(), 2);
+        assert_eq!(out.stats.instanced, 2);
+        let summary = summarize(&list, &context);
+        assert_eq!(summary.facts["unclosed"], 2);
+        assert_eq!(test.solids.stats().misses, 0, "every read was a hit");
+    }
+
+    #[test]
+    fn refusals_are_cached_as_negative_entries() {
+        // Core accepts the header alone; the kernel does not. The refusal
+        // is on record, drawn as a clear frame — and cached, so the next
+        // pass over the same bytes does not re-pay the kernel call.
+        let test = TestContext::new();
+        let pseudo = HashedValue::new(ValueData::Solid(
+            Solid::from_canonical_bytes(cicada_core::geometry::SOLID_CANONICAL_HEADER.to_vec())
+                .unwrap(),
+        ))
+        .unwrap();
+        let out = frames_for_value(&pseudo, 1, 1, 0, &mut PickTable::default(), &test.context());
+        assert_eq!(out.stats.kinds, vec!["clear"]);
+        assert_eq!(out.stats.errors.len(), 1);
+        assert!(out.stats.errors[0].starts_with("element 0 (Solid): "));
+        assert!(out.stats.warnings.is_empty());
+        let summary = summarize(&pseudo, &test.context());
+        let error = summary.facts["error"].as_str().unwrap().to_owned();
+        assert!(error.contains("OCCT"), "{error}");
+        let stats = test.solids.stats();
+        assert_eq!(
+            (stats.misses, stats.hits),
+            (1, 1),
+            "the summary hit the refusal"
+        );
+        assert_eq!((stats.entries, stats.refusals), (1, 1));
+        assert_eq!(stats.bytes, error.len(), "a refusal counts its text");
+        // Drawn again: a hit, the same text.
+        let again = frames_for_value(&pseudo, 2, 1, 0, &mut PickTable::default(), &test.context());
+        assert_eq!(again.stats.errors, out.stats.errors);
+        assert_eq!(test.solids.stats().misses, 1);
+        // Evicted like any entry: a budget too small for the text keeps
+        // nothing (oversized), and the refusal is re-derived each time.
+        let tiny = TestContext::with_budget(8);
+        let _ = frames_for_value(&pseudo, 1, 1, 0, &mut PickTable::default(), &tiny.context());
+        let _ = frames_for_value(&pseudo, 2, 1, 0, &mut PickTable::default(), &tiny.context());
+        let stats = tiny.solids.stats();
+        assert_eq!((stats.entries, stats.refusals, stats.oversized), (0, 0, 2));
+        assert_eq!(stats.misses, 2);
+    }
+
+    #[test]
+    fn distinct_solids_dedups_by_hash_through_nested_lists() {
+        let solid = probe_box();
+        let round = cylinder();
+        let inner = HashedValue::new(ValueData::List(List {
+            axis: None,
+            slots: vec![Some(round.clone()), Some(solid.clone()), None],
+        }))
+        .unwrap();
+        let outer = HashedValue::new(ValueData::List(List {
+            axis: Some(Arc::from("part")),
+            slots: vec![Some(solid.clone()), Some(inner), Some(point(1.0))],
+        }))
+        .unwrap();
+        let distinct = distinct_solids(&[outer, solid.clone(), point(2.0)]);
+        let hashes: Vec<ValueHash> = distinct.iter().map(|(hash, _)| *hash).collect();
+        let mut expected = vec![solid.hash(), round.hash()];
+        expected.sort();
+        assert_eq!(hashes, expected, "each solid once, in hash order");
+        assert_eq!(
+            distinct[0].1.bytes().len() + distinct[1].1.bytes().len(),
+            solid_of(&solid).bytes().len() + solid_of(&round).bytes().len()
+        );
+        assert!(distinct_solids(&[point(0.0)]).is_empty());
     }
 
     #[test]
     fn the_cache_evicts_least_recently_used_within_its_budget() {
-        // Only meaningful with the kernel (nothing is cached otherwise);
-        // the default build asserts that instead.
         let solid = probe_box();
-        let ValueData::Solid(bytes) = solid.data() else {
-            panic!("solid")
-        };
+        let bytes = solid_of(&solid);
         // A cube's display mesh is 8 vertices + 12 triangles = 336 bytes.
         let test = TestContext::with_budget(700);
         let context = test.context();
         let deflection = context.deflection();
         let coarser = Deflection::new(deflection.linear() * 2.0, deflection.angular()).unwrap();
         let finer = Deflection::new(deflection.linear() / 2.0, deflection.angular()).unwrap();
-        if !solids::kernel_available() {
-            assert!(
-                test.solids
-                    .tessellation(solid.hash(), bytes, deflection)
-                    .is_err()
-            );
-            assert_eq!(test.solids.stats().entries, 0);
-            return;
-        }
         // Three distinct keys (one value, three deflections) at 336 B each
         // against a 700 B budget: the third insert evicts the oldest.
         test.solids
@@ -1296,11 +1766,11 @@ mod tests {
         assert_eq!(test.solids.stats().misses, before.misses + 1);
     }
 
-    /// A synthetic tessellation the tests can key and size without the
+    /// A synthetic display mesh the tests can key and size without the
     /// kernel: a tetrahedron (4 vertices × 24 B + 4 triangles × 12 B =
     /// 144 B as the cache counts it) with `faces` set to `tag` so entries
     /// are distinguishable.
-    fn synthetic(tag: usize) -> Arc<Tessellation> {
+    fn synthetic(tag: usize) -> Cached {
         let mesh = Mesh::new(
             vec![
                 0.0, 0.0, 0.0, //
@@ -1313,10 +1783,22 @@ mod tests {
         .unwrap();
         assert!(mesh.is_watertight());
         assert_eq!(mesh_bytes(&mesh), 144);
-        Arc::new(Tessellation {
-            mesh: cicada_core::geometry::Watertight(mesh),
-            faces: tag,
-        })
+        Cached::Mesh(Arc::new(
+            DisplayMesh::new(solids::DisplayTessellation {
+                mesh,
+                watertight: true,
+                faces: tag,
+                deflection: Deflection::new(0.02, 0.1).unwrap(),
+            })
+            .unwrap(),
+        ))
+    }
+
+    fn faces_of(cached: &Cached) -> usize {
+        match cached {
+            Cached::Mesh(mesh) => mesh.faces,
+            Cached::Refused(reason) => panic!("a refusal: {reason}"),
+        }
     }
 
     fn synthetic_key(tag: u64) -> TessellationKey {
@@ -1327,7 +1809,7 @@ mod tests {
     }
 
     #[test]
-    fn recency_order_holds_at_scale_without_the_kernel() {
+    fn recency_order_holds_at_scale() {
         // The recency index replaced a linear scan; this is its contract at
         // a size where the scan would have mattered (the wall's part count
         // and then some): 2,000 entries in, every even one re-touched, then
@@ -1342,7 +1824,7 @@ mod tests {
         assert_eq!(cache.stats().bytes, usize::try_from(N).unwrap() * 144);
         for tag in (0..N).step_by(2) {
             let found = cache.lookup(synthetic_key(tag)).expect("present");
-            assert_eq!(found.faces, usize::try_from(tag).unwrap());
+            assert_eq!(faces_of(&found), usize::try_from(tag).unwrap());
         }
         // N/2 new entries: the budget is full, so N/2 evictions, the least
         // recently used first — the odd tags, never an even one.
@@ -1377,7 +1859,7 @@ mod tests {
 
     /// A second synthetic size: an octahedron (6 vertices × 24 B + 8
     /// triangles × 12 B = 240 B).
-    fn synthetic_octahedron() -> Arc<Tessellation> {
+    fn synthetic_octahedron() -> Cached {
         let mesh = Mesh::new(
             vec![
                 1.0, 0.0, 0.0, //
@@ -1395,10 +1877,15 @@ mod tests {
         .unwrap();
         assert!(mesh.is_watertight());
         assert_eq!(mesh_bytes(&mesh), 240);
-        Arc::new(Tessellation {
-            mesh: cicada_core::geometry::Watertight(mesh),
-            faces: 8,
-        })
+        Cached::Mesh(Arc::new(
+            DisplayMesh::new(solids::DisplayTessellation {
+                mesh,
+                watertight: true,
+                faces: 8,
+                deflection: Deflection::new(0.02, 0.1).unwrap(),
+            })
+            .unwrap(),
+        ))
     }
 
     #[test]
@@ -1425,23 +1912,15 @@ mod tests {
         exact.insert(synthetic_key(2), synthetic_octahedron());
         assert_eq!(exact.stats().entries, 1);
         assert_eq!(exact.stats().oversized, 0);
-    }
-
-    #[test]
-    fn bad_solid_bytes_are_an_error_on_record_not_a_crash() {
-        // Core accepts the header alone; the kernel does not. Either way
-        // the display path reports and moves on.
-        let test = TestContext::new();
-        let pseudo = HashedValue::new(ValueData::Solid(
-            Solid::from_canonical_bytes(cicada_core::geometry::SOLID_CANONICAL_HEADER.to_vec())
-                .unwrap(),
-        ))
-        .unwrap();
-        let out = frames_for_value(&pseudo, 1, 1, 0, &mut PickTable::default(), &test.context());
-        assert_eq!(out.stats.kinds, vec!["clear"]);
-        assert_eq!(out.stats.errors.len(), 1);
-        let summary = summarize(&pseudo, &test.context());
-        assert!(summary.facts.contains_key("error"), "{:?}", summary.facts);
-        assert_eq!(test.solids.stats().entries, 0, "errors are never cached");
+        // A refusal evicts and is evicted like a mesh: 144 + 10 > 150.
+        let mixed = SolidCache::new(150);
+        mixed.insert(synthetic_key(1), synthetic(1));
+        mixed.insert(synthetic_key(2), Cached::Refused(Arc::from("0123456789")));
+        let stats = mixed.stats();
+        assert_eq!((stats.entries, stats.refusals, stats.evictions), (1, 1, 1));
+        assert_eq!(stats.bytes, 10);
+        mixed.insert(synthetic_key(3), synthetic(3));
+        let stats = mixed.stats();
+        assert_eq!((stats.entries, stats.refusals, stats.evictions), (1, 0, 2));
     }
 }

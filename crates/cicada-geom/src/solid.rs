@@ -15,11 +15,18 @@
 //! # The display deflection
 //!
 //! A solid is drawn through tessellation at a deflection derived from the
-//! project's tolerance and unit ([`Deflection::display`]):
+//! project's tolerance and unit, in two tiers — the FINE tier
+//! ([`Deflection::display`]) for structural generations and the viewport
+//! at rest, the PREVIEW tier ([`Deflection::preview`]) for the
+//! generations of a slider drag, which the release refines:
 //!
 //! ```text
-//! linear  = max(DISPLAY_DEFLECTION_MM / unit.millimeters(), tol)
-//! angular = max(DISPLAY_ANGULAR_RAD, tol_angle)
+//! fine:     linear  = max(DISPLAY_DEFLECTION_MM / unit.millimeters(), tol)
+//!           angular = max(DISPLAY_ANGULAR_RAD, tol_angle)
+//! preview:  linear  = max(PREVIEW_DEFLECTION_MM / unit.millimeters(), tol)
+//!           angular = max(PREVIEW_ANGULAR_RAD, tol_angle)
+//! per solid (both tiers, tessellate_display):
+//!           linear  = max(linear, DISPLAY_RELATIVE × max extent of the solid's bounds)
 //! ```
 //!
 //! [`DISPLAY_DEFLECTION_MM`] is a PHYSICAL chord deviation (0.02 mm) so the
@@ -29,9 +36,26 @@
 //! default `tol = 1e-6` it never binds). [`DISPLAY_ANGULAR_RAD`] (0.1 rad
 //! ≈ 5.7°) gives a full turn ~63 facets — the analytic curves' display
 //! tessellation uses 64 segments per circle — and is floored at the
-//! angular tolerance for the same reason. The deflection is NOT part of a
-//! solid's identity: display tessellations live in the server's
-//! hash-keyed display cache, never in the value (docs/12).
+//! angular tolerance for the same reason. The preview tier
+//! ([`PREVIEW_DEFLECTION_MM`] 0.1 mm, [`PREVIEW_ANGULAR_RAD`] 0.3 rad ≈ 21
+//! facets per turn) is what a drag can afford: measured on the 02-solids
+//! carve, 3 ms against 23 ms at the fine tier (docs/17 §Item 3). The
+//! relative term ([`DISPLAY_RELATIVE`], 1/1000 of the part's largest
+//! extent — OCCT's own viewer convention, `Prs3d_Drawer`'s deviation
+//! coefficient) keeps a giant smooth part from drowning in triangles: a
+//! 2 m sphere at 0.02 mm would need ~700 facets per turn; at 2 mm the
+//! angular term decides and it gets the same ~63 as a small one. The
+//! deflection is NOT part of a solid's identity: display tessellations
+//! live in the server's hash-keyed display cache, never in the value
+//! (docs/12).
+//!
+//! Closure is the NODE's contract, not display's: [`tessellate`] returns
+//! `Watertight<Mesh>` or refuses, because the mesh tier needs a closed
+//! mesh; [`tessellate_display`] returns the welded mesh whether or not it
+//! closed and says which ([`DisplayTessellation::watertight`]), because a
+//! green Solid must never vanish from the viewport — the kernel's mesher
+//! can hand back non-conforming face triangulations for a valid solid
+//! (the moved-sphere-minus-cylinder regression in `occt/tests.rs`).
 
 use cicada_core::config::ProjectConfig;
 use cicada_core::geometry::{Curve, Mesh, Solid, Watertight};
@@ -50,6 +74,19 @@ pub const DISPLAY_DEFLECTION_MM: f64 = 0.02;
 
 /// The angular deviation of a display tessellation, in radians.
 pub const DISPLAY_ANGULAR_RAD: f64 = 0.1;
+
+/// The physical chord deviation of a PREVIEW tessellation (the generations
+/// of a slider drag), in millimetres.
+pub const PREVIEW_DEFLECTION_MM: f64 = 0.1;
+
+/// The angular deviation of a preview tessellation, in radians (~21 facets
+/// per full turn).
+pub const PREVIEW_ANGULAR_RAD: f64 = 0.3;
+
+/// The relative term of a display tessellation: the linear deflection is
+/// at least this fraction of the solid's largest bounding-box extent
+/// (OCCT's viewer uses the same 0.001 as its deviation coefficient).
+pub const DISPLAY_RELATIVE: f64 = 0.001;
 
 /// The finest linear deflection a [`Deflection`] admits: OCCT's
 /// `Precision::Confusion()` (1e-7). `BRepMesh_IncrementalMesh` throws
@@ -117,6 +154,32 @@ impl Deflection {
         Self { linear, angular }
     }
 
+    /// The preview-tier display deflection for a project — the module
+    /// docs' formula with the preview constants. Infallible for the same
+    /// reason as [`Deflection::display`] (coarser on both axes).
+    #[must_use]
+    pub fn preview(config: &ProjectConfig) -> Self {
+        let linear = (PREVIEW_DEFLECTION_MM / config.unit().millimeters()).max(config.tol());
+        let angular = PREVIEW_ANGULAR_RAD.max(config.tol_angle());
+        Self { linear, angular }
+    }
+
+    /// The deflection for drawing a solid whose largest bounding-box extent
+    /// is `extent`: the linear deflection raised to [`DISPLAY_RELATIVE`] ×
+    /// `extent` when that is coarser (the module docs' relative term); the
+    /// angular deflection is unchanged. A non-finite or non-positive extent
+    /// leaves the deflection as it is.
+    #[must_use]
+    pub fn for_extent(self, extent: f64) -> Self {
+        if !(extent.is_finite() && extent > 0.0) {
+            return self;
+        }
+        Self {
+            linear: self.linear.max(DISPLAY_RELATIVE * extent),
+            angular: self.angular,
+        }
+    }
+
     /// Absolute linear deflection, document units.
     #[must_use]
     pub fn linear(self) -> f64 {
@@ -130,15 +193,32 @@ impl Deflection {
     }
 }
 
-/// What tessellating a solid yields: the welded, watertight mesh and the
-/// solid's face count (the display summary's "N faces"), from one
-/// reconstruction of the handle.
+/// What the `tessellate` node yields: the welded, watertight mesh and the
+/// solid's face count, from one reconstruction of the handle.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tessellation {
-    /// The welded display mesh.
+    /// The welded, closed mesh.
     pub mesh: Watertight<Mesh>,
     /// B-rep faces in the solid.
     pub faces: usize,
+}
+
+/// What drawing a solid yields ([`tessellate_display`]): the welded mesh,
+/// whether it closed, the face count (the summary's "N faces") and the
+/// deflection it was actually meshed at (the tier's, raised by the
+/// relative term for this solid's extent).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DisplayTessellation {
+    /// The welded display mesh — drawn whether or not it is closed.
+    pub mesh: Mesh,
+    /// Did the weld close it? `false` is reported in the summary, never
+    /// hidden; it says the mesher's per-face triangulations did not
+    /// conform along some edge, not that the solid is invalid.
+    pub watertight: bool,
+    /// B-rep faces in the solid.
+    pub faces: usize,
+    /// The deflection the mesher ran at.
+    pub deflection: Deflection,
 }
 
 /// Does this build link the OCCT kernel (`cicada-geom` feature `occt`)?
@@ -150,7 +230,7 @@ pub const fn kernel_available() -> bool {
 
 #[cfg(feature = "occt")]
 mod backend {
-    use super::{Deflection, Tessellation};
+    use super::{Deflection, DisplayTessellation, Tessellation};
     use crate::GeomError;
     use crate::occt::Handle;
     use cicada_core::geometry::Solid;
@@ -177,11 +257,27 @@ mod backend {
     pub fn tessellate(solid: &Solid, deflection: Deflection) -> Result<Tessellation, GeomError> {
         Handle::from_value(solid)?.tessellate(deflection)
     }
+
+    pub fn tessellate_display(
+        solid: &Solid,
+        tier: Deflection,
+    ) -> Result<DisplayTessellation, GeomError> {
+        let handle = Handle::from_value(solid)?;
+        // The relative term needs the solid's extent: one bounds read on
+        // the handle about to be meshed (microseconds next to the mesher).
+        let (min, max) = handle.bounds()?;
+        let extent = (max.0 - min.0).max_element();
+        handle.tessellate_display(tier.for_extent(extent))
+    }
+
+    pub fn is_valid(solid: &Solid) -> Result<bool, GeomError> {
+        Handle::from_value(solid)?.is_valid()
+    }
 }
 
 #[cfg(not(feature = "occt"))]
 mod backend {
-    use super::{Deflection, Tessellation};
+    use super::{Deflection, DisplayTessellation, Tessellation};
     use crate::GeomError;
     use cicada_core::geometry::Solid;
     use cicada_core::spatial::{Point, Vector};
@@ -212,6 +308,17 @@ mod backend {
 
     pub fn tessellate(_solid: &Solid, _deflection: Deflection) -> Result<Tessellation, GeomError> {
         Err(unavailable("tessellate"))
+    }
+
+    pub fn tessellate_display(
+        _solid: &Solid,
+        _tier: Deflection,
+    ) -> Result<DisplayTessellation, GeomError> {
+        Err(unavailable("display"))
+    }
+
+    pub fn is_valid(_solid: &Solid) -> Result<bool, GeomError> {
+        Err(unavailable("is_valid"))
     }
 }
 
@@ -267,6 +374,37 @@ pub fn difference(solid: &Solid, cutter: &Solid) -> Result<Solid, GeomError> {
 /// [`GeomError::KernelUnavailable`] in a build without `occt`.
 pub fn tessellate(solid: &Solid, deflection: Deflection) -> Result<Tessellation, GeomError> {
     backend::tessellate(solid, deflection)
+}
+
+/// Tessellate a solid for DISPLAY at a tier's deflection
+/// ([`Deflection::display`] or [`Deflection::preview`]), raised by the
+/// relative term for this solid's extent (the module docs' formula): the
+/// welded mesh whether or not it closed, with `watertight` saying which,
+/// the face count, and the deflection the mesher ran at. One
+/// reconstruction of the handle serves the bounds and the mesh.
+///
+/// # Errors
+///
+/// [`GeomError::Kernel`] from the mesher or the bounds;
+/// [`GeomError::Serialization`] for unreadable bytes;
+/// [`GeomError::KernelUnavailable`] in a build without `occt`. Never
+/// `NotWatertight` — closure is reported, not required.
+pub fn tessellate_display(
+    solid: &Solid,
+    tier: Deflection,
+) -> Result<DisplayTessellation, GeomError> {
+    backend::tessellate_display(solid, tier)
+}
+
+/// `BRepCheck_Analyzer`'s verdict on a solid — the kernel's own validity
+/// check (topology and geometry). Diagnostic: the tests use it to tell an
+/// invalid boolean result from a valid solid whose mesh does not close.
+///
+/// # Errors
+///
+/// The kernel's errors; [`GeomError::KernelUnavailable`] without `occt`.
+pub fn is_valid(solid: &Solid) -> Result<bool, GeomError> {
+    backend::is_valid(solid)
 }
 
 // ---------------------------------------------------------------------------

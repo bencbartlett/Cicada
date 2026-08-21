@@ -549,10 +549,30 @@ fn unions_merge_and_refuse_disjoint_bodies() {
     assert_close(volume_of(&abc), 16.0, 1e-9);
     // One solid passes through (re-serialized, equal bytes).
     assert_eq!(solid::union_all(std::slice::from_ref(&a)).expect("one"), a);
-    // Disjoint: two bodies, refused.
+    // Disjoint: two bodies, refused — typed, with the count and the rule,
+    // never the glue's identifier or a `TopAbs_ShapeEnum` number.
     let far = cube(Point::new(10.0, 0.0, 0.0), 1.0);
     let error = solid::union_all(&[a, far]).expect_err("disjoint");
-    assert!(matches!(error, GeomError::Kernel { .. }), "{error}");
+    assert!(
+        matches!(
+            &error,
+            GeomError::NotOneSolid {
+                operation,
+                found: 2
+            } if operation == "union"
+        ),
+        "{error:?}"
+    );
+    let shown = error.to_string();
+    assert_eq!(
+        shown,
+        "union left 2 solids — a Solid is one body; change the inputs so one piece remains, or \
+         build the pieces as separate solids"
+    );
+    assert!(
+        !shown.contains("cicada_") && !shown.contains("shape type"),
+        "{shown}"
+    );
     assert!(matches!(
         solid::union_all(&[]),
         Err(GeomError::BadParameter { name: "solids", .. })
@@ -583,18 +603,44 @@ fn differences_take_every_cutter_in_one_pass() {
     let one = solid::difference_all(&block, &[peg(1.0)]).expect("cut");
     let wp_b = solid::difference(&block, &peg(1.0)).expect("cut");
     assert_close(volume_of(&one), volume_of(&wp_b), 1e-9);
-    // Splitting or emptying the solid is refused.
+    // Splitting or emptying the solid is refused, typed: the count says
+    // which happened, the text says what to do.
     let slab =
         solid::box_at(Point::new(-1.0, 1.5, -1.0), Vector::new(6.0, 1.0, 6.0)).expect("slab");
-    assert!(matches!(
-        solid::difference_all(&block, &[slab]),
-        Err(GeomError::Kernel { .. })
-    ));
+    let split = solid::difference_all(&block, &[slab]).expect_err("split");
+    assert!(
+        matches!(
+            &split,
+            GeomError::NotOneSolid {
+                operation,
+                found: 2
+            } if operation == "cut"
+        ),
+        "{split:?}"
+    );
+    assert!(
+        split
+            .to_string()
+            .starts_with("cut left 2 solids — a Solid is one body")
+    );
     let everything = cube(Point::new(-1.0, -1.0, -1.0), 6.0);
-    assert!(matches!(
-        solid::difference_all(&block, &[everything]),
-        Err(GeomError::Kernel { .. })
-    ));
+    let emptied = solid::difference_all(&block, &[everything]).expect_err("emptied");
+    assert!(
+        matches!(
+            &emptied,
+            GeomError::NotOneSolid {
+                operation,
+                found: 0
+            } if operation == "cut"
+        ),
+        "{emptied:?}"
+    );
+    assert!(
+        emptied
+            .to_string()
+            .starts_with("cut left no solid — a Solid is one body, and nothing remains"),
+        "{emptied}"
+    );
 }
 
 #[test]
@@ -609,7 +655,7 @@ fn intersections_keep_the_common_volume() {
     let far = cube(Point::new(5.0, 5.0, 5.0), 1.0);
     assert!(matches!(
         solid::intersection(&a, &far),
-        Err(GeomError::Kernel { .. })
+        Err(GeomError::NotOneSolid { found: 0, .. })
     ));
 }
 
@@ -662,6 +708,64 @@ fn kernel_transforms_move_rotate_scale_and_mirror() {
     assert_eq!(
         via_apply,
         cicada_core::geometry::Transformable::Solid(moved)
+    );
+}
+
+/// The review's hostile case (2026-08-21): a sphere MOVED by the kernel
+/// transform, minus a cylinder whose surface passes through both of the
+/// sphere's poles, tessellated at the display deflection. Before the fix
+/// the transform left a pcurve on the SOURCE sphere's surface on each
+/// degenerate pole edge (`glue.hxx`, `drop_foreign_pcurves`); the cut
+/// carried it along and the mesher discretized the intersection edge
+/// differently for its two faces — 7,713 triangles with 159 T-junctions, a
+/// mesh that did not close, for a solid `BRepCheck_Analyzer` called valid —
+/// while the twin sphere built in place meshed closed at 7,556. The moved
+/// solid and its twin are the same geometry, so they must tessellate alike.
+#[test]
+fn a_moved_sphere_minus_a_cylinder_through_its_poles_meshes_closed() {
+    let at = |x: f64, y: f64, z: f64| Plane {
+        origin: Point::new(x, y, z),
+        ..Plane::world_xy()
+    };
+    let ball = solid::sphere(&at(5.0, 5.0, 5.0), 3.0, TOL).expect("sphere");
+    let moved = solid::transform(&ball, &Similarity::translation(Vector::new(1.0, 0.0, 0.0)))
+        .expect("move");
+    let twin = solid::sphere(&at(6.0, 5.0, 5.0), 3.0, TOL).expect("twin");
+    // The moved sphere carries exactly its moved geometry: the same
+    // serialized size as the twin (with the stale surface it was 1,102 B
+    // against 939 B).
+    assert_eq!(moved.bytes().len(), twin.bytes().len());
+    // The cylinder's surface runs through both poles, (6, 5, 2) and
+    // (6, 5, 8): the intersection curves meet the degenerate edges.
+    let drill = solid::cylinder(&at(5.0, 5.0, 0.0), 1.0, 10.0, TOL).expect("cylinder");
+    let pierced_moved =
+        solid::difference_all(&moved, std::slice::from_ref(&drill)).expect("cut moved");
+    let pierced_twin =
+        solid::difference_all(&twin, std::slice::from_ref(&drill)).expect("cut twin");
+    assert!(solid::is_valid(&pierced_moved).expect("check"));
+    assert!(solid::is_valid(&pierced_twin).expect("check"));
+    assert_close(volume_of(&pierced_moved), volume_of(&pierced_twin), 1e-9);
+    let display = Deflection::display(&ProjectConfig::default());
+    let moved_mesh = solid::tessellate(&pierced_moved, display).expect("the node's mesh closes");
+    let twin_mesh = solid::tessellate(&pierced_twin, display).expect("the twin's too");
+    assert_eq!(
+        (
+            moved_mesh.mesh.0.vertex_count(),
+            moved_mesh.mesh.0.triangle_count()
+        ),
+        (
+            twin_mesh.mesh.0.vertex_count(),
+            twin_mesh.mesh.0.triangle_count()
+        ),
+        "the same geometry tessellates alike"
+    );
+    // The display path reports closure instead of requiring it.
+    let drawn = solid::tessellate_display(&pierced_moved, display).expect("drawn");
+    assert!(drawn.watertight);
+    assert_eq!(drawn.faces, 2);
+    assert_eq!(
+        drawn.mesh.triangle_count(),
+        moved_mesh.mesh.0.triangle_count()
     );
 }
 

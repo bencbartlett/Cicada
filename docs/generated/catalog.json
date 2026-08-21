@@ -4243,7 +4243,7 @@
       "pure": true,
       "volatile": false,
       "uses_tolerance": false,
-      "panics": "the cut leaves anything but one solid (split or emptied), or the kernel refuses.",
+      "panics": "the cut leaves anything but one solid — split in two or emptied; the message carries the count and the rule (\"a Solid is one body\") — or the kernel refuses.",
       "gh": "Solid Difference",
       "examples": [
         "span = construct_domain(start=0.0, end=20.0)\nthick = construct_domain(start=0.0, end=6.0)\nplate = box(x=span, y=span, z=thick)\ncentre = construct_point(x=10.0, y=10.0, z=-1.0)\ndrill_frame = xy_plane(origin=centre)\ndrill = cylinder(plane=drill_frame, radius=3.0, height=8.0)\ndrills = duplicate(item=drill, count=1)\nplate_with_hole = solid_difference(solid=plate, cutters=drills)"

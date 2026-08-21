@@ -126,6 +126,9 @@ mod ffi {
         /// coefficients, geometry copied and rewritten.
         fn transform(shape: &TopoDS_Shape, m: &[f64]) -> Result<UniquePtr<TopoDS_Shape>>;
 
+        /// `BRepCheck_Analyzer::IsValid` over the whole shape.
+        fn is_valid(shape: &TopoDS_Shape) -> Result<bool>;
+
         /// The `index`-th solid sub-shape (0-based).
         fn nth_solid(shape: &TopoDS_Shape, index: i32) -> Result<UniquePtr<TopoDS_Shape>>;
 

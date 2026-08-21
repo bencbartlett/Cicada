@@ -28,7 +28,20 @@
 //! and graph; the server's lowering, compile and session sources; and every
 //! stdlib node file — a node's panic message is the red text a user reads
 //! on the canvas. Comments, rustdoc and `#[cfg(test)]` modules are skipped
-//! — only what can reach a user counts.
+//! — only what can reach a user counts. The script host's Solid refusal
+//! (`cicada-script/src/value.rs`, the one literal there that names a node)
+//! is held to rule 1 on its own: the rest of that file is wire-protocol
+//! vocabulary (`k`, `v`, `kind`, "does not cross the boundary").
+//!
+//! A fourth rule for the kernel seam (`cicada-geom`'s error type, value
+//! level and OCCT module — whose `GeomError` texts are a Solid node's red
+//! text): no string literal may carry a C++ glue identifier (`cicada_…`,
+//! the fork's bridge-function prefix) or a `TopAbs_ShapeEnum` number
+//! ("shape type N") — the 2026-08-21 review read `kernel refused: OCCT cut:
+//! cicada_single_solid: expected exactly one solid, found 2 (shape type 0)`
+//! where the catalog promised "a cut that splits the solid in two is red".
+//! The seam sources are not held to the node-name rules (their
+//! `BadParameter` names are seam-level parameters, not nodes).
 
 #![allow(clippy::expect_used)]
 
@@ -47,6 +60,23 @@ const DIAGNOSTIC_SOURCES: &[&str] = &[
     "cicada-server/src/compile.rs",
     "cicada-server/src/session.rs",
 ];
+
+/// The script host's value boundary: its Solid refusal names the node to
+/// use, and that node must exist (2026-08-21: the text said `tessellate`
+/// was "arriving with WP-C" months after it shipped — tense pinned by a
+/// test; now the test pins existence instead).
+const SCRIPT_BOUNDARY: &str = "cicada-script/src/value.rs";
+
+/// The kernel seam's sources, scanned for glue identifiers only.
+const SEAM_SOURCES: &[&str] = &[
+    "cicada-geom/src/lib.rs",
+    "cicada-geom/src/solid.rs",
+    "cicada-geom/src/occt/mod.rs",
+];
+
+/// Substrings that mark a kernel diagnostic as leaked glue: the fork's
+/// bridge-function prefix, and OCCT's shape-type enum rendered as a number.
+const GLUE_MARKERS: &[&str] = &["cicada_", "shape type", "expected exactly one solid"];
 
 /// Every `.rs` under this directory is scanned too: a stdlib node's panic
 /// message is user-facing red text — the strict-zip refusal of `cull`
@@ -420,6 +450,81 @@ fn diagnostics_name_only_registered_nodes() {
         offences.len(),
         offences.join("\n  ")
     );
+}
+
+#[test]
+fn the_script_hosts_solid_refusal_names_a_node_that_exists() {
+    let registered: BTreeSet<&str> = cicada_stdlib::registry()
+        .iter()
+        .map(|spec| spec.name)
+        .collect();
+    let path = crates_dir().join(SCRIPT_BOUNDARY);
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+    let refusal = string_literals(without_test_modules(&source))
+        .into_iter()
+        .find(|literal| literal.starts_with("no Solid ABI exists"))
+        .expect("the Solid refusal literal is in the script host");
+    let named = node_like_tokens(&refusal);
+    assert!(
+        named.contains("tessellate"),
+        "the refusal names the way forward: {refusal}"
+    );
+    for token in &named {
+        assert!(
+            registered.contains(token.as_str()),
+            "`{token}` is not a registered node (in \"{refusal}\")"
+        );
+    }
+    // No tense, no work-package name: wording bound to a milestone is wrong
+    // the day the milestone lands.
+    for stale in ["arriving", "WP-", "until it lands", "not yet"] {
+        assert!(
+            !refusal.contains(stale),
+            "stale wording `{stale}`: {refusal}"
+        );
+    }
+}
+
+#[test]
+fn kernel_diagnostics_never_leak_glue_identifiers() {
+    let crates = crates_dir();
+    let mut offences = Vec::new();
+    let mut literals_seen = 0usize;
+    for relative in SEAM_SOURCES
+        .iter()
+        .chain(DIAGNOSTIC_SOURCES)
+        .chain(std::iter::once(&SCRIPT_BOUNDARY))
+    {
+        let path = crates.join(relative);
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+        for literal in string_literals(without_test_modules(&source)) {
+            literals_seen += 1;
+            for marker in GLUE_MARKERS {
+                if literal.contains(marker) {
+                    offences.push(format!("{relative}: \"{literal}\" carries `{marker}`"));
+                }
+            }
+        }
+    }
+    assert!(
+        literals_seen > 200,
+        "the scanner saw only {literals_seen} string literals — it is broken, not the sources"
+    );
+    assert!(
+        offences.is_empty(),
+        "{} diagnostic string(s) leak a glue identifier:\n  {}",
+        offences.len(),
+        offences.join("\n  ")
+    );
+    // The rule is live: the seam's own test strings are skipped, and a
+    // literal shaped like the reviewed message would be caught.
+    assert!(GLUE_MARKERS.iter().any(|m| {
+        "OCCT cut: cicada_single_solid: expected exactly one solid, found 2 (shape \
+                      type 0)"
+            .contains(m)
+    }));
 }
 
 // The scanner itself, on the shapes it must and must not see.

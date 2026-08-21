@@ -99,7 +99,13 @@ mod tests {
                 .downcast_ref::<String>()
                 .cloned()
                 .unwrap_or_default();
-            assert!(message.contains("expected exactly one solid"), "{message}");
+            assert!(
+                message.contains(
+                    "intersection left no solid — a Solid is one body, and nothing remains"
+                ),
+                "{message}"
+            );
+            assert!(!message.contains("cicada_"), "{message}");
         }) else {
             return;
         };

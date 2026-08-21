@@ -37,6 +37,7 @@
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBuilderAPI_TransitionMode.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
 #include <BRepOffsetAPI_MakePipeShell.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
@@ -48,11 +49,15 @@
 #include <BRepPrimAPI_MakeSphere.hxx>
 #include <BRepTools_WireExplorer.hxx>
 #include <BRep_Builder.hxx>
+#include <BRep_CurveRepresentation.hxx>
+#include <BRep_ListIteratorOfListOfCurveRepresentation.hxx>
+#include <BRep_TEdge.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
 #include <GCPnts_TangentialDeflection.hxx>
 #include <GProp_GProps.hxx>
 #include <GeomAbs_CurveType.hxx>
+#include <Geom_Surface.hxx>
 #include <IFSelect_ReturnStatus.hxx>
 #include <Message.hxx>
 #include <Message_Gravity.hxx>
@@ -63,6 +68,7 @@
 #include <STEPControl_StepModelType.hxx>
 #include <STEPControl_Writer.hxx>
 #include <ShapeAnalysis_FreeBounds.hxx>
+#include <ShapeBuild_Edge.hxx>
 #include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <Standard_Failure.hxx>
 #include <Standard_Handle.hxx>
@@ -75,6 +81,7 @@
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
+#include <TopLoc_Location.hxx>
 #include <TopTools_HSequenceOfShape.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
 #include <TopTools_ListOfShape.hxx>
@@ -566,6 +573,56 @@ inline void bounds(const TopoDS_Shape &shape, rust::Vec<double> &out) {
   out.push_back(zmax);
 }
 
+// BRepBuilderAPI_Transform with Copy = true (BRepTools_Modifier under it)
+// rebuilds every edge with the transformed 3D curve and pcurves on the
+// transformed surfaces — and, measured 2026-08-21 on a sphere's degenerate
+// pole edges, KEEPS the source edge's pcurve on the SOURCE surface beside
+// them: the moved sphere serialized with two spherical surfaces, the second
+// one at the original centre, referenced by no face. The stale
+// representation rides into every later boolean (the bytes grow; the result
+// is still BRepCheck-valid) and the mesher, meeting it where an intersection
+// curve runs through the pole, discretizes that edge differently for the two
+// faces: 159 T-junctions, a mesh that does not close (the moved sphere minus
+// a cylinder through both poles; its twin built in place meshed closed).
+// Drop every pcurve whose surface is not the surface of some face of the
+// shape, so a moved solid carries exactly its moved geometry — after which
+// the moved sphere serializes to the same size as its twin and the cut
+// meshes closed with the twin's triangle count (occt/node_set_tests.rs).
+inline void drop_foreign_pcurves(const TopoDS_Shape &shape) {
+  std::vector<Handle(Geom_Surface)> own;
+  for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
+    TopLoc_Location location;
+    own.push_back(BRep_Tool::Surface(TopoDS::Face(it.Current()), location));
+  }
+  const auto is_own = [&own](const Handle(Geom_Surface) &surface) {
+    for (const Handle(Geom_Surface) &candidate : own) {
+      if (candidate == surface) {
+        return true;
+      }
+    }
+    return false;
+  };
+  ShapeBuild_Edge edge_tool;
+  TopTools_IndexedMapOfShape edges;
+  TopExp::MapShapes(shape, TopAbs_EDGE, edges);
+  for (Standard_Integer i = 1; i <= edges.Extent(); ++i) {
+    const TopoDS_Edge &edge = TopoDS::Edge(edges(i));
+    const Handle(BRep_TEdge) tedge = Handle(BRep_TEdge)::DownCast(edge.TShape());
+    if (tedge.IsNull()) {
+      continue;
+    }
+    std::vector<Handle(Geom_Surface)> foreign;
+    for (BRep_ListIteratorOfListOfCurveRepresentation rep(tedge->Curves()); rep.More(); rep.Next()) {
+      if (rep.Value()->IsCurveOnSurface() && !is_own(rep.Value()->Surface())) {
+        foreign.push_back(rep.Value()->Surface());
+      }
+    }
+    for (const Handle(Geom_Surface) &surface : foreign) {
+      edge_tool.RemovePCurve(edge, surface);
+    }
+  }
+}
+
 // A similarity (rotation × uniform scale, reflections included, plus a
 // translation) as the 12 row-major coefficients of its 3×4 matrix, applied
 // with the geometry COPIED and rewritten (BRepBuilderAPI_Transform with
@@ -580,12 +637,26 @@ inline std::unique_ptr<TopoDS_Shape> transform(const TopoDS_Shape &shape, rust::
   trsf.SetValues(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11]);
   BRepBuilderAPI_Transform maker(shape, trsf, /*Copy=*/Standard_True);
   require_done(maker, "BRepBuilderAPI_Transform");
-  return boxed(maker.Shape());
+  TopoDS_Shape moved = maker.Shape();
+  drop_foreign_pcurves(moved);
+  return boxed(moved);
 }
 
 // --------------------------------------------------------------------------
 // Topology readers
 // --------------------------------------------------------------------------
+
+// BRepCheck_Analyzer's verdict on the whole shape (geometry and topology
+// checked): the kernel's own notion of a valid B-rep. Diagnostic — a
+// boolean can return a solid the analyzer accepts whose mesh still does not
+// close (the unclosed-tessellation regression in occt/tests.rs).
+inline bool is_valid(const TopoDS_Shape &shape) {
+  if (shape.IsNull()) {
+    fail("is_valid: null shape");
+  }
+  BRepCheck_Analyzer analyzer(shape, /*GeomControls=*/Standard_True);
+  return analyzer.IsValid() != 0;
+}
 
 // The i-th TopAbs_SOLID sub-shape (0-based, explorer order).
 inline std::unique_ptr<TopoDS_Shape> nth_solid(const TopoDS_Shape &shape, std::int32_t index) {

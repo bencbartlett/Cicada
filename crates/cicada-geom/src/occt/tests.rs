@@ -43,8 +43,27 @@ fn dump(name: &str, bytes: &[u8]) {
     }
 }
 
-const BOX_GOLDEN: &str = "e220198abe7f57ebfc21340ff4291859f9681d17c9c9ac60f2005e3d4c1aa9e9";
-const PRISM_GOLDEN: &str = "1f6c4615803ed53852f4d6904f520d6d2b9e15f8a08ada9fecae636a5fc962b6";
+/// The committed golden for THIS platform (DECISIONS.md row 42: goldens are
+/// per-OS until the three-OS CI matrix shows them equal). Every golden in
+/// this file was blessed on win-64 (OCCT 7.8.1, conda-forge build 103); the
+/// stdlib's `solids::support::platform_golden` is the same door for the
+/// node-level goldens. When a CI job on another OS disagrees on one of
+/// these transcendental-free solids, add a `#[cfg(target_os = "…")]` arm
+/// HERE with that OS's hash — a documented per-OS golden — rather than
+/// loosening any comparison; when the matrix agrees, the arms collapse to
+/// one. The three-OS verdict is pending the first run of the matrix on
+/// this branch (docs/17 §Item 3).
+fn platform_golden(win64: &'static str) -> &'static str {
+    win64
+}
+
+fn box_golden() -> &'static str {
+    platform_golden("e220198abe7f57ebfc21340ff4291859f9681d17c9c9ac60f2005e3d4c1aa9e9")
+}
+
+fn prism_golden() -> &'static str {
+    platform_golden("1f6c4615803ed53852f4d6904f520d6d2b9e15f8a08ada9fecae636a5fc962b6")
+}
 
 fn probe_box() -> Handle {
     Handle::box_at(Point::origin(), Vector::new(10.0, 20.0, 30.0)).expect("box")
@@ -92,7 +111,7 @@ fn golden_canonical_bytes_box() {
     let bytes = probe_box().canonical_bytes().expect("bytes");
     assert!(bytes.starts_with(CANONICAL_HEADER));
     assert_eq!(bytes.len(), 4494, "the probe's size for this box");
-    assert_golden("box", &bytes, BOX_GOLDEN);
+    assert_golden("box", &bytes, box_golden());
 }
 
 #[test]
@@ -100,7 +119,7 @@ fn golden_canonical_bytes_extruded_rectangle() {
     let bytes = probe_prism().canonical_bytes().expect("bytes");
     assert!(bytes.starts_with(CANONICAL_HEADER));
     assert_eq!(bytes.len(), 2303, "the probe's size for this prism");
-    assert_golden("extrude", &bytes, PRISM_GOLDEN);
+    assert_golden("extrude", &bytes, prism_golden());
 }
 
 /// WP-B: the same bytes through the value-level path, and the value hash
@@ -114,14 +133,14 @@ fn golden_value_hashes_through_the_core_path() {
         (
             "box",
             box_value(),
-            BOX_GOLDEN,
-            "c17f91abe11669178363650582426abbf0e2c8c23f5dd173689475f9763d142b",
+            box_golden(),
+            platform_golden("c17f91abe11669178363650582426abbf0e2c8c23f5dd173689475f9763d142b"),
         ),
         (
             "extrude",
             prism_value(),
-            PRISM_GOLDEN,
-            "a00fdcf81271793de1b46d9416d31e56245fe9e3cb6aabc2671db5f2702be727",
+            prism_golden(),
+            platform_golden("a00fdcf81271793de1b46d9416d31e56245fe9e3cb6aabc2671db5f2702be727"),
         ),
     ];
     for (name, value, raw_golden, value_golden) in cases {
@@ -352,8 +371,8 @@ fn difference_that_splits_or_empties_the_solid_is_refused() {
         .difference(slab)
         .expect_err("two solids must be refused");
     assert!(
-        matches!(&error, GeomError::Kernel { reason } if reason.contains("found 2")),
-        "{error}"
+        matches!(&error, GeomError::NotOneSolid { operation, found: 2 } if operation == "cut"),
+        "{error:?}"
     );
     // A cutter that swallows the block leaves nothing.
     let bigger =
@@ -362,8 +381,45 @@ fn difference_that_splits_or_empties_the_solid_is_refused() {
         .difference(bigger)
         .expect_err("no solid must be refused");
     assert!(
-        matches!(&error, GeomError::Kernel { reason } if reason.contains("found 0")),
-        "{error}"
+        matches!(&error, GeomError::NotOneSolid { operation, found: 0 } if operation == "cut"),
+        "{error:?}"
+    );
+    // The user reads the rule and the way out, never the glue's identifier
+    // or the `TopAbs_ShapeEnum` number the fork's message carries.
+    let shown = error.to_string();
+    assert!(shown.starts_with("cut left no solid"), "{shown}");
+    assert!(
+        !shown.contains("cicada_") && !shown.contains("shape type"),
+        "{shown}"
+    );
+}
+
+#[test]
+fn glue_identifiers_never_lead_a_kernel_reason() {
+    // The fork's and cicada-geom's glue prefix their throws with the bridge
+    // function's name; `kernel()` drops exactly that prefix (an identifier
+    // with an underscore, then `: `) and leaves everything else alone.
+    assert_eq!(
+        without_glue_prefix("cicada_tessellate: null shape"),
+        "null shape"
+    );
+    assert_eq!(
+        without_glue_prefix("make_polyline_wire: 2 points is too few"),
+        "2 points is too few"
+    );
+    assert_eq!(
+        without_glue_prefix("BRepAlgoAPI_Cut failed: report"),
+        "BRepAlgoAPI_Cut failed: report",
+        "a class name is not a glue identifier"
+    );
+    assert_eq!(
+        without_glue_prefix("Standard_DomainError: message"),
+        "Standard_DomainError: message"
+    );
+    assert_eq!(without_glue_prefix("no colon here"), "no colon here");
+    assert_eq!(
+        without_glue_prefix("STEP: `x` holds no solid"),
+        "STEP: `x` holds no solid"
     );
 }
 
@@ -645,7 +701,7 @@ fn related_solids_are_safe_across_rayon_workers() {
     assert_eq!(outcomes.len(), tasks);
     // And nothing moved: the inputs are the values they were.
     assert_eq!(block, box_value());
-    assert_eq!(blake3_hex(block.bytes()), BOX_GOLDEN);
+    assert_eq!(blake3_hex(block.bytes()), box_golden());
 }
 
 // ---------------------------------------------------------------------------
@@ -816,7 +872,7 @@ fn unwelded_cube() -> (Vec<f64>, Vec<u32>) {
 #[test]
 fn weld_merges_per_face_nodes_into_a_watertight_mesh() {
     let (positions, indices) = unwelded_cube();
-    let mesh = weld(&positions, &indices).expect("closed").0;
+    let mesh = weld(&positions, &indices).expect("closed");
     assert_eq!(mesh.vertex_count(), 8, "24 per-face nodes → 8 corners");
     assert_eq!(mesh.triangle_count(), 12);
     assert!(mesh.is_watertight());
@@ -824,17 +880,44 @@ fn weld_merges_per_face_nodes_into_a_watertight_mesh() {
 }
 
 #[test]
-fn weld_refuses_an_open_shell() {
+fn an_open_shell_is_drawn_by_display_and_refused_by_the_node() {
     // Eleven of the twelve triangles: welded, consistent, but not closed.
-    // Without the is_watertight check this would come back as a leaky
-    // `Watertight<Mesh>` — the refusal IS the contract.
+    // The weld reports it (display draws the mesh and shows `watertight:
+    // false`); the node's `Watertight<Mesh>` contract refuses it with the
+    // solid's numbers — without that check it would come back as a leaky
+    // `Watertight<Mesh>`.
     let (positions, mut indices) = unwelded_cube();
     indices.truncate(11 * 3);
-    let error = weld(&positions, &indices).expect_err("an open shell must be refused");
-    assert!(
-        matches!(&error, GeomError::NotWatertight { reason } if reason.contains("not closed")),
-        "{error}"
+    let mesh = weld(&positions, &indices).expect("an open shell still welds");
+    assert!(!mesh.is_watertight());
+    assert_eq!(mesh.triangle_count(), 11);
+    let display = DisplayTessellation {
+        mesh,
+        watertight: false,
+        faces: 6,
+        deflection: deflection(),
+    };
+    let error = closed_or_refused(display).expect_err("the node refuses an open shell");
+    let GeomError::NotWatertight { reason } = &error else {
+        panic!("{error:?}");
+    };
+    assert_eq!(
+        reason,
+        "the kernel's mesh of this solid does not close at deflection 0.01 / 0.5 rad (6 faces, \
+         8 vertices, 11 triangles after welding) — the solid itself may be valid; try another \
+         deflection, or keep it as a Solid (display draws it as is)"
     );
+    // Closed, the same shape passes through as the node's mesh.
+    let (positions, indices) = unwelded_cube();
+    let closed = closed_or_refused(DisplayTessellation {
+        mesh: weld(&positions, &indices).expect("closed"),
+        watertight: true,
+        faces: 6,
+        deflection: deflection(),
+    })
+    .expect("closed passes");
+    assert_eq!(closed.faces, 6);
+    assert_eq!(closed.mesh.0.triangle_count(), 12);
 }
 
 #[test]
@@ -848,7 +931,7 @@ fn weld_drops_triangles_that_collapse_onto_one_vertex() {
     let duplicate_of_zero = u32::try_from(positions.len() / 3).expect("small");
     positions.extend_from_slice(&[0.0, 0.0, 0.0]); // same point as node 0
     indices.extend_from_slice(&[0, duplicate_of_zero, 1]);
-    let mesh = weld(&positions, &indices).expect("the sliver is dropped").0;
+    let mesh = weld(&positions, &indices).expect("the sliver is dropped");
     assert_eq!(mesh.triangle_count(), 12);
     assert_eq!(mesh.vertex_count(), 8);
     assert!(mesh.is_watertight());
@@ -865,7 +948,7 @@ fn weld_treats_negative_zero_as_zero() {
         }
     }
     assert!(positions.iter().any(|v| v.to_bits() == (-0.0f64).to_bits()));
-    let mesh = weld(&positions, &indices).expect("welds").0;
+    let mesh = weld(&positions, &indices).expect("welds");
     assert_eq!(mesh.vertex_count(), 8);
     assert!(mesh.is_watertight());
     assert!(

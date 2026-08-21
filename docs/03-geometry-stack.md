@@ -148,7 +148,18 @@ edge, so only cicada-geom itself has a kernel-free world today).
   same; downstream booleans and STEP consumers prefer it), the result
   required to be exactly one solid as in WP-B (a union of disjoint
   bodies, a cut that splits or empties, an empty intersection are
-  refused, never returned as compounds); `volume_properties`
+  refused, never returned as compounds — typed since 2026-08-21 as
+  `GeomError::NotOneSolid { operation, found }`, counted on the Rust
+  side before the fork's unwrapping glue runs, so the red text is the
+  rule and the way out: "cut left 2 solids — a Solid is one body; change
+  the inputs so one piece remains, or build the pieces as separate
+  solids" / "intersection left no solid — … nothing remains", never the
+  glue identifier and `TopAbs_ShapeEnum` number the review read; every
+  other kernel reason drops the glue function's `name: ` prefix in
+  `occt::kernel()` and is attributed to a plain operation word — `box`,
+  `extrude`, `cut`, `union`, `STEP write` — and
+  `cicada-cli/tests/diagnostic_vocabulary.rs` rejects `cicada_` and
+  "shape type" in every seam literal); `volume_properties`
   (`BRepGProp::VolumeProperties`, adaptive, `eps` 1e-9), `bounds`
   (`BRepBndLib::AddOptimal`, no triangulation, no tolerance inflation);
   `transform` (`gp_Trsf::SetValues` from a `Similarity`'s 12 row-major
@@ -156,7 +167,27 @@ edge, so only cicada-geom itself has a kernel-free world today).
   scale, translation — then `BRepBuilderAPI_Transform` with `Copy =
   true`, so the result carries no `TopLoc_Location` and its bytes
   describe the moved geometry; `Similarity::apply` takes this path for a
-  `Solid`, and the five transform nodes need no Solid arm of their own);
+  `Solid`, and the five transform nodes need no Solid arm of their own.
+  **Stale pcurves, found 2026-08-21:** the modifier under `Copy = true`
+  rebuilds every edge with the transformed 3D curve and pcurves on the
+  transformed surfaces but KEEPS, on a sphere's degenerate pole edges,
+  the source edge's pcurve on the SOURCE surface — the moved sphere
+  serialized with two spherical surfaces, the second at the original
+  centre and referenced by no face (1,102 B against the in-place twin's
+  939 B). The stale representation rode into every later boolean (still
+  `BRepCheck`-valid) and the mesher, meeting it where the intersection
+  curve of a cylinder through both poles ran into the pole, discretized
+  that edge differently for its two faces: 159 T-junctions, a display
+  mesh that did not close, for a solid whose twin built in place meshed
+  closed. `transform` now drops every pcurve whose surface is not the
+  surface of some face of the result (`drop_foreign_pcurves`:
+  `BRep_TEdge::Curves` against the faces' `BRep_Tool::Surface`,
+  `ShapeBuild_Edge::RemovePCurve`) — a moved solid carries exactly its
+  moved geometry, the moved sphere serializes to its twin's size and the
+  cut meshes closed with the twin's triangle count
+  (`a_moved_sphere_minus_a_cylinder_through_its_poles_meshes_closed`).
+  `BRepCheck_Analyzer` is exposed as `solid::is_valid` for diagnosis;
+  it did not see this);
   the topology readers `edges` (every distinct non-degenerate edge as a
   curve record — lines and full circles exact, the rest discretized by
   `GCPnts_TangentialDeflection` at a `Deflection` — plus the face count),
@@ -346,16 +377,53 @@ edge, so only cicada-geom itself has a kernel-free world today).
   `BRepTools::Clean` or run with `ForceFaceDeflection` — at which point
   rule 2 can be relaxed to "tessellate and booleans borrow" and a bounded
   per-hash handle map with per-handle locks slots in at that function.
-- **Display tessellation (WP-B).** A `Solid` in a display set is drawn
-  through `solid::tessellate` at `Deflection::display(&ProjectConfig)`:
-  `linear = max(0.02 mm / unit.millimeters(), tol)`,
-  `angular = max(0.1 rad, tol_angle)` — a PHYSICAL chord deviation of two
-  hundredths of a millimetre (the same part looks the same in a mm, inch
+- **Display tessellation (WP-B; tiers, the relative term and the
+  closure policy 2026-08-21).** A `Solid` in a display set is drawn
+  through `solid::tessellate_display` at the generation's TIER:
+
+  ```text
+  fine    (structural generations, the release, a joining client, the inspector):
+          linear  = max(0.02 mm / unit.millimeters(), tol)
+          angular = max(0.1 rad, tol_angle)
+  preview (the generations of a slider drag):
+          linear  = max(0.1 mm / unit.millimeters(), tol)
+          angular = max(0.3 rad, tol_angle)
+  per solid, both tiers:
+          linear  = max(linear, 0.001 × the largest extent of the solid's bounds)
+  ```
+
+  A PHYSICAL chord deviation (the same part looks the same in a mm, inch
   or metre document), floored at the coincidence tolerance because a
   finer tessellation is noise; 0.1 rad ≈ 5.7° gives ~63 facets per full
-  turn, matching the 64 segments the analytic curves' display uses. The
-  server caches the result by the Solid's VALUE hash plus the deflection
-  (docs/12 §Display cache); the deflection never reaches the bytes.
+  turn, matching the 64 segments the analytic curves' display uses; the
+  preview tier (~21 facets per turn) is what a drag can afford — on the
+  02-solids carve 3 ms against 23 ms fine — and the release's structural
+  generation redraws the same value fine (the session records the tier
+  an output was drawn at; a fine drawing satisfies a preview request,
+  never the reverse). The relative term is OCCT's own viewer convention
+  (`Prs3d_Drawer`'s deviation coefficient 0.001): it keeps a giant smooth
+  part from drowning in triangles — a 2 m sphere at 0.02 mm would need
+  ~700 facets per turn; at 2 mm the angular term decides and it gets the
+  same ~63 as a small one — and costs one `BRepBndLib` read on the handle
+  about to be meshed. The server caches the result by the Solid's VALUE
+  hash plus the TIER deflection (the per-solid term is a function of the
+  solid; docs/12 §Display cache), warms it for a generation's distinct
+  solids in parallel on the solve loop's workers before the broadcast
+  takes the session lock, and keys the wire blobs by the display MESH's
+  own value hash — content-addressed, so a solid drawn at two tiers is
+  two blobs on a client that caches blobs by hash forever; the
+  deflection never reaches the Solid's bytes. **Closure is the node's
+  contract, not display's**: `tessellate` (the node) returns
+  `Watertight<Mesh>` or refuses with the solid's numbers — "the kernel's
+  mesh of this solid does not close at deflection … (N faces, V
+  vertices, T triangles after welding) — the solid itself may be valid;
+  try another deflection, or keep it as a Solid (display draws it as
+  is)" — because the mesh tier needs closure; `tessellate_display`
+  returns the welded mesh whether or not it closed and reports which
+  (`DisplayTessellation::watertight` → the summary's `watertight: false`,
+  a list's `unclosed: N`, the output's `stats.warnings`), because a green
+  Solid must never vanish from the viewport (the review found one that
+  had — the stale-pcurve case above, fixed at its source too).
   `Deflection::new` admits nothing finer than the kernel's own floors —
   `MIN_LINEAR_DEFLECTION` = 1e-7 (`Precision::Confusion()`) and
   `MIN_ANGULAR_DEFLECTION` = 1e-12 rad (`Precision::Angular()`) —
@@ -366,8 +434,13 @@ edge, so only cicada-geom itself has a kernel-free world today).
   the floor, and WP-C's `tessellate` node inherits it as its "Red when".
   The display formula cannot reach the floor (its minimum over every
   unit, 0.02 mm in a foot document, is 6.6e-5), which is why
-  `Deflection::display` is infallible — pinned by a test over all five
-  units at the finest tolerances `ProjectConfig` accepts.
+  `Deflection::display` (and `::preview`, coarser on both axes) is
+  infallible — pinned by a test over all five units at the finest
+  tolerances `ProjectConfig` accepts. Measured after the 2026-08-21
+  changes (release, dev machine; docs/17 §Item 3 has the table): the
+  02-solids `size` slider, whose 42 ms p50 against the 16 ms bar
+  motivated the tiers, and the 300-hole bar whose fine tessellation took
+  4.9 s under the session lock.
 
 ## Build (Cicada's actual code)
 

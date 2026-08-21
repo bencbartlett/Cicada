@@ -26,8 +26,9 @@
 //! canonical bytes are OCCT `BinTools` that nothing on the Python side can
 //! read, so handing them over would be a silent lie (v0.1 item 3 WP-B);
 //! a Solid ABI is future work, and until then a solid reaches a script only
-//! as a `Watertight<Mesh>` — through the `tessellate` node WP-C ships (the
-//! refusal names it as arriving, never as a node to go and use today).
+//! as a `Watertight<Mesh>` — through the `tessellate` node, which the
+//! refusal names (and which the registry must hold: the test checks the
+//! node exists rather than pinning any tense or work-package name).
 
 use std::sync::Arc;
 
@@ -135,9 +136,8 @@ fn mesh_wire(mesh: &Mesh) -> Wire {
 /// The typed refusal a `Solid` earns at this boundary — one constant so the
 /// host, the catalog of script kinds and the tests agree on the words.
 pub const SOLID_REFUSAL: &str = "no Solid ABI exists; its canonical bytes are OCCT BinTools that \
-     nothing on the Python side can read — convert the solid to a Watertight<Mesh> first (the \
-     `tessellate` node, arriving with the OCCT-backed solid nodes of v0.1 item 3 WP-C; until it \
-     lands no Solid can reach a script)";
+     nothing on the Python side can read — convert the solid to a Watertight<Mesh> first with \
+     the `tessellate` node and pass the mesh";
 
 /// A Cicada value onto the wire.
 ///
@@ -561,12 +561,16 @@ mod tests {
             "{shown}"
         );
         assert!(shown.contains("Watertight<Mesh>"), "{shown}");
-        // The way forward is named honestly: the `tessellate` node does not
-        // exist yet (WP-C), so the text says it is arriving, not that it is
-        // there to use — a diagnostic must not send the user to a node the
-        // catalog does not have.
-        assert!(shown.contains("`tessellate` node, arriving"), "{shown}");
-        assert!(shown.contains("WP-C"), "{shown}");
+        // The way forward names a node — and only a node that exists, which
+        // `crates/cicada-cli/tests/diagnostic_vocabulary.rs` checks against
+        // the shipped registry (`cicada-script` cannot see the stdlib: the
+        // dependency law). No tense, no work-package name: wording bound to
+        // a milestone is wrong the day the milestone lands.
+        assert!(shown.contains("the `tessellate` node"), "{shown}");
+        assert!(
+            !shown.contains("arriving") && !shown.contains("WP-"),
+            "{shown}"
+        );
         // Inside a list the refusal propagates; nothing is dropped.
         let list = seal(ValueData::List(List {
             axis: None,

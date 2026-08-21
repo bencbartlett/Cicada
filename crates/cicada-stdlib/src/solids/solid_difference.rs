@@ -27,8 +27,9 @@ pub struct SolidDifferenceIn {
 ///
 /// # Panics
 ///
-/// Panics when the cut leaves anything but one solid (split or emptied), or
-/// the kernel refuses.
+/// Panics when the cut leaves anything but one solid — split in two or
+/// emptied; the message carries the count and the rule ("a Solid is one
+/// body") — or the kernel refuses.
 ///
 /// # Examples
 ///
@@ -113,9 +114,20 @@ mod tests {
     fn solid_difference_that_splits_or_empties_is_red() {
         let Some(()) = with_kernel(|| {
             let block = brep_box([0.0; 3], [4.0; 3]);
-            for cutter in [
-                brep_box([-1.0, 1.5, -1.0], [6.0, 1.0, 6.0]), // a slab through the middle
-                brep_box([-1.0; 3], [6.0; 3]),                // everything
+            // The red text is the rule and the way out — the count says
+            // whether the cut split the solid or emptied it — never a glue
+            // identifier or a kernel enum number.
+            for (cutter, expected) in [
+                (
+                    brep_box([-1.0, 1.5, -1.0], [6.0, 1.0, 6.0]), // a slab through the middle
+                    "cut left 2 solids — a Solid is one body; change the inputs so one piece \
+                     remains, or build the pieces as separate solids",
+                ),
+                (
+                    brep_box([-1.0; 3], [6.0; 3]), // everything
+                    "cut left no solid — a Solid is one body, and nothing remains (the operands \
+                     do not overlap the way this operation needs)",
+                ),
             ] {
                 let outcome = std::panic::catch_unwind(|| {
                     solid_difference(SolidDifferenceIn {
@@ -128,7 +140,11 @@ mod tests {
                     .downcast_ref::<String>()
                     .cloned()
                     .unwrap_or_default();
-                assert!(message.contains("expected exactly one solid"), "{message}");
+                assert!(message.contains(expected), "{message}");
+                assert!(
+                    !message.contains("cicada_") && !message.contains("shape type"),
+                    "{message}"
+                );
             }
         }) else {
             return;

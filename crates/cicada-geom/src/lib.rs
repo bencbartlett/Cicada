@@ -112,6 +112,19 @@ pub enum GeomError {
         /// What failed.
         reason: String,
     },
+    /// A kernel operation that must yield exactly one solid body yielded
+    /// another count: a cut that split its solid in two or removed it
+    /// entirely, a union of disjoint operands, an empty intersection. A
+    /// `Solid` is one body (docs/08 §7), so the result is refused rather
+    /// than returned as a compound or as nothing.
+    #[error("{}", not_one_solid_message(operation, *found))]
+    NotOneSolid {
+        /// The operation that produced the result (`cut`, `fuse`, `common`,
+        /// a reader of bytes).
+        operation: String,
+        /// How many solid bodies it produced.
+        found: usize,
+    },
     /// The operation needs a rented kernel this build does not link (its
     /// cargo feature is off). Loud by design: a `Solid` in a build without
     /// OCCT cannot be drawn or operated on, and says so instead of falling
@@ -128,4 +141,20 @@ pub enum GeomError {
         /// The operation that was asked for.
         operation: &'static str,
     },
+}
+
+/// The user-facing text of [`GeomError::NotOneSolid`]: what happened, the
+/// rule, and the way out — never a glue identifier or a kernel enum value.
+fn not_one_solid_message(operation: &str, found: usize) -> String {
+    match found {
+        0 => format!(
+            "{operation} left no solid — a Solid is one body, and nothing remains (the operands \
+             do not overlap the way this operation needs)"
+        ),
+        1 => format!("{operation} left one solid"),
+        n => format!(
+            "{operation} left {n} solids — a Solid is one body; change the inputs so one piece \
+             remains, or build the pieces as separate solids"
+        ),
+    }
 }
