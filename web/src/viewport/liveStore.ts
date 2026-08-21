@@ -20,8 +20,15 @@ export function liveSceneStore(): SceneStore {
     started = true;
     frameBus.subscribe((frame) => store.apply(frame));
     useCicada.subscribe((state, prev) => {
-      // The server re-streams every displayed output after a reset.
-      if (state.displayGeneration !== prev.displayGeneration) store.reset();
+      // EVERY `display_reset` empties the ledger — the server re-streams
+      // every displayed output after it. Counted, not keyed to the reset's
+      // generation: that generation is the MAX of the server's display table,
+      // and an output that vanished meanwhile (its `clear` lost with the
+      // socket) can leave the max unchanged — a reconnect or a
+      // `resync_display` then re-announces the same generation, and a
+      // generation-keyed reset would keep the vanished output painted
+      // (review 2026-08-21; `state/frameBus.test.ts`).
+      if (state.displayResets !== prev.displayResets) store.reset();
     });
   }
   return store;

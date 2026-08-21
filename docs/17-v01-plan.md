@@ -591,38 +591,63 @@ same commit (skill `add-stdlib-node`).
   FIFO, the `biased` select pinned by 64 messages per lane); a wall-sized
   synthetic restream (the 94 MB frame in flight, 319 MiB behind it) + a
   slider tick whose status goes out behind exactly the frame in flight;
-  the parked-restream join (hydrated, intents answered, the superseded
-  output not resent); the lane assignment of the two display-plane
-  texts; the HTTP e2e's join order — all on a permit-paced recording
-  sink, no sleeps. Measured with `tools/measure/lanes.mjs` (the wire, no
-  browser; the "before" engine built from `24d558b`'s server sources):
-  a tick at the observer's snapshot reaches it after 368 MB / 278 ms
-  with one queue, behind 48 KB / 1.3 ms with the lanes; socket open →
-  `hello` 3,031 ms → 7 ms; a tick 50 ms into a join is answered in
-  3,202 ms → 1.3 ms. End to end in `compute_on_release.spec.ts`
-  (headless Chromium, software GL; the observer grabs mid-restream; the
-  spec now MEASURES — logs, attaches, annotates — under a 60 s sanity
-  bound): observer `preview_policy` after the grab — paired runs in one
-  session, 2026-08-20, debug engines: **21.0 s** with one queue (the
-  `24d558b` engine; 14 of 26 frames in at the grab, all 26 at the hint)
-  → **5.9 s and 11.7 s** with the lanes and the join fix (24 and 21
-  frames in at the grab, all 26 at the hint); earlier runs 15.6 s →
-  3.5–8.9 s. The writer's own hint 160–176 ms in both (one 4.5 s
-  outlier: the two pages share one headless browser). The residual is
-  the page's own message queue: the
-  browser takes the whole restream in faster than it handles frames,
-  so a text sent once the server has written them is legitimately last
-  on the wire — no socket order can fix that, and the page cannot be
-  the socket's oracle (the order guard the spec used to carry was
-  valid only while the tick beat the server's ~3 s build). Whether the
-  page's seconds per 27–94 MB frame are software-GL renders or
-  decode/upload is unmeasured; "a GPU browser pays milliseconds" was a
-  hypothesis, not evidence. Next, named, not scheduled: frame handling
-  off the main thread (decode in a worker → typed arrays to the scene),
-  the one change that lets the queue drain at memcpy speed;
-  chunked/element-range frames; a per-output latest-wins display queue
-  for display-vs-display blocking; the live `emit_frames` still encodes
-  under the session lock (changed outputs only).
+  the parked-restream join (hydrated, intents answered, a control text
+  asked for after the tick's repaint still precedes it, the superseded
+  output not resent); a departed client's restream encoding nothing
+  more; the lane assignment of the two display-plane texts; the HTTP
+  e2e's join order — all on a permit-paced recording sink, no sleeps,
+  and every test that asserts an order attached through
+  `attach_client`, the function `client_loop` uses (the review's
+  2026-08-21 finding: with the tests' own channels, `attach_client`
+  with both lanes MERGED passed everything — now it fails two). The
+  review's second round also narrowed two restream costs: the pick
+  table's mutex is held for one up-front ask of an output's ids
+  (`display::PickIds`), never across its encode — it used to be, and
+  the live path takes that mutex under the session lock, so a join
+  could stall every intent for one 94 MB encode; and a client that
+  leaves mid-restream stops costing before the next output's load, not
+  after its encode. Measured with `tools/measure/lanes.mjs` (the wire,
+  no browser; the "before" engine `24d558b`'s, sha256 `39b1c29f…`;
+  fresh runs 2026-08-21 on the final shape): a tick at the observer's
+  snapshot reaches it after 368 MB / 294–331 ms with one queue, behind
+  no frame / 1.3–1.4 ms with the lanes; socket open → `hello`
+  2,938–3,074 ms → 5.6–6.2 ms; a tick 50 ms into a join is answered in
+  3,160–3,348 ms → 1.3 ms, behind the 19–20 small frames encoded so
+  far. **The app-side number is not a before/after of the lanes.** The
+  heavy spec (`compute_on_release.spec.ts`, headless Chromium,
+  software GL) logs the observer's `preview_policy` latency after the
+  writer's grab, under a 60 s sanity bound, as a diagnostic of the
+  PAGE: it is set by where the page's frame handling stands at the
+  grab, which the spec does not control (its observer setup takes about
+  as long as the debug engine's ~3 s restream), and the one-queue
+  engine can post the better number — reproduced 2026-08-21: `24d558b`
+  192 ms with 26 of 26 frames already handled at the grab, the lanes
+  7,284 ms with 23 in (the 2026-08-20 paired runs, 21.0 s → 5.9/11.7 s,
+  carried the same confound: 14 vs 24/21 frames in at the grab, and
+  are withdrawn as evidence). The residual is the page's own message
+  queue: the browser takes the whole restream in faster than it
+  handles frames, so a text sent once the server has written them is
+  legitimately last on the wire — no socket order can fix that, and
+  the page cannot be the socket's oracle. Whether the page's seconds
+  per 27–94 MB frame are software-GL renders or decode/upload is
+  unmeasured; "a GPU browser pays milliseconds" was a hypothesis, not
+  evidence. The client's ledger now empties on EVERY `display_reset`
+  (counted), not on a change of its generation — the table's max can
+  repeat after an output vanished, and a reconnect's reset then kept
+  the vanished output painted (`frameBus.test.ts`). Definition of done
+  as accepted: the cadence is reached on the socket (a text behind at
+  most the frame in flight) and NOT on the page at wall scale; invariant
+  (a) of the work order — "a `display_reset` overtaking older frames
+  makes the client drop them" — was refuted and replaced by the
+  per-output rule (docs/13 point 4). Next, named, not scheduled: frame
+  handling off the main thread (decode in a worker → typed arrays to
+  the scene), the one change that lets the queue drain at memcpy speed;
+  chunked/element-range frames — the one frame in flight is 94 MB on
+  the wall, seconds by itself off loopback; a per-output latest-wins
+  display queue for display-vs-display blocking; an end-to-end
+  discriminator would need the restream throttled on the wire for the
+  observer (CDP network conditions); the live `emit_frames` still
+  encodes under the session lock (changed outputs only).
 - **A count/allocation guard for every count-taking node** — **done
   2026-08-20** (`wt/hardening`, three commits; docs/08 rule 7 is the
   contract). A slider wired into `count` could ask for a capacity the

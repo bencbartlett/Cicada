@@ -44,7 +44,7 @@ const SOLVE_TIMEOUT_MS = 5 * 60_000;
 // (docs/13 §Two lanes, one socket). The socket puts the text behind at most
 // one frame and the server no longer holds its lock or the joiner's
 // `hello` for the restream's build — both pinned deterministically by the
-// server's tests and measured on the wire by `corpus/measure/lanes.mjs`.
+// server's tests and measured on the wire by `tools/measure/lanes.mjs`.
 // What the PAGE then pays is its own: the browser takes the whole restream
 // into its message queue faster than it handles the frames (the wall: 368
 // MB, five frames of 27–94 MB; headless Chromium renders the ~13 M
@@ -52,8 +52,15 @@ const SOLVE_TIMEOUT_MS = 5 * 60_000;
 // server has written its frames waits behind every frame the page has not
 // handled yet — the page cannot be the socket's oracle, and this spec
 // MEASURES the observer's hint (logged + attached) and bounds it only by
-// this sanity net. Reaching the status cadence here is the display plane's
-// follow-up (docs/17): frame handling off the main thread.
+// this sanity net. The number is a DIAGNOSTIC of the page, never a
+// before/after of the lanes: it is set by where the page's frame handling
+// stands at the grab — uncontrolled here (the observer's setup takes about
+// as long as a debug engine's ~3 s restream) — and a one-queue engine whose
+// observer had already handled every frame posts the BETTER number (192 ms
+// with 26 of 26 frames in at the grab, reproduced 2026-08-21, against
+// 7.3 s for the lanes with 23 in). The lanes' evidence is the wire probe.
+// Reaching the status cadence here is the display plane's follow-up
+// (docs/17): frame handling off the main thread.
 const OBSERVER_POLICY_BOUND_MS = 60_000;
 
 interface Timing {
@@ -358,11 +365,12 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
   // The observer hears the broadcast: the hint, the class, the entry —
   // while its display set is still streaming. Before the lanes (one
   // channel per client) the wall's ~350 MB of frames stood between the
-  // observer and this text on the SOCKET: `preview_policy` reached it only
-  // after the last frame — ~26 s after the drag on a loaded dev machine
-  // (measured 2026-08-20; 15.6 s in the spec's own run). Now the text
-  // leaves the server behind at most the one frame in flight; what is left
-  // is the page's own queue (see OBSERVER_POLICY_BOUND_MS), measured here.
+  // observer and this text on the SOCKET whenever the tick reached the
+  // server while they were still queued there. Now the text leaves the
+  // server behind at most the one frame in flight; what is left is the
+  // page's own queue (see OBSERVER_POLICY_BOUND_MS), measured here as a
+  // diagnostic — the number says where the page's frame handling stood at
+  // the grab, not which engine served it.
   const observerHint = observer.getByTestId("param-pending-deboss");
   await expect(observerHint).toBeVisible({ timeout: OBSERVER_POLICY_BOUND_MS });
   const observerHintMs = Date.now() - tGrab;

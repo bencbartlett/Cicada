@@ -15,6 +15,9 @@
  * than the reset's generation" would be the WRONG rule: a restream carries
  * each output at the generation that last drew it, and the reset's
  * generation is the newest of those — unchanged outputs arrive below it.
+ * The ledger empties on EVERY reset (counted — `displayResets`), not on a
+ * change of the reset's generation: that generation is the table's max and
+ * can repeat after an output vanished.
  */
 import { expect, test } from "vitest";
 import { decodeFrame, encodeBatchForTest, type BatchFrame, type Frame, type FrameHeader } from "../protocol/frames";
@@ -119,6 +122,31 @@ test("a display_reset that overtook the frames queued before it: the ledger conv
   // last drew the output with or later, so it is never dropped as stale.
   frameBus.publish(clear(6, 2), BYTES);
   expect(held()).toEqual({ "1:0": 5 });
+});
+
+test("a display_reset at an UNCHANGED generation still empties the ledger: an output whose clear was lost is not kept", () => {
+  // The ledger holds A@5 from above; the server also drew B (node ref 2)
+  // at generation 5.
+  frameBus.publish(mesh(5, 2, 12), BYTES);
+  expect(held()).toEqual({ "1:0": 5, "2:0": 5 });
+
+  // Generation 6 removed B. Its `clear` rode a socket that dropped, so the
+  // page never applied it; the server's display table is now {A@5} and its
+  // MAX generation is still 5. The reconnect (or a `resync_display`)
+  // announces display_reset{5} — the same generation as before. The
+  // convergence argument (docs/13 §Two lanes, one socket, point 2) needs
+  // the ledger to empty HERE: keyed to a change of generation it would not,
+  // and B would stay painted for good (review 2026-08-21).
+  const before = useCicada.getState().displayGeneration;
+  expect(before).toBe(5);
+  displayReset(5);
+  expect(useCicada.getState().displayGeneration).toBe(before);
+  expect(held()).toEqual({});
+
+  // The restream re-sends exactly the table: A@5, and no B.
+  frameBus.publish(mesh(5, 1, 11), BYTES);
+  expect(held()).toEqual({ "1:0": 5 });
+  expect(liveSceneStore().outputs.has("2:0")).toBe(false);
 });
 
 test("control-plane texts that overtake frames touch nothing the ledger reads", () => {

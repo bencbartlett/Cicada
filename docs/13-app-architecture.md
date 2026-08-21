@@ -280,9 +280,15 @@ node ref — instead of landing together after the build); a tick sent
 50 ms into the join is answered in 1.3 ms, the observer's copy behind
 the 20 small frames encoded so far (3.4 MB) — it was 3.2 s, behind all
 26. The restream's build outside the lock takes the pick table's mutex
-per value, so the live path's frame emission may wait one value's
-encode for it — a fraction of a second at worst, instead of the whole
-build.
+for ONE ask per output — `display::PickIds`: every drawn element's id,
+allocated up front, before the tessellation and the encode — never
+across the encode (review 2026-08-21: it used to hold the table for
+the whole encode, up to the 94 MB output's most-of-a-second, and the
+live path takes the table while holding the session lock, so every
+client's intents could stall for one encode during any join). A client
+that leaves mid-restream stops costing at the next output boundary —
+the leave check precedes the load and the encode (`/debug/state`'s
+`picks.encodes` counts encodes; the test reads it).
 
 **What stays ordered with the frames.** Two texts are display-plane by
 meaning and ride the display lane, FIFO with the frames:
@@ -308,7 +314,15 @@ luck.**
    a vanished output is cleared by the `clear` behind it, a restream
    re-applies idempotently (`web/src/state/frameBus.test.ts` drives the
    interleavings, including a reset that overtook the frames queued
-   before it — the order a second socket would produce).
+   before it — the order a second socket would produce). The argument
+   needs the ledger to EMPTY on every `display_reset`, so the client
+   counts resets (`displayResets`) rather than watching the reset's
+   generation change: that generation is the MAX of the server's table,
+   and an output that vanished meanwhile — its `clear` lost with a
+   dropped socket — can leave the max unchanged, so a reconnect's or a
+   `resync_display`'s reset repeats it; keyed to the generation, the
+   ledger kept the vanished output painted (found and fixed
+   2026-08-21, the test pins it).
 3. What a user can see: a `delta` that removes a node may arrive before
    the node's `clear` frame, so the viewport draws its last geometry a
    moment longer — the same pixels it drew a moment before; a pick on
@@ -347,58 +361,97 @@ failure). The pump's priority and FIFO, and its `biased` select pinned
 by 64 pre-queued messages per lane (an unbiased select passes the
 two-message test 1 run in 12; this one with probability 2⁻⁶⁴). A
 wall-sized synthetic restream — the 94.4 MB frame first, then 319
-distinct 1 MiB frames — queued to a real session's client, then a
-slider tick: exactly the frame in flight precedes the tick's status,
-every further text precedes the rest of the restream, the restream
-resumes FIFO, the tick's repaint follows it. The join-time half, with a
-restream parked on `SessionConfig::restream_hold` (a test seam in the
-shape of `op_clock`): the joiner's `hello`, `snapshot`, `display_reset`
-are on the wire while the restream builds; an intent lands and is
-answered meanwhile (the lock is free); when the restream resumes it does
-not resend the output the intent superseded (the client keeps the live
-frame) and does send the unchanged one. The lane assignment of
-`display_reset` and `screenshot_request`: frames already queued to a
-client precede a resync's reset, the restream's frames precede the
-screenshot ask, a control text enqueued last overtakes them all (both
-texts could move to the control lane with every other test green).
-`tests/http_e2e.rs`: the join's wire order (`hello`, `snapshot`, then
-`display_reset` before any frame).
+distinct 1 MiB frames — queued on the display lane of a client attached
+through `attach_client` (the channels and lane wiring `client_loop`
+serves — review 2026-08-21: with its own channels this test passed with
+both lanes merged into one there), then a slider tick: exactly the
+frame in flight precedes the tick's status, every further text precedes
+the rest of the restream, the restream resumes FIFO, the tick's repaint
+follows it. The join-time half, with a restream parked on
+`SessionConfig::restream_hold` (a test seam in the shape of
+`op_clock`): the joiner's `hello`, `snapshot`, `display_reset` are on
+the wire while the restream builds; a `wire_probe` plugs the in-flight
+slot; an intent lands and is answered meanwhile (the lock is free); a
+second `wire_probe` asked for AFTER the tick's repaint was queued still
+precedes it on the wire — the served wiring is two lanes, not one; when
+the restream resumes it does not resend the output the intent
+superseded (the client keeps the live frame) and does send the
+unchanged one. A client that disconnects while its restream is parked:
+the restream resumes, encodes nothing (`picks.encodes` unchanged),
+sends nothing, ends. The lane assignment of `display_reset` and
+`screenshot_request`: frames already queued to a client precede a
+resync's reset, the restream's frames precede the screenshot ask, a
+control text enqueued last overtakes them all (both texts could move
+to the control lane with every other test green). `tests/http_e2e.rs`:
+the join's wire order (`hello`, `snapshot`, then `display_reset` before
+any frame). Mutations that must fail, and do: no `biased`; either
+display-plane text on the control lane; the compare-and-send removed;
+the restream built before the pump; the lanes swapped or MERGED in
+`attach_client`; the leave check moved back behind the encode.
 
-**Measured** (the wall, Ben's machine, debug engine, 2026-08-20). On
-the wire (`tools/measure/lanes.mjs`, no browser; the "before" engine
-built from `24d558b`'s server sources — `git diff 24d558b -- crates`
-empty at build time): a tick sent the moment the observer has its
-snapshot reaches it after ALL 26 frames / 368 MB with one queue per
-client (278 ms after the tick, the wire's time for 368 MB — the
-head-of-line signature), and behind one 48 KB frame, 1.3 ms after the
-tick, with the lanes; socket open → `hello` 3,031 ms before, 7 ms
-after. End to end in the app
+**Measured** (the wall, Ben's machine, debug engines, 2026-08-20/21).
+The lanes' evidence is the WIRE (`tools/measure/lanes.mjs`, no
+browser; scratch copies of `examples/`, scratch caches, the wall solved
+first). The "before" engine is `24d558b`'s (sha256
+`39b1c29f…433d94`, built 2026-08-20 18:21 from a tree whose `git diff
+24d558b -- crates` was empty; the first lanes commit is 18:43 — the
+binary's age is what vouches for it, no other record survived). One
+queue per client: socket open → `hello` 2,938–3,074 ms (the restream
+built under the lock before the joiner's texts); a tick sent the
+moment the observer has its snapshot reaches it after ALL 26 frames /
+368 MB (278–331 ms after the tick — the wire's time for 368 MB, the
+head-of-line signature); a tick 50 ms into the join 3,160–3,348 ms
+after it, behind all 26. The lanes (the final shape, with the pick
+table held for the id ask only; sha256 `cca36d25…df26e`): open →
+`hello` 5.6–6.2 ms; the at-snapshot tick answered 1.3–1.4 ms after it
+behind NO frame (the `display_reset` is out, the first output is still
+being encoded); the 50 ms tick 1.3 ms after it behind the 19–20 small
+frames encoded so far (2.3–3.4 MB) — mid-restream; a cheap slider's
+`status` 2 ms. Two runs each, 2026-08-21; the review's own runs of
+both engines the same day agree, and its hostile states — a
+`resync_display` during the join's restream (two concurrent restreams
+to one client: the ledger converges, 0 mismatches against the server's
+table), a joiner leaving 80 ms in and a fresh one after it (full
+368 MB, no errors), three simultaneous joiners and a tick (each
+answered in 1.1–1.2 ms) — were all clean.
+
+The app-side number is NOT a before/after of the lanes. The heavy spec
 (`web/e2e/compute_on_release.spec.ts` under `CICADA_E2E_HEAVY=1`,
-headless Chromium; the observer grabs while its restream streams): the
-observer's `preview_policy` after the writer's grab — **21.0 s** with
-one queue per client and **5.9 / 11.7 s** with the lanes, paired runs
-in one session (earlier runs 15.6 s → 3.5–8.9 s; docs/17 §Follow-ups
-has the frame counts). That residual is the PAGE's queue, and
-the lanes cannot touch it: the browser takes the whole restream into its
-message queue faster than it handles the frames (368 MB reach a Node
-client in ~0.3 s; the page needs seconds per 27–94 MB frame), so a text
-sent once the server has written its frames waits behind every frame
-the page has not handled yet — on the wire it is, legitimately, last.
-The lanes reorder what is still queued at the SERVER: the text sent
-during the build (the debug engine's ~3 s) or while the socket is
-backpressured. Where the page's seconds per frame go — headless
-Chromium rendering the wall's ~13 M triangles in software (SwiftShader)
-once per arriving frame, ~1.5–2 s per render on this machine, or
-decoding and GPU-uploading a 94 MB frame on the main thread — is a
-hypothesis from an uncommitted long-task trace (eight back-to-back
-tasks of 1.0–2.2 s, `renders: 12`), not separated, not measured on a
-GPU browser. The spec therefore MEASURES the observer's hint (logged,
-attached, annotated "mid-restream" or not) under a 60 s sanity bound;
-the socket's order is pinned by the server tests and `lanes.mjs`. The
-page-side fix is the display plane's: handle frames off the main thread
-(decode in a worker, hand the scene typed arrays), so the queue drains
-at memcpy speed and a text behind it lands in milliseconds; chunked /
-element-range frames keep the unit of work small once they exist.
+headless Chromium) logs the observer's `preview_policy` latency after
+the writer's grab; it is set by where the PAGE's frame handling stands
+at the grab, which the spec does not control — the observer's setup
+(a tab click, a disabled-slider expect) takes about as long as a debug
+engine writes the 368 MB (~3 s) — so whether any frames remain
+unhandled at the grab is luck, and the one-queue engine can post the
+BETTER number: reproduced 2026-08-21, the `24d558b` engine 192 ms with
+26 of 26 frames already handled at the grab, this branch 7,284 ms with
+23 of 26 in (the earlier paired runs, 21.0 s → 5.9/11.7 s, carried the
+same confound: 14 vs 24/21 frames in at the grab). The residual IS the
+page's queue, and the lanes cannot touch it: the browser takes the
+whole restream into its message queue faster than it handles the
+frames (368 MB reach a Node client in ~0.3 s; the page needs seconds
+per 27–94 MB frame), so a text sent once the server has written its
+frames waits behind every frame the page has not handled yet — on the
+wire it is, legitimately, last. The lanes reorder what is still queued
+at the SERVER: the text sent during the build (the debug engine's
+~3 s) or while the socket is backpressured. Where the page's seconds
+per frame go — headless Chromium rendering the wall's ~13 M triangles
+in software (SwiftShader) once per arriving frame, ~1.5–2 s per render
+on this machine, or decoding and GPU-uploading a 94 MB frame on the
+main thread — is a hypothesis from an uncommitted long-task trace
+(eight back-to-back tasks of 1.0–2.2 s, `renders: 12`), not separated,
+not measured on a GPU browser. The spec therefore MEASURES the
+observer's hint (logged, attached, annotated "mid-restream" or not)
+under a 60 s sanity bound, as a diagnostic of the page; the socket's
+order is pinned by the server tests and `lanes.mjs`. An end-to-end
+discriminator would have to make the restream slow ON THE WIRE for the
+observer (CDP `Network.emulateNetworkConditions`, or a throttling
+proxy) so the text's place among the frames reflects the socket order
+— not built. The page-side fix is the display plane's: handle frames
+off the main thread (decode in a worker, hand the scene typed arrays),
+so the queue drains at memcpy speed and a text behind it lands in
+milliseconds; chunked / element-range frames keep the unit of work
+small once they exist.
 
 **Still one socket, still one lock for the live path.** A generation
 that completes while a client's restream is in flight queues its frames
