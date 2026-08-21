@@ -483,7 +483,9 @@ pub fn lower_with_playhead(
 }
 
 /// Lower everything that can lower (the live-session form) with no
-/// transport — the dry check of `cicada mcp` and the tests. Statements
+/// transport — the headless view; the view-model's tests use it, and
+/// `cicada mcp`'s `check` takes the `_with_playhead` form at rest, the
+/// app's view (a wired `cycle` loop is red there, solvable here). Statements
 /// with diagnostics, disabled statements, and statements whose lowering
 /// refuses are excluded with their reason; everything downstream of an
 /// exclusion (or of an unknown name) is excluded as `FedBy`. Kahn order,

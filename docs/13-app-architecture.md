@@ -359,13 +359,25 @@ intents:
 | `transport_play` | `{}` | The playhead advances from where it stands at `speed`; the current frame paints at once. Idempotent while playing |
 | `transport_pause` | `{}` | Freezes the playhead. Idempotent while paused |
 | `transport_seek` | `{"frame": 57}` | Moves the playhead to the first representable playhead INSIDE the frame of the primary loop (nominally `frame × period_ms / frames`, nudged up until it quantizes back to `frame` — the nominal start rounds a few ulps short for some frames, so a bare seek would paint one frame low; `lower.rs` `Playhead::at_frame`), playing or paused — a paused seek paints the frame. `frame ≥ frames` is refused |
-| `transport_speed` | `{"factor": 0.5}` | Playback rate, playhead ms per wall ms, from the current position. Not finite or `≤ 0` is refused |
+| `transport_speed` | `{"factor": 0.5}` | Playback rate, playhead ms per wall ms, from the current position. Not finite, `≤ 0` or above `64` (`MAX_SPEED` — sixteen times the play bar's fastest; unbounded, `1e300` put the playhead beyond the exact frame range within a frame) is refused |
 | `transport_reset` | `{}` | Pause and rewind to `t_ms = 0` — frame 0, `clock` at 0, the values a headless run evaluates |
 
 A refusal is the ordinary `error` with kind `transport` and the
 intent's id (`"frame 500 is outside the loop (frames 0..120)"`,
-`"speed must be a positive finite number, got 0"`); an observer's
-control is kind `lease`. `/debug/state` carries `transport` (the same
+`"speed must be a positive finite number, got 0"`, `"speed must be at
+most 64×, got 1e300"`); an observer's control is kind `lease`. The
+transport-driven ports themselves are never written from the app:
+`set_param` and `param_preview` into `cycle.frame` / `clock.t` are
+refused (kind `refused`) with the same reason the wire probe and
+`connect` give — the session fills the port from the playhead whatever
+the text says, so the kwarg would be dead; `apply_text` may still carry
+it by hand as the headless value. A frame whose lowering excludes a
+binding the structural graph (the canvas) does not — the playhead
+beyond the exact frame range (a `frames` literal at the edge of 2^53),
+a held slider's literal refused — is announced with a `notice`
+(warning) naming the binding, its reason and how many bindings it
+feeds, once per change of that set: the cone is missing from the
+transport's frames and nothing else would say so. `/debug/state` carries `transport` (the same
 view) and the transport generations have their own timing kind,
 `transport`, beside `structural` / `preview` (`wait=true` is a quiet
 oracle only while paused: between frames the loop is idle for an

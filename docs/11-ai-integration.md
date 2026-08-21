@@ -81,8 +81,9 @@ client at `cicada mcp [--project <dir-or-pipeline>]`). It serves the
 SAME data as `/api/catalog` (the server's renderer), runs THE checker
 (`cicada_server::compile::check_source`, the function `cicada run` and
 the live session call) and then THE lowering dry
-(`cicada_server::lower::lower_partial`, the session's form — closures
-built, nothing solved) — never a second copy of any of them. Every
+(`cicada_server::lower::lower_partial_with_playhead` at the playhead at
+rest, the session's form as the app opens a file — closures built,
+nothing solved) — never a second copy of any of them. Every
 tool's description tells the model when to use it; every tool carries
 its real output schema (`node_doc`'s is the catalog node shape, field
 by field, held to the renderer by a test); every refusal is a
@@ -110,7 +111,11 @@ an opaque protocol error; stdout carries nothing but JSON-RPC.
   binding the app would not solve, with the canvas's `status` (`red`:
   its own diagnostics, `#off`, or a lowering refusal the checker alone
   never sees — an integer literal at or beyond 2^53, a literal that
-  refuses construction; `blocked`: fed by an excluded binding) and
+  refuses construction, a `cycle` whose `frames` / `period` is wired
+  rather than literal (the transport's one red: the app quantizes the
+  frame from the node's own literals; headless it is an ordinary node
+  and `cicada run` solves it — `check` is the APP's view, as the reason
+  text says); `blocked`: fed by an excluded binding) and
   `reason` (the same text the node shows, from one renderer) — and the
   binding names. `ok` is true when there are no diagnostics and no
   lowering refusal; `#off` and its blocked cone are a deliberate state,

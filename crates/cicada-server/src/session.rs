@@ -61,7 +61,8 @@ use crate::atomic::write_atomic;
 use crate::compile::{self, Loaded};
 use crate::display::{self, DisplayStats, PickTable};
 use crate::lower::{
-    DrivenPort, Lowered, LoweredBinding, Playhead, lower_partial_with_playhead, lower_with_playhead,
+    DrivenPort, Exclusion, Lowered, LoweredBinding, Playhead, lower_partial_with_playhead,
+    lower_with_playhead,
 };
 use crate::protocol::{
     Actor, ApplyTextRequest, ClientMessage, DeltaSource, DrivenSignal, DrivenView, HistoryView,
@@ -137,6 +138,16 @@ pub const TRANSPORT_TICK: Duration = Duration::from_nanos(16_666_667);
 /// seconds — the lowering's units, so seek and view quantize exactly as
 /// the injected frame does; the wire carries `period_ms`.)
 const DEFAULT_LOOP: (i64, f64) = (120, 4.0);
+
+/// The fastest `transport_speed` accepted — sixteen times the play bar's
+/// fastest (4×). Above it the playhead is useless (a 30 fps loop shows
+/// one frame in thirty at 64×) and only grows `t_ms`: unbounded, a factor
+/// like 1e300 put the playhead beyond the exact frame range within one
+/// frame, and the cycle's cone was dropped from the transport generations
+/// with no red on the canvas (review 2026-08-21; the tick now also says
+/// so — [`Core::transport_tick`]). At 64× a 1,000-frames-per-second loop
+/// stays inside the exact range (2^53 frames) for 4,400 years of playback.
+pub const MAX_SPEED: f64 = 64.0;
 
 /// Session construction options.
 #[derive(Clone)]
@@ -660,6 +671,12 @@ struct Transport {
     /// position is unchanged submits nothing. `None` after any control or
     /// rebuild, so the next tick always paints.
     last_position: Option<Vec<u64>>,
+    /// The bindings the LAST tick's lowering excluded that the structural
+    /// lowering had not (name → reason) — a tick-time red is the playhead's
+    /// doing (beyond the exact frame range) or a held slider's, and the
+    /// canvas, built from the structural graph, does not show it; the tick
+    /// broadcasts a notice whenever this set changes to a non-empty one.
+    tick_exclusions: BTreeMap<String, String>,
 }
 
 impl Transport {
@@ -671,6 +688,7 @@ impl Transport {
             anchor_t_ms: 0.0,
             anchor_clock_ms: 0.0,
             last_position: None,
+            tick_exclusions: BTreeMap::new(),
         }
     }
 
@@ -798,6 +816,52 @@ fn announce_drag_ended(inner: &Inner, drag: &Drag) {
             },
         );
     }
+}
+
+/// A binding a transport frame's lowering (`lowered`) excluded that the
+/// structural graph — the canvas — does not show red (the playhead beyond
+/// the exact frame range, a held slider's literal refused) would otherwise
+/// drop its cone from the frames silently. Broadcast a warning naming the
+/// roots and counting what they feed, once per change of the set
+/// ([`Transport::tick_exclusions`]); an emptied set is silent — the frames
+/// themselves are the recovery.
+fn announce_tick_exclusions(inner: &mut Inner, lowered: &Lowered) {
+    let fresh: Vec<(&String, &Exclusion)> = lowered
+        .excluded
+        .iter()
+        .filter(|(name, reason)| inner.lowered.excluded.get(*name) != Some(*reason))
+        .collect();
+    let tick_exclusions: BTreeMap<String, String> = fresh
+        .iter()
+        .map(|(name, reason)| ((*name).clone(), reason.reason()))
+        .collect();
+    if tick_exclusions == inner.transport.tick_exclusions {
+        return;
+    }
+    if !tick_exclusions.is_empty() {
+        let roots: Vec<String> = fresh
+            .iter()
+            .filter(|(_, reason)| !matches!(reason, Exclusion::FedBy(_)))
+            .map(|(name, reason)| format!("`{name}` ({})", reason.reason()))
+            .collect();
+        let downstream = match fresh.len() - roots.len() {
+            0 => String::new(),
+            1 => " and the 1 binding they feed".to_owned(),
+            n => format!(" and the {n} bindings they feed"),
+        };
+        broadcast(
+            inner,
+            &ServerMessage::Notice {
+                level: "warning".to_owned(),
+                message: format!(
+                    "transport: this frame's graph excludes {}{downstream} — not solved in the \
+                     transport's frames until it lowers again",
+                    roots.join(", ")
+                ),
+            },
+        );
+    }
+    inner.transport.tick_exclusions = tick_exclusions;
 }
 
 /// The cost model's verdict on one param's dirty cone
@@ -1465,7 +1529,13 @@ impl Session {
                 let job = {
                     let mut inner = self.core.lock_inner();
                     let mut scratch = inner.loaded.document.clone();
-                    apply_param(&mut scratch, &node, port.as_deref(), &value)?;
+                    apply_param(
+                        &mut scratch,
+                        &inner.loaded.specs,
+                        &node,
+                        port.as_deref(),
+                        &value,
+                    )?;
                     let resolution = resolve(&scratch, &Catalog::new(&inner.loaded.specs));
                     // At the transport's current playhead: a slider moved
                     // at frame 57 paints frame 57, not the file's frame 0.
@@ -1569,6 +1639,11 @@ impl Session {
                     if !(factor.is_finite() && factor > 0.0) {
                         return Err(IntentError::Transport(format!(
                             "speed must be a positive finite number, got {factor}"
+                        )));
+                    }
+                    if factor > MAX_SPEED {
+                        return Err(IntentError::Transport(format!(
+                            "speed must be at most {MAX_SPEED}×, got {factor}"
                         )));
                     }
                     transport.anchor(now);
@@ -1863,7 +1938,13 @@ impl Session {
                 })
             }
             ClientMessage::SetParam { node, port, value } => {
-                apply_param(&mut inner.loaded.document, &node, port.as_deref(), &value)?;
+                apply_param(
+                    &mut inner.loaded.document,
+                    &inner.loaded.specs,
+                    &node,
+                    port.as_deref(),
+                    &value,
+                )?;
                 let label = match &port {
                     Some(port) => format!("set {node}.{port} = {value}"),
                     None => format!("set {node} = {value}"),
@@ -2770,7 +2851,7 @@ impl Session {
         let (lowered, targets) = {
             let inner = self.core.lock_inner();
             let mut scratch = inner.loaded.document.clone();
-            apply_param(&mut scratch, node, port, value)?;
+            apply_param(&mut scratch, &inner.loaded.specs, node, port, value)?;
             let resolution = resolve(&scratch, &Catalog::new(&inner.loaded.specs));
             let playhead = self.core.playhead(&inner);
             let lowered = lower_partial_with_playhead(
@@ -3093,12 +3174,33 @@ fn spec_order(inner: &Inner, node: &str) -> Option<Vec<&'static str>> {
     Some(spec.inputs.iter().map(|port| port.name).collect())
 }
 
+/// Apply one param edit (`set_param`, a `param_preview` tick, a
+/// hypothetical's override) to `document`: ONE literal into `node.port`
+/// (or the bare literal binding `node`). Refused before it touches the
+/// text when the value is not a literal, and when the port is
+/// transport-driven — `cycle.frame`, `clock.t` ([`transport_driven_reason`];
+/// `specs` is what knows): the session fills that port from the playhead
+/// whatever the text says, so the kwarg such an edit wrote would be dead
+/// in the app and the app must not write it. `apply_text` (a whole file,
+/// by hand) may still carry the kwarg: that is the headless value, shown
+/// on the canvas and removable.
 fn apply_param(
     document: &mut Document,
+    specs: &[&'static NodeSpec],
     node: &str,
     port: Option<&str>,
     value: &str,
 ) -> Result<(), IntentError> {
+    if let Some(port) = port
+        && let Some(signal) = transport_driven_port(document, specs, node, port)
+    {
+        return Err(IntentError::Refused(transport_driven_reason(
+            node,
+            port,
+            signal,
+            "a param edit cannot set it",
+        )));
+    }
     // A param edit writes ONE literal (docs/10: slider drag = one numeric
     // token). Anything else — a reference, an `each()`, a stray
     // expression — is refused before it touches the text.
@@ -3316,21 +3418,19 @@ fn wire_verdict(
     // text says, so a wire into it would be dead in the app. The type
     // lattice would accept an Integer there — this is the one rule the
     // checker does not know, and it is decided HERE (the probe and the
-    // connect gesture both ask this function) so the canvas never computes
-    // it (docs/13; the protocol-change skill: the server owns wire
-    // compatibility). A wire the text already carries is shown and may be
-    // unwired; it is only never offered or created from the app.
+    // connect gesture both ask this function; `apply_param` applies the
+    // same rule to `set_param` / `param_preview`) so the canvas never
+    // computes it (docs/13; the protocol-change skill: the server owns
+    // wire compatibility). A wire the text already carries is shown and
+    // may be unwired; it is only never offered or created from the app.
     if let Some(signal) = transport_driven_port(document, specs, node, port) {
-        let what = match signal {
-            TransportSignal::Frame => "the loop frame",
-            TransportSignal::Time => "the playhead in seconds",
-        };
         return (
             "blocked".to_owned(),
-            Some(format!(
-                "`{node}`: `{port}` is driven by the transport — the session fills it with {what} \
-                 whatever the text says, so nothing can be wired into it in the app (a headless \
-                 run evaluates what the text says)"
+            Some(transport_driven_reason(
+                node,
+                port,
+                signal,
+                "nothing can be wired into it",
             )),
         );
     }
@@ -3619,6 +3719,28 @@ fn transport_driven_port(
         .iter()
         .find(|input| input.name == port)
         .and_then(|input| input.transport_driven)
+}
+
+/// Why nothing from the app may target a transport-driven port — worded
+/// once for the wire probe, the connect gesture, `set_param` and
+/// `param_preview` ([`wire_verdict`], [`apply_param`]); `attempt` names
+/// what is being refused ("nothing can be wired into it", "a param edit
+/// cannot set it"). The web's e2e matches the opening.
+fn transport_driven_reason(
+    node: &str,
+    port: &str,
+    signal: TransportSignal,
+    attempt: &str,
+) -> String {
+    let what = match signal {
+        TransportSignal::Frame => "the loop frame",
+        TransportSignal::Time => "the playhead in seconds",
+    };
+    format!(
+        "`{node}`: `{port}` is driven by the transport — the session fills it with {what} \
+         whatever the text says, so {attempt} in the app (a headless run evaluates what the \
+         text says)"
+    )
 }
 
 fn debounce_loop(core: &Core) {
@@ -3991,6 +4113,7 @@ impl Core {
                 let mut scratch = inner.loaded.document.clone();
                 match apply_param(
                     &mut scratch,
+                    &inner.loaded.specs,
                     &drag.node,
                     drag.port.as_deref(),
                     &drag.last_value,
@@ -4015,6 +4138,7 @@ impl Core {
         };
         let job = match lowered {
             Ok(lowered) => {
+                announce_tick_exclusions(&mut inner, &lowered);
                 let targets = all_targets(&lowered);
                 Job {
                     lowered: Arc::new(lowered),
@@ -5521,6 +5645,97 @@ mod tests {
         );
     }
 
+    // Nor is it a param-edit target: `set_param` into `cycle.frame` /
+    // `clock.t` wrote a kwarg the app ignores (the transport overrides it)
+    // with no refusal — the "server owns the rule" fix covered wires only,
+    // and the web merely hid the editor (review 2026-08-21). `set_param`,
+    // `param_preview` and a hypothetical's override are refused with the
+    // wire's reason, kind `refused`, before the text moves; `apply_text`
+    // (a whole file by hand) still carries the kwarg as the headless value.
+    #[test]
+    fn a_transport_driven_port_is_never_a_param_edit_target_from_the_app() {
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             spin = cycle(period=4.0, frames=120)\n\
+             elapsed = clock(speed=1.0)\n\
+             size = spin + elapsed\n",
+        );
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let before = std::fs::read_to_string(&pipeline).unwrap();
+        drain(&mut rx);
+
+        for (node, port, value, opening) in [
+            (
+                "spin",
+                "frame",
+                "5",
+                "`spin`: `frame` is driven by the transport",
+            ),
+            (
+                "elapsed",
+                "t",
+                "2.5",
+                "`elapsed`: `t` is driven by the transport",
+            ),
+        ] {
+            for intent in [
+                ClientMessage::SetParam {
+                    node: node.into(),
+                    port: Some(port.into()),
+                    value: value.into(),
+                },
+                ClientMessage::ParamPreview {
+                    node: node.into(),
+                    port: Some(port.into()),
+                    value: value.into(),
+                },
+            ] {
+                let error = session.dispatch(id, Some("p".into()), intent).unwrap_err();
+                assert_eq!(error.kind(), "refused");
+                let why = error.to_string();
+                assert!(why.starts_with(opening), "{why}");
+                assert!(
+                    why.contains("so a param edit cannot set it in the app"),
+                    "{why}"
+                );
+            }
+            let error = session
+                .solve_hypothetical(node, Some(port), value)
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("is driven by the transport"),
+                "{error}"
+            );
+        }
+        session.wait_idle();
+        assert_eq!(std::fs::read_to_string(&pipeline).unwrap(), before);
+        assert_eq!(history_of(&session)["depth"], 0, "nothing landed");
+        assert!(
+            transport_generations(&session).is_empty(),
+            "no preview solved either"
+        );
+        // The loop ports stay editable: they are the text's, not the
+        // transport's.
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetParam {
+                node: "spin".into(),
+                port: Some("frames".into()),
+                value: "60".into(),
+            },
+        );
+        session.wait_idle();
+        let text = std::fs::read_to_string(&pipeline).unwrap();
+        assert!(text.contains("frames=60"), "{text}");
+        assert!(!text.contains("frame=5"), "{text}");
+        assert_eq!(session.transport().frames, 60);
+    }
+
     #[test]
     #[allow(clippy::too_many_lines)] // one refusal story, every refused gesture in turn
     fn blocked_wires_bad_params_and_shadowing_renames_are_refused_before_the_text_moves() {
@@ -6724,7 +6939,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
     /// The tick's scratch graph, exactly as the preview path lowers it.
     fn scratch_lowered(inner: &Inner, node: &str, port: Option<&str>, value: &str) -> Lowered {
         let mut scratch = inner.loaded.document.clone();
-        apply_param(&mut scratch, node, port, value).unwrap();
+        apply_param(&mut scratch, &inner.loaded.specs, node, port, value).unwrap();
         let resolution = resolve(&scratch, &Catalog::new(&inner.loaded.specs));
         lower_partial_with_playhead(
             &scratch,
@@ -10238,6 +10453,126 @@ size = slider(value=4.0, min=0.5, max=5.0)
         );
         drop(inner);
         assert!(session.transport().driven.is_empty());
+    }
+
+    // Hostile input stays loud (review 2026-08-21): a speed above
+    // `MAX_SPEED` is refused (unbounded, 1e300 put the playhead beyond the
+    // exact frame range within a frame), and the one way left to get there
+    // — a `frames` literal at the edge of the exact range — is announced:
+    // the tick's lowering excludes the cycle, the canvas (built from the
+    // structural graph) shows nothing, so the tick broadcasts a warning
+    // naming the binding and the reason, once per change of the set.
+    #[test]
+    #[allow(clippy::float_cmp)]
+    #[allow(clippy::too_many_lines)] // the bound, the excursion, the silence, the reset, the repeat
+    fn an_absurd_speed_is_refused_and_a_tick_time_red_is_announced() {
+        let (_dir, config, clock) = project_with_clock(
+            "# cicada 1\n\
+             spin = cycle(period=1.0, frames=9007199254740991)\n\
+             size = spin + 1.0\n\
+             twice = size * 2.0\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (writer, _) = session.connect(tx);
+
+        for factor in [64.5, 1.0e300] {
+            let error = session
+                .dispatch(writer, None, ClientMessage::TransportSpeed { factor })
+                .unwrap_err();
+            assert_eq!(error.kind(), "transport");
+            assert_eq!(
+                error.to_string(),
+                format!("speed must be at most 64×, got {factor}")
+            );
+        }
+        session.handle(writer, None, ClientMessage::TransportSpeed { factor: 64.0 });
+        assert_eq!(session.transport().speed, 64.0, "the bound itself is fine");
+        session.handle(writer, None, ClientMessage::TransportSpeed { factor: 1.0 });
+
+        // At rest the cycle lowers (frame 0) and the canvas shows it green.
+        assert!(
+            session
+                .core
+                .lock_inner()
+                .graph
+                .node("spin")
+                .unwrap()
+                .excluded
+                .is_none()
+        );
+        session.handle(writer, None, ClientMessage::TransportPlay {});
+        session.wait_idle();
+        drain(&mut rx);
+
+        // 1,001 ms in, the frame index passes 2^53: the tick's lowering
+        // excludes `spin` (and what it feeds) — announced once.
+        clock.advance(1_001_000_000);
+        session.transport_tick();
+        session.wait_idle();
+        let messages = texts(&drain(&mut rx));
+        let notices: Vec<&serde_json::Value> =
+            messages.iter().filter(|m| m["type"] == "notice").collect();
+        assert_eq!(notices.len(), 1, "{messages:?}");
+        assert_eq!(notices[0]["payload"]["level"], "warning");
+        assert_eq!(
+            notices[0]["payload"]["message"],
+            "transport: this frame's graph excludes `spin` (`spin`: the playhead (1001 ms) is \
+             beyond the exact frame range — reset the transport) and the 2 bindings they feed \
+             — not solved in the transport's frames until it lowers again"
+        );
+        {
+            let inner = session.core.lock_inner();
+            let kept = inner.last_complete.as_ref().unwrap();
+            assert!(
+                kept.lowered.driven.is_empty(),
+                "the frame solved without the cycle"
+            );
+            assert_eq!(kept.lowered.excluded.len(), 3);
+            assert!(
+                inner.graph.node("spin").unwrap().excluded.is_none(),
+                "the canvas is the structural graph — which is why the notice exists"
+            );
+        }
+        // Further out, the same set: no repeat.
+        clock.advance(1_000_000_000);
+        session.transport_tick();
+        session.wait_idle();
+        assert!(
+            texts(&drain(&mut rx)).iter().all(|m| m["type"] != "notice"),
+            "announced once per change"
+        );
+        // Reset: frame 0 lowers again (silently — the recovery is the
+        // frames themselves), and a second excursion is announced again.
+        session.handle(writer, None, ClientMessage::TransportReset {});
+        session.wait_idle();
+        assert!(
+            texts(&drain(&mut rx)).iter().all(|m| m["type"] != "notice"),
+            "nothing to warn about at frame 0"
+        );
+        assert_eq!(
+            session
+                .core
+                .lock_inner()
+                .last_complete
+                .as_ref()
+                .unwrap()
+                .lowered
+                .driven
+                .len(),
+            1
+        );
+        session.handle(writer, None, ClientMessage::TransportPlay {});
+        clock.advance(1_001_000_000);
+        session.transport_tick();
+        session.wait_idle();
+        let messages = texts(&drain(&mut rx));
+        assert_eq!(
+            messages.iter().filter(|m| m["type"] == "notice").count(),
+            1,
+            "{messages:?}"
+        );
     }
 
     // The last client leaving pauses playback: a session animating for no
