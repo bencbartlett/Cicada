@@ -18,7 +18,7 @@ runs in parallel from day 1:
 | 1 | Undo/redo — snapshot op log + atomic `batch`/`apply_text` path; riders `#off`, Backspace-no-delete | foreground (server/web) | days | **done** 2026-08-20 (merged) |
 | 2 | Git panel slice 1 — status strip, per-node change markers, commit, revert-to-HEAD | foreground (server/web) | ~1 week | **done** 2026-08-20 (wt/git-panel): `GET /api/git/status` + writer-gated `POST /api/git/commit` / `POST /api/git/revert` (docs/13), the web chip / Git tab / canvas badges / `Ctrl+S` commit dialog (docs/16); measured, debug builds: revert POST → barrier snapshot ≤ 35 ms (route test), Revert click → reloaded text in the store 69–81 ms across runs (Playwright) |
 | P | OCCT probe — prebuilt 7.8.x build/link on win/mac/linux, determinism, timings, license, CI shape | parallel worktree | hours, cap 1 day | **done** 2026-08-20 — GREEN on win-64 with one rename patch, byte-deterministic, ~3 ms/boolean; Linux/macOS measured by item 3 WP-A's CI job; memo `docs/probes/occt-2026-08.md` |
-| 3 | OCCT-backed Solid — the `Solid` kind, primitives/extrude/loft/revolve/sweep, booleans, `tessellate`, STEP; `mesh_*` renames in the same commit | main geometry track from week 3 | weeks | **WP-A done** 2026-08-20, review fixes applied the same day (fork `bencbartlett/opencascade-rs@960a8bc`, `occt` feature + seam in `cicada-geom`, `tools/fetch_occt.py`, CI jobs `occt (ubuntu)` per PR and `occt (<os>)` nightly — the non-Windows jobs await their first run); **WP-B done** 2026-08-20 (`wt/solid`: the `Solid` kind end to end, the sharing model — op-local linear handles, no kernel lock — the value-level `cicada_geom::solid`, display through the session's `SolidCache`, the typed Python refusal, the store variant with a committed pre-change pack; the handle cache measured and NOT built); **WP-B second review closed** 2026-08-21 (`wt/solid`: the moved-sphere stale-pcurve root cause fixed in `transform`, display draws unclosed meshes and says so, display tiered + off the session lock on the worker pool, blobs keyed by the display mesh's hash, typed `NotOneSolid`, cached refusals, the 02-solids display cone at 5.2 ms p50 — §Item 3 has the table); **WP-C + WP-D done** 2026-08-20 (`wt/solid`: `occt` ON by default + every CI job fetches the prebuilt; the node-set glue in cicada-geom; `box`/`sphere`/`cylinder`/`cone`/`extrude`/`extrude_to_point`/`loft`/`revolve`/`sweep`/`pipe`/`solid_union`/`solid_difference`/`solid_intersection`/`volume`/`bounding_box`/`deconstruct_solid`/`section`/`tessellate`/`export_step`/`import_step`; the mesh tier as `mesh_*`, the wall's carve hash unchanged; `examples/07-simple-cad.cic` + its Playwright spec; `mirror` added 2026-08-21; numbers below — the cheap-cone slider on the OCCT example: the display cone PASSES since the second review (5.2 / 9.1 ms) while the COMMITTED 02-solids misses the 16 ms bar because its export `tessellate(deflection=0.01)` node sits in the cone (34 ms per tick — a one-line decision for Ben), and Esc inside ONE kernel call misses 250 ms: both named follow-ups) |
+| 3 | OCCT-backed Solid — the `Solid` kind, primitives/extrude/loft/revolve/sweep, booleans, `tessellate`, STEP; `mesh_*` renames in the same commit | main geometry track from week 3 | weeks | **WP-A done** 2026-08-20, review fixes applied the same day (fork `bencbartlett/opencascade-rs@960a8bc`, `occt` feature + seam in `cicada-geom`, `tools/fetch_occt.py`, the dedicated `occt` CI jobs — folded by WP-C into the standard per-PR `rust` / `test-cross` / `playwright-smoke` jobs and the nightly matrix, every building job fetching the prebuilt first; the non-Windows runs await the branch's first CI run); **WP-B done** 2026-08-20 (`wt/solid`: the `Solid` kind end to end, the sharing model — op-local linear handles, no kernel lock — the value-level `cicada_geom::solid`, display through the session's `SolidCache`, the typed Python refusal, the store variant with a committed pre-change pack; the handle cache measured and NOT built); **WP-B second review closed** 2026-08-21 (`wt/solid`: the moved-sphere stale-pcurve root cause fixed in `transform`, display draws unclosed meshes and says so, display tiered + off the session lock on the worker pool, blobs keyed by the display mesh's hash, typed `NotOneSolid`, cached refusals, the 02-solids display cone at 5.2 ms p50 — §Item 3 has the table); **WP-C + WP-D done** 2026-08-20 (`wt/solid`: `occt` ON by default + every CI job fetches the prebuilt; the node-set glue in cicada-geom; `box`/`sphere`/`cylinder`/`cone`/`extrude`/`extrude_to_point`/`loft`/`revolve`/`sweep`/`pipe`/`solid_union`/`solid_difference`/`solid_intersection`/`volume`/`bounding_box`/`deconstruct_solid`/`section`/`tessellate`/`export_step`/`import_step`; the mesh tier as `mesh_*`, the wall's carve hash unchanged; `examples/07-simple-cad.cic` + its Playwright spec; `mirror` added 2026-08-21; numbers below — the cheap-cone slider on the OCCT example: the display cone PASSES since the second review (5.2 / 9.1 ms) while the COMMITTED 02-solids misses the 16 ms bar because its export `tessellate(deflection=0.01)` node sits in the cone (34 ms per tick — a one-line decision for Ben), and Esc inside ONE kernel call misses 250 ms: both named follow-ups); **WP-C/WP-D review closed** 2026-08-21 (`wt/solid`: the tier flip's cache hygiene — `box`/`sphere`/`extrude`/`loft` at version 2 with a stale-memo regression test and a committed signature ledger that makes "a changed meaning bumps the version" a test; `tessellate` bounded by a budget before the mesher runs; `section` tells a tangent contact from a loop; the stdlib's kernel-free world is real and tested; the MCP registration carries the loader path; §Item 3 has the record) |
 | 3b | Scheduler foundations — per-solve cancel handle, `volatile`, idle-class hypothetical solve — plus compute-on-release | parallel (sched/server) | ~1 week | **done** 2026-08-20 (`wt/sched`, eighteen commits after three review rounds: the engine half, then the web half — both sliders show the pending value + estimate from `preview_policy`, the release that writes nothing is `end_drag` and every announced drag's end is `drag_ended` — with a Playwright drag of the wall's `deboss`, an observer page watching, as its evidence) |
 | 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | pending |
 | 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | pending |
@@ -375,7 +375,9 @@ Design: DECISIONS.md rows 16 and 42 (revised 2026-08-19), doc 03, doc 08
   OCCT global written except by the STEP translators, which run under
   `occt::STEP_LOCK`. **The nodes** (all three tests each; every Solid
   node's table test runs in BOTH worlds through `with_kernel` — without
-  the kernel the node must be red with the typed refusal): `box`,
+  the kernel the node must be red with the typed refusal; a claim that
+  became TRUE only with the review closure below, when the stdlib got a
+  kernel-free build of its own): `box`,
   `sphere`, `cylinder`, `cone` (BRepPrimAPI in a plane's frame; a
   world-frame `box` is byte-identical to the seam's `box_at`), `extrude`
   (exact edges for every curve kind: a circle is an exact cylinder, so
@@ -404,8 +406,10 @@ Design: DECISIONS.md rows 16 and 42 (revised 2026-08-19), doc 03, doc 08
   process wrote 'parts 11' — so the same solids give the same bytes,
   proved by a write-twice test) and `import_step` (the first shipped
   `volatile` node: a file on disk is external state; the registry test
-  now holds a sanctioned list of one; its example reads a committed
-  fixture, `crates/cicada-stdlib/fixtures/block.step`). **The
+  now holds a sanctioned list of one; its example reads `block.step`
+  "next to the pipeline" — the example runner stands where a pipeline
+  stands and provides the stdlib's committed fixture there, since the
+  review closure). **The
   transforms**: `Similarity::apply`'s Solid arm goes through the kernel
   (`solid::transform`), so `move` / `rotate` / `scale` / `orient` /
   `linear_array` accept a `Solid` as `T` with no arm of their own, and
@@ -495,6 +499,81 @@ Design: DECISIONS.md rows 16 and 42 (revised 2026-08-19), doc 03, doc 08
   of this branch (row 42's per-OS policy applies if they disagree); Esc
   during a long boolean measured and written down, the kernel worker
   named ✓; `cargo deny` green ✓; CATALOG.md regenerated ✓.
+- **WP-C/WP-D review closure (2026-08-21; findings 1–8 of the
+  adversarial review, five commits on `wt/solid`):** (1) *blocker — a
+  pre-flip memo served a Mesh to the Solid-typed `box`*: the flip
+  changed `box`'s output kind under an unchanged name, port list and
+  `version = 1`, and the memo key `(op, version, tolerance, inputs,
+  fan)` says nothing about what an op returns, so a store warmed by any
+  earlier engine handed the mesh box back, green (reproduced by the
+  review with main's engine and the branch's on one `--cache-dir`).
+  `box` / `sphere` / `extrude` / `loft` are at version 2 (old caches
+  recompute the four once); `cicada-server/tests/stale_memo.rs` plants
+  the pre-flip entry through the real lowering and requires `block` to
+  COMPUTE a Solid, with a control that plants the same entry at the
+  current version and requires the hit (so the planted key is the
+  executor's); and the rule itself is now a test — the conformance suite
+  holds every `(name, version)` to its recorded signature and
+  key-relevant flags in `crates/cicada-stdlib/tests/signatures.tsv`
+  (bless a new row with `CICADA_BLESS_SIGNATURES=1`; the four version-1
+  rows were reconstructed from main's catalog.json so the ledger states
+  the history the flip crossed). The memo-hit kind check the review also
+  offered is NOT built: entries carry hashes only, so it would read every
+  output blob on every hit (the warm path is hash-only, docs/12) or add a
+  `LogRecord` with the kinds for information the version already
+  carries. (2) *major — `tessellate` admitted any deflection the kernel
+  admits*: a unit sphere at 1e-7 had 23 GB of mesher state after 25 s
+  and never finished, in one uninterruptible kernel call. The node now
+  has a budget stated in the part's terms — never finer than
+  `TESSELLATE_MAX_FACETS_PER_TURN` = 1000 facets around a full turn at
+  the solid's largest extent: angle ≥ 2π/1000, deflection ≥
+  (L/2)(1 − cos(π/1000)) ≈ 2.5e-6·L (the default 0.01 admitted up to a
+  4 m part; the review's request 50× below the line) — checked between
+  one handle's bounds read and its mesh (`solid::tessellate_within_budget`),
+  refused typed (`GeomError::TessellationBudget`) with the floors for
+  THIS part in the message; at the budget a sphere the size of the part
+  is ~10⁶ triangles, the most a deliberate request may cost. Display
+  tessellation never reaches it (asserted). (6) the same node dropped
+  `uses_tolerance` (it read no tolerance; the slot only invalidated every
+  tessellation on a tolerance change) — version 2. (3) *`section` false
+  red on a tangent plane*: the seam now tells a tangent contact (the
+  plane touching the solid along a line or curve without entering it)
+  from a loop edge by probing 100 tolerances either side of the edge in
+  the plane — both probes classify alike for a contact, differ for a loop
+  edge — drops the contacts (counted in `occt::Section`) and requires
+  what remains to close, so an open chain with the solid on one side is
+  a typed kernel failure, never a loop; per EDGE, because a graze joined
+  onto a loop arrives as one open wire (the plate outline with the bore
+  graze as a chord). The tangent cylinder, the box-edge plane, a miss,
+  the bore graze and the same plane a hair inside the bore are the tests
+  at the seam and at the node; `section` at version 2. (5) *"both
+  worlds" was dead code*: the stdlib takes cicada-geom with
+  `default-features = false` and forwards its own default-on `occt`
+  feature; `cargo test -p cicada-stdlib --no-default-features` is a 9 s
+  build that CI's Linux job runs — and the first honest run showed 24
+  tests whose Solid fixtures unwrapped kernel constructors before the
+  node was reached, now routed through `support::fixture` (the built
+  solid with the kernel, a pseudo solid without, so the refusal asserted
+  is the NODE's own) and `support::expect_red` (a red in both worlds:
+  the kernel-world reason, or the kernel refusal). (4) *the MCP server
+  died silently without the loader path*: `.mcp.json.example` carries
+  an `env` block (the Windows layout via `${LOCALAPPDATA}`), `tools/
+  fetch_occt.py --print-env mcp` writes the registration for any OS with
+  the absolute library dir and the right variable, `cicada-cli/tests/
+  mcp.rs` asserts the example; AGENTS.md says the path is needed
+  wherever the binary is launched from. (8) `import_step`'s example is
+  `block.step` next to the pipeline; the example runner mirrors `cicada
+  run`'s chdir and provides the stdlib's fixtures there. (7) *three-OS
+  goldens and the CI fetch steps*: still unverified by any run — the
+  branch has not been pushed; the workflow files parse and every
+  building job carries the fetch + env step (read, not run); the
+  per-OS arms of `platform_golden` stay single until the matrix speaks
+  (row 42). The status row's stale job names are fixed. **Re-measured
+  after the closure (release, fresh caches, the dev machine):** the
+  wall's carve hash and the 02-solids slider numbers are in the report
+  of the closure run and unchanged in kind — the budget adds one bounds
+  read (microseconds) to `tessellate`, the contact test runs only on a
+  section wire that did not close.
 
 ## Item 3b — scheduler foundations + compute-on-release (~1 week, parallel)
 
@@ -878,7 +957,24 @@ same commit (skill `add-stdlib-node`).
   subprocess that Esc kills; the op-local sharing model makes this
   cheap — the call's inputs are bytes already. Until then a long B-rep
   boolean holds the session for its duration; an `each()` chain of small
-  booleans does not (p95 31 ms).
+  booleans does not (p95 31 ms). The worker is also the only complete
+  answer to MEMORY inside one call: `tessellate`'s budget (review
+  closure, 2026-08-21) bounds the one node whose request could grow the
+  mesher without limit, but a boolean or a STEP read of a pathological
+  input still runs in-process; a worker with a memory limit is killed,
+  the node goes red, the session lives.
+- **The memo hit checks arity, not kinds** (review closure 2026-08-21):
+  a memo entry whose outputs are the wrong KIND for the node is served
+  if its key matches. The version discipline (now a test — the signature
+  ledger) is what prevents it; the structural guard would be output
+  kinds in the memo record (`LogRecord` + `LOG_FORMAT` bump) compared
+  against the decl on a hit. Worth it if a second class of stale entries
+  ever appears.
+- **The signature ledger is per-crate**: `tests/signatures.tsv` covers
+  the stdlib's registry; script nodes (`scripts/*.py`) key on their body
+  hash and need none. If a second node crate ever exists, it gets its
+  own ledger through the same test.
+
 - **`import_step` re-reads its file every solve** (volatile by design):
   a content-keyed memo (hash the file's bytes, key the translation on
   that) would keep the honesty and drop the read from a slider's cone
