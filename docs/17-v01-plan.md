@@ -736,9 +736,41 @@ same commit (skill `add-stdlib-node`).
   seven files).
 - **Renumber item 4's orbit example**: `examples/06-lists.cic` took the
   number; the transport slice uses the next free one.
-- **Stale catalog on the client after a scripts-change reload**: the app
-  fetches `/api/catalog` once; search rows and port tooltips for script
-  nodes go stale until a reload. Refetch on the catalog-reload barrier.
+- **Stale catalog on the client after a scripts-change reload** — **done
+  2026-08-20** (`wt/hardening`; `web/src/state/catalog.ts`,
+  `web/src/protocol/catalog.ts`; nothing on the wire changed,
+  `PROTOCOL_VERSION` unchanged). The app fetched `/api/catalog` once at
+  start; search rows and port tooltips for script nodes went stale until
+  a page reload. The server labels no snapshot as a catalog change — the
+  watcher's `reason` is `"external file change"` whether the pipeline
+  text or a `scripts/*.py` moved, `git revert` says `"git revert"` with
+  or without a script, and `apply_text` answers with a (non-barrier)
+  snapshot only when a script changed — so the client cannot key on the
+  reason, and a label would be one more thing a reload path could
+  forget. The rule shipped needs no label: **every `snapshot` re-reads
+  the catalog** (`CatalogRefreshPolicy`, fed from the connection module
+  like the git policy). That is the join's snapshot too — the first
+  connect, and every reconnect, where the scripts may have changed while
+  the socket was down, a staleness the one-shot fetch never saw — so the
+  start-time fetch is gone: the socket's first snapshot reads. One read
+  in flight; any number of snapshots that land meanwhile collapse into
+  exactly one follow-up, so reads land in order and an older catalog
+  never ends on top of a newer one; a failed read is a notice and the
+  previous catalog stays. Cost: one ~100 KB GET per snapshot (text-only
+  reloads included), rare by construction. `window.__cicada.catalog()`
+  reports `{reads, busy, nodes}`. Tests: the feed (every snapshot kind
+  reads, `hello`/`delta`/statuses/lease/notices do not), the
+  sequencing (a burst mid-read = one follow-up; a failed read keeps the
+  owed one; dispose), the store path with an injected fetch (URL + token
+  header, the whole object swapped, failure keeps the old catalog). Real
+  app (debug engine, headless Chromium, a scratch copy of `examples/`
+  with `05-script-geometry` open): the join reads once (108 nodes,
+  `pyramids` in); a script written into `scripts/` → the watcher's
+  barrier → exactly one more read, 109 nodes, search-to-place lists
+  `Zzz Probe`; a text-only edit → one more read, no duplicates. Open, for
+  the server side if the per-reload GET ever matters: an additive
+  `catalog_changed` field on `snapshot` would let the client skip
+  text-only barriers.
 
 ## Gates that must not regress (re-measured at each geometry or scheduler landing)
 

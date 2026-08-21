@@ -1,11 +1,13 @@
 /**
- * Wires the socket to the store and the frame bus, fetches the catalog,
- * feeds the git status policy (`state/git.ts`) the events it refreshes on,
- * answers screenshot requests via the viewport, and exposes the debug
- * handle Playwright reads (`window.__cicada`). Called once from `main.tsx`.
+ * Wires the socket to the store and the frame bus, feeds the catalog policy
+ * (`state/catalog.ts`: every `snapshot` re-reads `/api/catalog`) and the git
+ * status policy (`state/git.ts`) the events they refresh on, answers
+ * screenshot requests via the viewport, and exposes the debug handle
+ * Playwright reads (`window.__cicada`). Called once from `main.tsx`.
  */
 import { CicadaClient, wsUrl } from "../protocol/client";
-import type { Catalog, ClientMessage, ServerEnvelope } from "../protocol/messages";
+import type { ClientMessage, ServerEnvelope } from "../protocol/messages";
+import { catalogPolicy, feedCatalogPolicy, startCatalogRefresh } from "./catalog";
 import { frameBus } from "./frameBus";
 import { gitPolicy, startGitStatus } from "./git";
 import type { GitRefreshPolicy } from "./gitRefresh";
@@ -115,9 +117,11 @@ export function startConnection(options: StartOptions): CicadaClient {
 
   const url = wsUrl(options.token, options.pipeline);
   const git = startGitStatus(window);
+  const catalog = startCatalogRefresh();
   client = new CicadaClient(url, {
     onMessage: (envelope: ServerEnvelope) => {
       useCicada.getState().applyServerMessage(envelope);
+      feedCatalogPolicy(catalog, envelope);
       feedGitPolicy(git, envelope);
       if (envelope.type === "screenshot_request") {
         const { id, target } = envelope.payload;
@@ -158,17 +162,9 @@ export function startConnection(options: StartOptions): CicadaClient {
     },
   });
   store.installSender((message: ClientMessage) => client?.send(message) ?? "");
+  // No catalog fetch here: the socket's first `snapshot` reads it (and every
+  // later one re-reads it — `state/catalog.ts`).
   client.connect();
-
-  void fetch(`/api/catalog?pipeline=${encodeURIComponent(options.pipeline)}`, {
-    headers: { "X-Cicada-Token": options.token },
-  })
-    .then(async (response) => {
-      if (!response.ok) throw new Error(`catalog: HTTP ${response.status}`);
-      return (await response.json()) as Catalog;
-    })
-    .then((catalog) => useCicada.getState().setCatalog(catalog))
-    .catch((error: unknown) => useCicada.getState().addNotice("error", String(error)));
 
   installDebugHandle();
   return client;
@@ -200,6 +196,12 @@ function installDebugHandle(): void {
       const policy = gitPolicy();
       const { stale, writes, answers } = useCicada.getState().git;
       return { reads: policy?.reads ?? 0, busy: policy?.busy ?? false, stale, writes, answers };
+    },
+    /** The catalog policy's counters: reads started (one per snapshot received), whether one is in flight, and how many nodes the store holds. */
+    catalog: () => {
+      const policy = catalogPolicy();
+      const catalog = useCicada.getState().catalog;
+      return { reads: policy?.reads ?? 0, busy: policy?.busy ?? false, nodes: catalog?.nodes.length ?? 0 };
     },
     /** Filled in by the viewport: scene statistics for assertions. */
     scene: null as null | (() => unknown),
