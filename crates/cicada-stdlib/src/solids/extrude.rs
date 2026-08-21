@@ -40,10 +40,13 @@ pub struct ExtrudeIn {
 /// up = unit_z(factor=5.0)
 /// prism = extrude(profile=ring, direction=up)
 /// ```
+// `version = 2`: the tier flip changed the output kind (Watertight<Mesh> →
+// Solid) behind the spike's name — a behavior change bumps the version
+// (see `box`'s note for the stale-memo failure it prevents).
 #[node(
     category = "Surface & solid",
     tier = "S",
-    version = 1,
+    version = 2,
     gh = "Extrude",
     uses_tolerance
 )]

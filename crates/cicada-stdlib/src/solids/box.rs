@@ -44,10 +44,15 @@ pub struct BoxIn {
 /// span = construct_domain(start=0.0, end=2.0)
 /// block = box(x=span, y=span, z=span)
 /// ```
+// `version = 2`: the tier flip (WP-C) changed this op's OUTPUT KIND under
+// an unchanged name and port list — Watertight<Mesh> (the spike's box) →
+// Solid — and the memo key is (op, version, tolerance, input hashes): at
+// version 1 a store warmed by a pre-flip engine served the mesh box for the
+// Solid-typed node, green (the review's blocker). Old caches recompute once.
 #[node(
     category = "Surface & solid",
     tier = "S",
-    version = 1,
+    version = 2,
     gh = "Domain Box",
     uses_tolerance
 )]

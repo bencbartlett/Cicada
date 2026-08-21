@@ -46,10 +46,13 @@ pub struct LoftIn {
 /// sections = linear_array(geometry=base, direction=up, count=2)
 /// bar = loft(profiles=sections)
 /// ```
+// `version = 2`: the tier flip changed the output kind (Watertight<Mesh> →
+// Solid) behind the spike's name — a behavior change bumps the version
+// (see `box`'s note for the stale-memo failure it prevents).
 #[node(
     category = "Surface & solid",
     tier = "S",
-    version = 1,
+    version = 2,
     gh = "Loft",
     uses_tolerance
 )]

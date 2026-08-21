@@ -38,10 +38,14 @@ pub struct SphereIn {
 /// ```cic
 /// ball = sphere(radius=1.5)
 /// ```
+// `version = 2`: the tier flip changed the output kind (Watertight<Mesh> →
+// Solid) behind the spike's name — a behavior change bumps the version
+// whether or not the ports moved too (they did here; `box` is the one
+// whose ports did not, see its note).
 #[node(
     category = "Surface & solid",
     tier = "S",
-    version = 1,
+    version = 2,
     gh = "Sphere",
     uses_tolerance
 )]
