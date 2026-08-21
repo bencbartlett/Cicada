@@ -206,8 +206,8 @@ Design: DECISIONS.md rows 16 and 42 (revised 2026-08-19), doc 03, doc 08
   while another is serialized; choose deep copies at the seam
   (`BRepBuilderAPI_Copy`) or doc 12's kernel worker, then retire the
   lock; per-OS goldens until the nightly shows agreement (the policy is
-  drafted in the probe memo §4d; its ledger row and the row-16/42
-  appends land with the merge of WP-A — they are not in the package);
+  in DECISIONS.md rows 16 and 42, revised 2026-08-20 at the merge of
+  WP-A from the probe memo's §4d drafts);
   for WP-C: the own-built OCCT with FreeType/FreeImage off (the fetch
   table takes a second source), `Message_Printer` redirection for the
   STEP writer, the patches for the static path (PR #216's system libs,

@@ -113,11 +113,11 @@ OCCT) in `crates/cicada-geom/src/occt/`.
   under read → write, unaffected by tessellation; golden blake3 hashes
   for the transcendental-free box and prism are in the seam's tests.
   Cross-OS identity is measured by the nightly `occt (<os>)` jobs; until
-  the three agree the goldens are per-OS — the policy the probe memo
-  drafted (`docs/probes/occt-2026-08.md` §4d, together with the row-16
-  and row-42 appends that record the fork, the pinned format version,
-  the single-solid unwrapping and the flag normalization); those ledger
-  rows land with the merge of WP-A, not in the package itself.
+  the three agree the goldens are per-OS — DECISIONS.md rows 16 and 42,
+  revised 2026-08-20 at the merge of WP-A from the probe memo's §4d
+  drafts (`docs/probes/occt-2026-08.md`): they record the fork and its
+  patch stack, the pinned format version, the single-solid unwrapping,
+  the flag normalization and the per-OS goldens rule.
 - **Threads.** `occt::Solid` is `Send`, not `Sync`, and the hazard is
   wider than one solid: OCCT results SHARE `TShape`s with their inputs (a
   boolean reuses the faces it did not touch), `tessellate` attaches
