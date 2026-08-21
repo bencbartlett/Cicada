@@ -162,6 +162,12 @@ pub fn is_drawable(value: &HashedValue) -> bool {
 /// `generation`. `tolerance` feeds curve tessellation. `picks` is asked
 /// once, up front, for every drawn element's id ([`PickIds`]); nothing
 /// below it holds a lock.
+///
+/// # Panics
+///
+/// When `picks` answers a different number of ids than elements it was
+/// asked for — a caller bug ([`PickTable::ids_for`] never does), never a
+/// data condition.
 #[must_use]
 #[allow(clippy::too_many_lines)] // one pass over points, curves, meshes — splitting hides the frame order
 pub fn frames_for_value(
