@@ -46,6 +46,14 @@ touching the committed examples — the app writes what you do.
   `floor`), and the strict-zip adapters made visible (`repeat`,
   `pad_last`) feeding `cull` and a sphere per kept column. Pure
   throughout — the second `--time` run is fully cached.
+- **07-orbit.cic** — the time transport (docs/13 §Animation transport):
+  a `cycle` (one 4 s loop in 120 frames) drives a planet around a sun
+  and a moon around the planet through `rotate`. Headless there is no
+  transport — `spin` evaluates at frame 0, the rest pose — and the
+  second `--time` run is fully cached; in the app, play it (the engine
+  half is in; the play bar arrives with the web half — until then an
+  agent sends `transport_play` on the socket) and watch the first pass
+  compute each frame once and the second pass play from cache.
 
 Notes that save a first-timer some head-scratching:
 

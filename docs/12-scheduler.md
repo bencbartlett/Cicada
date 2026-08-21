@@ -59,7 +59,8 @@ same-value detection needed — content addressing *is* the detection.
 
 *(Live, v0.1 item 3b.)* A node declared `#[node(volatile)]` (catalog:
 `"volatile": true`, CATALOG.md tag `· volatile`) is **uncached by
-design** — the flag `Clock` wears (DECISIONS.md time row; item 4). The
+design** — the flag `clock` wears (DECISIONS.md time row; shipped with
+item 4, the one volatile node in the catalog). The
 executor never reads or writes the memo for a volatile node's outputs,
 at node AND element granularity: it executes in every generation whose
 cone holds it, and inside an `each()` fan-out once per element, every
@@ -348,7 +349,15 @@ No UI rides it yet; items 4 and 5 are its consumers.)*
 - **Cycle loops**: a `cycle` time param (docs/08) is a scrub over a
   fixed range by construction; its frames warm the same way,
   playhead-ahead first, so a loop becomes pure cache playback after
-  at most one pass.
+  at most one pass. *(Live, v0.1 item 4 — the pass itself: the
+  transport injects `floor(t × frames / period) mod frames` into
+  `cycle.frame` at lowering (docs/13 §Animation transport), so the loop
+  IS a finite set of NodeKeys — `frames` of them per downstream node —
+  and one pass of playback warms every one; the second pass is 100 %
+  memo hits with an identical key set, a session test. A cone slower
+  than the frame rate skips frames on the first pass and fills them in
+  on the next. Playhead-ahead warming through the idle class is item
+  5's generic warmer; not yet.)*
 - Any other param change alters the hypothetical NodeKeys, so stale
   warm entries simply stop matching — **no invalidation bookkeeping
   exists at all**.
