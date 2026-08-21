@@ -330,13 +330,19 @@ client ignores the new message and the new snapshot field). The view:
 ```json
 {"playing": true, "speed": 1.0, "t_ms": 1250.0, "frame": 37,
  "frames": 120, "period_ms": 4000.0,
- "driven": [{"node": "spin", "port": "frame", "signal": "frame"},
+ "driven": [{"node": "spin", "port": "frame", "signal": "frame",
+             "loop": {"frames": 120, "period_ms": 4000.0}},
             {"node": "elapsed", "port": "t", "signal": "time"}]}
 ```
 
 `frame` is the primary loop's frame at `t_ms`; `driven` lists every
 `cycle.frame` / `clock.t` that lowered (empty = no time params:
-playback moves nothing). It rides every `snapshot` as
+playback moves nothing), each `frame` port carrying its OWN `loop` —
+the `frames` / `period_ms` the lowering quantized its frame from (the
+node's literals, or `cycle`'s defaults) — so a client showing what a
+non-primary `cycle` is fed computes `floor(t_ms × frames / period_ms)
+mod frames` on that loop, never on the primary's; a `time` port has no
+`loop`. It rides every `snapshot` as
 `payload.transport`, and it is the whole payload of
 
 ```json
@@ -382,7 +388,7 @@ view) and the transport generations have their own timing kind,
 `transport`, beside `structural` / `preview` (`wait=true` is a quiet
 oracle only while paused: between frames the loop is idle for an
 instant, so it returns rather than hangs). Measured on the orbit
-example (`examples/07-orbit.cic`, debug build, 15 nodes): the first
+example (`examples/08-orbit.cic`, debug build, 15 nodes): the first
 pass of the 120-frame loop is 120 generations, one per frame at 30 fps
 (1,190 computed / 610 cached, p50 1.5 ms); the second pass is 120
 generations, 0 computed / 1,800 cached, p50 0.43 ms — pure cache

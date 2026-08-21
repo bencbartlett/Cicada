@@ -2,10 +2,10 @@
 # The time transport (docs/13 §Animation transport): a `cycle` drives an
 # orbit. Time is a transport-driven param, never an ambient clock — the
 # graph stays pure, the player feeds the frame.
-# Headless:   cargo run -p cicada-cli -- run examples/07-orbit.cic
+# Headless:   cargo run -p cicada-cli -- run examples/08-orbit.cic
 #             (no transport: `spin` evaluates at frame 0 — the rest pose;
 #             `--time` twice shows the second run fully cached)
-# In the app: cargo run -p cicada-cli -- serve examples/07-orbit.cic
+# In the app: cargo run -p cicada-cli -- serve examples/08-orbit.cic
 #             press play: the first pass of the 120-frame loop computes each
 #             frame once, the second pass is pure cache playback. Esc pauses.
 

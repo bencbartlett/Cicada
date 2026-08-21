@@ -398,3 +398,57 @@ n = length(list=nums)
     );
     assert!(err.contains("blocked: `n` — fed by red `nums`"), "{err}");
 }
+
+// The time transport headless (v0.1 item 4 "done when": a headless run
+// yields frame 0): `cicada run` passes no playhead, so the transport-driven
+// ports evaluate as written — `spin` (a `cycle`) is 0, the angles it feeds
+// are 0, and the shipped orbit example solves whole, every leaf, with a
+// warm rerun computing nothing. On the REAL example file, so a renumbering
+// or an edit that breaks it is caught here, not in the app.
+#[test]
+fn the_orbit_example_solves_headless_at_frame_zero() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let orbit = repo.join("examples/08-orbit.cic");
+    assert!(orbit.is_file(), "{} is the orbit example", orbit.display());
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("cache");
+    let cache = cache.to_str().unwrap();
+    let orbit = orbit.to_str().unwrap();
+
+    let values = cicada(
+        dir.path(),
+        &[
+            "run",
+            orbit,
+            "--cache-dir",
+            cache,
+            "--node",
+            "spin",
+            "--node",
+            "turn",
+            "--node",
+            "moon_turn",
+        ],
+    );
+    assert!(values.status.success(), "{}", stderr(&values));
+    let text = stdout(&values);
+    assert!(text.contains("spin.out = 0"), "frame 0 of the loop: {text}");
+    assert!(text.contains("turn.out = 0"), "{text}");
+    assert!(text.contains("moon_turn.out = 0"), "{text}");
+
+    // Every leaf — the bodies too — then the warm rerun.
+    let args = ["run", orbit, "--cache-dir", cache, "--hashes", "--time"];
+    let cold = cicada(dir.path(), &args);
+    assert!(cold.status.success(), "{}", stderr(&cold));
+    let cold_out = stdout(&cold);
+    let cold_hashes = hash_lines(&cold_out);
+    assert!(!cold_hashes.is_empty(), "{cold_out}");
+    let warm = cicada(dir.path(), &args);
+    assert!(warm.status.success(), "{}", stderr(&warm));
+    let warm_out = stdout(&warm);
+    assert_eq!(hash_lines(&warm_out), cold_hashes, "stable hashes");
+    assert!(
+        warm_out.contains(" 0 computed, "),
+        "the warm rerun computes nothing: {warm_out}"
+    );
+}

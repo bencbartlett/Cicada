@@ -2,7 +2,7 @@
  * The transport in the app (docs/17 item 4; docs/13 §Animation transport;
  * docs/16 keyboard map): the orbit example's play bar drives the REAL
  * engine from `playwright.config.ts` (a scratch copy of `examples/`,
- * `?pipeline=07-orbit.cic` on the served project). Through the real UI —
+ * `?pipeline=08-orbit.cic` on the served project). Through the real UI —
  * the play button, Space, a pointer on the scrubber, the speed menu,
  * reset — with `/debug/state` (transport, timings, statuses, text_hash,
  * display hashes) and `window.__cicada` as the oracles:
@@ -34,7 +34,7 @@ import config from "../playwright.config";
 
 const meta = config.metadata as { token: string; scratch: string };
 const TOKEN = meta.token;
-const PIPELINE = "07-orbit.cic";
+const PIPELINE = "08-orbit.cic";
 
 interface TransportView {
   playing: boolean;
