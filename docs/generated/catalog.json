@@ -4073,6 +4073,60 @@
       ]
     },
     {
+      "name": "revolve",
+      "title": "Revolve",
+      "description": "revolve a closed planar profile about a line in its plane into a B-rep solid: a full turn by default (a ring from a square, a disc from a profile touching the axis), a partial sweep through any angle domain.",
+      "category": "Surface & solid",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "the profile is degenerate, non-planar or self-intersecting at tolerance, the axis is not a `Line`, has no length, lies off the profile's plane or crosses the profile, the angle domain is empty or spans more than a full turn, or the kernel refuses.",
+      "gh": "Revolution",
+      "examples": [
+        "xs = [2.0, 3.0, 3.0, 2.0]\nzs = [0.0, 0.0, 1.0, 1.0]\ncorners = construct_point(x=each(xs), z=each(zs))\nsection = polyline(vertices=corners, closed=True)\nprofile = as_closed(curve=section)\nbottom = construct_point()\ntop = construct_point(z=1.0)\naxis = line(a=bottom, b=top)\nring = revolve(profile=profile, axis=axis)"
+      ],
+      "inputs": [
+        {
+          "name": "profile",
+          "type": "Closed<Curve>",
+          "base": "Closed<Curve>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The closed, planar profile to revolve; it may touch the axis but never cross it."
+        },
+        {
+          "name": "axis",
+          "type": "Curve",
+          "base": "Curve",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The revolution axis: a `Line` curve (the `line` node) lying in the profile's plane."
+        },
+        {
+          "name": "angle",
+          "type": "Domain",
+          "base": "Domain",
+          "list_depth": 0,
+          "optional": false,
+          "default": "full turn",
+          "doc": "The sweep in radians, from `start` to `end` about the axis (right- handed about the line's direction): at most a full turn, either way round.",
+          "dimension": "angle"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The solid of revolution."
+        }
+      ]
+    },
+    {
       "name": "solid_difference",
       "title": "Solid Difference",
       "description": "subtract every cutter from a B-rep solid in one OCCT pass, coplanar faces merged afterwards; the `mesh_difference` shape (one solid, a list of cutters — lift with `each()` to carve per part), but a `Solid` is always one body: a cut that splits the solid in two or removes it entirely is red, never a compound or an empty solid.",

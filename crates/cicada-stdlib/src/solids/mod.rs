@@ -15,6 +15,7 @@ pub mod cylinder;
 pub mod extrude;
 pub mod extrude_to_point;
 pub mod loft;
+pub mod revolve;
 pub mod solid_difference;
 pub mod solid_intersection;
 pub mod solid_union;
