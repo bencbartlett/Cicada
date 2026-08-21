@@ -5708,7 +5708,7 @@ mod tests {
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         let before = std::fs::read_to_string(&pipeline).unwrap();
 
         session.handle(
@@ -5871,7 +5871,7 @@ mod tests {
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (id, _) = session.connect(tx);
+        let (id, _) = session.connect(ClientLanes::merged(tx));
         let before = std::fs::read_to_string(&pipeline).unwrap();
         drain(&mut rx);
 
@@ -9955,9 +9955,9 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (writer, _) = session.connect(tx);
+        let (writer, _) = session.connect(ClientLanes::merged(tx));
         let (otx, mut orx) = unbounded_channel();
-        let (observer, role) = session.connect(otx);
+        let (observer, role) = session.connect(ClientLanes::merged(otx));
         assert_eq!(role, Role::Observer);
         drain(&mut rx);
         drain(&mut orx);
@@ -10185,7 +10185,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, _rx) = unbounded_channel();
-        let (writer, _) = session.connect(tx);
+        let (writer, _) = session.connect(ClientLanes::merged(tx));
         let wait_until = |what: &str, condition: &dyn Fn() -> bool| {
             let deadline = Instant::now() + Duration::from_secs(30);
             while !condition() {
@@ -10248,7 +10248,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (writer, _) = session.connect(tx);
+        let (writer, _) = session.connect(ClientLanes::merged(tx));
         drain(&mut rx);
         assert_eq!(
             (session.transport().frames, session.transport().period_ms),
@@ -10297,7 +10297,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (writer, _) = session.connect(tx);
+        let (writer, _) = session.connect(ClientLanes::merged(tx));
         drain(&mut rx);
 
         // The primary loop is the longest period (`slow`); seek its frame 10
@@ -10371,7 +10371,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, _rx) = unbounded_channel();
-        let (writer, _) = session.connect(tx);
+        let (writer, _) = session.connect(ClientLanes::merged(tx));
         session.handle(writer, None, ClientMessage::TransportPlay {});
         session.wait_idle();
         assert_eq!(transport_generations(&session).len(), 1);
@@ -10420,7 +10420,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (writer, _) = session.connect(tx);
+        let (writer, _) = session.connect(ClientLanes::merged(tx));
         let before_disk = file_hash(&pipeline);
         let before_text = session.debug_state(false)["text_hash"].clone();
         let modified = std::fs::metadata(&pipeline).unwrap().modified().unwrap();
@@ -10469,7 +10469,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, _rx) = unbounded_channel();
-        let (writer, _) = session.connect(tx);
+        let (writer, _) = session.connect(ClientLanes::merged(tx));
         session.handle(writer, None, ClientMessage::TransportPlay {});
         session.wait_idle();
 
@@ -10534,7 +10534,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, _rx) = unbounded_channel();
-        let (writer, _) = session.connect(tx);
+        let (writer, _) = session.connect(ClientLanes::merged(tx));
         session.handle(writer, None, ClientMessage::TransportPlay {});
         session.wait_idle();
 
@@ -10584,7 +10584,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (writer, _) = session.connect(tx);
+        let (writer, _) = session.connect(ClientLanes::merged(tx));
         let view = session.transport();
         assert!(view.driven.is_empty());
         assert_eq!((view.frames, view.period_ms), (120, 4000.0));
@@ -10684,7 +10684,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
-        let (writer, _) = session.connect(tx);
+        let (writer, _) = session.connect(ClientLanes::merged(tx));
 
         for (factor, spelled) in [(64.5, "64.5"), (1.0e300, "1e300"), (1.0e7, "1e7")] {
             let error = session
@@ -10793,9 +10793,9 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, _rx) = unbounded_channel();
-        let (writer, _) = session.connect(tx);
+        let (writer, _) = session.connect(ClientLanes::merged(tx));
         let (otx, _orx) = unbounded_channel();
-        let (observer, _) = session.connect(otx);
+        let (observer, _) = session.connect(ClientLanes::merged(otx));
         session.handle(writer, None, ClientMessage::TransportPlay {});
         clock.advance(FRAME_NS * 3);
         session.disconnect(writer);
