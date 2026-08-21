@@ -5090,6 +5090,51 @@
       ]
     },
     {
+      "name": "mirror",
+      "title": "Mirror",
+      "description": "reflect geometry across a plane.",
+      "category": "Transform",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "the plane is degenerate (zero-length or parallel axes), or for a `Solid` the OCCT kernel refuses to transform (a `Solid` moves through the kernel — its B-rep geometry is rewritten, never a mesh in disguise).",
+      "gh": "Mirror",
+      "examples": [
+        "corner = construct_point(x=1.0, y=2.0, z=3.0)\nreflected = mirror(geometry=corner)"
+      ],
+      "inputs": [
+        {
+          "name": "geometry",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The geometry to mirror."
+        },
+        {
+          "name": "plane",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "default": "xy_plane",
+          "doc": "The mirror plane: every point of it stays where it is, everything else lands the same distance on the other side."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The geometry reflected across `plane`."
+        }
+      ]
+    },
+    {
       "name": "move",
       "title": "Move",
       "description": "translate geometry along a vector.",

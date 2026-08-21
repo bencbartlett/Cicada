@@ -163,11 +163,15 @@ edge, so only cicada-geom itself has a kernel-free world today).
   (`BRepGProp::VolumeProperties`, adaptive, `eps` 1e-9), `bounds`
   (`BRepBndLib::AddOptimal`, no triangulation, no tolerance inflation);
   `transform` (`gp_Trsf::SetValues` from a `Similarity`'s 12 row-major
-  coefficients — rotation × uniform scale, reflections as a negative
-  scale, translation — then `BRepBuilderAPI_Transform` with `Copy =
+  coefficients — rotation × uniform scale, reflections (a negative
+  scale, or `mirror`'s plane reflection: `Similarity::reflection`, the
+  Householder map about the plane's normal, determinant −1, which the
+  kernel answers by reversing the solid so its volume stays positive),
+  translation — then `BRepBuilderAPI_Transform` with `Copy =
   true`, so the result carries no `TopLoc_Location` and its bytes
   describe the moved geometry; `Similarity::apply` takes this path for a
-  `Solid`, and the five transform nodes need no Solid arm of their own.
+  `Solid`, and the six transform nodes (`move`, `rotate`, `scale`,
+  `orient`, `linear_array`, `mirror`) need no Solid arm of their own.
   **Stale pcurves, found 2026-08-21:** the modifier under `Copy = true`
   rebuilds every edge with the transformed 3D curve and pcurves on the
   transformed surfaces but KEEPS, on a sphere's degenerate pole edges,

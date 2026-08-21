@@ -67,6 +67,29 @@ impl Similarity {
         }
     }
 
+    /// Reflection across the frame's xy plane (the Householder map
+    /// `I − 2·n·nᵀ` about the unit normal `n = frame.z`, through the
+    /// frame's origin): an isometry with determinant −1, so lengths are
+    /// preserved and orientation flips — mesh windings swap, the kernel
+    /// reverses the solid, a plane's derived normal comes out on the
+    /// mirrored side. Unlike [`Self::scale_about`] with a negative factor
+    /// (a POINT reflection) this fixes every point of the mirror plane.
+    #[must_use]
+    pub fn reflection(frame: &Frame) -> Self {
+        let n = frame.z;
+        // Entries `δᵢⱼ − 2·nᵢ·nⱼ`, written as identity minus the scaled
+        // outer product so an axis-aligned mirror stays exact arithmetic
+        // (the zeros are `0 − 0`, the diagonal `1 − 0` / `1 − 2`).
+        let outer = DMat3::from_cols(n * n.x, n * n.y, n * n.z);
+        let linear = DMat3::IDENTITY - outer * 2.0;
+        Self {
+            linear,
+            translation: frame.origin.0 - linear * frame.origin.0,
+            scale_abs: 1.0,
+            flips: true,
+        }
+    }
+
     /// The rigid motion carrying `source` onto `target` (both right-handed
     /// orthonormal, so this is always a rotation + translation).
     #[must_use]
@@ -362,6 +385,59 @@ mod tests {
             (signed_volume(&reflected) - 6.0).abs() < 1e-9,
             "winding swap keeps outward orientation"
         );
+    }
+
+    #[test]
+    fn reflection_fixes_the_plane_and_flips_the_normal_side() {
+        // A tilted mirror through an offset origin: the Householder map
+        // about the frame's normal. Points ON the plane stay, a point off
+        // it lands at the same distance on the other side, lengths hold,
+        // and the transform reports the orientation flip (a reflected box
+        // mesh keeps a positive volume through the winding swap).
+        let tilted = Plane {
+            origin: Point::new(0.0, 0.0, 1.0),
+            x: Vector::new(1.0, 0.0, 0.0),
+            y: Vector::new(0.0, 1.0, 1.0),
+        };
+        let frame = orthonormal(&tilted, TOL).expect("frame");
+        let s = Similarity::reflection(&frame);
+        let on_plane = Point::new(3.0, 2.0, 3.0); // origin + 3x + 2(y-ish)
+        assert!(tol::coincident(s.apply_point(on_plane), on_plane, 1e-12));
+        assert!(tol::coincident(
+            s.apply_point(frame.origin),
+            frame.origin,
+            1e-12
+        ));
+        // The normal's tip mirrors to the other side of the origin.
+        let tip = Point(frame.origin.0 + frame.z);
+        assert!(tol::coincident(
+            s.apply_point(tip),
+            Point(frame.origin.0 - frame.z),
+            1e-12
+        ));
+        let a = Point::new(1.0, 5.0, -2.0);
+        let b = Point::new(-4.0, 0.5, 7.0);
+        let before = (a.0 - b.0).length();
+        let after = (s.apply_point(a).0 - s.apply_point(b).0).length();
+        assert!((before - after).abs() < 1e-9 * before);
+        assert!(s.flips);
+        // Coefficients are exact for the axis-aligned mirror (1 − 0, 1 − 2).
+        let xy = Similarity::reflection(&orthonormal(&world_xy(), TOL).expect("frame"));
+        assert_eq!(
+            xy.coefficients().map(f64::to_bits),
+            [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0].map(f64::to_bits)
+        );
+        let mesh = box_mesh(
+            &world_xy(),
+            Domain::new(0.0, 1.0),
+            Domain::new(0.0, 2.0),
+            Domain::new(0.0, 3.0),
+            TOL,
+        )
+        .expect("builds");
+        let reflected = xy.apply_mesh(&mesh);
+        assert!(reflected.is_watertight());
+        assert!((signed_volume(&reflected) - 6.0).abs() < 1e-9);
     }
 
     #[test]

@@ -347,7 +347,7 @@ All kind-preserving over `T: Transformable`.
 | Move | `(geometry: T, motion: Vector) → T` | S | |
 | Rotate | `(geometry: T, angle: Number, plane: Plane) → T` | S | Rotate Axis: tier 1 |
 | Scale | `(geometry: T, center: Point, factor: Number) → T` | S | Scale NU: tier 1 |
-| Mirror | `(geometry: T, plane: Plane) → T` | 1 | |
+| Mirror | `(geometry: T, plane: Plane = xy_plane) → T` | 1 | **shipped 2026-08-21 (WP-C)**: the reflection across the plane (`Similarity::reflection`, a Householder map about the plane's normal — an isometry, so analytic curves stay analytic); orientation flips the way the other similarities already handle it: mesh windings swap, a `Solid` is reversed by the kernel transform (volume stays positive), a mirrored plane's derived normal is on the mirrored side; a vector mirrors its direction and ignores the plane's offset |
 | Orient | `(geometry: T, source: Plane, target: Plane) → T` | S | the wall's part-to-plate workhorse |
 | Linear Array | `(geometry: T, direction: Vector, count: Integer) → [T]` | S | |
 | Polar / Rectangular Array | `(geometry: T, …) → [T]` | 1 | |
