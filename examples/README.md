@@ -48,17 +48,32 @@ touching the committed examples — the app writes what you do.
   throughout — the second `--time` run is fully cached.
 
 **The rule: every example must solve.** CI runs each `examples/**/*.cic`
-headlessly with a fresh cache — the same compile → lower → solve path as
-`cicada run <file>` with no `--node` (every non-effectful leaf; the
-exporters' inputs solve, the exporters never run) — and requires zero
-checker diagnostics, zero red and zero blocked bindings
-(`crates/cicada-cli/tests/examples_solve.rs`; the failure names the
-example and the binding). Discovery is by extension, so a new example is
-covered the moment it is committed and needs no registration; an example
-that needs Python needs only the interpreter (the scripts here are
-dependency-free on purpose). The wall is included — it solves cold in
-under ten seconds in debug on the dev machine. A pipeline that is MEANT
-to show a red node does not belong in `examples/`.
+headlessly with a fresh cache through the same compile → lower → solve
+functions as `cicada run <file>` with no `--node` (every non-effectful
+leaf; the exporters' inputs solve, the exporters are never lowered, so
+they never run) and requires zero checker diagnostics, zero red and zero
+blocked bindings (`crates/cicada-cli/tests/examples_solve.rs`; the
+failure names the example and the binding). What `run` accepts, the test
+accepts — a binding answered by the memo within the solve (two nodes with
+the same key) is as green as a computed one — with exactly two
+differences, both deliberate:
+
+- **Diagnostics anywhere refuse the example.** `run` gates them to the
+  target cone and prints the rest as warnings; the app paints every one.
+- **The working directory is not the pipeline's.** `run` and `serve`
+  enter it (so exporter `path=` literals resolve against the pipeline);
+  the test cannot (process-global, concurrent tests). Nothing here
+  depends on it — exporters never run, and the wall's scripts resolve
+  `inputs/` against their own `__file__` — and that is the rule it
+  implies: **relative paths in non-effectful nodes must not rely on the
+  cwd** (a script reads files beside itself, never beside the process).
+
+Discovery is by extension, so a new example is covered the moment it is
+committed and needs no registration; an example that needs Python needs
+only the interpreter (the scripts here are dependency-free on purpose).
+The wall is included — it solves cold in under ten seconds in debug on
+the dev machine. A pipeline that is MEANT to show a red node does not
+belong in `examples/`.
 
 Notes that save a first-timer some head-scratching:
 

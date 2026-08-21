@@ -15,16 +15,24 @@
  * reconnect, where the scripts may have changed while the socket was down
  * (a staleness the one-shot fetch at start never saw) — and it costs one
  * ~100 KB GET per snapshot, which is rare by construction (connects,
- * reloads); nothing else the server sends moves the catalog.
+ * reloads); nothing else the server sends moves the catalog. An answer
+ * byte-identical to the one the store holds (a text-only reload) is not
+ * re-applied, so the canvas re-renders for a catalog that changed, never
+ * for a read that merely happened.
  *
  * One read in flight at a time; a snapshot that lands mid-read runs ONE
  * more read when it finishes, so reads land in order and the catalog in
  * the store is never older than the last snapshot (two quick saves cannot
  * leave the earlier catalog on top). No DOM, no timers.
+ *
+ * The wiring — the socket's `onMessage` feeds every envelope through
+ * `feedCatalogPolicy` — lives in `connection.ts` and is pinned there by
+ * `connection.test.ts` against a fake socket; the tests here hold the
+ * policy, the feed and the reader each in isolation.
  */
 import { fetchCatalog } from "../protocol/catalog";
 import type { CatalogSession } from "../protocol/catalog";
-import type { ServerEnvelope } from "../protocol/messages";
+import type { Catalog, ServerEnvelope } from "../protocol/messages";
 import { useCicada } from "./store";
 
 export class CatalogRefreshPolicy {
@@ -76,6 +84,18 @@ export class CatalogRefreshPolicy {
 
 let policy: CatalogRefreshPolicy | null = null;
 
+/**
+ * The last answer `readCatalog` applied: its text and the object the store
+ * was handed. Every snapshot reads (the rule above), but most answers are
+ * byte-identical to the one before — a text-only reload moves no node —
+ * and the store swaps the catalog object unconditionally, which re-renders
+ * every canvas node subscribed to it. An identical answer is therefore not
+ * re-applied, PROVIDED the store still holds the object we applied (if
+ * anything else replaced or cleared it, our memory of the text is moot and
+ * the answer is applied).
+ */
+let applied: { text: string; catalog: Catalog } | null = null;
+
 function session(): CatalogSession {
   const state = useCicada.getState();
   return { token: state.token, pipeline: state.pipeline };
@@ -85,14 +105,18 @@ type FetchLike = Parameters<typeof fetchCatalog>[1];
 
 /**
  * One catalog read into the store: a good answer replaces the catalog
- * (the store swaps the whole object — the canvas re-indexes per object),
- * a failure is a notice and the previous catalog stays — better a stale
- * search box than an empty one mid-session. `fetchImpl` is for tests.
+ * (the store swaps the whole object — the canvas re-indexes per object)
+ * unless it is byte-identical to the one the store holds; a failure is a
+ * notice and the previous catalog stays — better a stale search box than
+ * an empty one mid-session. `fetchImpl` is for tests.
  */
 export async function readCatalog(fetchImpl?: FetchLike): Promise<void> {
   try {
-    const catalog = await fetchCatalog(session(), fetchImpl);
-    useCicada.getState().setCatalog(catalog);
+    const { catalog, text } = await fetchCatalog(session(), fetchImpl);
+    const store = useCicada.getState();
+    if (applied !== null && applied.text === text && store.catalog === applied.catalog) return;
+    applied = { text, catalog };
+    store.setCatalog(catalog);
   } catch (error: unknown) {
     useCicada.getState().addNotice("error", String(error));
   }
@@ -112,6 +136,7 @@ export function startCatalogRefresh(read: () => Promise<void> = readCatalog): Ca
 export function stopCatalogRefresh(): void {
   policy?.dispose();
   policy = null;
+  applied = null;
 }
 
 /** The installed policy (null before `startCatalogRefresh`). */

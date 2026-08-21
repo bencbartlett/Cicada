@@ -793,23 +793,46 @@ same commit (skill `add-stdlib-node`).
   Playwright smoke). Now every `examples/**/*.cic` — discovered by
   extension, never listed, so a new example is covered the moment it is
   committed — solves in-process through the same `compile::load` →
-  `resolve_targets` → `lower` → `Scheduler::solve` path `cicada run`
-  prints over, with a fresh `DiskStore` per example (nothing can be a memo
-  hit, so every node really computes) and no `--node` (every non-effectful
-  leaf; exporters skipped, their inputs solved, and the test asserts they
-  stayed `Skipped`). Green means: zero checker diagnostics anywhere
-  (stricter than `run`'s cone gate on purpose — a warning outside the cone
-  is still a wrong example), zero red, zero blocked; the failure names the
-  example and the binding in `run`'s own words (`red \`xs\` — range: steps
-  must be >= 1, got 0`, `blocked \`n\` — fed by red \`xs\``; verified by
-  mutating `06-lists`). The wall IS included: measured cold in debug on
-  the 24-core dev machine 6.9 s at cores − 2, 18 s at 4 threads, 34 s at 2
-  — the whole test runs in 7.8 s here; CI's 4-vCPU runners will sit near a
-  minute, and the test's header says where the exclusion list goes if
-  that ever dominates. The runner's own contract is pinned (a red binding,
-  its blocked dependant and a diagnostic are each reported, never
-  skipped), as is discovery (the nested `wall/wall.cic` and a floor of
-  seven files).
+  `resolve_targets` → `lower` → `Scheduler::solve` functions `cicada run`
+  prints over, with a fresh `DiskStore` per example (nothing comes from an
+  earlier run, so a node that broke cannot hide behind yesterday's memo)
+  and no `--node` (every non-effectful leaf; the exporters' inputs are the
+  targets and the exporters themselves are never lowered — `lower` takes
+  the upstream closure of the leaves — so they have no outcome at all; the
+  test pins that no effectful binding is lowered and, the observable half,
+  that an exporter's file is never written). Green means: zero checker
+  diagnostics anywhere (stricter than `run`'s cone gate on purpose — a
+  warning outside the cone is still a wrong example), zero red, zero
+  blocked; the failure names the example and the binding in `run`'s own
+  words (`red \`xs\` — range: steps must be >= 1, got 0`, `blocked \`n\` —
+  fed by red \`xs\``; verified by mutating `06-lists`). The wall IS
+  included: measured cold in debug on the 24-core dev machine 6.9 s at
+  cores − 2, 18 s at 4 threads, 34 s at 2 — the whole test runs in 7.8 s
+  here; CI's 4-vCPU runners will sit near a minute, and the test's header
+  says where the exclusion list goes if that ever dominates. The runner's
+  own contract is pinned both ways (a red binding, its blocked dependant
+  and a diagnostic are each reported, never skipped; a computed target, a
+  memo hit within the solve and an exporter left alone each pass), as is
+  discovery (the nested `wall/wall.cic` and a floor of seven files). **The
+  review's fix round (2026-08-21)**: the first version demanded `Computed`
+  of every target, and a VALID pipeline with two nodes of one
+  content-addressed key (`reverse` applied twice more to its own result:
+  `d = reverse(c)` has `b`'s key and is answered from `b`'s entry) failed
+  as "`d` did not compute: CacheHit" — a false FAIL `cicada run` never
+  gave ("3 computed, 1 from cache"), and for same-wave twins one that
+  depended on the thread count (serial: a hit; parallel: both compute).
+  An intra-solve hit is now green like `run`'s, and the `reverse³` case
+  pins it (its hit is deterministic: the twin sits two waves downstream).
+  The header and `examples/README.md` now state the exact differences
+  from `run` — two, not one: diagnostics anywhere, and the working
+  directory, which the test does not enter (`set_current_dir` is
+  process-global and its tests run concurrently) — hence the rule that
+  relative paths in non-effectful nodes must not rely on the cwd (nothing
+  in `examples/` does: `export_obj` never runs, the wall's scripts resolve
+  `inputs/` against `__file__`). Named, not done: the script host could
+  spawn its workers with the pipeline's directory as their cwd so scripts
+  see one rule under `run`, `serve` and this test alike — a
+  `cicada-script`/`cicada-server` change, out of this package.
 - **Renumber item 4's orbit example**: `examples/06-lists.cic` took the
   number; the transport slice uses the next free one.
 - **Stale catalog on the client after a scripts-change reload** — **done
@@ -846,7 +869,28 @@ same commit (skill `add-stdlib-node`).
   `Zzz Probe`; a text-only edit → one more read, no duplicates. Open, for
   the server side if the per-reload GET ever matters: an additive
   `catalog_changed` field on `snapshot` would let the client skip
-  text-only barriers.
+  text-only barriers. **The review's fix round (2026-08-21)**: (1) every
+  snapshot still reads, but an answer byte-identical to the one the store
+  holds is no longer re-applied (`readCatalog` compares the response
+  text, and trusts the comparison only while the store still holds the
+  object it applied) — the store used to swap the catalog object on every
+  read, and every canvas node subscribes to it, so a text-only reload
+  re-rendered the whole canvas for a catalog that had not changed
+  (`CicadaNode.tsx`'s "fires once per load" comment was stale and is
+  corrected); `catalog.test.ts` pins that three identical answers leave
+  one object in the store and a changed answer swaps. (2) The WIRING is
+  now unit-tested: the review deleted `feedCatalogPolicy` from
+  `startConnection`'s `onMessage` and 242 tests stayed green (only `tsc`
+  noticed an unused import; a conditional mis-wire would have passed
+  that too), the Playwright search spec being the only net.
+  `connection.test.ts` drives `startConnection` against a fake
+  `WebSocket` and a stubbed `fetch`: `hello` → no read, the join's
+  snapshot → exactly one `GET /api/catalog?pipeline=…` with the token
+  header and the answer in the store, a `delta` → none, a barrier → a
+  second read, and `window.__cicada.catalog()` reports `{reads: 2, busy:
+  false, nodes: 3}`; both mutations (feed removed; feed on `delta`
+  instead) fail it. The Playwright suite was re-run on the branch's debug
+  engine as part of this round (see the commit).
 
 ## Gates that must not regress (re-measured at each geometry or scheduler landing)
 

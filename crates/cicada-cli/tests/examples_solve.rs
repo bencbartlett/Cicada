@@ -15,9 +15,11 @@
 //!
 //! Discovery is the point — a new example is picked up by its extension,
 //! never by a list — so the test also pins its own discovery (the files
-//! it must have found), and the runner's contract is pinned by the
-//! broken-pipeline cases below (a red binding, a blocked one, a diagnostic
-//! are each reported, never skipped).
+//! it must have found), and the runner's contract is pinned both ways by
+//! the cases below: a red binding, a blocked one, a diagnostic are each
+//! reported, never skipped; a computed target, a memo hit within the
+//! solve, an exporter left alone (its inputs solved, its file unwritten)
+//! each pass.
 //!
 //! The wall is included. Measured cold in DEBUG on the 24-core dev machine
 //! (2026-08-20): 6.9 s at the default thread count (cores − 2), 18 s at 4
@@ -26,9 +28,36 @@
 //! exclude it here by an explicit list WITH the reason, and say so in
 //! `examples/README.md`.
 //!
-//! Stricter than `cicada run` in exactly one way, on purpose: `run` gates
-//! diagnostics to the target cone and prints the rest as warnings; an
-//! example with a warning ANYWHERE is a wrong example (the app paints it).
+//! Same functions as `cicada run`, with exactly two differences, both
+//! deliberate and both stated in `examples/README.md`:
+//!
+//! 1. Diagnostics ANYWHERE refuse the example. `run` gates them to the
+//!    target cone and prints the rest as warnings; an example with a
+//!    warning outside the cone is still a wrong example (the app paints
+//!    it red).
+//! 2. The working directory is NOT the pipeline's directory. `run` enters
+//!    it (`set_current_dir`, so exporter `path=` literals resolve against
+//!    the pipeline, the `serve` rule) — a process-global switch this test
+//!    cannot make: its two tests run concurrently in one process. Nothing
+//!    in `examples/` depends on the cwd today (the only path-taking
+//!    stdlib node is the effectful `export_obj`, which never runs here,
+//!    and the wall's scripts resolve their `inputs/` against their own
+//!    `__file__`), so a relative path in a NON-effectful node — a future
+//!    reader node, a script using the cwd — is the one thing that could
+//!    pass `run` and fail here, or the reverse. The rule for examples
+//!    follows: relative paths in non-effectful nodes must not rely on
+//!    the cwd.
+//!
+//! Not a difference, though the first version of this test made it one:
+//! a target answered by the memo WITHIN the solve is as green as a
+//! computed one. The store is fresh, so nothing comes from an earlier
+//! run — but two nodes of one pipeline with the same content-addressed
+//! key (the same function over the same values, e.g. `reverse` applied
+//! twice more to its own result) share one memo entry, and the later one
+//! is a `CacheHit`. `run` prints it as "from cache" and is happy; so is
+//! this test (`a_sound_pipeline_passes` pins the `reverse³` shape, whose
+//! hit is deterministic at any thread count: the first `reverse` sits two
+//! waves upstream of its twin).
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -39,7 +68,7 @@ use std::sync::Arc;
 use cicada_core::config::ProjectConfig;
 use cicada_sched::{
     CancelToken, DiskStore, MonotonicClock, NodeId, NodeOutcome, NoopObserver, Scheduler,
-    SchedulerConfig,
+    SchedulerConfig, SolveReport,
 };
 use cicada_server::compile::{self, Loaded};
 use cicada_server::lower::{Lowered, LoweredBinding, lower};
@@ -77,10 +106,12 @@ fn discover_pipelines(root: &Path) -> Vec<PathBuf> {
 
 /// Solve one pipeline end to end the way `cicada run <file> --cache-dir
 /// <fresh>` does; `Err` is the human-readable list of what went wrong,
-/// every line naming a binding.
-fn solve_pipeline(pipeline: &Path, cache_dir: &Path) -> Result<(), String> {
+/// every line naming a binding. `Ok` hands the solve back so a test can
+/// pin HOW a binding passed (computed, or a memo hit within the solve).
+fn solve_pipeline(pipeline: &Path, cache_dir: &Path) -> Result<Solved, String> {
     let prepared = check_and_lower(pipeline)?;
-    solve_prepared(&prepared, cache_dir)
+    let report = solve_prepared(&prepared, cache_dir)?;
+    Ok(Solved { prepared, report })
 }
 
 /// A checked, lowered pipeline: the graph, the targets a headless run
@@ -89,6 +120,39 @@ struct Prepared {
     lowered: Lowered,
     target_ids: Vec<NodeId>,
     effectful: HashSet<String>,
+}
+
+/// A pipeline that passed the runner, with the evidence.
+struct Solved {
+    prepared: Prepared,
+    report: SolveReport,
+}
+
+impl std::fmt::Debug for Solved {
+    /// What a test that expected a refusal sees instead: every node's
+    /// outcome by name.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut map = f.debug_map();
+        for (index, outcome) in self.report.outcomes.iter().enumerate() {
+            map.entry(
+                &self.prepared.lowered.graph.node(NodeId(index)).name,
+                outcome,
+            );
+        }
+        map.finish()
+    }
+}
+
+impl Solved {
+    /// The outcome of a lowered binding's node.
+    fn outcome(&self, name: &str) -> &NodeOutcome {
+        match self.prepared.lowered.bindings.get(name) {
+            Some(LoweredBinding::Port { node, .. } | LoweredBinding::Node { node }) => {
+                self.report.outcome(*node)
+            }
+            other => panic!("`{name}` is not a lowered node: {other:?}"),
+        }
+    }
 }
 
 /// Phase 1 of `cicada run`: parse + check (script discovery included),
@@ -157,15 +221,18 @@ fn check_and_lower(pipeline: &Path) -> Result<Prepared, String> {
 }
 
 /// Phase 2: solve on a fresh store and judge the report — zero red, zero
-/// blocked, every target computed, no exporter ran.
-fn solve_prepared(prepared: &Prepared, cache_dir: &Path) -> Result<(), String> {
+/// blocked, every target answered (computed, or a memo hit within this
+/// very solve), no exporter lowered.
+fn solve_prepared(prepared: &Prepared, cache_dir: &Path) -> Result<SolveReport, String> {
     let Prepared {
         lowered,
         target_ids,
         effectful,
     } = prepared;
-    // A fresh store per pipeline: nothing can be a cache hit, so every
-    // node really computes — the memo cannot hide a node that broke.
+    // A fresh store per pipeline: nothing comes from an EARLIER run, so a
+    // node that broke cannot hide behind yesterday's memo entry. Hits
+    // within the solve itself (two nodes with one key) are real work done
+    // once, and accepted below.
     let (store, _report) =
         DiskStore::open(cache_dir).map_err(|e| format!("opening the store: {e}"))?;
     let scheduler = Scheduler::new(
@@ -208,30 +275,36 @@ fn solve_prepared(prepared: &Prepared, cache_dir: &Path) -> Result<(), String> {
     if !problems.is_empty() {
         return Err(problems.join("\n"));
     }
-    // Every target computed (a fresh store cannot answer from the memo),
-    // and no exporter ran.
+    // Every target answered: computed this solve, or — two nodes of this
+    // pipeline sharing one content-addressed key — served from the entry
+    // its twin wrote moments ago (`run` says "from cache" and accepts it
+    // too). Anything else (`Skipped`, `Cancelled`) is a runner bug, not
+    // an example's: red and blocked were reported above.
     for id in target_ids {
         match report.outcome(*id) {
-            NodeOutcome::Computed { .. } => {}
+            NodeOutcome::Computed { .. } | NodeOutcome::CacheHit { .. } => {}
             other => {
                 return Err(format!(
-                    "  `{}` did not compute: {other:?}",
+                    "  `{}` was neither computed nor answered: {other:?}",
                     lowered.graph.node(*id).name
                 ));
             }
         }
     }
+    // Exporters never run — by construction, not by a status: `lower`
+    // takes the UPSTREAM closure of the leaves, and an exporter is a leaf
+    // nothing references (its inputs are the targets, not it), so it is
+    // not lowered at all and has no outcome to inspect. Pin exactly that;
+    // the observable half (no file written) is pinned by the test below.
     for name in effectful {
-        if let Some(LoweredBinding::Node { node } | LoweredBinding::Port { node, .. }) =
-            lowered.bindings.get(name)
-            && !matches!(report.outcome(*node), NodeOutcome::Skipped)
-        {
+        if lowered.bindings.contains_key(name) {
             return Err(format!(
-                "  effectful `{name}` ran — exporters never auto-run"
+                "  effectful `{name}` was lowered into the solve graph — exporters never \
+                 auto-run (only their inputs are targets)"
             ));
         }
     }
-    Ok(())
+    Ok(report)
 }
 
 #[test]
@@ -311,11 +384,87 @@ fn a_broken_pipeline_names_the_binding() {
     let diag = write("diag.cic", "# cicada 1\nxs = series(cont=4)\n");
     let err = solve_pipeline(&diag, &dir.path().join("cache_diag")).unwrap_err();
     assert!(err.contains("diagnostic"), "{err}");
+}
 
-    // And a sound pipeline passes the same runner.
+// The runner's other contract: what `cicada run` accepts, this accepts —
+// including the two shapes the first version of the test got wrong or
+// never reached (the 2026-08-21 review).
+#[test]
+fn a_sound_pipeline_passes() {
+    let dir = tempfile::tempdir().unwrap();
+    let write = |name: &str, text: &str| -> PathBuf {
+        let path = dir.path().join(name);
+        std::fs::write(&path, text).unwrap();
+        path
+    };
+
+    // The plain case: every target computed.
     let ok = write(
         "ok.cic",
         "# cicada 1\nxs = series(count=4)\nys = reverse(list=xs)\n",
     );
-    solve_pipeline(&ok, &dir.path().join("cache_ok")).unwrap();
+    let solved = solve_pipeline(&ok, &dir.path().join("cache_ok")).unwrap();
+    assert!(
+        matches!(solved.outcome("ys"), NodeOutcome::Computed { .. }),
+        "{:?}",
+        solved.outcome("ys")
+    );
+
+    // A memo hit WITHIN the solve is green. `c` reverses `b` back into
+    // `a`'s value, so `d = reverse(c)` has `b`'s content-addressed key and
+    // is answered from the entry `b` wrote two waves earlier — at any
+    // thread count (the first version demanded `Computed` of every target
+    // and refused this valid pipeline, which `run` prints as "3 computed,
+    // 1 from cache"). The assertion on `d`'s outcome is deliberate: if the
+    // scheduler ever stopped deduplicating keys within a solve, this case
+    // would no longer exercise what it claims to, and must say so.
+    let twins = write(
+        "twins.cic",
+        "# cicada 1\na = series(count=3)\nb = reverse(list=a)\nc = reverse(list=b)\nd = reverse(list=c)\n",
+    );
+    let solved = solve_pipeline(&twins, &dir.path().join("cache_twins")).unwrap();
+    assert!(
+        matches!(solved.outcome("b"), NodeOutcome::Computed { .. }),
+        "{:?}",
+        solved.outcome("b")
+    );
+    assert!(
+        matches!(solved.outcome("d"), NodeOutcome::CacheHit { .. }),
+        "`d` shares `b`'s key and must be the intra-solve memo hit this case pins: {:?}",
+        solved.outcome("d")
+    );
+
+    // An exporter in the pipeline: its inputs solve, it is never lowered,
+    // and — the half a user can see — its file is never written. The path
+    // is absolute so the assertion does not depend on the cwd (see the
+    // header: this test does not enter the pipeline's directory).
+    let never = dir.path().join("never.obj");
+    let never_literal = never.to_string_lossy().replace('\\', "/");
+    let export = write(
+        "export.cic",
+        &format!(
+            "# cicada 1\nspan = construct_domain(start=0.0, end=1.0)\nblock = box(x=span, y=span, z=span)\n\
+             meshes = duplicate(item=block, count=1)\ndump = export_obj(meshes=meshes, path=\"{never_literal}\")\n"
+        ),
+    );
+    let solved = solve_pipeline(&export, &dir.path().join("cache_export")).unwrap();
+    assert!(
+        solved.prepared.effectful.contains("dump"),
+        "the runner saw the exporter: {:?}",
+        solved.prepared.effectful
+    );
+    assert!(
+        !solved.prepared.lowered.bindings.contains_key("dump"),
+        "an exporter is never lowered (upstream closure of the leaves)"
+    );
+    assert!(
+        matches!(solved.outcome("meshes"), NodeOutcome::Computed { .. }),
+        "the exporter's input is a target and solves: {:?}",
+        solved.outcome("meshes")
+    );
+    assert!(
+        !never.exists(),
+        "the exporter must not have run: {} exists",
+        never.display()
+    );
 }

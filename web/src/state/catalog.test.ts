@@ -206,6 +206,8 @@ describe("startCatalogRefresh / stopCatalogRefresh", () => {
 
 describe("readCatalog", () => {
   beforeEach(() => {
+    // `stopCatalogRefresh` also forgets the last applied answer.
+    stopCatalogRefresh();
     useCicada.setState({ catalog: null, notices: [] });
     useCicada.getState().setIdentity("tok", "sub/p.cic");
   });
@@ -236,5 +238,42 @@ describe("readCatalog", () => {
     const state = useCicada.getState();
     expect(state.catalog?.nodes.map((n) => n.name), "better a stale search box than an empty one").toEqual(["series"]);
     expect(state.notices.map((n) => [n.level, n.message])).toEqual([["error", "Error: catalog: HTTP 401"]]);
+  });
+
+  it("an answer byte-identical to the one held is not re-applied — a text-only reload re-renders no canvas node", async () => {
+    const same = () => Promise.resolve(new Response(JSON.stringify(catalogOf("series", "my_script")), { status: 200 }));
+    const swaps = vi.fn();
+    const unsubscribe = useCicada.subscribe((state, previous) => {
+      if (state.catalog !== previous.catalog) swaps();
+    });
+    try {
+      await readCatalog(same);
+      const held = useCicada.getState().catalog;
+      expect(held?.nodes.map((n) => n.name)).toEqual(["series", "my_script"]);
+      expect(swaps).toHaveBeenCalledTimes(1);
+
+      await readCatalog(same);
+      await readCatalog(same);
+      expect(useCicada.getState().catalog, "the same object — subscribers saw nothing").toBe(held);
+      expect(swaps).toHaveBeenCalledTimes(1);
+
+      // A different answer (a script added) swaps, as before.
+      await readCatalog(() => Promise.resolve(new Response(JSON.stringify(catalogOf("series", "my_script", "added")), { status: 200 })));
+      expect(useCicada.getState().catalog).not.toBe(held);
+      expect(swaps).toHaveBeenCalledTimes(2);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("the identical-answer skip trusts the text only while the store still holds the object it applied", async () => {
+    const same = () => Promise.resolve(new Response(JSON.stringify(catalogOf("series")), { status: 200 }));
+    await readCatalog(same);
+    expect(useCicada.getState().catalog).not.toBeNull();
+    // Something else cleared the store's catalog (a future reset path): the
+    // remembered text must not keep the store empty.
+    useCicada.setState({ catalog: null });
+    await readCatalog(same);
+    expect(useCicada.getState().catalog?.nodes.map((n) => n.name), "applied again — the memory of the text is moot once the store moved").toEqual(["series"]);
   });
 });

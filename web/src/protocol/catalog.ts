@@ -19,11 +19,19 @@ export interface CatalogSession {
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
-/** The catalog the server serves for `session.pipeline`; any non-OK answer throws with the HTTP status. */
-export async function fetchCatalog(session: CatalogSession, fetchImpl: FetchLike = fetch): Promise<Catalog> {
+/** One catalog answer: the parsed object and the bytes it was parsed from (the state layer compares answers by text). */
+export interface CatalogAnswer {
+  catalog: Catalog;
+  /** The response body verbatim — two snapshots whose answers are byte-identical need no second catalog object. */
+  text: string;
+}
+
+/** The catalog the server serves for `session.pipeline`, with its text; any non-OK answer throws with the HTTP status. */
+export async function fetchCatalog(session: CatalogSession, fetchImpl: FetchLike = fetch): Promise<CatalogAnswer> {
   const response = await fetchImpl(`/api/catalog?pipeline=${encodeURIComponent(session.pipeline)}`, {
     headers: { "X-Cicada-Token": session.token },
   });
   if (!response.ok) throw new Error(`catalog: HTTP ${response.status}`);
-  return (await response.json()) as Catalog;
+  const text = await response.text();
+  return { catalog: JSON.parse(text) as Catalog, text };
 }

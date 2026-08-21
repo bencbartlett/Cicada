@@ -242,8 +242,11 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
   const writer = useCicada(canWrite);
   const gitChange = useCicada((s) => s.gitMarkers[name]?.change);
   // Output-port docs come from the catalog (the view-model's `OutputView`
-  // carries none); the catalog object is replaced whole, never mutated, so
-  // this subscription only fires once per load.
+  // carries none); the catalog object is replaced whole, never mutated,
+  // and only when a read's answer differs from the one held (every
+  // snapshot re-reads it — `state/catalog.ts` — but an identical answer
+  // is not re-applied), so this subscription fires when a script node
+  // appeared or changed, not per reload.
   const catalog = useCicada((s) => s.catalog);
   const dragSource = useDragSource();
   const tier = useLodTier();
