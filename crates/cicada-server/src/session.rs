@@ -149,6 +149,17 @@ const DEFAULT_LOOP: (i64, f64) = (120, 4.0);
 /// stays inside the exact range (2^53 frames) for 4,400 years of playback.
 pub const MAX_SPEED: f64 = 64.0;
 
+/// A `transport_speed` factor as a refusal spells it: plainly for the
+/// numbers a play bar sends, in exponent form once `{}` would print a
+/// 300-digit integer for `1e300`.
+fn spell_speed(factor: f64) -> String {
+    if factor.is_finite() && factor.abs() >= 1.0e6 {
+        format!("{factor:e}")
+    } else {
+        format!("{factor}")
+    }
+}
+
 /// Session construction options.
 #[derive(Clone)]
 pub struct SessionConfig {
@@ -1638,12 +1649,14 @@ impl Session {
                 self.transport_control(|transport, now, _| {
                     if !(factor.is_finite() && factor > 0.0) {
                         return Err(IntentError::Transport(format!(
-                            "speed must be a positive finite number, got {factor}"
+                            "speed must be a positive finite number, got {}",
+                            spell_speed(factor)
                         )));
                     }
                     if factor > MAX_SPEED {
                         return Err(IntentError::Transport(format!(
-                            "speed must be at most {MAX_SPEED}×, got {factor}"
+                            "speed must be at most {MAX_SPEED}×, got {}",
+                            spell_speed(factor)
                         )));
                     }
                     transport.anchor(now);
@@ -10477,14 +10490,14 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let (tx, mut rx) = unbounded_channel();
         let (writer, _) = session.connect(tx);
 
-        for factor in [64.5, 1.0e300] {
+        for (factor, spelled) in [(64.5, "64.5"), (1.0e300, "1e300"), (1.0e7, "1e7")] {
             let error = session
                 .dispatch(writer, None, ClientMessage::TransportSpeed { factor })
                 .unwrap_err();
             assert_eq!(error.kind(), "transport");
             assert_eq!(
                 error.to_string(),
-                format!("speed must be at most 64×, got {factor}")
+                format!("speed must be at most 64×, got {spelled}")
             );
         }
         session.handle(writer, None, ClientMessage::TransportSpeed { factor: 64.0 });
