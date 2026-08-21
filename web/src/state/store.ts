@@ -600,10 +600,13 @@ export const useCicada = create<CicadaState>((set, get) => ({
         // landed one (docs/13 §Slider drags: "landed or refused") — the
         // pending value is NOT going to solve, so the badge must not
         // stand. Errors are unicast answers to this client's own intents;
-        // mid-drag those are writes. The one refusal the session decides
-        // BEFORE the drag-ending door is the lease check, so a `lease`
-        // error leaves the drag (and the badge) standing.
-        set({ lastError: lastErrorOf(p), pending: p.kind === "lease" ? get().pending : null });
+        // mid-drag those are writes. Two refusals leave the server's drag
+        // standing, so they leave the badge standing too: the lease check
+        // (decided BEFORE the drag-ending door) and a transport control
+        // (`transport_seek` outside the loop, `transport_speed` out of
+        // bounds — writes for the lease, never drag-enders: docs/13
+        // §Animation transport).
+        set({ lastError: lastErrorOf(p), pending: dragStandsAfter(p.kind) ? get().pending : null });
         // An empty undo/redo side is a routine answer to Ctrl+Z, not a
         // failure: the message still says why (including the barrier).
         get().addNotice(errorNoticeLevel(p.kind), p.message);
@@ -825,6 +828,18 @@ export function lastErrorOf(p: ErrorPayload): LastError {
  */
 export function errorNoticeLevel(kind: ErrorKind): Notice["level"] {
   return kind === "nothing_to_undo" || kind === "nothing_to_redo" ? "info" : "error";
+}
+
+/**
+ * Does a refusal of this `kind` leave the server's drag — and so the
+ * pending badge — standing? A refused write ends the drag at the
+ * dispatcher's door (docs/13 §Slider drags: "landed or refused"); the two
+ * refusals that never reach that door are the lease check, decided before
+ * it, and a transport control, which is a write for the lease's purposes
+ * and nothing else (docs/13 §Animation transport: never a drag-ender).
+ */
+export function dragStandsAfter(kind: ErrorKind): boolean {
+  return kind === "lease" || kind === "transport";
 }
 
 /** Keep only the entries whose key is a live binding. */
