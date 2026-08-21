@@ -122,7 +122,10 @@ mod tests {
 
     // The slot ceiling on the DERIVED vertex count: 2,897 segments is the
     // last sphere under 2^22 vertices (4,191,961), 2,898 the first over
-    // (4,196,306) — red before the kernel allocates a single position.
+    // (4,196,306) — red with the vertex count and the ceiling. The boundary
+    // case pins where the guard sits (a guard moved after the kernel would
+    // pass it too — a 200 MB sphere is buildable); the absurd case below
+    // is what detects that mutation.
     #[test]
     fn sphere_vertex_ceiling_sits_between_2897_and_2898_segments() {
         assert_eq!(sphere_vertex_count(2897), 4_191_961);
@@ -134,7 +137,7 @@ mod tests {
     #[should_panic(
         expected = "sphere: vertices would be 4196306 — above the 4194304 (2^22) slot ceiling"
     )]
-    fn sphere_one_segment_past_the_vertex_ceiling_is_refused_not_allocated() {
+    fn sphere_one_segment_past_the_vertex_ceiling_is_red() {
         let _ = sphere(
             &config(),
             SphereIn {
@@ -145,6 +148,11 @@ mod tests {
         );
     }
 
+    // The absurd density a literal or an Integer wire can carry: 10^14
+    // segments is 5 × 10^27 vertices — with the guard after the kernel
+    // this test binary would abort on allocation failure (`catch_unwind`
+    // cannot catch that), so passing proves the refusal precedes it, with
+    // the true product in the message (u128, no overflow).
     #[test]
     #[should_panic(expected = "sphere: vertices would be 4999999999999900000000000002 —")]
     fn sphere_absurd_segments_are_refused_not_allocated() {

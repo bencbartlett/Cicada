@@ -652,7 +652,12 @@ same commit (skill `add-stdlib-node`).
   2026-08-20** (`wt/hardening`, three commits, plus the 2026-08-21
   re-audit that found every node accounted for and added the one missing
   boundary case — `series` at 2^22 builds, 2^22 + 1 is red; docs/08 rule
-  7 is the contract). A slider wired into `count` could ask for a capacity the
+  7 is the contract, DECISIONS.md row of 2026-08-21 the ledger record;
+  the review's fix round of 2026-08-21 is recorded at the end of this
+  entry). A count literal or an Integer wire into `count` (a slider is a
+  `Number`, and the checker widens Integer → Number only — the
+  inspector's set-param, `apply_text` and `length`'s Integer output are
+  the vectors) could ask for a capacity the
   allocator refuses, which aborts the process — `catch_unwind` cannot
   catch it. The 2^24 slot ceiling (15112fb) already stood on eight count
   ports; this package gave it its byte half and its product form,
@@ -667,7 +672,7 @@ same commit (skill `add-stdlib-node`).
   end-to-end cost of a slot (value-model hashing + memo log + zstd) —
   `series` at 2^24 peaked at 9,763 MiB of working set and wrote 1.4 GB
   to the cache, ~580 bytes a slot for an 8-byte element — so the 2^24
-  band let a slider reach the allocator-failure abort on an 8–16 GB
+  band let a count literal reach the allocator-failure abort on an 8–16 GB
   machine a few million slots UNDER the ceiling; at 2^22 the process
   peaks at 2,478 MiB in 4.1 s (measured the same way; the numbers are
   on the constant). `bytes_per_slot` is what a slot makes the node
@@ -726,11 +731,55 @@ same commit (skill `add-stdlib-node`).
   the message; only the absurd cases detect a guard-after mutation. A
   test-only counting `#[global_allocator]` would have proven it at
   exactly cap+1 but needs `unsafe` outside an FFI seam, which the rules
-  forbid — recorded as the one assertion not made.
+  forbid — recorded as the one assertion not made. **The review's fix
+  round (2026-08-21)** closed what the second adversarial pass found.
+  (1) *The ceiling is charged on what a node EMITS, all outputs
+  together* — the justification is per slot the value model hashes, and
+  `divide_curve` emits three lists: charged per port it admitted
+  3 × 2^22 slots and measured 5,332 MiB / 1,172 MB of cache at
+  `count = 2^22` (2.15× the series figure the ceiling is justified by,
+  the allocator-failure abort on the 8 GB class the guard exists to
+  prevent); it now charges `3 × samples` (`count + 1` open, `count`
+  closed — the kernel's own rule, read from `Curve::is_closed`) through
+  `checked_size`, so `count = 1398100` is the last allowed on an open
+  curve and its at-cap footprint is 2,039 MiB / 410 MB against `series`
+  at 2,482 MiB / 365 MB in the same run (branch debug engine; on the
+  constant). The fence-post `range` charges the `steps + 1` it emits the
+  same way (`steps = 4194303` is the last allowed; the port-only check
+  admitted 2^22 + 1 slots). Both take their floor through the shared
+  `checked_floor` and name the port and its value in the red text
+  (`range: values at steps=4194304 (steps + 1) would be 4194305 — above
+  …`). Both went to **version 3**: their version-2 band had been
+  admitted by the branch's engines (docs/12: any behaviour change). (2)
+  *The `…refused_not_allocated` name is held to what it claims*: the
+  review moved the guard after the allocation in `random` and
+  `duplicate` and their tests so named still passed (11/11) — nine
+  guarded files had that assertion only at cap + 1 (32–64 MiB,
+  buildable). Every guarded file now carries the 10^11-shaped case with
+  the exact message (`random`, `range`, `repeat`, `duplicate`,
+  `pad_last`, `divide_curve` at `count = 10^11`; `extrude`, `loft`,
+  `voronoi` at `segments = 10^11` on the tessellated input), the cap + 1
+  cases are renamed `…one_past_the_ceiling_is_red` (they pin the
+  boundary and the message, not the order), and
+  `tests/conformance.rs` holds the rule: a file that calls a guard must
+  hold a `…refused_not_allocated` test, and every test so named must
+  carry a literal ≥ 10^10 and never the cap constant — re-running the
+  review's `random` mutation now aborts the test binary ("memory
+  allocation of 800000000000 bytes failed"), and the rule rejects a
+  cap-constant body with both halves of the reason. (3) The ledger row.
+  (4) The measurements are headless `cicada run` numbers — what `cicada
+  serve` adds by encoding a 1 GiB list of meshes into display frames is
+  unmeasured and belongs with the frame follow-up above; said on the
+  constant. Accepted as-is from the review: the helper shape
+  (`checked_count(node, port, value, least, bytes_per_slot)` → `usize`,
+  panic-based — stdlib has no `NodeError`, the scheduler turns the panic
+  red, and `run_e2e` matches the text); the two files outside the stated
+  stdlib scope (`cicada-geom/src/text.rs`'s `Font::outline_spans`, the
+  sanctioned `stdlib → geom` edge, and the `run_e2e` message).
 - **Tessellation `segments` bound memory, not time** (found by the
   guard review, verified 2026-08-20): `extrude` of a circle at 50k
   segments takes 2.0 s, 100k 8.7 s, 200k 37 s (release; the cap ear clip
-  is O(n²)) — everything under the 2^22 ceiling is admitted and a slider
+  is O(n²)) — everything under the 2^22 ceiling is admitted and a count
   past ~10^5 is an hours-long, uncancellable solve (Esc cannot interrupt
   an in-kernel call today). A `segments`-only ceiling would be partial
   (a 200k-vertex polyline profile from `divide_curve` reaches the same

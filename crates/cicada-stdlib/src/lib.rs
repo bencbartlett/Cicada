@@ -38,30 +38,45 @@ pub(crate) fn red<T>(result: Result<T, cicada_geom::GeomError>) -> T {
     }
 }
 
-/// The most slots one count port may ask a node to produce: 2^22
-/// (4,194,304). A count above it is a red node, never an attempt to
-/// allocate it — an unbounded `count` once aborted the whole engine on
-/// allocation failure (`series(count=100000000000)`: "memory allocation of
-/// 800000000000 bytes failed", which is not a panic, so the scheduler could
-/// not turn it red and `cicada serve` would have died with it; C1 review).
-/// Why 2^22: the slot ceiling is the one that bounds what a slot costs
-/// BEYOND the node's own buffer — the value model hashes every slot on its
-/// way out, the memo log serialises it and zstd compresses it — and that
-/// cost was measured, not guessed (v0.1 follow-up 2, release engine, fresh
-/// cache, peak working set): `series` at 2^24 slots peaked at 9,763 MiB
-/// and wrote 1.4 GB to the cache (a 128 MiB `Vec<f64>` became ~580 bytes
-/// a slot end to end); at 2^22 it peaks at 2,478 MiB in 4.1 s and writes
-/// 348 MB (2^21: 1,249 MiB — the cost is linear), and the last allowed
-/// sphere (2,897 segments, 4.19M vertices) peaks at 650 MiB. 2^22 is the
-/// largest power of two whose end-to-end footprint an 8 GB machine
+/// The most slots one node may EMIT from a count, all its outputs
+/// together: 2^22 (4,194,304). A count above it is a red node, never an
+/// attempt to allocate it — an unbounded `count` once aborted the whole
+/// engine on allocation failure (`series(count=100000000000)`: "memory
+/// allocation of 800000000000 bytes failed", which is not a panic, so the
+/// scheduler could not turn it red and `cicada serve` would have died with
+/// it; C1 review). Why 2^22: the slot ceiling is the one that bounds what
+/// a slot costs BEYOND the node's own buffer — the value model hashes
+/// every slot on its way out, the memo log serialises it and zstd
+/// compresses it — and that cost was measured, not guessed (v0.1
+/// follow-up 2, headless `cicada run`, fresh cache, peak working set;
+/// release engine unless said otherwise): `series` at 2^24 slots peaked
+/// at 9,763 MiB and wrote 1.4 GB to the cache (a 128 MiB `Vec<f64>` became
+/// ~580 bytes a slot end to end); at 2^22 it peaks at 2,478 MiB in 4.1 s
+/// and writes 348 MB (2^21: 1,249 MiB — the cost is linear), and the last
+/// allowed sphere (2,897 segments, 4.19M vertices) peaks at 650 MiB. 2^22
+/// is the largest power of two whose end-to-end footprint an 8 GB machine
 /// survives with room for the rest of the pipeline; the earlier 2^24
 /// (15112fb) bounded the buffer and let the process reach the allocator
-/// failure a few million slots under its own ceiling. No design needs
-/// more elements in ONE list (the production wall is 1,200 parts; an 8M
-/// point grid is a fan-out or a mesh, not a list the value model hashes
-/// slot by slot). This is a SLOT ceiling — it keeps absurd counts loud and
-/// the per-slot overhead bounded; the bytes a fat slot allocates are the
-/// other half, [`MAX_BYTES`].
+/// failure a few million slots under its own ceiling. The ceiling is
+/// charged on what the node EMITS, because that is what the value model
+/// hashes: a node with several list outputs charges every one of them
+/// (`divide_curve` emits `count + 1` points AND tangents AND parameters —
+/// charged per port, its cap admitted 3 × 2^22 slots and measured
+/// 5,332 MiB / 1,172 MB of cache at `count = 2^22`, 2.15× the footprint
+/// the ceiling is justified by; charged on the total, its last allowed
+/// count on a closed curve — 1,398,101, 4,194,303 slots — peaks at
+/// 2,039 MiB and writes 410 MB, against `series` at 2^22 measured in the
+/// same run at 2,482 MiB / 365 MB; both the branch's debug engine,
+/// 2026-08-21), and a fence-post node charges the length it emits
+/// (`range` emits `steps + 1`). No design needs more
+/// elements in ONE list (the production wall is 1,200 parts; an 8M point
+/// grid is a fan-out or a mesh, not a list the value model hashes slot by
+/// slot). This is a SLOT ceiling — it keeps absurd counts loud and the
+/// per-slot overhead bounded; the bytes a fat slot allocates are the other
+/// half, [`MAX_BYTES`]. The served path (`cicada serve` encoding a node's
+/// display frames on top of the memo) is not what these numbers measure;
+/// docs/17 names it with the frame follow-up. DECISIONS.md row of
+/// 2026-08-21 is the binding record of both halves.
 pub const MAX_SLOTS: i64 = 1 << 22;
 
 /// The most bytes one count-driven buffer may take up front: 1 GiB. The
@@ -91,21 +106,38 @@ pub(crate) const MESH_BYTES_PER_VERTEX: usize = 3 * 8 + 2 * 3 * 4;
 /// and one cap triangle per cap.
 pub(crate) const PRISM_BYTES_PER_PROFILE_VERTEX: usize = 2 * 3 * 8 + 4 * 3 * 4;
 
-/// A count port as the `usize` a node may allocate: red below `least` (`0`
-/// for a count, `1` for a step count, `3` for a tessellation), red above
-/// [`MAX_SLOTS`], and red when `count × bytes_per_slot` is above
-/// [`MAX_BYTES`] — the port's name and value in the message either way,
-/// and never an allocation. `bytes_per_slot` is what one slot makes the
-/// node allocate: the element the buffer holds (`size_of::<f64>()` for a
-/// number list, a prism's cost per profile vertex) PLUS whatever the node
-/// builds per slot behind it (`linear_array` transforms a fresh copy of its
-/// geometry per slot, so a copy costs the `Transformable` and its mesh or
-/// polyline payload — see [`transform::support::payload_bytes`]); a node
-/// whose slots share one value (`duplicate`) counts the slot alone. Every node
-/// whose output length is a port goes through here (`series` is the
-/// original pattern); a node whose allocation is a PRODUCT of inputs (the
-/// sphere, the text nodes) computes the product and goes through
+/// The floor every count port shares: red below `least` (`0` for a count,
+/// `1` for a step count, `3` for a tessellation) with the port's name and
+/// value in the message. [`checked_count`] applies it before the ceilings;
+/// a node whose emitted length is not the port's value (`range`,
+/// `divide_curve`) applies it itself and takes the emitted total through
 /// [`checked_size`].
+pub(crate) fn checked_floor(node: &str, port: &str, value: i64, least: i64) -> u128 {
+    assert!(
+        value >= least,
+        "{node}: {port} must be >= {least}, got {value}"
+    );
+    u128::from(value.unsigned_abs())
+}
+
+/// A count port as the `usize` a node may allocate: red below `least`
+/// ([`checked_floor`]), red above [`MAX_SLOTS`], and red when `count ×
+/// bytes_per_slot` is above [`MAX_BYTES`] — the port's name and value in
+/// the message either way, and never an allocation. `bytes_per_slot` is
+/// what one slot makes the node allocate: the element the buffer holds
+/// (`size_of::<f64>()` for a number list, a prism's cost per profile
+/// vertex) PLUS whatever the node builds per slot behind it
+/// (`linear_array` transforms a fresh copy of its geometry per slot, so a
+/// copy costs the `Transformable` and its mesh or polyline payload — see
+/// [`transform::support::payload_bytes`]); a node whose slots share one
+/// value (`duplicate`) counts the slot alone. A node that emits exactly
+/// `value` slots on its one list output goes through here (`series` is
+/// the original pattern); a node whose emitted total is NOT the port's
+/// value — a fence-post (`range`: `steps + 1`), several list outputs
+/// (`divide_curve`: `count + 1` on each of three), or a PRODUCT of inputs
+/// (the sphere, the text nodes) — computes the total it emits and goes
+/// through [`checked_size`], so the ceiling is always on what the value
+/// model will hash.
 pub(crate) fn checked_count(
     node: &str,
     port: &str,
@@ -113,10 +145,7 @@ pub(crate) fn checked_count(
     least: i64,
     bytes_per_slot: usize,
 ) -> usize {
-    assert!(
-        value >= least,
-        "{node}: {port} must be >= {least}, got {value}"
-    );
+    let _ = checked_floor(node, port, value, least);
     assert!(
         value <= MAX_SLOTS,
         "{node}: {port} is {value} — above the {MAX_SLOTS} (2^22) slot ceiling of one node \
@@ -133,13 +162,18 @@ pub(crate) fn checked_count(
     count
 }
 
-/// A derived slot count — a product of inputs, not one port: the sphere's
-/// `segments × rings` vertices, a text's `spans × segments` outline
-/// vertices — checked against both ceilings ([`MAX_SLOTS`] and, at
-/// `bytes_per_slot` each, [`MAX_BYTES`]) before the allocation it sizes;
-/// `what` names the quantity in the message ("vertices would be …"). The
+/// A derived slot count — what the node will emit when that is not one
+/// port's value: the sphere's `segments × rings` vertices, a text's
+/// `spans × segments` outline vertices, `range`'s `steps + 1` values,
+/// `divide_curve`'s `count + 1` samples on each of its three outputs —
+/// checked against both ceilings ([`MAX_SLOTS`] and, at `bytes_per_slot`
+/// each, [`MAX_BYTES`]) before the allocation it sizes; `what` names the
+/// quantity in the message ("vertices would be …", "values at steps=N
+/// (steps + 1) would be …" — a port-driven total names the port and its
+/// value there, so the red text still says which count to lower). The
 /// caller has already refused the negative and too-small ports with the
-/// node's own floor message; this is the ceiling.
+/// node's own floor message ([`checked_floor`] or the kernel's); this is
+/// the ceiling.
 pub(crate) fn checked_size(node: &str, what: &str, slots: u128, bytes_per_slot: usize) -> usize {
     assert!(
         slots <= u128::from(MAX_SLOTS.unsigned_abs()),
@@ -268,6 +302,29 @@ mod tests {
             message(fat),
             "linear_array: count is 1048577 — 1073742848 bytes at 1024 bytes a slot, above the \
              1073741824-byte (1 GiB) ceiling of one node allocation"
+        );
+    }
+
+    // The floor on its own — what `range` and `divide_curve` apply before
+    // taking their EMITTED total through `checked_size`: the same message
+    // `checked_count` gives, and the value back as the u128 the total is
+    // computed in (so `steps + 1` or `3 × (count + 1)` cannot overflow at
+    // any i64).
+    #[test]
+    fn checked_floor_refuses_below_least_with_the_shared_message() {
+        assert_eq!(checked_floor("range", "steps", 1, 1), 1);
+        assert_eq!(
+            checked_floor("divide_curve", "count", i64::MAX, 1),
+            u128::from(i64::MAX.unsigned_abs())
+        );
+        let below = std::panic::catch_unwind(|| checked_floor("range", "steps", 0, 1))
+            .expect_err("below least refuses");
+        assert_eq!(message(below), "range: steps must be >= 1, got 0");
+        let negative = std::panic::catch_unwind(|| checked_floor("divide_curve", "count", -7, 1))
+            .expect_err("negative refuses");
+        assert_eq!(
+            message(negative),
+            "divide_curve: count must be >= 1, got -7"
         );
     }
 

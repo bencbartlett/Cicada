@@ -115,12 +115,36 @@ mod tests {
         });
     }
 
+    // One past the ceiling pins where the guard sits and what it says (a
+    // guard moved after the allocation would still pass this — 64 MiB of
+    // slots is buildable); the absurd case below is what detects that
+    // mutation.
     #[test]
-    #[should_panic(expected = "repeat: count is 4194305 — above the 4194304 (2^22) slot ceiling")]
-    fn repeat_absurd_count_is_refused_not_allocated() {
+    #[should_panic(
+        expected = "repeat: count is 4194305 — above the 4194304 (2^22) slot ceiling of one node \
+                    output"
+    )]
+    fn repeat_one_past_the_ceiling_is_red() {
         let _ = repeat(RepeatIn {
             pattern: numbers(&[1.0]),
             count: crate::MAX_SLOTS + 1,
+        });
+    }
+
+    // The absurd count a literal or an Integer wire can carry: 10^11 slots
+    // is a 1.6 TB buffer (`take(count)` sizes the collect up front) no
+    // machine holds — with the guard after the allocation this test binary
+    // would abort on allocation failure (`catch_unwind` cannot catch that),
+    // so passing proves the refusal precedes the allocation.
+    #[test]
+    #[should_panic(
+        expected = "repeat: count is 100000000000 — above the 4194304 (2^22) slot ceiling of one \
+                    node output"
+    )]
+    fn repeat_absurd_count_is_refused_not_allocated() {
+        let _ = repeat(RepeatIn {
+            pattern: numbers(&[1.0]),
+            count: 100_000_000_000,
         });
     }
 

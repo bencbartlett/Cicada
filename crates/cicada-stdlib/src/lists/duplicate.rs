@@ -99,14 +99,36 @@ mod tests {
         });
     }
 
+    // One past the ceiling pins where the guard sits and what it says (a
+    // guard moved after the allocation would still pass this — 64 MiB of
+    // `Arc` clones is buildable); the absurd case below is what detects
+    // that mutation.
     #[test]
     #[should_panic(
-        expected = "duplicate: count is 4194305 — above the 4194304 (2^22) slot ceiling"
+        expected = "duplicate: count is 4194305 — above the 4194304 (2^22) slot ceiling of one \
+                    node output"
+    )]
+    fn duplicate_one_past_the_ceiling_is_red() {
+        let _ = duplicate(DuplicateIn {
+            item: number(1.0),
+            count: crate::MAX_SLOTS + 1,
+        });
+    }
+
+    // The absurd count a literal or an Integer wire can carry: 10^11 slots
+    // is a 1.6 TB `vec![item; count]` no machine holds — with the guard
+    // after the allocation this test binary would abort on allocation
+    // failure (`catch_unwind` cannot catch that), so passing proves the
+    // refusal precedes the allocation.
+    #[test]
+    #[should_panic(
+        expected = "duplicate: count is 100000000000 — above the 4194304 (2^22) slot ceiling of \
+                    one node output"
     )]
     fn duplicate_absurd_count_is_refused_not_allocated() {
         let _ = duplicate(DuplicateIn {
             item: number(1.0),
-            count: crate::MAX_SLOTS + 1,
+            count: 100_000_000_000,
         });
     }
 

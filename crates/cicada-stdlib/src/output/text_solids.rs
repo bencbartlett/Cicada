@@ -116,12 +116,13 @@ mod tests {
     };
 
     // One chord past the slot ceiling for a CURVED glyph (`O`): red with
-    // the bound in the message, before a single glyph is laid out at that
-    // density (a prism vertex is 96 bytes, so 2^22 of them is 384 MiB and
-    // the slot half bites first). The guard is shared with `text_outlines`,
-    // whose tests pin the boundary.
+    // the bound in the message (a prism vertex is 96 bytes, so 2^22 of
+    // them is 384 MiB and the slot half bites first). This pins where the
+    // guard sits (with the guard after the layout it would still pass —
+    // slowly); the absurd case below is what detects that mutation. The
+    // guard is shared with `text_outlines`, whose tests pin the boundary.
     #[test]
-    fn one_chord_past_the_vertex_ceiling_is_refused_not_allocated() {
+    fn one_chord_past_the_vertex_ceiling_is_red() {
         let font = bundled_font("DejaVu Sans Bold");
         let ceiling = u128::from(crate::MAX_SLOTS.unsigned_abs());
         let fixed = outline_vertex_bound(font, "O", 0);

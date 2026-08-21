@@ -106,9 +106,11 @@ mod tests {
 
     // A thin copy (a point) is its `Transformable` slot alone: the slot
     // ceiling bites first (2^22 × 112 bytes is 448 MiB) — one past it is
-    // red with the count and the ceiling, and no allocation.
+    // red with the count and the ceiling. This pins where the guard sits
+    // (a guard moved after the copies would pass it too — 448 MiB is
+    // buildable); the absurd case below is what detects that mutation.
     #[test]
-    fn linear_array_one_copy_past_the_slot_ceiling_is_refused_not_allocated() {
+    fn linear_array_one_copy_past_the_slot_ceiling_is_red() {
         let count = crate::MAX_SLOTS + 1;
         let panic = std::panic::catch_unwind(|| {
             linear_array(LinearArrayIn {
@@ -136,11 +138,14 @@ mod tests {
     // A fat copy is charged what it allocates: a 1,000,003-vertex strip
     // (24 MB of positions, 12 MB of indices) is refused at the first count
     // whose copies cross 1 GiB — 30 — with the count, the per-copy bytes
-    // and the ceiling in the message, before a single copy is transformed
-    // (the old guard counted 112 bytes a copy and admitted 9.5 million;
-    // v0.1 follow-up 2 review measured 3.5 GB committed at count=100).
+    // and the ceiling in the message (the old guard counted 112 bytes a
+    // copy and admitted 9.5 million; v0.1 follow-up 2 review measured
+    // 3.5 GB committed at count=100). This pins the byte half's boundary
+    // and message; a guard moved after the copies would pass it too (1 GiB
+    // is buildable on the test machine) — the absurd case below is what
+    // detects that mutation.
     #[test]
-    fn linear_array_fat_copies_are_refused_by_their_payload_not_allocated() {
+    fn linear_array_fat_copies_are_refused_by_their_payload() {
         let mesh = strip_mesh(1_000_003);
         let payload = payload_bytes(&Transformable::Mesh(mesh.clone()));
         assert_eq!(payload, 1_000_003 * 24 + 1_000_001 * 12);
@@ -217,6 +222,11 @@ mod tests {
         assert_eq!(circles.len(), 23);
     }
 
+    // The absurd count a literal or an Integer wire can carry: 10^11 point
+    // copies is an 11 TB buffer no machine holds — with the guard after the
+    // collect this test binary would abort on allocation failure
+    // (`catch_unwind` cannot catch that), so passing proves the refusal
+    // precedes the allocation.
     #[test]
     #[should_panic(
         expected = "linear_array: count is 100000000000 — above the 4194304 (2^22) slot ceiling"

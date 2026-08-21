@@ -177,12 +177,12 @@ mod tests {
     }
 
     // One chord past the slot ceiling for a CURVED glyph (`O` is béziers
-    // throughout): red with the bound in the message, before a single
-    // outline is laid out at that density. With the guard after the
-    // layout this test would build ~4M points — slow, and the absurd case
-    // below could not run at all.
+    // throughout): red with the bound in the message. This pins where the
+    // guard sits and the exact boundary (with the guard after the layout
+    // it would still pass — slowly, building ~4M points); the absurd case
+    // below is what detects that mutation.
     #[test]
-    fn one_chord_past_the_vertex_ceiling_is_refused_not_allocated() {
+    fn one_chord_past_the_vertex_ceiling_is_red() {
         let (segments, would_be) = one_chord_past_the_ceiling("O");
         let panic = std::panic::catch_unwind(|| at_density("O", segments))
             .expect_err("one chord past the ceiling refuses");

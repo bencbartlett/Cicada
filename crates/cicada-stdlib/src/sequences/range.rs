@@ -3,7 +3,7 @@
 use cicada_core::scalar::Domain;
 use cicada_macros::{Ports, node};
 
-use crate::checked_count;
+use crate::{checked_floor, checked_size};
 
 /// Inputs for [`range`].
 #[derive(Ports, Clone, Copy, Debug)]
@@ -24,7 +24,9 @@ pub struct RangeIn {
 /// # Panics
 ///
 /// Panics when `steps < 1` — a domain cannot be divided into no steps — or
-/// when `steps` is above the 2^22 slot ceiling (4,194,304 slots).
+/// when the `steps + 1` values it would emit are above the 2^22 slot
+/// ceiling (4,194,304 slots: `steps = 4194303` is the last allowed; the
+/// message names `steps` and the value count).
 ///
 /// # Examples
 ///
@@ -32,10 +34,19 @@ pub struct RangeIn {
 /// span = construct_domain(start=0.0, end=1.0)
 /// ticks = range(domain=span, steps=4)
 /// ```
-#[node(category = "Sequences & random", tier = "1", version = 2, gh = "Range")]
+#[node(category = "Sequences & random", tier = "1", version = 3, gh = "Range")]
 #[must_use]
 pub fn range(input: RangeIn) -> Vec<f64> {
-    let count = checked_count("range", "steps", input.steps, 1, size_of::<f64>());
+    // The ceiling is on what the node EMITS — `steps + 1` values, the
+    // fence-post — not on the port: at `steps = 2^22` the list is one slot
+    // over (the review of v0.1 follow-up 2).
+    let steps = checked_floor("range", "steps", input.steps, 1);
+    let count = checked_size(
+        "range",
+        &format!("values at steps={} (steps + 1)", input.steps),
+        steps + 1,
+        size_of::<f64>(),
+    ) - 1;
     let Domain { start, end } = input.domain;
     let span = end - start;
     // Per-element form (never accumulation) keeps every value independent
@@ -108,12 +119,50 @@ mod tests {
         });
     }
 
+    // The boundary is on the EMITTED length: `steps = 2^22 - 1` builds the
+    // 2^22 values the ceiling allows (32 MiB, both ends exact), `steps =
+    // 2^22` would emit one value over it and is red with the step count,
+    // the value count and the ceiling in the message — this pins where the
+    // guard sits; the absurd case below is what detects a guard moved
+    // after the allocation.
     #[test]
-    #[should_panic(expected = "range: steps is 4194305 — above the 4194304 (2^22) slot ceiling")]
+    fn range_steps_at_the_ceiling_builds_and_one_past_it_is_red() {
+        let at = range(RangeIn {
+            domain: Domain::new(0.0, 1.0),
+            steps: crate::MAX_SLOTS - 1,
+        });
+        assert_eq!(at.len(), 4_194_304);
+        assert_eq!((at[0], *at.last().unwrap()), (0.0, 1.0));
+        let past = std::panic::catch_unwind(|| {
+            range(RangeIn {
+                domain: Domain::new(0.0, 1.0),
+                steps: crate::MAX_SLOTS,
+            })
+        })
+        .expect_err("steps + 1 past the ceiling refuses");
+        assert_eq!(
+            past.downcast_ref::<String>().map(String::as_str),
+            Some(
+                "range: values at steps=4194304 (steps + 1) would be 4194305 — above the \
+                 4194304 (2^22) slot ceiling of one node output"
+            )
+        );
+    }
+
+    // The absurd count a literal or an Integer wire can carry: 10^11 steps
+    // is an 800 GB buffer no machine holds — with the guard after the
+    // allocation this test binary would abort on allocation failure
+    // (`catch_unwind` cannot catch that), so passing proves the refusal
+    // precedes the allocation.
+    #[test]
+    #[should_panic(
+        expected = "range: values at steps=100000000000 (steps + 1) would be 100000000001 — \
+                    above the 4194304 (2^22) slot ceiling of one node output"
+    )]
     fn range_absurd_steps_is_refused_not_allocated() {
         let _ = range(RangeIn {
             domain: Domain::new(0.0, 1.0),
-            steps: crate::MAX_SLOTS + 1,
+            steps: 100_000_000_000,
         });
     }
 

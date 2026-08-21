@@ -128,10 +128,12 @@ mod tests {
     }
 
     // A circle profile tessellates to `segments` vertices: one past the
-    // slot ceiling is red — before the kernel samples a single point —
-    // with the count and the ceiling in the message.
+    // slot ceiling is red with the count and the ceiling in the message.
+    // This pins where the guard sits (a guard moved after the tessellation
+    // would pass it too — slowly, through the O(n²) cap clip); the absurd
+    // case below is what detects that mutation.
     #[test]
-    fn extrude_circle_one_past_the_ceiling_is_refused_not_allocated() {
+    fn extrude_circle_one_past_the_ceiling_is_red() {
         let segments = one_past_the_prism_ceiling();
         assert_eq!(segments, 4_194_305);
         let panic = std::panic::catch_unwind(|| {
@@ -149,6 +151,27 @@ mod tests {
             *panic.downcast_ref::<String>().unwrap(),
             "extrude: segments is 4194305 — above the 4194304 (2^22) slot ceiling of one node \
              output"
+        );
+    }
+
+    // The absurd density a literal or an Integer wire can carry: a circle
+    // at 10^11 segments is a 2.4 TB loop (`tessellate_closed` sizes its
+    // collect up front) no machine holds — with the guard after it this
+    // test binary would abort on allocation failure (`catch_unwind` cannot
+    // catch that), so passing proves the refusal precedes the allocation.
+    #[test]
+    #[should_panic(
+        expected = "extrude: segments is 100000000000 — above the 4194304 (2^22) slot ceiling of \
+                    one node output"
+    )]
+    fn extrude_circle_absurd_segments_are_refused_not_allocated() {
+        let _ = extrude(
+            &config(),
+            ExtrudeIn {
+                profile: unit_circle_profile(),
+                direction: Vector::new(0.0, 0.0, 1.0),
+                segments: 100_000_000_000,
+            },
         );
     }
 

@@ -149,18 +149,44 @@ mod tests {
     }
 
     // A circle boundary tessellates to `segments` vertices: one past the
-    // slot ceiling is red before the boundary is sampled.
+    // slot ceiling is red with the count and the ceiling in the message.
+    // This pins where the guard sits (a guard moved after the tessellation
+    // would pass it too — slowly, through the clipper); the absurd case
+    // below is what detects that mutation.
     #[test]
     #[should_panic(
-        expected = "voronoi: segments is 4194305 — above the 4194304 (2^22) slot ceiling"
+        expected = "voronoi: segments is 4194305 — above the 4194304 (2^22) slot ceiling of one \
+                    node output"
     )]
-    fn voronoi_circle_one_past_the_ceiling_is_refused_not_allocated() {
+    fn voronoi_circle_one_past_the_ceiling_is_red() {
         let _ = voronoi(
             &config(),
             VoronoiIn {
                 seeds: vec![Point::new(2.0, 0.0, 0.0), Point::new(-2.0, 0.0, 0.0)],
                 boundary: disc(5.0),
                 segments: crate::MAX_SLOTS + 1,
+            },
+        );
+    }
+
+    // The absurd density a literal or an Integer wire can carry: a circle
+    // boundary at 10^11 segments is a 2.4 TB loop (`tessellate_closed`
+    // sizes its collect up front) no machine holds — with the guard after
+    // it this test binary would abort on allocation failure
+    // (`catch_unwind` cannot catch that), so passing proves the refusal
+    // precedes the allocation.
+    #[test]
+    #[should_panic(
+        expected = "voronoi: segments is 100000000000 — above the 4194304 (2^22) slot ceiling of \
+                    one node output"
+    )]
+    fn voronoi_circle_absurd_segments_are_refused_not_allocated() {
+        let _ = voronoi(
+            &config(),
+            VoronoiIn {
+                seeds: vec![Point::new(2.0, 0.0, 0.0), Point::new(-2.0, 0.0, 0.0)],
+                boundary: disc(5.0),
+                segments: 100_000_000_000,
             },
         );
     }

@@ -244,11 +244,11 @@
       "description": "`steps + 1` evenly spaced numbers across a domain, both ends included exactly (`series` when you know the step instead).",
       "category": "Sequences & random",
       "tier": "1",
-      "version": 2,
+      "version": 3,
       "pure": true,
       "volatile": false,
       "uses_tolerance": false,
-      "panics": "`steps < 1` — a domain cannot be divided into no steps — or when `steps` is above the 2^22 slot ceiling (4,194,304 slots).",
+      "panics": "`steps < 1` — a domain cannot be divided into no steps — or when the `steps + 1` values it would emit are above the 2^22 slot ceiling (4,194,304 slots: `steps = 4194303` is the last allowed; the message names `steps` and the value count).",
       "gh": "Range",
       "examples": [
         "span = construct_domain(start=0.0, end=1.0)\nticks = range(domain=span, steps=4)"
@@ -3484,11 +3484,11 @@
       "description": "points, tangents, and parameters at equal arc-length steps. An open curve yields `count + 1` samples (both ends included); a closed curve yields `count` (the seam appears once).",
       "category": "Curve",
       "tier": "S",
-      "version": 2,
+      "version": 3,
       "pure": true,
       "volatile": false,
       "uses_tolerance": true,
-      "panics": "`count < 1`, when `count` is above the 2^22 slot ceiling (4,194,304 slots), or when the curve is degenerate at tolerance (no usable length, zero radius, collapsed frame).",
+      "panics": "`count < 1`; when the slots it would emit over its three outputs — `count + 1` samples on an open curve, `count` on a closed one, each a point, a tangent and a parameter — are above the 2^22 slot ceiling (4,194,304 slots: `count = 1398100` is the last allowed on an open curve, `1398101` on a closed one; the message names `count` and the slot total); or when the curve is degenerate at tolerance (no usable length, zero radius, collapsed frame).",
       "gh": "Divide Curve",
       "examples": [
         "ring = circle(radius=2.0)\npoints, tangents, params = divide_curve(curve=ring, count=12)"

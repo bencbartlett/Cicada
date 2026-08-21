@@ -200,10 +200,12 @@ mod tests {
 
     // Analytic sections tessellate to `segments` vertices each: one past
     // the slot ceiling (the one that bites first for a prism: 2^22 vertices
-    // at 96 bytes is 384 MiB) is red before either section is sampled,
-    // with the count and the ceiling in the message.
+    // at 96 bytes is 384 MiB) is red with the count and the ceiling in the
+    // message. This pins where the guard sits (a guard moved after the
+    // sampling would pass it too — slowly, through the O(n²) cap clip);
+    // the absurd case below is what detects that mutation.
     #[test]
-    fn loft_analytic_one_past_the_ceiling_is_refused_not_allocated() {
+    fn loft_analytic_one_past_the_ceiling_is_red() {
         let segments = one_past_the_prism_ceiling();
         assert_eq!(segments, 4_194_305);
         let panic = std::panic::catch_unwind(|| {
@@ -221,6 +223,29 @@ mod tests {
             *panic.downcast_ref::<String>().unwrap(),
             "loft: segments is 4194305 — above the 4194304 (2^22) slot ceiling of one node \
              output"
+        );
+    }
+
+    // The absurd density a literal or an Integer wire can carry: an
+    // analytic section at 10^11 segments is an 800 GB parameter buffer and
+    // 2.4 TB of samples (`divide` sizes them up front) no machine holds —
+    // with the guard after it this test binary would abort on allocation
+    // failure (`catch_unwind` cannot catch that), so passing proves the
+    // refusal precedes the allocation. Both analytic kinds are the case:
+    // a rectangle start here, circles in `loft_too_few_segments_is_red`.
+    #[test]
+    #[should_panic(
+        expected = "loft: segments is 100000000000 — above the 4194304 (2^22) slot ceiling of \
+                    one node output"
+    )]
+    fn loft_analytic_absurd_segments_are_refused_not_allocated() {
+        let _ = loft(
+            &config(),
+            LoftIn {
+                start: unit_square_profile(),
+                end: ring(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)], 2.0),
+                segments: 100_000_000_000,
+            },
         );
     }
 
