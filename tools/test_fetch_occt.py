@@ -9,6 +9,7 @@ import shutil
 import struct
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 
 import fetch_occt as fo
@@ -227,6 +228,154 @@ class VerificationTest(unittest.TestCase):
             fo.check_occt_version(header, "7.8.1")
         with self.assertRaises(fo.FetchError):
             fo.parse_occt_version("nothing here")
+
+
+class WarmPathTest(unittest.TestCase):
+    """The idempotence check is real: the stamp records every shared library
+    with its size, and a prefix that lost or changed one is re-extracted even
+    though its stamp still matches the manifest."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="cicada-occt-warm-"))
+        self.layout = fo.Layout(self.root, "win-64", "7.8.1")
+        self.layout.library_dir.mkdir(parents=True)
+        for name, size in (("TKernel.dll", 300), ("TKBO.dll", 200), ("zlib.dll", 100)):
+            (self.layout.library_dir / name).write_bytes(b"x" * size)
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def stamp(self):
+        return {"libraries": fo.library_inventory(self.layout)}
+
+    def test_inventory_lists_shared_libraries_with_sizes(self):
+        (self.layout.library_dir / "notes.txt").write_text("not a library", encoding="utf-8")
+        self.assertEqual(fo.library_inventory(self.layout), {"TKBO.dll": 200, "TKernel.dll": 300, "zlib.dll": 100})
+
+    def test_intact_prefix_has_no_problems(self):
+        self.assertEqual(fo.prefix_problems(self.stamp(), self.layout), [])
+
+    def test_missing_library_is_a_problem(self):
+        stamp = self.stamp()
+        (self.layout.library_dir / "TKBO.dll").unlink()
+        self.assertEqual(fo.prefix_problems(stamp, self.layout), ["TKBO.dll is missing"])
+
+    def test_resized_library_is_a_problem(self):
+        stamp = self.stamp()
+        (self.layout.library_dir / "zlib.dll").write_bytes(b"y" * 99)
+        self.assertEqual(fo.prefix_problems(stamp, self.layout), ["zlib.dll is 99 bytes, stamp says 100"])
+
+    def test_stamp_without_a_record_or_a_missing_dir_is_a_problem(self):
+        self.assertEqual(len(fo.prefix_problems({"packages": {}}, self.layout)), 1)
+        self.assertIn("records no shared libraries", fo.prefix_problems({}, self.layout)[0])
+        stamp = self.stamp()
+        shutil.rmtree(self.layout.library_dir)
+        self.assertIn("is missing", fo.prefix_problems(stamp, self.layout)[0])
+
+    def test_fetch_reextracts_a_tampered_prefix_and_skips_an_intact_one(self):
+        # fetch() with the network and the archives stubbed out: the decision
+        # logic is the subject. The fake extraction writes the version marker
+        # and the libraries a real one would.
+        manifest = minimal_manifest()
+        manifest["_sha256"] = "m" * 64
+        package = manifest["platforms"]["win-64"]["packages"][0]
+        extractions = []
+
+        def fake_ensure_archive(manifest_, subdir, package_, downloads, log):
+            return downloads / package_["filename"]
+
+        def fake_extract_conda(archive, prefix, meta_dir):
+            extractions.append(archive.name)
+            marker = self.layout.dep_occt_root / "include" / "opencascade" / "Standard_Version.hxx"
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(
+                "#define OCC_VERSION_MAJOR 7\n#define OCC_VERSION_MINOR 8\n#define OCC_VERSION_MAINTENANCE 1\n",
+                encoding="utf-8",
+            )
+            self.layout.library_dir.mkdir(parents=True, exist_ok=True)
+            (self.layout.library_dir / "TKernel.dll").write_bytes(b"x" * 300)
+            (self.layout.library_dir / "TKBO.dll").write_bytes(b"x" * 200)
+            return []
+
+        original = (fo.ensure_archive, fo.extract_conda)
+        fo.ensure_archive, fo.extract_conda = fake_ensure_archive, fake_extract_conda
+        try:
+            messages = []
+            self.assertTrue(fo.fetch(manifest, self.layout, messages.append), "cold: work done")
+            self.assertEqual(extractions, [package["filename"]])
+            stamp = fo.read_stamp(self.layout)
+            self.assertEqual(stamp["libraries"], {"TKBO.dll": 200, "TKernel.dll": 300})
+
+            self.assertFalse(fo.fetch(manifest, self.layout, messages.append), "warm: nothing to do")
+            self.assertEqual(len(extractions), 1)
+            self.assertTrue(any("present and verified" in m and "2 shared libraries" in m for m in messages))
+
+            (self.layout.library_dir / "TKBO.dll").unlink()
+            messages.clear()
+            self.assertTrue(fo.fetch(manifest, self.layout, messages.append), "tampered: re-extracted")
+            self.assertEqual(len(extractions), 2)
+            self.assertTrue(any("does not match its stamp (TKBO.dll is missing)" in m for m in messages))
+            self.assertTrue((self.layout.library_dir / "TKBO.dll").is_file())
+
+            # A stamp from before the library record existed is re-extracted once.
+            stamp = fo.read_stamp(self.layout)
+            del stamp["libraries"]
+            self.layout.stamp.write_text(__import__("json").dumps(stamp), encoding="utf-8")
+            self.assertTrue(fo.fetch(manifest, self.layout, messages.append))
+            self.assertEqual(len(extractions), 3)
+            self.assertFalse(fo.fetch(manifest, self.layout, messages.append))
+        finally:
+            fo.ensure_archive, fo.extract_conda = original
+
+
+class NetworkFailureTest(unittest.TestCase):
+    """A network failure is a FetchError (the `error:` line, exit 1), carries
+    the URL, leaves no partial file behind, and every request has a timeout."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="cicada-occt-net-"))
+        self.original = fo.urllib.request.urlopen
+
+    def tearDown(self):
+        fo.urllib.request.urlopen = self.original
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_refused_connection_is_a_fetch_error_with_the_url(self):
+        calls = []
+
+        def refused(url, timeout=None):
+            calls.append((url, timeout))
+            raise urllib.error.URLError(OSError(10061, "connection refused"))
+
+        fo.urllib.request.urlopen = refused
+        destination = self.dir / "pkg.conda"
+        with self.assertRaisesRegex(fo.FetchError, r"download https://example\.invalid/pkg\.conda: .*refused"):
+            fo.download("https://example.invalid/pkg.conda", destination, lambda _m: None)
+        self.assertEqual(calls, [("https://example.invalid/pkg.conda", fo.NETWORK_TIMEOUT_SECONDS)])
+        self.assertFalse(destination.exists())
+        self.assertFalse(destination.with_suffix(".conda.part").exists())
+        with self.assertRaisesRegex(fo.FetchError, "download https://api.anaconda.org/package/conda-forge/occt/files"):
+            fo.fetch_listing("occt", {}, None, lambda _m: None)
+
+    def test_stall_mid_stream_is_a_fetch_error_and_leaves_no_partial(self):
+        import socket
+
+        class Stalling:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self, _size=-1):
+                raise socket.timeout("timed out")
+
+        fo.urllib.request.urlopen = lambda url, timeout=None: Stalling()
+        destination = self.dir / "pkg.conda"
+        with self.assertRaisesRegex(fo.FetchError, "timed out"):
+            fo.download("https://example.invalid/pkg.conda", destination, lambda _m: None)
+        self.assertFalse(destination.exists())
+        self.assertFalse(destination.with_suffix(".conda.part").exists())
 
 
 class VersionSpecTest(unittest.TestCase):

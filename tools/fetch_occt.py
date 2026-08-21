@@ -9,7 +9,11 @@ libraries load. This script downloads those packages, verifies every byte
 against the sha256 pinned in `tools/fetch_occt_manifest.json`, extracts them
 into ONE conda-style prefix under the user cache dir (never inside a repo),
 and prints the environment a shell needs. It is idempotent: a prefix whose
-stamp matches the manifest is left alone.
+stamp matches the manifest AND whose shared libraries are all present at
+their recorded sizes is left alone (the warm path is a stat per library,
+~88 on Windows); anything missing or resized is re-extracted from the
+verified archives. `--check-closure` is the strict mode on top: it reads
+every library's import table.
 
     python tools/fetch_occt.py                      # fetch for this platform, print the env
     python tools/fetch_occt.py --print-env bash     # `export ...` lines   (also: powershell)
@@ -44,7 +48,8 @@ which, it never guesses. `regenerate-manifest` needs network access and is
 the ONLY operation that does anything unpinned.
 
 Exit status: 0 on success; 1 on any mismatch (size, sha256, manifest,
-closure) or missing tool -- never a silent fallback.
+closure), a failed or stalled download (120 s socket timeout), or a missing
+tool -- always through the `error:` line, never a silent fallback.
 """
 
 from __future__ import annotations
@@ -62,6 +67,7 @@ import shutil
 import struct
 import sys
 import tarfile
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -72,6 +78,9 @@ MANIFEST_PATH = HERE / "fetch_occt_manifest.json"
 STAMP_NAME = ".cicada-occt-stamp.json"
 META_DIR_NAME = ".cicada-occt-meta"
 MANIFEST_FORMAT = 1
+# Per-request socket timeout: a stalled anaconda.org connection must fail
+# the run, not hang a CI job until its 6 h limit.
+NETWORK_TIMEOUT_SECONDS = 120
 
 OCCT_VERSION = "7.8.1"
 OCCT_BUILD_NUMBER = 103
@@ -313,12 +322,24 @@ def verify_archive(path: Path, expected_size: int, expected_sha256: str) -> None
         raise FetchError(f"{path.name}: sha256 {digest} != pinned {expected_sha256}")
 
 
+def open_url(url: str):
+    """`urlopen` with the timeout, every network failure a FetchError."""
+    try:
+        return urllib.request.urlopen(url, timeout=NETWORK_TIMEOUT_SECONDS)
+    except (urllib.error.URLError, OSError, ValueError) as error:
+        raise FetchError(f"download {url}: {error}") from error
+
+
 def download(url: str, destination: Path, log) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_suffix(destination.suffix + ".part")
     log(f"downloading {url}")
-    with urllib.request.urlopen(url) as response, partial.open("wb") as handle:
-        shutil.copyfileobj(response, handle, 1 << 20)
+    try:
+        with open_url(url) as response, partial.open("wb") as handle:
+            shutil.copyfileobj(response, handle, 1 << 20)
+    except OSError as error:  # a stall or reset mid-stream (socket.timeout is an OSError)
+        partial.unlink(missing_ok=True)
+        raise FetchError(f"download {url}: {error}") from error
     partial.replace(destination)
 
 
@@ -460,21 +481,58 @@ def read_stamp(layout: Layout) -> dict | None:
 
 
 def stamp_matches(stamp: dict | None, manifest: dict, subdir: str) -> bool:
+    """Does the stamp describe THIS manifest's packages? (Says nothing about
+    the files on disk -- that is `prefix_problems`.)"""
     if not stamp:
         return False
     expected = {package["filename"]: package["sha256"] for package in manifest_packages(manifest, subdir)}
     return stamp.get("manifest_sha256") == manifest["_sha256"] and stamp.get("packages") == expected
 
 
+def library_inventory(layout: Layout) -> dict[str, int]:
+    """Every shared library in the prefix's library dir with its size -- what
+    the stamp records at extraction and re-checks on the warm path."""
+    return {path.name: path.stat().st_size for path in shared_library_files(layout)}
+
+
+def prefix_problems(stamp: dict, layout: Layout) -> list[str]:
+    """Why the prefix on disk does NOT match its stamp (empty = it does): a
+    stamp without a library record (written before this check existed), a
+    missing library dir, a missing library, a library whose size changed.
+    A stat per library; no file is read."""
+    recorded = stamp.get("libraries")
+    if not isinstance(recorded, dict) or not recorded:
+        return ["stamp records no shared libraries (written before this check existed)"]
+    if not layout.library_dir.is_dir():
+        return [f"library dir {layout.library_dir} is missing"]
+    problems = []
+    for name, size in sorted(recorded.items()):
+        path = layout.library_dir / name
+        if not path.is_file():
+            problems.append(f"{name} is missing")
+        elif path.stat().st_size != size:
+            problems.append(f"{name} is {path.stat().st_size} bytes, stamp says {size}")
+    return problems
+
+
 def fetch(manifest: dict, layout: Layout, log) -> bool:
     """Bring the prefix up to the manifest. Returns True when work was done."""
     packages = manifest_packages(manifest, layout.subdir)
-    if stamp_matches(read_stamp(layout), manifest, layout.subdir):
-        log(f"prefix {layout.prefix} is present and verified (stamp matches manifest {manifest['_sha256'][:12]})")
-        return False
+    stamp = read_stamp(layout)
+    reason = "is stale or incomplete"
+    if stamp_matches(stamp, manifest, layout.subdir):
+        problems = prefix_problems(stamp, layout)
+        if not problems:
+            log(
+                f"prefix {layout.prefix} is present and verified (stamp matches manifest "
+                f"{manifest['_sha256'][:12]}; {len(stamp['libraries'])} shared libraries present at their sizes)"
+            )
+            return False
+        shown = "; ".join(problems[:3]) + (f"; +{len(problems) - 3} more" if len(problems) > 3 else "")
+        reason = f"does not match its stamp ({shown})"
     archives = [ensure_archive(manifest, layout.subdir, package, layout.downloads, log) for package in packages]
     if layout.prefix.exists():
-        log(f"prefix {layout.prefix} is stale or incomplete; re-extracting")
+        log(f"prefix {layout.prefix} {reason}; re-extracting")
         shutil.rmtree(layout.prefix)
     layout.prefix.mkdir(parents=True)
     symlinks: list[Symlink] = []
@@ -486,10 +544,14 @@ def fetch(manifest: dict, layout: Layout, log) -> bool:
     if not marker.is_file():
         raise FetchError(f"extraction finished but {marker} is missing -- not an OCCT prefix")
     check_occt_version(marker, manifest["occt_version"])
+    libraries = library_inventory(layout)
+    if not libraries:
+        raise FetchError(f"extraction finished but {layout.library_dir} holds no shared libraries")
     stamp = {
         "manifest_sha256": manifest["_sha256"],
         "subdir": layout.subdir,
         "packages": {package["filename"]: package["sha256"] for package in packages},
+        "libraries": libraries,
         "written": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
     }
     layout.stamp.write_text(json.dumps(stamp, indent=1, sort_keys=True) + "\n", encoding="utf-8")
@@ -805,8 +867,11 @@ def fetch_listing(name: str, cache: dict[str, list[dict]], listing_dir: Path | N
             return cache[name]
     url = LISTING_URL.format(name=name)
     log(f"listing {url}")
-    with urllib.request.urlopen(url) as response:
-        raw = response.read()
+    try:
+        with open_url(url) as response:
+            raw = response.read()
+    except OSError as error:
+        raise FetchError(f"download {url}: {error}") from error
     if listing_dir is not None:
         listing_dir.mkdir(parents=True, exist_ok=True)
         (listing_dir / f"{name}_files.json").write_bytes(raw)
