@@ -203,6 +203,49 @@ async fn serve_snapshot_frames_intents_and_debug_state() {
         3
     );
     assert_eq!(snapshot["payload"]["lease"]["writer"], 1);
+    // The transport rides every snapshot (v0.1 item 4): at rest, the
+    // default loop, nothing driven in a pipeline without time params.
+    assert_eq!(
+        snapshot["payload"]["transport"],
+        serde_json::json!({
+            "playing": false, "speed": 1.0, "t_ms": 0.0, "frame": 0,
+            "frames": 120, "period_ms": 4000.0, "driven": []
+        })
+    );
+
+    // ---- The transport over the real socket: play is answered by the
+    // `transport` broadcast; pause too; the debug oracle agrees.
+    for (intent, playing) in [("transport_play", true), ("transport_pause", false)] {
+        socket
+            .send(Message::Text(
+                format!(r#"{{"v":{PROTOCOL_VERSION},"type":"{intent}","payload":{{}}}}"#).into(),
+            ))
+            .await
+            .unwrap();
+        let mut heard = None;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        while tokio::time::Instant::now() < deadline && heard.is_none() {
+            let Ok(Some(Ok(Message::Text(text)))) =
+                tokio::time::timeout(Duration::from_secs(5), socket.next()).await
+            else {
+                continue;
+            };
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            if value["type"] == "transport" {
+                heard = Some(value["payload"].clone());
+            }
+        }
+        let heard = heard.unwrap_or_else(|| panic!("{intent}: no transport broadcast"));
+        assert_eq!(heard["playing"], playing, "{intent}: {heard}");
+        assert_eq!(heard["frames"], 120);
+    }
+    let (_, body) =
+        tokio::task::spawn_blocking(move || http_get(addr, "/debug/state?token=t&wait=true", None))
+            .await
+            .unwrap();
+    let state: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(state["transport"]["playing"], false);
+    assert_eq!(state["transport"]["speed"], 1.0);
 
     // Wrong protocol version is refused, not guessed around.
     socket
