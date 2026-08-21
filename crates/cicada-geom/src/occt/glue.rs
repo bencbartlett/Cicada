@@ -147,7 +147,9 @@ mod ffi {
         fn vertices(shape: &TopoDS_Shape, out: &mut Vec<f64>) -> Result<()>;
 
         /// The planar section (`plane` = origin, normal — six doubles) as
-        /// curve records, one per connected wire.
+        /// curve records, one per closed wire; returns the number of
+        /// tangent contacts (open wires the plane only touches along)
+        /// dropped. An open wire that is not a contact is an error.
         fn section(
             shape: &TopoDS_Shape,
             plane: &[f64],
@@ -157,7 +159,7 @@ mod ffi {
             kinds: &mut Vec<i32>,
             counts: &mut Vec<u32>,
             data: &mut Vec<f64>,
-        ) -> Result<()>;
+        ) -> Result<i32>;
 
         /// Lower OCCT's default printers to failures only (STEP lock held).
         fn quiet_messenger() -> Result<()>;

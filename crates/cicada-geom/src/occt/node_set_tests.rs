@@ -856,6 +856,116 @@ fn sections_are_exact_where_the_kernel_is() {
     );
 }
 
+/// A plane that only TOUCHES the solid — along a cylinder's generatrix,
+/// along one edge of a box (the review's two false reds: "the kernel
+/// returned an open loop (Line)"), or grazing a bore's wall from inside the
+/// material — contributes no loop: the contact is recognized (both probes
+/// beside it classify alike), counted, and dropped; the loops the same
+/// plane does cut survive. A plane that misses and one that only touches
+/// both give the empty list at the value level.
+#[test]
+fn tangent_contacts_contribute_no_loop() {
+    let section_of = |solid: &Solid, plane: &Plane| {
+        let frame = crate::frame::orthonormal(plane, TOL).expect("frame");
+        Handle::from_value(solid)
+            .expect("handle")
+            .section(&frame, TOL, fine())
+            .expect("section")
+    };
+    // A cylinder r = 1, h = 3 and the plane x = 1: tangent along one
+    // generatrix.
+    let cylinder = solid::cylinder(&Plane::world_xy(), 1.0, 3.0, TOL).expect("cylinder");
+    let yz_at_one = Plane {
+        origin: Point::new(1.0, 0.0, 0.0),
+        x: Vector::new(0.0, 1.0, 0.0),
+        y: Vector::new(0.0, 0.0, 1.0),
+    };
+    let touched = section_of(&cylinder, &yz_at_one);
+    assert!(touched.loops.is_empty(), "{touched:?}");
+    assert_eq!(
+        touched.contacts, 1,
+        "the generatrix was recognized as a contact, not dropped blind"
+    );
+    assert!(
+        solid::section(&cylinder, &yz_at_one, TOL, fine())
+            .expect("section")
+            .is_empty()
+    );
+    // A 2 × 2 × 2 box and the 45° plane x + z = 4 through its top-right
+    // edge (y along the edge): the box lies on one side, touching along
+    // that edge only.
+    let block = solid::box_at(Point::origin(), Vector::new(2.0, 2.0, 2.0)).expect("box");
+    let through_edge = Plane {
+        origin: Point::new(2.0, 0.0, 2.0),
+        x: Vector::new(0.0, 1.0, 0.0),
+        y: Vector::new(-1.0, 0.0, 1.0),
+    };
+    let touched = section_of(&block, &through_edge);
+    assert!(touched.loops.is_empty(), "{touched:?}");
+    assert_eq!(touched.contacts, 1);
+    // A plane that misses has neither loops nor contacts.
+    let missed = section_of(&block, &xy_at(9.0));
+    assert_eq!((missed.loops.len(), missed.contacts), (0, 0));
+    // A plate with a through-bore and the vertical plane y = 13 tangent to
+    // the bore's wall (bore centre (10, 10), radius 3): the plane cuts the
+    // plate — one rectangular loop — and grazes the bore along a vertical
+    // line INSIDE the material, a concave contact. The loop survives; the
+    // contact is dropped.
+    let plate = solid::box_at(Point::origin(), Vector::new(20.0, 20.0, 6.0)).expect("plate");
+    let drill = solid::cylinder(
+        &Plane {
+            origin: Point::new(10.0, 10.0, -1.0),
+            ..Plane::world_xy()
+        },
+        3.0,
+        8.0,
+        TOL,
+    )
+    .expect("drill");
+    let bored = solid::difference_all(&plate, &[drill]).expect("cut");
+    let xz_at_13 = Plane {
+        origin: Point::new(0.0, 13.0, 0.0),
+        x: Vector::new(1.0, 0.0, 0.0),
+        y: Vector::new(0.0, 0.0, 1.0),
+    };
+    let grazed = section_of(&bored, &xz_at_13);
+    assert_eq!(grazed.contacts, 1, "{grazed:?}");
+    assert_eq!(grazed.loops.len(), 1, "{grazed:?}");
+    let Curve::Polyline(Polyline { vertices, closed }) = &grazed.loops[0] else {
+        panic!("the plate's section is a rectangle: {grazed:?}");
+    };
+    assert!(*closed);
+    // The rectangle 20 × 6 at y = 13 (the graze's ends split two of its
+    // edges, so collinear vertices may remain — the loop is the same).
+    assert!(vertices.len() >= 4, "{vertices:?}");
+    assert!(vertices.iter().all(|v| tol::close(v.0.y, 13.0, 1e-9)));
+    assert!(
+        vertices
+            .iter()
+            .all(|v| tol::close(v.0.z, 0.0, 1e-9) || tol::close(v.0.z, 6.0, 1e-9)),
+        "{vertices:?}"
+    );
+    let xs: Vec<f64> = vertices.iter().map(|v| v.0.x).collect();
+    assert!(
+        xs.iter().any(|&x| tol::close(x, 0.0, 1e-9))
+            && xs.iter().any(|&x| tol::close(x, 20.0, 1e-9))
+    );
+    // Just inside the bore (y = 12.9) the same plane cuts it: two loops,
+    // no contact — the contact test did not swallow a real crossing.
+    let crossed = section_of(
+        &bored,
+        &Plane {
+            origin: Point::new(0.0, 12.9, 0.0),
+            ..xz_at_13
+        },
+    );
+    assert_eq!(
+        (crossed.loops.len(), crossed.contacts),
+        (2, 0),
+        "{crossed:?}"
+    );
+}
+
 #[test]
 fn deconstruct_reads_edges_vertices_and_faces() {
     let block = solid::box_at(Point::origin(), Vector::new(1.0, 2.0, 3.0)).expect("box");

@@ -887,7 +887,9 @@ mod node_backend {
         tolerance: f64,
         deflection: Deflection,
     ) -> Result<Vec<Curve>, GeomError> {
-        Handle::from_value(solid)?.section(frame, tolerance, deflection)
+        Ok(Handle::from_value(solid)?
+            .section(frame, tolerance, deflection)?
+            .loops)
     }
 
     pub fn edges_and_vertices(
@@ -1304,11 +1306,18 @@ pub fn transform(solid: &Solid, similarity: &Similarity) -> Result<Solid, GeomEr
 
 /// The planar section of a solid through `plane`: one closed curve per
 /// loop (circles exact, the rest polylines at `deflection`); empty when
-/// the plane misses the solid.
+/// the plane misses the solid. A TANGENT CONTACT — the plane touching the
+/// solid along a line or curve without entering it there (tangent to a
+/// cylinder along a generatrix, through one edge of a box, grazing a
+/// bore's wall) — bounds no region and contributes no loop; a plane that
+/// only touches yields the empty list like one that misses. (The seam's
+/// [`crate::occt::Handle::section`] also counts the contacts.)
 ///
 /// # Errors
 ///
-/// [`GeomError::DegenerateFrame`] for a bad plane; the kernel's errors;
+/// [`GeomError::DegenerateFrame`] for a bad plane; [`GeomError::Kernel`]
+/// when the section fails or a loop did not close (an open chain with the
+/// solid on one side of it — a kernel failure, never returned as a loop);
 /// [`GeomError::KernelUnavailable`] without `occt`.
 pub fn section(
     solid: &Solid,

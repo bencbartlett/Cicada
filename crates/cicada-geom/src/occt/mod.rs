@@ -141,6 +141,18 @@ pub struct Handle {
     inner: UniquePtr<TopoDS_Shape>,
 }
 
+/// What [`Handle::section`] yields: the closed loops, and how many tangent
+/// contacts the plane made with the solid that bound no region and were
+/// dropped (a diagnostic count — the tests use it to tell "the plane
+/// touched along a line" from "the plane missed").
+#[derive(Debug, Clone, PartialEq)]
+pub struct Section {
+    /// One closed curve per loop.
+    pub loops: Vec<Curve>,
+    /// Open chains the plane only touched the solid along.
+    pub contacts: usize,
+}
+
 impl fmt::Debug for Handle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("occt::Handle").finish_non_exhaustive()
@@ -982,20 +994,26 @@ impl Handle {
     }
 
     /// The planar section through `frame`'s xy plane: one closed curve per
-    /// connected loop (a single circular edge stays a circle; the rest are
-    /// polylines discretized at `deflection`), edges connected into loops
-    /// at `tolerance`. Empty when the plane misses the solid.
+    /// loop (a single circular edge stays a circle; the rest are polylines
+    /// discretized at `deflection`), edges connected into loops at
+    /// `tolerance`, plus the number of TANGENT CONTACTS dropped — open
+    /// chains along which the plane touches the solid without entering it
+    /// (a plane tangent to a cylinder along a generatrix, a plane through
+    /// one edge of a box, a plane grazing a bore's wall), which bound no
+    /// region. Empty when the plane misses the solid. An open chain that
+    /// is NOT a contact (the solid on one side of it) is a loop the kernel
+    /// failed to close, and an error.
     ///
     /// # Errors
     ///
-    /// [`GeomError::Kernel`] if the section fails or its records are
-    /// malformed.
+    /// [`GeomError::Kernel`] if the section fails, a loop did not close,
+    /// or the records are malformed.
     pub fn section(
         &self,
         frame: &Frame,
         tolerance: f64,
         deflection: Deflection,
-    ) -> Result<Vec<Curve>, GeomError> {
+    ) -> Result<Section, GeomError> {
         let plane = [
             frame.origin.0.x,
             frame.origin.0.y,
@@ -1005,7 +1023,7 @@ impl Handle {
             frame.z.z,
         ];
         let (mut kinds, mut counts, mut data) = (Vec::new(), Vec::new(), Vec::new());
-        glue::section(
+        let contacts = glue::section(
             &self.inner,
             &plane,
             tolerance,
@@ -1016,7 +1034,19 @@ impl Handle {
             &mut data,
         )
         .map_err(|error| kernel("section", &error))?;
-        decode_curves(&kinds, &counts, &data)
+        let contacts = usize::try_from(contacts).map_err(|_| GeomError::Kernel {
+            reason: format!("section returned a negative contact count {contacts}"),
+        })?;
+        let loops = decode_curves(&kinds, &counts, &data)?;
+        if let Some(open) = loops.iter().find(|curve| !curve.is_closed()) {
+            return Err(GeomError::Kernel {
+                reason: format!(
+                    "section returned an open curve ({}) as a loop",
+                    open.variant_name()
+                ),
+            });
+        }
+        Ok(Section { loops, contacts })
     }
 
     /// Write `solids` to a STEP AP214 file at `path`, declaring the

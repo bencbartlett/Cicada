@@ -38,6 +38,7 @@
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBuilderAPI_TransitionMode.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepGProp.hxx>
 #include <BRepOffsetAPI_MakePipeShell.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
@@ -79,6 +80,7 @@
 #include <TCollection_HAsciiString.hxx>
 #include <TopAbs_Orientation.hxx>
 #include <TopAbs_ShapeEnum.hxx>
+#include <TopAbs_State.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopLoc_Location.hxx>
@@ -95,6 +97,7 @@
 #include <TopoDS_Wire.hxx>
 #include <UnitsMethods.hxx>
 #include <UnitsMethods_LengthUnit.hxx>
+#include <gp.hxx>
 #include <gp_Ax1.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Circ.hxx>
@@ -702,20 +705,80 @@ inline void vertices(const TopoDS_Shape &shape, rust::Vec<double> &out) {
   }
 }
 
+// Is a section EDGE a tangent contact — the plane touching the solid along
+// it without entering there — or part of a loop? Within the plane, a loop's
+// edge separates inside from outside; a contact's does not: the two points
+// a hair either side of the edge's midpoint, in the plane and perpendicular
+// to the edge, classify ALIKE — both outside (or on the boundary) for a
+// convex contact (a plane tangent to a cylinder along a generatrix, a plane
+// through one edge of a box), both inside for a concave one (a plane
+// grazing a bore's wall through a plate). The step is 100 tolerances: far
+// enough from the surface that a transversal crossing's probes are IN / OUT
+// rather than ON, small next to any feature a part has.
+inline bool is_tangent_contact(const TopoDS_Shape &solid, const TopoDS_Edge &edge, const gp_Dir &normal,
+                               double tolerance) {
+  BRepAdaptor_Curve curve(edge);
+  const Standard_Real middle = 0.5 * (curve.FirstParameter() + curve.LastParameter());
+  gp_Pnt point;
+  gp_Vec tangent;
+  curve.D1(middle, point, tangent);
+  if (tangent.Magnitude() <= gp::Resolution()) {
+    fail("section: a section edge has no tangent at its midpoint");
+  }
+  const gp_Vec side = gp_Vec(normal).Crossed(tangent).Normalized();
+  const double step = 100.0 * tolerance;
+  const auto state_at = [&solid, tolerance](const gp_Pnt &probe) {
+    BRepClass3d_SolidClassifier classifier(solid, probe, tolerance);
+    return classifier.State();
+  };
+  return state_at(point.Translated(side * step)) == state_at(point.Translated(side * -step));
+}
+
+// ConnectEdgesToWires takes its input by non-const handle (it does not
+// modify the sequence); the copy keeps the caller's sequence untouched.
+inline Handle(TopTools_HSequenceOfShape) wires_of(const Handle(TopTools_HSequenceOfShape) &edges,
+                                                  double tolerance) {
+  Handle(TopTools_HSequenceOfShape) input = edges;
+  Handle(TopTools_HSequenceOfShape) wires;
+  ShapeAnalysis_FreeBounds::ConnectEdgesToWires(input, tolerance, /*shared=*/Standard_False, wires);
+  if (wires.IsNull()) {
+    fail("section: connecting the section edges into wires failed");
+  }
+  return wires;
+}
+
+inline std::size_t edge_count(const TopoDS_Wire &wire) {
+  std::size_t count = 0;
+  for (BRepTools_WireExplorer it(wire); it.More(); it.Next()) {
+    ++count;
+  }
+  return count;
+}
+
 // The planar section of a solid: BRepAlgoAPI_Section against the plane
 // through `plane[0..3]` with normal `plane[3..6]`, its edges connected into
-// wires at `tolerance`, each wire one curve record (circles exact, the rest
-// discretized at the deflections).
-inline void section(const TopoDS_Shape &shape, rust::Slice<const double> plane, double tolerance, double linear,
-                    double angular, rust::Vec<int32_t> &kinds, rust::Vec<uint32_t> &counts,
-                    rust::Vec<double> &data) {
+// wires at `tolerance`, each CLOSED wire one curve record (circles exact,
+// the rest discretized at the deflections). A wire that does not close
+// holds tangent contacts — edges the plane touches the solid along without
+// entering (is_tangent_contact), which bound no region: a contact standing
+// alone (the generatrix a tangent plane meets, the one edge of a box a plane
+// passes through) or one joined onto a loop (a plane grazing a bore's wall
+// through a plate: the plate's outline with the graze as a chord). The
+// contact edges are dropped and counted in the return value; what remains
+// must close, or the kernel failed on this solid and this throws. A solid's
+// planar section is loops and contacts, nothing else — the common case (every
+// wire closed) pays for no classification.
+inline std::int32_t section(const TopoDS_Shape &shape, rust::Slice<const double> plane, double tolerance,
+                            double linear, double angular, rust::Vec<int32_t> &kinds, rust::Vec<uint32_t> &counts,
+                            rust::Vec<double> &data) {
   if (plane.size() != 6) {
     fail("section: a plane is 6 doubles (origin, normal), got " + std::to_string(plane.size()));
   }
   kinds.clear();
   counts.clear();
   data.clear();
-  const gp_Pln pln(gp_Pnt(plane[0], plane[1], plane[2]), gp_Dir(plane[3], plane[4], plane[5]));
+  const gp_Dir normal(plane[3], plane[4], plane[5]);
+  const gp_Pln pln(gp_Pnt(plane[0], plane[1], plane[2]), normal);
   BRepAlgoAPI_Section op(shape, pln, /*PerformNow=*/Standard_False);
   op.ComputePCurveOn1(Standard_False);
   op.Approximation(Standard_False);
@@ -727,16 +790,39 @@ inline void section(const TopoDS_Shape &shape, rust::Slice<const double> plane, 
     edges->Append(it.Current());
   }
   if (edges->IsEmpty()) {
-    return; // the plane misses the solid: no curves
+    return 0; // the plane misses the solid: no curves
   }
-  Handle(TopTools_HSequenceOfShape) wires;
-  ShapeAnalysis_FreeBounds::ConnectEdgesToWires(edges, tolerance, /*shared=*/Standard_False, wires);
-  if (wires.IsNull()) {
-    fail("section: connecting the section edges into wires failed");
-  }
+  const Handle(TopTools_HSequenceOfShape) wires = wires_of(edges, tolerance);
+  std::int32_t contacts = 0;
   for (Standard_Integer i = 1; i <= wires->Length(); ++i) {
-    push_wire(kinds, counts, data, TopoDS::Wire(wires->Value(i)), linear, angular);
+    const TopoDS_Wire wire = TopoDS::Wire(wires->Value(i));
+    if (BRep_Tool::IsClosed(wire)) {
+      push_wire(kinds, counts, data, wire, linear, angular);
+      continue;
+    }
+    Handle(TopTools_HSequenceOfShape) kept = new TopTools_HSequenceOfShape();
+    for (BRepTools_WireExplorer it(wire); it.More(); it.Next()) {
+      if (is_tangent_contact(shape, it.Current(), normal, tolerance)) {
+        ++contacts;
+      } else {
+        kept->Append(it.Current());
+      }
+    }
+    if (kept->IsEmpty()) {
+      continue; // contacts only: no loop here
+    }
+    const Handle(TopTools_HSequenceOfShape) loops = wires_of(kept, tolerance);
+    for (Standard_Integer k = 1; k <= loops->Length(); ++k) {
+      const TopoDS_Wire loop = TopoDS::Wire(loops->Value(k));
+      if (!BRep_Tool::IsClosed(loop)) {
+        fail("section: a loop did not close — an open chain of " + std::to_string(edge_count(loop)) +
+             " edge(s) with the solid on one side of it, which a planar section never has; the kernel failed on "
+             "this solid");
+      }
+      push_wire(kinds, counts, data, loop, linear, angular);
+    }
   }
+  return contacts;
 }
 
 // --------------------------------------------------------------------------

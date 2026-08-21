@@ -27,7 +27,11 @@ pub struct SectionIn {
 /// loop the plane cuts (a through-hole makes two). A loop that is one full
 /// circle comes back as an exact `Circle`; every other loop is a closed
 /// polyline — exact corners for planar faces, `deflection`-close points
-/// for curved ones. An empty list when the plane misses the solid.
+/// for curved ones. A tangent contact — the plane touching the solid
+/// along a line or curve without entering it there (tangent to a cylinder
+/// along a generatrix, through one edge of a box, grazing a bore's wall)
+/// — bounds no region and contributes no loop. An empty list when the
+/// plane misses the solid, or only touches it.
 ///
 /// # Returns
 ///
@@ -36,7 +40,9 @@ pub struct SectionIn {
 /// # Panics
 ///
 /// Panics when the plane is degenerate, the deflection is below the
-/// kernel's floor (1e-7), or the kernel refuses.
+/// kernel's floor (1e-7), when the kernel leaves a loop open (an open
+/// chain with the solid on one side of it — a kernel failure on this
+/// solid, never returned as a loop), or the kernel refuses.
 ///
 /// # Examples
 ///
@@ -48,10 +54,13 @@ pub struct SectionIn {
 /// cut_plane = xy_plane(origin=mid)
 /// outline = section(solid=plate, plane=cut_plane)
 /// ```
+// `version = 2`: a tangent contact yields no loop where it was a (false)
+// red — a behavior change on inputs the memo never held, bumped all the
+// same (the rule is the rule; a section recomputes in milliseconds).
 #[node(
     category = "Intersect & regions",
     tier = "1",
-    version = 1,
+    version = 2,
     gh = "Brep | Plane",
     uses_tolerance
 )]
@@ -72,10 +81,13 @@ pub fn section(config: &ProjectConfig, input: SectionIn) -> Vec<Closed<Curve>> {
     loops
         .into_iter()
         .map(|curve| {
+            // The seam drops tangent contacts and refuses an open chain
+            // with the solid on one side; this restates, at the node, the
+            // invariant the `Closed` wrapper promises.
             assert!(
                 curve.is_closed(),
-                "section: the kernel returned an open loop ({}) — a planar section of a \
-                 solid is always closed",
+                "section: the kernel returned an open curve ({}) as a loop — a loop that did \
+                 not close is a kernel failure on this solid",
                 curve.variant_name()
             );
             Closed(curve)
@@ -86,7 +98,7 @@ pub fn section(config: &ProjectConfig, input: SectionIn) -> Vec<Closed<Curve>> {
 #[cfg(test)]
 mod tests {
     use cicada_core::geometry::{Circle, Polyline};
-    use cicada_core::spatial::Point;
+    use cicada_core::spatial::{Point, Vector};
     use cicada_core::value::{HashedValue, ValueData};
     use cicada_geom::tol;
 
@@ -163,6 +175,41 @@ mod tests {
             },
         );
         assert!(none.is_empty());
+        // A plane that only TOUCHES — tangent to a cylinder along one
+        // generatrix (the review's false red: "an open loop (Line)") —
+        // bounds no region: nothing, like a miss.
+        let peg =
+            cicada_geom::solid::cylinder(&Plane::world_xy(), 1.0, 3.0, config().tol()).unwrap();
+        let tangent = section(
+            &config(),
+            SectionIn {
+                solid: peg,
+                plane: Plane {
+                    origin: Point::new(1.0, 0.0, 0.0),
+                    x: Vector::new(0.0, 1.0, 0.0),
+                    y: Vector::new(0.0, 0.0, 1.0),
+                },
+                deflection: 0.01,
+            },
+        );
+        assert!(tangent.is_empty(), "{tangent:?}");
+        // A plane grazing the drilled plate's hole from inside the material
+        // (y = 13, the hole's wall at its widest) keeps the loop it does
+        // cut — the plate's outline — and drops the graze.
+        let grazed = section(
+            &config(),
+            SectionIn {
+                solid: drilled_plate(),
+                plane: Plane {
+                    origin: Point::new(0.0, 13.0, 0.0),
+                    x: Vector::new(1.0, 0.0, 0.0),
+                    y: Vector::new(0.0, 0.0, 1.0),
+                },
+                deflection: 0.01,
+            },
+        );
+        assert_eq!(grazed.len(), 1, "{grazed:?}");
+        assert!(grazed[0].0.is_closed());
         // A vertical cut through a sphere: one circle of the right radius.
         let ball = cicada_geom::solid::sphere(&Plane::world_xy(), 2.0, config().tol()).unwrap();
         let cut = section(

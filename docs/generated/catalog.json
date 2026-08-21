@@ -4932,14 +4932,14 @@
     {
       "name": "section",
       "title": "Section",
-      "description": "the planar section of a B-rep solid: one closed curve per loop the plane cuts (a through-hole makes two). A loop that is one full circle comes back as an exact `Circle`; every other loop is a closed polyline — exact corners for planar faces, `deflection`-close points for curved ones. An empty list when the plane misses the solid.",
+      "description": "the planar section of a B-rep solid: one closed curve per loop the plane cuts (a through-hole makes two). A loop that is one full circle comes back as an exact `Circle`; every other loop is a closed polyline — exact corners for planar faces, `deflection`-close points for curved ones. A tangent contact — the plane touching the solid along a line or curve without entering it there (tangent to a cylinder along a generatrix, through one edge of a box, grazing a bore's wall) — bounds no region and contributes no loop. An empty list when the plane misses the solid, or only touches it.",
       "category": "Intersect & regions",
       "tier": "1",
-      "version": 1,
+      "version": 2,
       "pure": true,
       "volatile": false,
       "uses_tolerance": true,
-      "panics": "the plane is degenerate, the deflection is below the kernel's floor (1e-7), or the kernel refuses.",
+      "panics": "the plane is degenerate, the deflection is below the kernel's floor (1e-7), when the kernel leaves a loop open (an open chain with the solid on one side of it — a kernel failure on this solid, never returned as a loop), or the kernel refuses.",
       "gh": "Brep | Plane",
       "examples": [
         "span = construct_domain(start=0.0, end=20.0)\nthick = construct_domain(start=0.0, end=6.0)\nplate = box(x=span, y=span, z=thick)\nmid = construct_point(z=3.0)\ncut_plane = xy_plane(origin=mid)\noutline = section(solid=plate, plane=cut_plane)"

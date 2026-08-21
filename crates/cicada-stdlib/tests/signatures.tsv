@@ -98,6 +98,7 @@ rotate	1	rotate(geometry: T, angle: Number, plane: Plane = xy_plane) → T	uses_
 round	1	round(x: Number) → Number	
 scale	1	scale(geometry: T, center: Point = origin, factor: Number) → T	uses_tolerance
 section	1	section(solid: Solid, plane: Plane = xy_plane, deflection: Number = 0.01) → [Closed<Curve>]	uses_tolerance
+section	2	section(solid: Solid, plane: Plane = xy_plane, deflection: Number = 0.01) → [Closed<Curve>]	uses_tolerance
 series	1	series(start: Number = 0.0, step: Number = 1.0, count: Integer) → [Number]	
 shift_list	1	shift_list(list: [E], offset: Integer, wrap: Boolean = true) → [E]	
 sin	1	sin(x: Number) → Number	
