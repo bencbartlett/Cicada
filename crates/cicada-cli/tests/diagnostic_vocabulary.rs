@@ -17,12 +17,11 @@
 //! 2. Any `snake_case` word, backticked or not (`pad_last` — the shape that
 //!    first slipped through), must be a node or listed vocabulary.
 //! 3. A PHANTOM — a single word docs/09's combinator inventory or an old
-//!    diagnostic used for something that is NOT a node (`cycle` the zip
-//!    policy, `cross`, `squeeze`, …) — may not appear as a whole word at
-//!    all, backticked or bare. Rule 1 alone let a bare `cycle` through (the
-//!    2026-08-19 wording that motivated this test). The graph-cycle messages
-//!    ("the graph must be a DAG") are exempted by their wording, listed
-//!    below.
+//!    diagnostic used for something that is NOT a node (`cross`, `squeeze`,
+//!    …; `cycle` the zip policy was one until the §1 time param `cycle`
+//!    shipped in v0.1 item 4) — may not appear as a whole word at all,
+//!    backticked or bare. Rule 1 alone let a bare `cycle` through (the
+//!    2026-08-19 wording that motivated this test).
 //!
 //! Scanned: the checker, parser and diagnostics; the scheduler's executor
 //! and graph; the server's lowering, compile and session sources; and every
@@ -79,17 +78,14 @@ const VOCABULARY: &[&str] = &[
     "insert_between",
 ];
 
-/// Names a user could read as nodes that are NOT nodes: the zip policy
-/// docs/02/09 once spelled `cycle` (the node is `repeat`; the §1 time
-/// param owns `cycle`), and docs/09's combinator inventory's unbuilt rows.
+/// Names a user could read as nodes that are NOT nodes: docs/09's
+/// combinator inventory's unbuilt rows (the zip policy docs/02/09 once
+/// spelled `cycle` was the first entry; the node is `repeat`, and the §1
+/// time param `cycle` shipped in v0.1 item 4, so the word is a node now).
 /// A diagnostic may not mention one as a whole word — backticked or bare —
 /// because a user would go looking for it. Each entry says what it is
 /// instead. When one ships as a node it leaves this list (asserted below).
 const PHANTOMS: &[(&str, &str)] = &[
-    (
-        "cycle",
-        "the zip policy's node is `repeat`; `cycle` is the §1 time param",
-    ),
     (
         "cross",
         "the all-pairs combinator — two type variables, pending (docs/09)",
@@ -112,11 +108,6 @@ const PHANTOMS: &[(&str, &str)] = &[
         "GH's Shortest List — the node form is `truncate`",
     ),
 ];
-
-/// Wording that makes `cycle` the GRAPH sense (a dependency cycle), which
-/// is not the phantom zip policy: "cycle — the graph must be a DAG",
-/// "would create a cycle", "part of a cycle", "cycle in the target cone".
-const GRAPH_CYCLE_WORDING: &[&str] = &["DAG", "a cycle", "cycle in the"];
 
 fn crates_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -331,8 +322,8 @@ fn node_like_tokens(raw: &str) -> BTreeSet<String> {
 }
 
 /// The phantoms a literal mentions as WHOLE words (identifier boundaries on
-/// both sides — `cycle` is found in "`cycle`", "cycle," and "/ cycle /",
-/// not in "recycled"), minus the graph-cycle wording.
+/// both sides — `cross` is found in "`cross`", "cross," and "/ cross /",
+/// not in "crosses").
 fn phantom_mentions(raw: &str) -> Vec<&'static str> {
     if is_code_path(raw) {
         return Vec::new();
@@ -345,9 +336,6 @@ fn phantom_mentions(raw: &str) -> Vec<&'static str> {
     PHANTOMS
         .iter()
         .filter(|(name, _)| words.contains(name))
-        .filter(|(name, _)| {
-            *name != "cycle" || !GRAPH_CYCLE_WORDING.iter().any(|w| literal.contains(w))
-        })
         .map(|(name, _)| *name)
         .collect()
 }
@@ -479,17 +467,18 @@ fn the_scanner_reads_literals_and_skips_comments() {
 }
 
 // The phantom rule catches the ORIGINAL defect shape — a bare, unbackticked
-// single word — and leaves the graph-cycle wording alone.
+// single word (the 2026-08-19 wording was a bare `cycle`; that word is a
+// node since v0.1 item 4, so `cross` stands in for the shape here).
 #[test]
-fn the_phantom_rule_catches_bare_words_and_spares_graph_cycles() {
+fn the_phantom_rule_catches_bare_words() {
     assert_eq!(
-        phantom_mentions("zip is strict: 3 vs 4 — `pad_last` / cycle / `truncate`"),
-        vec!["cycle"],
-        "the 2026-08-19 wording: a bare `cycle` is the phantom"
+        phantom_mentions("for all pairs: `zip` / cross / `each()`"),
+        vec!["cross"],
+        "a bare phantom is caught"
     );
     assert_eq!(
-        phantom_mentions("zip is strict — `pad_last` / `cycle` / `truncate` are the adapters"),
-        vec!["cycle"]
+        phantom_mentions("for all pairs — `zip` / `cross` / `each()` are the combinators"),
+        vec!["cross"]
     );
     assert_eq!(
         phantom_mentions(
@@ -498,18 +487,11 @@ fn the_phantom_rule_catches_bare_words_and_spares_graph_cycles() {
         vec!["cross", "squeeze", "flatten_all"]
     );
     assert!(
-        phantom_mentions("cycle — the graph must be a DAG: {} → {}").is_empty(),
-        "the graph sense is exempt"
-    );
-    assert!(phantom_mentions("would create a cycle").is_empty());
-    assert!(phantom_mentions("part of a cycle").is_empty());
-    assert!(phantom_mentions("cycle in the target cone").is_empty());
-    assert!(
         phantom_mentions("the recycled buffer crosses nothing").is_empty(),
         "whole words only"
     );
     assert!(
-        phantom_mentions("crate::cycle::Policy").is_empty(),
+        phantom_mentions("crate::cross::Policy").is_empty(),
         "a bare Rust path is code"
     );
 }

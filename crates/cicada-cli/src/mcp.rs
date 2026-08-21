@@ -365,8 +365,10 @@ fn build_router() -> anyhow::Result<ToolRouter<McpServer>> {
                  and its parts `base` / `list_depth` / `optional` (`optional` = the type \
                  carries `?`, a value that may be absent — NOT whether the kwarg may be \
                  omitted), `default` (present = the kwarg may be omitted; absent = you \
-                 must pass it), `doc`, and `dimension` (`length` ports rescale with units, \
-                 `angle` ports are radians). A single output is the port `out`. Use it \
+                 must pass it), `doc`, `dimension` (`length` ports rescale with units, \
+                 `angle` ports are radians) and `transport_driven` (`frame` / `time`: the \
+                 app's transport fills the port from the playhead — write the kwarg only \
+                 for its headless value). A single output is the port `out`. Use it \
                  before wiring a node you have not used in this session. Unknown names \
                  return an error with a did-you-mean.",
             )?,
@@ -770,6 +772,12 @@ struct PortDoc {
     /// radians (absent for dimensionless ports).
     #[serde(skip_serializing_if = "Option::is_none")]
     dimension: Option<String>,
+    /// `frame` or `time` when the app's transport drives this port (v0.1
+    /// item 4): hidden on the canvas, filled from the playhead at lowering;
+    /// in the text — and headless — the kwarg is just a value (absent for
+    /// every other port).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transport_driven: Option<String>,
 }
 
 fn node_doc(

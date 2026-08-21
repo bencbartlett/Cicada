@@ -5,7 +5,7 @@
 //! ledger revision 2026-08-18) while the CLI's committed file is the
 //! stdlib alone.
 
-use cicada_core::spec::{Dimension, NodeSpec, PortSpec, Tier};
+use cicada_core::spec::{Dimension, NodeSpec, PortSpec, Tier, TransportSignal};
 
 /// The catalog format version this build emits. Bumps on breaking shape
 /// changes; additive fields keep it.
@@ -62,6 +62,11 @@ struct Port<'a> {
     doc: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     dimension: Option<&'a str>,
+    /// `frame` / `time` when the session's transport drives this port
+    /// (docs/13 §Animation transport): the canvas hides it and never
+    /// writes it. Absent otherwise. Format 2, additive (v0.1 item 4).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transport_driven: Option<&'a str>,
 }
 
 fn port(spec: &PortSpec) -> Port<'_> {
@@ -77,6 +82,7 @@ fn port(spec: &PortSpec) -> Port<'_> {
             Dimension::Length => "length",
             Dimension::Angle => "angle",
         }),
+        transport_driven: spec.transport_driven.map(TransportSignal::as_str),
     }
 }
 
@@ -171,6 +177,40 @@ mod tests {
         let as_closed = nodes.iter().find(|n| n["name"] == "as_closed").unwrap();
         assert!(as_closed["gh"].is_null() && as_closed.get("gh").is_some());
         assert!(render_json(specs).unwrap().ends_with('\n'));
+    }
+
+    // The transport-driven ports are marked for the canvas to hide (v0.1
+    // item 4); every other port carries no such key at all.
+    #[test]
+    fn transport_driven_ports_are_marked_and_nothing_else_is() {
+        let value = catalog_value(cicada_stdlib::registry());
+        let nodes = value["nodes"].as_array().unwrap();
+        let port_of = |node: &str, port: &str| -> serde_json::Value {
+            nodes.iter().find(|n| n["name"] == node).unwrap()["inputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["name"] == port)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(port_of("cycle", "frame")["transport_driven"], "frame");
+        assert_eq!(port_of("clock", "t")["transport_driven"], "time");
+        let marked: Vec<String> = nodes
+            .iter()
+            .flat_map(|n| {
+                let name = n["name"].as_str().unwrap_or("?").to_owned();
+                n["inputs"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .chain(n["outputs"].as_array().into_iter().flatten())
+                    .filter(|p| p.get("transport_driven").is_some())
+                    .map(|p| format!("{name}.{}", p["name"].as_str().unwrap_or("?")))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert_eq!(marked, ["clock.t", "cycle.frame"]);
     }
 
     #[test]

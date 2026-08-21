@@ -2,6 +2,109 @@
   "format": 2,
   "nodes": [
     {
+      "name": "clock",
+      "title": "Clock",
+      "description": "unbounded time `0 → ∞` in seconds, driven by the transport and uncached by design.",
+      "category": "Params & input",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": true,
+      "uses_tolerance": false,
+      "panics": "`t` or `speed` is not finite.",
+      "gh": null,
+      "examples": [
+        "elapsed = clock(speed=2.0)\nrise = elapsed * 0.5"
+      ],
+      "inputs": [
+        {
+          "name": "speed",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "1.0",
+          "doc": "Multiplier on the playhead: the output is `t × speed` (negative runs backwards, 0 freezes). Distinct from the transport's own playback speed, which scales `t` for every time param at once."
+        },
+        {
+          "name": "t",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "0.0",
+          "doc": "The playhead in seconds. Driven by the transport and hidden on the canvas; headless (`cicada run`) it evaluates as written — 0 unless the text says otherwise.",
+          "transport_driven": "time"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "`t × speed`, in seconds."
+        }
+      ]
+    },
+    {
+      "name": "cycle",
+      "title": "Cycle",
+      "description": "looping time `0 → 1`, frame-quantized and driven by the transport, never by an ambient clock.",
+      "category": "Params & input",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": false,
+      "panics": "`frames` or `period` is not positive, or when `frames` does not convert to a Number exactly (beyond 2^53 — the position would drift).",
+      "gh": null,
+      "examples": [
+        "spin = cycle(period=4.0, frames=120)\nangle = spin * 6.283185307179586"
+      ],
+      "inputs": [
+        {
+          "name": "period",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "4.0",
+          "doc": "Seconds per loop at transport speed 1. The transport reads it to place the frame (`frame = floor(t × frames / period) mod frames`), so in the app it must be a literal; the value itself never sees it."
+        },
+        {
+          "name": "frames",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "default": "120",
+          "doc": "Frames per loop — the quantization. A pass visits exactly these values, `0/frames … (frames − 1)/frames`, so one full loop warms every downstream cache entry and playback is then pure cache reads (docs/12). A literal in the app, like `period`."
+        },
+        {
+          "name": "frame",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "default": "0",
+          "doc": "The current frame. Driven by the transport and hidden on the canvas; headless (`cicada run`) it evaluates as written — 0 unless the text says otherwise.",
+          "transport_driven": "frame"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The loop position in `0..1`: `(frame mod frames) / frames`."
+        }
+      ]
+    },
+    {
       "name": "panel",
       "title": "Panel",
       "description": "display sink; shows counts and samples on the canvas.",

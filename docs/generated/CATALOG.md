@@ -9,13 +9,17 @@ one exists. Type variables: `T` = any transformable kind (kind-preserving),
 `E` = any element kind, optionality included (an `E` port takes absent slots;
 the `?` rides through to `E` outputs — except through an `E?` port, which keeps
 the `?` itself, so `compact` returns a present `[E]`), `Any` = display-sink
-catch-all.
+catch-all. `· volatile` = never memoized (recomputes every generation);
+`· transport-driven` names a port the app's transport fills from the playhead
+(hidden on the canvas; in the text, and headless, the kwarg is just a value).
 Port docs (every input and output — the bare `out` carries the node's
 `# Returns` line) and runnable examples live in `catalog.json` (`examples`:
 one `.cic` snippet per node, solved by CI).
 
 ## Params & input
 
+- `clock(speed: Number = 1.0, t: Number = 0.0) → Number` — Clock · volatile · transport-driven `t` (time) — unbounded time `0 → ∞` in seconds, driven by the transport and uncached by design. Red when: `t` or `speed` is not finite.
+- `cycle(period: Number = 4.0, frames: Integer = 120, frame: Integer = 0) → Number` — Cycle · transport-driven `frame` (frame) — looping time `0 → 1`, frame-quantized and driven by the transport, never by an ambient clock. Red when: `frames` or `period` is not positive, or when `frames` does not convert to a Number exactly (beyond 2^53 — the position would drift).
 - `panel(data: Any) → ()` — Panel · GH: Panel — display sink; shows counts and samples on the canvas.
 - `slider(value: Number, min: Number = 0.0, max: Number = 10.0, step: Number = 0.0) → Number` — Number Slider · GH: Number Slider — a bounded numeric parameter. Red when: `value` lies outside `min..=max` or the bounds are inverted — a drifted literal is a loud red, never a silent clamp.
 - `toggle(value: Boolean) → Boolean` — Boolean Toggle · GH: Boolean Toggle — an on/off parameter.

@@ -24,6 +24,7 @@ const fn port(name: &'static str, base: &'static str, depth: u8) -> PortSpec {
         default: None,
         doc: "",
         dimension: None,
+        transport_driven: None,
     }
 }
 
@@ -43,6 +44,7 @@ const fn opt_port(
         default: Some(default),
         doc: "",
         dimension: None,
+        transport_driven: None,
     }
 }
 
@@ -58,6 +60,7 @@ const fn opt_elem_port(name: &'static str, base: &'static str, depth: u8) -> Por
         default: None,
         doc: "",
         dimension: None,
+        transport_driven: None,
     }
 }
 

@@ -121,9 +121,9 @@ mod naming_fixtures {
     }
 
     /// Volatile Fixture — `#[node(volatile)]` must register uncached
-    /// (docs/12 §Volatile nodes; the flag `Clock` will wear, item 4). No
-    /// shipped node is volatile yet — this fixture keeps the macro → spec
-    /// path honest until one is.
+    /// (docs/12 §Volatile nodes; the flag `clock` wears since item 4). The
+    /// fixture keeps the macro → spec path honest independently of any
+    /// shipped node.
     ///
     /// # Returns
     ///
@@ -230,11 +230,14 @@ mod tests {
             .expect("the test-only volatile fixture registers");
         assert!(fixture.volatile, "#[node(volatile)] sets the flag");
         assert!(fixture.pure, "volatile is not effectful");
-        // Exporters are effectful; nothing shipped is volatile (Clock
-        // arrives with item 4 — revise this assertion with it).
-        for spec in specs.iter().filter(|s| s.name != "fixture_volatile") {
-            assert!(!spec.volatile, "`{}` is volatile unexpectedly", spec.name);
-        }
+        // Exporters are effectful; the ONE shipped volatile node is
+        // `clock` (DECISIONS.md time row: uncached by design, item 4).
+        let shipped: Vec<&str> = specs
+            .iter()
+            .filter(|s| s.volatile && s.name != "fixture_volatile")
+            .map(|s| s.name)
+            .collect();
+        assert_eq!(shipped, ["clock"], "volatile nodes shipped");
     }
 
     #[test]

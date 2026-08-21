@@ -4,6 +4,8 @@
 //! Bare literals cover the "Literals" catalog row — a constant is a
 //! binding, not a node.
 
+pub mod clock;
+pub mod cycle;
 pub mod panel;
 pub mod slider;
 pub mod toggle;

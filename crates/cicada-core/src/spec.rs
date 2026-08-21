@@ -66,6 +66,34 @@ pub enum Dimension {
     Angle,
 }
 
+/// Which transport signal drives a port (DECISIONS.md time row; docs/13
+/// §Animation transport). A transport-driven port is owned by the
+/// session's transport in the app — hidden on the canvas, its value
+/// injected at lowering from the playhead, never written to the file —
+/// and evaluates as written headless (`cicada run`: its default).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportSignal {
+    /// The loop frame, an `Integer`: `floor(t × frames / period) mod
+    /// frames` from the node's own `frames` (Integer) and `period`
+    /// (Number, seconds) ports, which must be literals in the app —
+    /// `cycle`'s `frame`. Frame-quantized so one pass of the loop warms
+    /// every downstream cache entry (docs/12).
+    Frame,
+    /// The playhead in seconds, a `Number`, unbounded — `clock`'s `t`.
+    Time,
+}
+
+impl TransportSignal {
+    /// The catalog spelling (`catalog.json` → `transport_driven`).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Frame => "frame",
+            Self::Time => "time",
+        }
+    }
+}
+
 /// Catalog tier (docs/08): spike set, v0.1, v0.2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
@@ -91,6 +119,10 @@ pub struct PortSpec {
     pub doc: &'static str,
     /// Physical dimension, when declared (`#[port(dimension = length)]`).
     pub dimension: Option<Dimension>,
+    /// The transport signal that drives this port, when declared
+    /// (`#[port(transport_driven = frame)]` / `time`): the canvas hides
+    /// it, the session's transport owns its value (v0.1 item 4).
+    pub transport_driven: Option<TransportSignal>,
 }
 
 /// Specification of one node: what the palette, the checker, the catalog,
@@ -226,6 +258,7 @@ impl<T: PortTyped> AsOutputs for Vec<T> {
         default: None,
         doc: "",
         dimension: None,
+        transport_driven: None,
     }];
 }
 
@@ -236,6 +269,7 @@ impl<T: PortTyped> AsOutputs for Option<T> {
         default: None,
         doc: "",
         dimension: None,
+        transport_driven: None,
     }];
 }
 
@@ -292,6 +326,7 @@ pub const fn documented_outputs<const N: usize>(
             default: None,
             doc: "",
             dimension: None,
+            transport_driven: None,
         }
     }; N];
     let mut i = 0;
@@ -303,6 +338,7 @@ pub const fn documented_outputs<const N: usize>(
             default: port.default,
             doc: if single_out { returns } else { port.doc },
             dimension: port.dimension,
+            transport_driven: port.transport_driven,
         };
         i += 1;
     }
@@ -352,6 +388,7 @@ macro_rules! impl_port_leaf {
                 default: None,
                 doc: "",
                 dimension: None,
+                transport_driven: None,
             }];
         }
     };
@@ -469,6 +506,7 @@ mod tests {
             default: None,
             doc: "",
             dimension: None,
+            transport_driven: None,
         },
         PortSpec {
             name: "count",
@@ -476,6 +514,7 @@ mod tests {
             default: Some("10"),
             doc: "",
             dimension: None,
+            transport_driven: None,
         },
     ];
     const DIVIDE_OUT: &[PortSpec] = &[
@@ -489,6 +528,7 @@ mod tests {
             default: None,
             doc: "",
             dimension: None,
+            transport_driven: None,
         },
         PortSpec {
             name: "tangents",
@@ -500,6 +540,7 @@ mod tests {
             default: None,
             doc: "",
             dimension: None,
+            transport_driven: None,
         },
     ];
 
