@@ -3,7 +3,7 @@
 use cicada_core::marshal::ElemSlot;
 use cicada_macros::{Ports, node};
 
-use crate::slot_count;
+use crate::checked_count;
 
 /// Inputs for [`duplicate`].
 #[derive(Ports, Clone, Debug)]
@@ -42,7 +42,7 @@ pub struct DuplicateIn {
 )]
 #[must_use]
 pub fn duplicate(input: DuplicateIn) -> Vec<ElemSlot> {
-    let count = slot_count("duplicate", "count", input.count, 0);
+    let count = checked_count("duplicate", "count", input.count, 0, size_of::<ElemSlot>());
     vec![input.item; count]
 }
 

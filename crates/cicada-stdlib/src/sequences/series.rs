@@ -2,7 +2,7 @@
 
 use cicada_macros::{Ports, node};
 
-use crate::slot_count;
+use crate::checked_count;
 
 /// Inputs for [`series`].
 #[derive(Ports, Clone, Copy, Debug)]
@@ -43,7 +43,7 @@ pub struct SeriesIn {
 )]
 #[must_use]
 pub fn series(input: SeriesIn) -> Vec<f64> {
-    let count = slot_count("series", "count", input.count, 0);
+    let count = checked_count("series", "count", input.count, 0, size_of::<f64>());
     // Per-element multiply (not accumulation) keeps results exact-of-form
     // start + step·i and independent of evaluation order. Counts stay below
     // 2^24 (the slot ceiling), so the cast is loss-free.

@@ -3,7 +3,7 @@
 use cicada_core::marshal::ElemSlot;
 use cicada_macros::{Ports, node};
 
-use crate::slot_count;
+use crate::checked_count;
 
 /// Inputs for [`repeat`].
 #[derive(Ports, Clone, Debug)]
@@ -44,7 +44,7 @@ pub struct RepeatIn {
 )]
 #[must_use]
 pub fn repeat(input: RepeatIn) -> Vec<ElemSlot> {
-    let count = slot_count("repeat", "count", input.count, 0);
+    let count = checked_count("repeat", "count", input.count, 0, size_of::<ElemSlot>());
     if count == 0 {
         return Vec::new();
     }

@@ -3,7 +3,7 @@
 use cicada_core::marshal::ElemSlot;
 use cicada_macros::{Ports, node};
 
-use crate::slot_count;
+use crate::checked_count;
 
 /// Inputs for [`pad_last`].
 #[derive(Ports, Clone, Debug)]
@@ -46,7 +46,7 @@ pub struct PadLastIn {
 #[must_use]
 pub fn pad_last(input: PadLastIn) -> Vec<ElemSlot> {
     let mut list = input.list;
-    let count = slot_count("pad_last", "count", input.count, 0);
+    let count = checked_count("pad_last", "count", input.count, 0, size_of::<ElemSlot>());
     assert!(
         count >= list.len(),
         "pad_last: count {count} is below the list's {} slots — pad_last only lengthens \

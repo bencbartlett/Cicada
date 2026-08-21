@@ -5,7 +5,7 @@ use cicada_core::geometry::Curve;
 use cicada_core::spatial::{Point, Vector};
 use cicada_macros::{Ports, node};
 
-use crate::{red, slot_count};
+use crate::{checked_count, red};
 
 /// Inputs for [`divide_curve`].
 #[derive(Ports, Clone, Debug)]
@@ -53,9 +53,16 @@ pub struct DivideCurveOut {
 )]
 #[must_use]
 pub fn divide_curve(config: &ProjectConfig, input: DivideCurveIn) -> DivideCurveOut {
-    // The kernel refuses `count < 1` itself; the slot ceiling is the node
-    // layer's contract (an open curve yields `count + 1` samples).
-    let _ = slot_count("divide_curve", "count", input.count, 1);
+    // The kernel refuses `count < 1` itself; the ceilings are the node
+    // layer's contract (an open curve yields `count + 1` samples, each a
+    // point, a tangent and a parameter).
+    let _ = checked_count(
+        "divide_curve",
+        "count",
+        input.count,
+        1,
+        size_of::<Point>() + size_of::<Vector>() + size_of::<f64>(),
+    );
     let divided = red(cicada_geom::curve::divide(
         &input.curve,
         input.count,

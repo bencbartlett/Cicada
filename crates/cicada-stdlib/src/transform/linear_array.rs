@@ -5,7 +5,7 @@ use cicada_core::spatial::Vector;
 use cicada_geom::transform::Similarity;
 use cicada_macros::{Ports, node};
 
-use crate::slot_count;
+use crate::checked_count;
 
 /// Inputs for [`linear_array`].
 #[derive(Ports, Clone, Debug)]
@@ -27,8 +27,9 @@ pub struct LinearArrayIn {
 ///
 /// # Panics
 ///
-/// Panics when `count < 1` or `count` is above the 2^24 slot ceiling
-/// (16,777,216 slots).
+/// Panics when `count < 1`, or when `count` is above the shared ceilings
+/// (2^24 slots, or 1 GiB of copies up front — the message names the count
+/// and the ceiling that bit; the copies' own geometry is not counted).
 ///
 /// # Examples
 ///
@@ -40,7 +41,16 @@ pub struct LinearArrayIn {
 #[node(category = "Transform", tier = "S", version = 1, gh = "Linear Array")]
 #[must_use]
 pub fn linear_array(input: LinearArrayIn) -> Vec<Transformable> {
-    let count = slot_count("linear_array", "count", input.count, 1);
+    // A copy is one `Transformable` slot up front (its geometry payload
+    // comes behind it, per copy): the byte ceiling bites before the slot
+    // ceiling here.
+    let count = checked_count(
+        "linear_array",
+        "count",
+        input.count,
+        1,
+        size_of::<Transformable>(),
+    );
     (0..count)
         .map(|i| {
             #[allow(clippy::cast_precision_loss)] // counts stay below 2^24
@@ -89,15 +99,47 @@ mod tests {
         });
     }
 
+    // A copy is a 112-byte `Transformable` slot, so the 1 GiB byte ceiling
+    // bites before the 2^24 slot ceiling: one copy past it is red with the
+    // count, the bytes and the ceiling in the message — and no allocation
+    // (the count would be a 1 GiB Vec).
+    #[test]
+    fn linear_array_one_copy_past_the_byte_ceiling_is_refused_not_allocated() {
+        let slot = size_of::<Transformable>();
+        let cap = usize::try_from(crate::MAX_BYTES).unwrap() / slot;
+        assert!(
+            i64::try_from(cap).unwrap() < crate::MAX_SLOTS,
+            "the byte ceiling is the one that bites for copies"
+        );
+        let count = i64::try_from(cap + 1).unwrap();
+        let panic = std::panic::catch_unwind(|| {
+            linear_array(LinearArrayIn {
+                geometry: point(0.0, 0.0, 0.0),
+                direction: Vector::new(1.0, 0.0, 0.0),
+                count,
+            })
+        })
+        .expect_err("one copy past the byte ceiling refuses");
+        let message = panic.downcast_ref::<String>().unwrap();
+        assert_eq!(
+            *message,
+            format!(
+                "linear_array: count is {count} — {} bytes at {slot} bytes a slot, above the \
+                 1073741824-byte (1 GiB) ceiling of one node allocation",
+                (cap + 1) * slot
+            )
+        );
+    }
+
     #[test]
     #[should_panic(
-        expected = "linear_array: count is 16777217 — above the 16777216 (2^24) slot ceiling"
+        expected = "linear_array: count is 100000000000 — above the 16777216 (2^24) slot ceiling"
     )]
     fn linear_array_absurd_count_is_refused_not_allocated() {
         let _ = linear_array(LinearArrayIn {
             geometry: point(0.0, 0.0, 0.0),
             direction: Vector::new(1.0, 0.0, 0.0),
-            count: crate::MAX_SLOTS + 1,
+            count: 100_000_000_000,
         });
     }
 

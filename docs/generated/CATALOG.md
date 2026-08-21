@@ -138,7 +138,7 @@ one `.cic` snippet per node, solved by CI).
 
 ## Transform
 
-- `linear_array(geometry: T, direction: Vector, count: Integer) → [T]` — Linear Array · GH: Linear Array — `count` copies stepped along a direction, the first at the original position. Red when: `count < 1` or `count` is above the 2^24 slot ceiling (16,777,216 slots).
+- `linear_array(geometry: T, direction: Vector, count: Integer) → [T]` — Linear Array · GH: Linear Array — `count` copies stepped along a direction, the first at the original position. Red when: `count < 1`, or when `count` is above the shared ceilings (2^24 slots, or 1 GiB of copies up front — the message names the count and the ceiling that bit; the copies' own geometry is not counted).
 - `move(geometry: T, motion: Vector) → T` — Move · GH: Move — translate geometry along a vector.
 - `orient(geometry: T, source: Plane, target: Plane) → T` — Orient · GH: Orient — the rigid motion carrying the source plane onto the target plane (the wall's part-to-plate workhorse). Red when: either plane is degenerate.
 - `rotate(geometry: T, angle: Number, plane: Plane = xy_plane) → T` — Rotate · GH: Rotate — rotate geometry about a plane's normal through its origin. Red when: the plane is degenerate (zero-length or parallel axes).

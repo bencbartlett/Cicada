@@ -3,7 +3,7 @@
 use cicada_core::scalar::Domain;
 use cicada_macros::{Ports, node};
 
-use crate::slot_count;
+use crate::checked_count;
 
 /// Inputs for [`range`].
 #[derive(Ports, Clone, Copy, Debug)]
@@ -35,7 +35,7 @@ pub struct RangeIn {
 #[node(category = "Sequences & random", tier = "1", version = 1, gh = "Range")]
 #[must_use]
 pub fn range(input: RangeIn) -> Vec<f64> {
-    let count = slot_count("range", "steps", input.steps, 1);
+    let count = checked_count("range", "steps", input.steps, 1, size_of::<f64>());
     let Domain { start, end } = input.domain;
     let span = end - start;
     // Per-element form (never accumulation) keeps every value independent

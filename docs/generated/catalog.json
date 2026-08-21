@@ -4168,7 +4168,7 @@
       "pure": true,
       "volatile": false,
       "uses_tolerance": false,
-      "panics": "`count < 1` or `count` is above the 2^24 slot ceiling (16,777,216 slots).",
+      "panics": "`count < 1`, or when `count` is above the shared ceilings (2^24 slots, or 1 GiB of copies up front — the message names the count and the ceiling that bit; the copies' own geometry is not counted).",
       "gh": "Linear Array",
       "examples": [
         "ring = circle(radius=1.0)\nstep = unit_x(factor=3.0)\nrow = linear_array(geometry=ring, direction=step, count=4)"

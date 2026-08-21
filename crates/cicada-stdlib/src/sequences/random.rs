@@ -3,7 +3,7 @@
 use cicada_macros::{Ports, node};
 
 use super::support::{seed_state, unit_draw};
-use crate::slot_count;
+use crate::checked_count;
 
 /// Inputs for [`random`].
 #[derive(Ports, Clone, Copy, Debug)]
@@ -47,7 +47,7 @@ pub struct RandomIn {
 )]
 #[must_use]
 pub fn random(input: RandomIn) -> Vec<f64> {
-    let count = slot_count("random", "count", input.count, 0);
+    let count = checked_count("random", "count", input.count, 0, size_of::<f64>());
     let mut state = seed_state(input.seed);
     let span = input.domain.end - input.domain.start;
     (0..count)

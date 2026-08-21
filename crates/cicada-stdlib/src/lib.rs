@@ -44,17 +44,42 @@ pub(crate) fn red<T>(result: Result<T, cicada_geom::GeomError>) -> T {
 /// allocation failure (`series(count=100000000000)`: "memory allocation of
 /// 800000000000 bytes failed", which is not a panic, so the scheduler could
 /// not turn it red and `cicada serve` would have died with it; C1 review).
-/// This is a SLOT ceiling — it keeps absurd counts loud, it does not bound
-/// memory: a million copies of a mesh are a million meshes.
+/// Why 2^24: no design asks one node for more elements than that (the
+/// production wall is 1,200 parts; a 4K-resolution point grid is 8M), and
+/// the value model hashes every slot on its way out (~100 bytes a slot), so
+/// 2^24 slots is already ~1.7 GB of list — beyond it the refusal is the
+/// useful answer. This is a SLOT ceiling — it keeps absurd counts loud, it
+/// does not bound memory: a million copies of a mesh are a million meshes.
 pub const MAX_SLOTS: i64 = 1 << 24;
 
+/// The most bytes one count-driven buffer may take up front: 1 GiB. The
+/// second half of the cap ([`MAX_SLOTS`] is the first; whichever bites
+/// first refuses): it is what makes fat slots honest — 2^24 copies of a
+/// 112-byte `Transformable` or 2^24 profile vertices of a capped prism
+/// (96 bytes each) are several GiB the allocator may refuse, and an
+/// allocation failure aborts the engine instead of going red. 1 GiB is the
+/// largest single buffer a node should build eagerly without the
+/// scheduler's cost model knowing about it; every legitimate output the
+/// gates measure (docs/15) is two orders of magnitude below it.
+pub const MAX_BYTES: u64 = 1 << 30;
+
 /// A count port as the `usize` a node may allocate: red below `least` (`0`
-/// for a count, `1` for a step count) and red above [`MAX_SLOTS`], the
-/// port's name and value in the message either way. Every node whose output
-/// length is a port goes through here (`series` is the original pattern; the
-/// geometry `segments` ports are mesh resolution, not slot counts, and keep
-/// their own contracts).
-pub(crate) fn slot_count(node: &str, port: &str, value: i64, least: i64) -> usize {
+/// for a count, `1` for a step count, `3` for a tessellation), red above
+/// [`MAX_SLOTS`], and red when `count × bytes_per_slot` is above
+/// [`MAX_BYTES`] — the port's name and value in the message either way,
+/// and never an allocation. `bytes_per_slot` is the size of the element the
+/// node's buffer holds (`size_of::<f64>()` for a number list, the
+/// `Transformable` of a copy, a prism's cost per profile vertex) — the
+/// eager allocation the count sizes, not the payload behind it. Every node
+/// whose output length is a port goes through here (`series` is the
+/// original pattern).
+pub(crate) fn checked_count(
+    node: &str,
+    port: &str,
+    value: i64,
+    least: i64,
+    bytes_per_slot: usize,
+) -> usize {
     assert!(
         value >= least,
         "{node}: {port} must be >= {least}, got {value}"
@@ -66,7 +91,19 @@ pub(crate) fn slot_count(node: &str, port: &str, value: i64, least: i64) -> usiz
     );
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)] // 0 <= value <= 2^24
     let count = value as usize;
+    let bytes = bytes_of(count, bytes_per_slot);
+    assert!(
+        bytes <= u128::from(MAX_BYTES),
+        "{node}: {port} is {value} — {bytes} bytes at {bytes_per_slot} bytes a slot, above the \
+         {MAX_BYTES}-byte (1 GiB) ceiling of one node allocation"
+    );
     count
+}
+
+/// `count × bytes_per_slot` without overflow (both fit `u64`; the product
+/// fits `u128`).
+fn bytes_of(count: usize, bytes_per_slot: usize) -> u128 {
+    (count as u128) * (bytes_per_slot as u128)
 }
 
 /// Every node registered in this binary, in canonical catalog order
@@ -138,29 +175,51 @@ mod naming_fixtures {
 mod tests {
     use super::*;
 
-    // The slot ceiling every count port shares: both bounds inclusive, the
-    // refusals name the port and the value.
+    // The ceilings every count port shares: both bounds inclusive, the
+    // refusals name the port (or the derived quantity), the value, and the
+    // ceiling that bit.
     #[test]
-    fn slot_count_accepts_the_bounds_and_refuses_beyond_them() {
-        assert_eq!(slot_count("series", "count", 0, 0), 0);
-        assert_eq!(slot_count("range", "steps", 1, 1), 1);
+    fn checked_count_accepts_the_bounds_and_refuses_beyond_them() {
+        assert_eq!(checked_count("series", "count", 0, 0, 8), 0);
+        assert_eq!(checked_count("range", "steps", 1, 1, 8), 1);
         assert_eq!(
-            slot_count("duplicate", "count", MAX_SLOTS, 0),
+            checked_count("duplicate", "count", MAX_SLOTS, 0, 8),
             16_777_216,
-            "the ceiling itself is allowed"
+            "the slot ceiling itself is allowed (2^24 × 8 bytes is 128 MiB)"
         );
-        let below = std::panic::catch_unwind(|| slot_count("series", "count", -1, 0))
-            .expect_err("below least refuses");
-        let below = below.downcast_ref::<String>().expect("message");
-        assert_eq!(below, "series: count must be >= 0, got -1");
-        let above = std::panic::catch_unwind(|| slot_count("repeat", "count", MAX_SLOTS + 1, 0))
-            .expect_err("above the ceiling refuses");
-        let above = above.downcast_ref::<String>().expect("message");
         assert_eq!(
-            above,
+            checked_count("linear_array", "count", 1 << 20, 1, 1024),
+            1 << 20,
+            "the byte ceiling itself is allowed (2^20 × 1 KiB is exactly 1 GiB)"
+        );
+        let below = std::panic::catch_unwind(|| checked_count("series", "count", -1, 0, 8))
+            .expect_err("below least refuses");
+        assert_eq!(message(below), "series: count must be >= 0, got -1");
+        let above =
+            std::panic::catch_unwind(|| checked_count("repeat", "count", MAX_SLOTS + 1, 0, 8))
+                .expect_err("above the slot ceiling refuses");
+        assert_eq!(
+            message(above),
             "repeat: count is 16777217 — above the 16777216 (2^24) slot ceiling of one node \
              output"
         );
+        let fat = std::panic::catch_unwind(|| {
+            checked_count("linear_array", "count", (1 << 20) + 1, 1, 1024)
+        })
+        .expect_err("above the byte ceiling refuses before the slot ceiling");
+        assert_eq!(
+            message(fat),
+            "linear_array: count is 1048577 — 1073742848 bytes at 1024 bytes a slot, above the \
+             1073741824-byte (1 GiB) ceiling of one node allocation"
+        );
+    }
+
+    /// The `String` payload of a caught `assert!` panic (by value: a
+    /// `&Box<dyn Any>` would unsize to the Box's own type id).
+    fn message(panic: Box<dyn std::any::Any + Send>) -> String {
+        panic
+            .downcast::<String>()
+            .map_or_else(|_| panic!("a formatted message"), |s| *s)
     }
 
     #[test]
