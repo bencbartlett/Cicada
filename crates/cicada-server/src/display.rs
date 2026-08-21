@@ -1352,7 +1352,14 @@ mod tests {
         .unwrap();
         let test = TestContext::new();
         let mut picks = PickTable::default();
-        let first = frames_for_value(&list, 1, 5, 0, &mut |e| picks.ids_for(5, 0, e), &test.context());
+        let first = frames_for_value(
+            &list,
+            1,
+            5,
+            0,
+            &mut |e| picks.ids_for(5, 0, e),
+            &test.context(),
+        );
         assert_eq!(first.stats.kinds, vec!["point"]);
         assert_eq!(first.stats.points, 2);
         assert_eq!(first.stats.bounds, Some([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]]));
@@ -1370,7 +1377,14 @@ mod tests {
         let pick_of_third = batch.elements[1].pick_id;
         assert_eq!(picks.resolve(pick_of_third), Some((5, 0, 2)));
         // Same triple next generation → same pick id.
-        let second = frames_for_value(&list, 2, 5, 0, &mut |e| picks.ids_for(5, 0, e), &test.context());
+        let second = frames_for_value(
+            &list,
+            2,
+            5,
+            0,
+            &mut |e| picks.ids_for(5, 0, e),
+            &test.context(),
+        );
         let Frame::Batch { batch, .. } = decode(&second.frames[0]).unwrap() else {
             panic!("point batch")
         };
@@ -1449,7 +1463,14 @@ mod tests {
         let number = HashedValue::new(ValueData::Number(1.0)).unwrap();
         let mut table = PickTable::default();
         let before = table.encodes();
-        let _ = frames_for_value(&number, 1, 9, 0, &mut |e| table.ids_for(9, 0, e), &test.context());
+        let _ = frames_for_value(
+            &number,
+            1,
+            9,
+            0,
+            &mut |e| table.ids_for(9, 0, e),
+            &test.context(),
+        );
         assert_eq!(table.encodes(), before + 1);
         assert!(table.is_empty(), "no element, no id");
     }
@@ -1466,7 +1487,14 @@ mod tests {
         .unwrap();
         let test = TestContext::new();
         let mut picks = PickTable::default();
-        let out = frames_for_value(&list, 3, 1, 0, &mut |e| picks.ids_for(1, 0, e), &test.context());
+        let out = frames_for_value(
+            &list,
+            3,
+            1,
+            0,
+            &mut |e| picks.ids_for(1, 0, e),
+            &test.context(),
+        );
         assert_eq!(out.stats.instanced, 2);
         assert_eq!(out.stats.elements, 3);
         assert_eq!(out.stats.triangles, 12);
@@ -1498,7 +1526,14 @@ mod tests {
         let number = HashedValue::new(ValueData::Number(1.0)).unwrap();
         assert!(!is_drawable(&number));
         let mut picks = PickTable::default();
-        let out = frames_for_value(&number, 1, 1, 0, &mut |e| picks.ids_for(1, 0, e), &test.context());
+        let out = frames_for_value(
+            &number,
+            1,
+            1,
+            0,
+            &mut |e| picks.ids_for(1, 0, e),
+            &test.context(),
+        );
         assert_eq!(out.stats.kinds, vec!["clear"]);
         let circle = HashedValue::new(ValueData::Curve(Curve::Circle(
             cicada_core::geometry::Circle {
@@ -1507,7 +1542,14 @@ mod tests {
             },
         )))
         .unwrap();
-        let out = frames_for_value(&circle, 1, 1, 0, &mut |e| picks.ids_for(1, 0, e), &test.context());
+        let out = frames_for_value(
+            &circle,
+            1,
+            1,
+            0,
+            &mut |e| picks.ids_for(1, 0, e),
+            &test.context(),
+        );
         assert_eq!(out.stats.kinds, vec!["curve"]);
         assert_eq!(
             out.stats.segments,
@@ -1532,7 +1574,14 @@ mod tests {
         let solid = probe_box();
         assert!(is_drawable(&solid));
         let mut picks = PickTable::default();
-        let out = frames_for_value(&solid, 1, 7, 0, &mut |e| picks.ids_for(7, 0, e), &test.context());
+        let out = frames_for_value(
+            &solid,
+            1,
+            7,
+            0,
+            &mut |e| picks.ids_for(7, 0, e),
+            &test.context(),
+        );
         let summary = summarize(&solid, &test.context());
         assert_eq!(summary.kind, "Solid");
         assert_eq!(summary.facts["bytes"], 4494);
@@ -1568,7 +1617,14 @@ mod tests {
         assert_eq!(stats.bytes, 8 * 3 * 8 + 12 * 3 * 4);
         assert_eq!(stats.refusals, 0);
         // Drawing it again is a hit, not a kernel call.
-        let again = frames_for_value(&solid, 2, 7, 0, &mut |e| picks.ids_for(7, 0, e), &test.context());
+        let again = frames_for_value(
+            &solid,
+            2,
+            7,
+            0,
+            &mut |e| picks.ids_for(7, 0, e),
+            &test.context(),
+        );
         assert_eq!(again.stats.triangles, 12);
         assert_eq!(test.solids.stats().hits, 2);
         assert_eq!(test.solids.stats().misses, 1);
@@ -1591,7 +1647,14 @@ mod tests {
         .unwrap();
         assert!(is_drawable(&list));
         let mut picks = PickTable::default();
-        let out = frames_for_value(&list, 1, 2, 0, &mut |e| picks.ids_for(2, 0, e), &test.context());
+        let out = frames_for_value(
+            &list,
+            1,
+            2,
+            0,
+            &mut |e| picks.ids_for(2, 0, e),
+            &test.context(),
+        );
         let summary = summarize(&list, &test.context());
         assert_eq!(summary.count, Some(3));
         assert_eq!(summary.facts["element_kind"], "Solid");
@@ -1658,8 +1721,22 @@ mod tests {
             };
             hash
         };
-        let preview = frames_for_value(&list, 1, 1, 0, &mut |e| picks.ids_for(1, 0, e), &test.at(DisplayTier::Preview));
-        let fine = frames_for_value(&list, 2, 1, 0, &mut |e| picks.ids_for(1, 0, e), &test.at(DisplayTier::Fine));
+        let preview = frames_for_value(
+            &list,
+            1,
+            1,
+            0,
+            &mut |e| picks.ids_for(1, 0, e),
+            &test.at(DisplayTier::Preview),
+        );
+        let fine = frames_for_value(
+            &list,
+            2,
+            1,
+            0,
+            &mut |e| picks.ids_for(1, 0, e),
+            &test.at(DisplayTier::Fine),
+        );
         assert_eq!(preview.stats.tier, Some(DisplayTier::Preview));
         assert_eq!(fine.stats.tier, Some(DisplayTier::Fine));
         assert!(
@@ -1675,7 +1752,14 @@ mod tests {
         );
         assert_eq!(test.solids.stats().entries, 2, "two keys in the cache");
         // A second fine pass is the same blob: content-addressed both ways.
-        let fine_again = frames_for_value(&list, 3, 1, 0, &mut |e| picks.ids_for(1, 0, e), &test.at(DisplayTier::Fine));
+        let fine_again = frames_for_value(
+            &list,
+            3,
+            1,
+            0,
+            &mut |e| picks.ids_for(1, 0, e),
+            &test.at(DisplayTier::Fine),
+        );
         assert_eq!(blob_hash(&fine), blob_hash(&fine_again));
         // The box: deflection-independent mesh, one blob hash at both tiers.
         let flat = probe_box();
@@ -1684,8 +1768,22 @@ mod tests {
             slots: vec![Some(flat.clone()), Some(flat)],
         }))
         .unwrap();
-        let a = frames_for_value(&boxes, 4, 2, 0, &mut |e| picks.ids_for(2, 0, e), &test.at(DisplayTier::Preview));
-        let b = frames_for_value(&boxes, 5, 2, 0, &mut |e| picks.ids_for(2, 0, e), &test.at(DisplayTier::Fine));
+        let a = frames_for_value(
+            &boxes,
+            4,
+            2,
+            0,
+            &mut |e| picks.ids_for(2, 0, e),
+            &test.at(DisplayTier::Preview),
+        );
+        let b = frames_for_value(
+            &boxes,
+            5,
+            2,
+            0,
+            &mut |e| picks.ids_for(2, 0, e),
+            &test.at(DisplayTier::Fine),
+        );
         assert_eq!(blob_hash(&a), blob_hash(&b));
         // The summary reads whatever tier is cached, the fine one first.
         let before = test.solids.stats();
@@ -1779,7 +1877,14 @@ mod tests {
                 .unwrap(),
             )),
         );
-        let out = frames_for_value(&solid, 1, 3, 0, &mut |e| PickTable::default().ids_for(3, 0, e), &context);
+        let out = frames_for_value(
+            &solid,
+            1,
+            3,
+            0,
+            &mut |e| PickTable::default().ids_for(3, 0, e),
+            &context,
+        );
         assert_eq!(out.stats.kinds, vec!["mesh"], "drawn");
         assert_eq!(out.stats.solids, 1);
         assert_eq!(out.stats.triangles, 3);
@@ -1801,7 +1906,14 @@ mod tests {
             slots: vec![Some(solid.clone()), Some(solid)],
         }))
         .unwrap();
-        let out = frames_for_value(&list, 2, 3, 0, &mut |e| PickTable::default().ids_for(3, 0, e), &context);
+        let out = frames_for_value(
+            &list,
+            2,
+            3,
+            0,
+            &mut |e| PickTable::default().ids_for(3, 0, e),
+            &context,
+        );
         assert_eq!(out.stats.warnings.len(), 2);
         assert_eq!(out.stats.instanced, 2);
         let summary = summarize(&list, &context);
@@ -1820,7 +1932,14 @@ mod tests {
                 .unwrap(),
         ))
         .unwrap();
-        let out = frames_for_value(&pseudo, 1, 1, 0, &mut |e| PickTable::default().ids_for(1, 0, e), &test.context());
+        let out = frames_for_value(
+            &pseudo,
+            1,
+            1,
+            0,
+            &mut |e| PickTable::default().ids_for(1, 0, e),
+            &test.context(),
+        );
         assert_eq!(out.stats.kinds, vec!["clear"]);
         assert_eq!(out.stats.errors.len(), 1);
         assert!(out.stats.errors[0].starts_with("element 0 (Solid): "));
@@ -1837,14 +1956,35 @@ mod tests {
         assert_eq!((stats.entries, stats.refusals), (1, 1));
         assert_eq!(stats.bytes, error.len(), "a refusal counts its text");
         // Drawn again: a hit, the same text.
-        let again = frames_for_value(&pseudo, 2, 1, 0, &mut |e| PickTable::default().ids_for(1, 0, e), &test.context());
+        let again = frames_for_value(
+            &pseudo,
+            2,
+            1,
+            0,
+            &mut |e| PickTable::default().ids_for(1, 0, e),
+            &test.context(),
+        );
         assert_eq!(again.stats.errors, out.stats.errors);
         assert_eq!(test.solids.stats().misses, 1);
         // Evicted like any entry: a budget too small for the text keeps
         // nothing (oversized), and the refusal is re-derived each time.
         let tiny = TestContext::with_budget(8);
-        let _ = frames_for_value(&pseudo, 1, 1, 0, &mut |e| PickTable::default().ids_for(1, 0, e), &tiny.context());
-        let _ = frames_for_value(&pseudo, 2, 1, 0, &mut |e| PickTable::default().ids_for(1, 0, e), &tiny.context());
+        let _ = frames_for_value(
+            &pseudo,
+            1,
+            1,
+            0,
+            &mut |e| PickTable::default().ids_for(1, 0, e),
+            &tiny.context(),
+        );
+        let _ = frames_for_value(
+            &pseudo,
+            2,
+            1,
+            0,
+            &mut |e| PickTable::default().ids_for(1, 0, e),
+            &tiny.context(),
+        );
         let stats = tiny.solids.stats();
         assert_eq!((stats.entries, stats.refusals, stats.oversized), (0, 0, 2));
         assert_eq!(stats.misses, 2);

@@ -64,7 +64,7 @@ pub struct MeshLoftIn {
 #[node(
     category = "Mesh & field",
     tier = "S",
-    version = 2,
+    version = 1,
     gh = "Loft",
     uses_tolerance
 )]

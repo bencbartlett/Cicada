@@ -17,6 +17,8 @@ import { stopGitStatus } from "./git";
 import { useCicada } from "./store";
 
 const HISTORY = { can_undo: false, can_redo: false, undo_label: null, redo_label: null, depth: 0 };
+/** No time params: the bar is hidden and playback moves nothing (`TransportView`). */
+const IDLE_TRANSPORT = { playing: false, speed: 1, t_ms: 0, frame: 0, frames: 120, period_ms: 4000, driven: [] };
 const GRAPH = { nodes: [], wires: [], diagnostics: [] };
 const SUMMARY = {
   generation: 0,
@@ -45,6 +47,7 @@ function snapshot(seq: number, barrier: boolean, reason: string): ServerEnvelope
       barrier,
       reason,
       history: HISTORY,
+      transport: IDLE_TRANSPORT,
     },
   };
 }

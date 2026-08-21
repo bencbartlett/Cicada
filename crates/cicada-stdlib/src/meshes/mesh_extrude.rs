@@ -52,7 +52,7 @@ pub struct MeshExtrudeIn {
 #[node(
     category = "Mesh & field",
     tier = "S",
-    version = 2,
+    version = 1,
     gh = "Extrude",
     uses_tolerance
 )]

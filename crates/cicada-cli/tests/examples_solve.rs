@@ -443,7 +443,7 @@ fn a_sound_pipeline_passes() {
     let export = write(
         "export.cic",
         &format!(
-            "# cicada 1\nspan = construct_domain(start=0.0, end=1.0)\nblock = box(x=span, y=span, z=span)\n\
+            "# cicada 1\nspan = construct_domain(start=0.0, end=1.0)\nblock = mesh_box(x=span, y=span, z=span)\n\
              meshes = duplicate(item=block, count=1)\ndump = export_obj(meshes=meshes, path=\"{never_literal}\")\n"
         ),
     );

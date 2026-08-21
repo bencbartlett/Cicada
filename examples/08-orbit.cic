@@ -16,7 +16,7 @@ spin = cycle(period=4.0, frames=120)
 turn = spin * 6.283185307179586
 
 # The sun sits at the origin.
-sun = sphere(radius=0.6, segments=24)
+sun = sphere(radius=0.6)
 
 # The planet's frame is parked two units out along x, then swung around the
 # sun by the cycle's angle — one revolution per loop. Frames (planes) are
@@ -36,4 +36,4 @@ moon_out = unit_x(factor=2.6)
 moon_parked = move(geometry=world, motion=moon_out)
 moon_local = rotate(geometry=moon_parked, angle=moon_turn, plane=parked)
 moon_frame = rotate(geometry=moon_local, angle=turn)
-moon = sphere(plane=moon_frame, radius=0.12, segments=16)
+moon = sphere(plane=moon_frame, radius=0.12)

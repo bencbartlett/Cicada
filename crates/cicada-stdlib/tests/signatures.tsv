@@ -20,6 +20,7 @@ box	2	box(plane: Plane = xy_plane, x: Domain, y: Domain, z: Domain) → Solid	us
 ceiling	1	ceiling(x: Number) → Number	
 chunk	1	chunk(list: [E], size: Integer) → [[E]]	
 circle	1	circle(plane: Plane = xy_plane, radius: Number) → Closed<Curve>	uses_tolerance
+clock	1	clock(speed: Number = 1.0, t: Number = 0.0) → Number	volatile
 compact	1	compact(list: [E?]) → (values: [E], map: IndexMap)	
 concat	1	concat(a: [E], b: [E]) → [E]	
 cone	1	cone(plane: Plane = xy_plane, radius: Number, height: Number) → Solid	uses_tolerance
@@ -29,6 +30,7 @@ construct_point	1	construct_point(x: Number = 0.0, y: Number = 0.0, z: Number = 
 cos	1	cos(x: Number) → Number	
 cull	1	cull(list: [E], pattern: [Boolean]) → (kept: [E], map: IndexMap)	
 custom_preview	1	custom_preview(geometry: Geometry, color: Color = white) → ()	
+cycle	1	cycle(period: Number = 4.0, frames: Integer = 120, frame: Integer = 0) → Number	
 cylinder	1	cylinder(plane: Plane = xy_plane, radius: Number, height: Number) → Solid	uses_tolerance
 deconstruct_domain	1	deconstruct_domain(domain: Domain) → (start: Number, end: Number)	
 deconstruct_point	1	deconstruct_point(point: Point) → (x: Number, y: Number, z: Number)	
@@ -37,7 +39,9 @@ degrees	1	degrees(radians: Number) → Number
 dispatch	1	dispatch(list: [E], pattern: [Boolean]) → (a: [E], b: [E], map_a: IndexMap, map_b: IndexMap)	
 divide	1	divide(a: Number, b: Number) → Number	
 divide_curve	1	divide_curve(curve: Curve, count: Integer = 10) → (points: [Point], tangents: [Vector], parameters: [Number])	uses_tolerance
+divide_curve	3	divide_curve(curve: Curve, count: Integer = 10) → (points: [Point], tangents: [Vector], parameters: [Number])	uses_tolerance
 duplicate	1	duplicate(item: E, count: Integer) → [E]	
+duplicate	2	duplicate(item: E, count: Integer) → [E]	
 equals	1	equals(a: Number, b: Number, tolerance: Number = 0.0) → Boolean	
 exp	1	exp(x: Number) → Number	
 export_obj	1	export_obj(meshes: [Mesh], path: Text) → ()	effectful
@@ -56,6 +60,7 @@ larger	1	larger(a: Number, b: Number) → Boolean
 length	1	length(list: [E]) → Integer	
 line	1	line(a: Point, b: Point) → Curve	
 linear_array	1	linear_array(geometry: T, direction: Vector, count: Integer) → [T]	
+linear_array	2	linear_array(geometry: T, direction: Vector, count: Integer) → [T]	
 ln	1	ln(x: Number) → Number	
 loft	1	loft(start: Closed<Curve>, end: Closed<Curve>, segments: Integer = 64) → Watertight<Mesh>	uses_tolerance
 loft	2	loft(profiles: [Closed<Curve>], ruled: Boolean = true) → Solid	uses_tolerance
@@ -80,6 +85,7 @@ not	1	not(x: Boolean) → Boolean
 or	1	or(a: Boolean, b: Boolean) → Boolean	
 orient	1	orient(geometry: T, source: Plane, target: Plane) → T	uses_tolerance
 pad_last	1	pad_last(list: [E], count: Integer) → [E]	
+pad_last	2	pad_last(list: [E], count: Integer) → [E]	
 panel	1	panel(data: Any) → ()	
 partition	1	partition(list: [E], sizes: [Integer]) → [[E]]	
 pick	1	pick(pattern: Boolean, true: E, false: E) → E	
@@ -88,10 +94,13 @@ polyline	1	polyline(vertices: [Point], closed: Boolean = false) → Curve
 power	1	power(a: Number, b: Number) → Number	
 radians	1	radians(degrees: Number) → Number	
 random	1	random(domain: Domain, count: Integer, seed: Integer) → [Number]	
+random	2	random(domain: Domain, count: Integer, seed: Integer) → [Number]	
 range	1	range(domain: Domain, steps: Integer) → [Number]	
+range	3	range(domain: Domain, steps: Integer) → [Number]	
 rectangle	1	rectangle(plane: Plane = xy_plane, x: Domain, y: Domain) → Closed<Curve>	uses_tolerance
 remap	1	remap(value: Number, source: Domain, target: Domain) → Number	
 repeat	1	repeat(pattern: [E], count: Integer) → [E]	
+repeat	2	repeat(pattern: [E], count: Integer) → [E]	
 reverse	1	reverse(list: [E]) → [E]	
 revolve	1	revolve(profile: Closed<Curve>, axis: Curve, angle: Domain = full turn) → Solid	uses_tolerance
 rotate	1	rotate(geometry: T, angle: Number, plane: Plane = xy_plane) → T	uses_tolerance
@@ -100,6 +109,7 @@ scale	1	scale(geometry: T, center: Point = origin, factor: Number) → T	uses_to
 section	1	section(solid: Solid, plane: Plane = xy_plane, deflection: Number = 0.01) → [Closed<Curve>]	uses_tolerance
 section	2	section(solid: Solid, plane: Plane = xy_plane, deflection: Number = 0.01) → [Closed<Curve>]	uses_tolerance
 series	1	series(start: Number = 0.0, step: Number = 1.0, count: Integer) → [Number]	
+series	2	series(start: Number = 0.0, step: Number = 1.0, count: Integer) → [Number]	
 shift_list	1	shift_list(list: [E], offset: Integer, wrap: Boolean = true) → [E]	
 sin	1	sin(x: Number) → Number	
 slider	1	slider(value: Number, min: Number = 0.0, max: Number = 10.0, step: Number = 0.0) → Number	
@@ -118,7 +128,9 @@ tan	1	tan(x: Number) → Number
 tessellate	1	tessellate(solid: Solid, deflection: Number = 0.01, angle: Number = 0.1) → Watertight<Mesh>	uses_tolerance
 tessellate	2	tessellate(solid: Solid, deflection: Number = 0.01, angle: Number = 0.1) → Watertight<Mesh>	
 text_outlines	1	text_outlines(text: Text, size: Number, plane: Plane = xy_plane, font: Text = "DejaVu Sans Bold", segments: Integer = 8, line_gap: Number = 1.35) → [Closed<Curve>]	uses_tolerance
+text_outlines	2	text_outlines(text: Text, size: Number, plane: Plane = xy_plane, font: Text = "DejaVu Sans Bold", segments: Integer = 8, line_gap: Number = 1.35) → [Closed<Curve>]	uses_tolerance
 text_solids	1	text_solids(text: Text, size: Number, depth: Number, plane: Plane = xy_plane, font: Text = "DejaVu Sans Bold", segments: Integer = 8, line_gap: Number = 1.35) → [Watertight<Mesh>]	uses_tolerance
+text_solids	2	text_solids(text: Text, size: Number, depth: Number, plane: Plane = xy_plane, font: Text = "DejaVu Sans Bold", segments: Integer = 8, line_gap: Number = 1.35) → [Watertight<Mesh>]	uses_tolerance
 text_tag	1	text_tag(location: Plane, text: Text, size: Number = 1.0) → ()	
 toggle	1	toggle(value: Boolean) → Boolean	
 transpose	1	transpose(list: [[E]]) → [[E]]	
@@ -129,6 +141,7 @@ unit_z	1	unit_z(factor: Number = 1.0) → Vector
 vector_2pt	1	vector_2pt(a: Point, b: Point, unitize: Boolean = false) → Vector	uses_tolerance
 volume	1	volume(solid: Solid) → (volume: Number, centroid: Point)	
 voronoi	1	voronoi(seeds: [Point], boundary: Closed<Curve>, segments: Integer = 64) → (cells: [Closed<Curve>])	uses_tolerance
+voronoi	2	voronoi(seeds: [Point], boundary: Closed<Curve>, segments: Integer = 64) → (cells: [Closed<Curve>])	uses_tolerance
 weave	1	weave(pattern: [Integer], a: [E], b: [E]) → [E]	
 xor	1	xor(a: Boolean, b: Boolean) → Boolean	
 xy_plane	1	xy_plane(origin: Point = origin) → Plane	
