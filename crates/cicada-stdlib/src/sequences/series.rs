@@ -112,6 +112,35 @@ mod tests {
         });
     }
 
+    // The boundary itself, like every other count port: the ceiling is
+    // inclusive (2^22 values, 32 MiB, built) and one past it is red with
+    // the exact message. The absurd case above is what detects a guard
+    // moved after the allocation; this one pins where the guard sits.
+    #[test]
+    fn count_at_the_slot_ceiling_builds_and_one_past_it_is_refused() {
+        let at = series(SeriesIn {
+            start: 1.0,
+            step: 0.5,
+            count: crate::MAX_SLOTS,
+        });
+        assert_eq!(at.len(), 4_194_304);
+        assert_eq!(at.last(), Some(&(1.0 + 0.5 * 4_194_303.0)));
+        let past = std::panic::catch_unwind(|| {
+            series(SeriesIn {
+                start: 1.0,
+                step: 0.5,
+                count: crate::MAX_SLOTS + 1,
+            })
+        })
+        .expect_err("one past the ceiling refuses");
+        assert_eq!(
+            past.downcast_ref::<String>().map(String::as_str),
+            Some(
+                "series: count is 4194305 — above the 4194304 (2^22) slot ceiling of one node output"
+            )
+        );
+    }
+
     proptest::proptest! {
         // Length equals count; each element is exactly start + step·i.
         #[test]
