@@ -60,7 +60,30 @@ pub(crate) fn plane_at(x: f64, y: f64, z: f64) -> Plane {
 /// transcendental-free solid, add a `#[cfg(target_os = "…")]` arm here
 /// with that OS's hash (a documented per-OS golden, DECISIONS.md row 42)
 /// rather than loosening any comparison.
+///
+/// The first matrix run with the kernel in every job (CI 32508005776,
+/// 2026-08-21, macos-latest = arm64): linux-64 agrees with win-64 on all
+/// ten Solid goldens, and nine of the ten agree with osx-arm64 byte for
+/// byte — box, extrude, extrude to a point, the three booleans, bounding
+/// box, deconstruct, tessellate; only
+/// `loft` differs (`BRepOffsetAPI_ThruSections` builds ruled B-spline
+/// surfaces whose control-point arithmetic rounds differently on that
+/// build). Its macOS hash is the one that run printed — blessed from CI's
+/// own output, never typed from a guess; a golden without an arm for the
+/// running OS falls back to the win-64 value and, if it differs, fails
+/// loudly with both hashes, which is how the next arm gets added.
 pub(crate) fn platform_golden(win64: &'static str) -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        match win64 {
+            // loft_determinism_golden_hash — the ruled frustum between two
+            // pentagonal rings 12 units apart.
+            "bf5a61c9a03e5e9add5fb41899d27618cc3205df556f611cb2cc229bf4a6a617" => {
+                return "958dddb63ef5d6411f98ddc7b67f8695c0b298dc7e188d9a2367a6c80458c463";
+            }
+            _ => {}
+        }
+    }
     win64
 }
 

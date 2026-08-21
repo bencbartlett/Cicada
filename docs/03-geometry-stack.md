@@ -272,7 +272,15 @@ unconditionally — a kernel-free product build does not exist.
   revised 2026-08-20 at the merge of WP-A from the probe memo's §4d
   drafts (`docs/probes/occt-2026-08.md`): they record the fork and its
   patch stack, the pinned format version, the single-solid unwrapping,
-  the flag normalization and the per-OS goldens rule.
+  the flag normalization and the per-OS goldens rule. **First
+  measurement (CI 32508005776, 2026-08-21, win-64 vs osx-arm64):** nine of
+  the ten Solid goldens agree byte for byte — box, extrude, extrude to a
+  point, the three booleans, bounding box, deconstruct, tessellate — and
+  `loft` (`ThruSections`' ruled B-spline surfaces) differs; its macOS hash
+  is a documented per-OS arm in `solids/support.rs::platform_golden`,
+  blessed from that run's output. linux-64 agrees with win-64 on all ten
+  (the same run's Linux job, kernel linked) — so the x86-64 builds are
+  byte-identical across OSes and the one divergence is the arm64 build's.
 - **The sharing model (decided 2026-08-20, WP-B; DECISIONS.md row 16
   revised the same day).** The hazard WP-A found: OCCT results SHARE
   `TShape`s with their inputs (a boolean reuses the faces it did not
