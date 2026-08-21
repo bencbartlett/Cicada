@@ -26,8 +26,11 @@
 //! Locking discipline: `inner` (document/graph/clients) and `status` (the
 //! per-node board, written from rayon worker threads) are separate mutexes;
 //! neither is held while calling into the solve loop, and the solve loop
-//! holds none of its own while calling back in — so no lock order exists
-//! to violate.
+//! holds none of its own while calling back in. The pick table has its own
+//! mutex (`picks`) so a display restream can encode frames without the
+//! session lock; the one order is `inner` → `picks` (the live frame
+//! emission holds `inner` and takes `picks` per value) — nothing takes
+//! `inner` while holding `picks`.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -118,7 +121,17 @@ pub struct SessionConfig {
     /// clock's epoch — never wall time). `None` = a monotonic clock anchored
     /// at open; tests inject a [`cicada_sched::VirtualClock`].
     pub op_clock: Option<Arc<dyn Clock>>,
+    /// A hold on [`Session::restream_display`] — the deterministic gate the
+    /// lane tests pause a restream on (no sleeps, no wall clock). Called
+    /// once per restream with the client id, after the display table was
+    /// read and the session lock RELEASED, before any value is loaded; the
+    /// restream proceeds when it returns. `None` (production) = no hold.
+    /// A test seam in the shape of `op_clock`.
+    pub restream_hold: Option<RestreamHold>,
 }
+
+/// See [`SessionConfig::restream_hold`].
+pub type RestreamHold = Arc<dyn Fn(u32) + Send + Sync>;
 
 impl std::fmt::Debug for SessionConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -131,6 +144,10 @@ impl std::fmt::Debug for SessionConfig {
             .field(
                 "op_clock",
                 &self.op_clock.as_ref().map_or("monotonic", |_| "injected"),
+            )
+            .field(
+                "restream_hold",
+                &self.restream_hold.as_ref().map_or("none", |_| "injected"),
             )
             .finish()
     }
@@ -597,7 +614,6 @@ struct Inner {
     graph: GraphView,
     seq: u64,
     refs: NodeRefs,
-    picks: PickTable,
     clients: BTreeMap<u32, Client>,
     next_client: u32,
     join_counter: u64,
@@ -738,6 +754,10 @@ struct Core {
     relative: String,
     inner: Mutex<Inner>,
     status: Mutex<StatusBoard>,
+    /// Pick ids per `(node ref, output, element)` — its own mutex so a
+    /// display restream encodes frames without `inner` (lock order:
+    /// `inner` → `picks`, never the reverse).
+    picks: Mutex<PickTable>,
     scheduler: Arc<Scheduler>,
     scripts: Arc<ScriptCancel>,
     /// The debounce thread's shared state.
@@ -953,7 +973,6 @@ impl Session {
                 graph,
                 seq: 0,
                 refs,
-                picks: PickTable::default(),
                 clients: BTreeMap::new(),
                 next_client: 0,
                 join_counter: 0,
@@ -977,6 +996,7 @@ impl Session {
                 predicted: HashMap::new(),
                 dirty: false,
             }),
+            picks: Mutex::new(PickTable::default()),
             scheduler: Arc::clone(&scheduler),
             scripts: Arc::clone(&scripts_cancel),
             debounce: Mutex::new(None),
@@ -1045,43 +1065,38 @@ impl Session {
 
     // --------------------------------------------------------- clients --
 
-    /// Register a client socket by its two lanes ([`ClientLanes`]). The
-    /// first client takes the write lease; later ones observe. Returns
-    /// `(client id, role)`. The caller then sends [`Self::hello`],
-    /// [`Self::snapshot`] (control lane), and [`Self::restream_display`].
+    /// Register a client socket by its two lanes ([`ClientLanes`]) without
+    /// hydrating it (the session tests' shape). The first client takes the
+    /// write lease; later ones observe. Returns `(client id, role)`. The
+    /// caller then sends [`Self::hello`], [`Self::snapshot`] (control lane)
+    /// and [`Self::restream_display`] — or uses [`Self::join`], which does
+    /// the first two under the same lock hold as the registration.
     #[must_use]
     pub fn connect(&self, lanes: ClientLanes) -> (u32, Role) {
         let mut inner = self.core.lock_inner();
-        inner.next_client += 1;
-        inner.join_counter += 1;
-        let id = inner.next_client;
-        let role = if inner.writer.is_none() {
-            inner.writer = Some(id);
-            Role::Writer
-        } else {
-            Role::Observer
-        };
-        let joined = inner.join_counter;
-        inner.clients.insert(
-            id,
-            Client {
-                lanes,
-                role,
-                joined,
-            },
-        );
-        let lease = lease_view(&inner);
-        // Everyone learns the new roster.
-        for (&other, client) in &inner.clients {
-            if other != id {
-                client.lanes.control_text(encode(
-                    inner.seq,
-                    &ServerMessage::Lease {
-                        lease: lease.clone(),
-                        role: client.role,
-                    },
-                ));
-            }
+        register_client(&mut inner, lanes)
+    }
+
+    /// Register AND hydrate a client socket under ONE lock hold: `hello`
+    /// and the initial `snapshot` are the first two texts on its control
+    /// lane — no broadcast another client's intent enqueues between the
+    /// registration and the hydration can land ahead of them. The display
+    /// restream is separate ([`Self::restream_display`]): it rides the
+    /// display lane and is built outside the lock, so the caller starts
+    /// the socket's write task first and the restream after — the
+    /// joiner's graph is on the wire while its frames are still being
+    /// encoded (docs/13 §Two lanes, one socket).
+    #[must_use]
+    pub fn join(&self, lanes: ClientLanes) -> (u32, Role) {
+        let mut inner = self.core.lock_inner();
+        let (id, role) = register_client(&mut inner, lanes);
+        if let Some(client) = inner.clients.get(&id) {
+            client
+                .lanes
+                .control_text(self.hello_locked(&inner, id, role));
+            client
+                .lanes
+                .control_text(self.core.snapshot_locked(&inner, false, "initial"));
         }
         (id, role)
     }
@@ -1133,6 +1148,10 @@ impl Session {
     #[must_use]
     pub fn hello(&self, id: u32, role: Role) -> String {
         let inner = self.core.lock_inner();
+        self.hello_locked(&inner, id, role)
+    }
+
+    fn hello_locked(&self, inner: &Inner, id: u32, role: Role) -> String {
         encode(
             inner.seq,
             &ServerMessage::Hello {
@@ -1177,27 +1196,52 @@ impl Session {
     /// lane together — the reset is the header of the restream it
     /// announces, and the lane's FIFO is what keeps it ahead of them; the
     /// notices are control-plane texts.
+    ///
+    /// Built OUTSIDE the session lock (docs/13 §Two lanes, one socket — the
+    /// join-time half). The wall's restream is ~370 MB of frames: seconds
+    /// of store reads and encoding, during which every other client's
+    /// intent and every broadcast used to wait on `inner`, and the joiner's
+    /// own `hello`/`snapshot` sat behind the build. Now the lock is held
+    /// three times briefly: to read the plan (the display table as of the
+    /// reset), per output to hand the frames over, and for the notices.
+    /// The per-output hand-over is a compare-and-send: if the table no
+    /// longer says what the plan read (hash AND generation), the live path
+    /// already broadcast the newer frames — or the `clear` — to this
+    /// client, which joined the roster before the plan was read, and the
+    /// plan's frames are dropped here: sent, they would undo a clear on the
+    /// client (a cleared output has no generation left to compare with)
+    /// or be dropped by its per-output rule.
     pub fn restream_display(&self, id: u32) {
-        let mut inner = self.core.lock_inner();
-        let Some(client) = inner.clients.get(&id) else {
-            return;
+        // Phase 1, under the lock, briefly: the header and the plan.
+        let (lanes, plan) = {
+            let inner = self.core.lock_inner();
+            let Some(client) = inner.clients.get(&id) else {
+                return;
+            };
+            let lanes = client.lanes.clone();
+            let generation = inner
+                .display
+                .values()
+                .map(|d| d.generation)
+                .max()
+                .unwrap_or(0);
+            lanes.display_text(encode(
+                inner.seq,
+                &ServerMessage::DisplayReset { generation },
+            ));
+            let mut plan: Vec<((u32, u32), Displayed)> =
+                inner.display.iter().map(|(k, v)| (*k, v.clone())).collect();
+            plan.sort_by_key(|(key, _)| *key);
+            (lanes, plan)
         };
-        let lanes = client.lanes.clone();
-        let generation = inner
-            .display
-            .values()
-            .map(|d| d.generation)
-            .max()
-            .unwrap_or(0);
-        lanes.display_text(encode(
-            inner.seq,
-            &ServerMessage::DisplayReset { generation },
-        ));
+        if let Some(hold) = &self.core.config.restream_hold {
+            hold(id);
+        }
+        // Phase 2, per output, without the session lock: load and encode
+        // (the pick table's own lock), then the compare-and-send.
         let store = Arc::clone(self.core.scheduler.store());
         let tolerance = self.core.config.project.tol();
-        let keys: Vec<((u32, u32), Displayed)> =
-            inner.display.iter().map(|(k, v)| (*k, v.clone())).collect();
-        for ((node, output), displayed) in keys {
+        for ((node, output), displayed) in plan {
             match store.load_value(&displayed.hash) {
                 Ok(value) => {
                     let frames = display::frames_for_value(
@@ -1205,14 +1249,25 @@ impl Session {
                         displayed.generation,
                         node,
                         output,
-                        &mut inner.picks,
+                        &mut self.core.lock_picks(),
                         tolerance,
                     );
-                    for frame in frames.frames {
-                        lanes.frame(Bytes::from(frame));
+                    let inner = self.core.lock_inner();
+                    if !inner.clients.contains_key(&id) {
+                        // The client left mid-restream: nothing to send to.
+                        return;
+                    }
+                    let unchanged = inner.display.get(&(node, output)).is_some_and(|now| {
+                        now.hash == displayed.hash && now.generation == displayed.generation
+                    });
+                    if unchanged {
+                        for frame in frames.frames {
+                            lanes.frame(Bytes::from(frame));
+                        }
                     }
                 }
                 Err(error) => {
+                    let inner = self.core.lock_inner();
                     lanes.control_text(encode(
                         inner.seq,
                         &ServerMessage::Notice {
@@ -1226,14 +1281,18 @@ impl Session {
                 }
             }
         }
-        for notice in self.core.take_notices() {
-            lanes.control_text(encode(
-                inner.seq,
-                &ServerMessage::Notice {
-                    level: "warning".to_owned(),
-                    message: notice,
-                },
-            ));
+        let notices = self.core.take_notices();
+        if !notices.is_empty() {
+            let inner = self.core.lock_inner();
+            for notice in notices {
+                lanes.control_text(encode(
+                    inner.seq,
+                    &ServerMessage::Notice {
+                        level: "warning".to_owned(),
+                        message: notice,
+                    },
+                ));
+            }
         }
     }
 
@@ -2722,6 +2781,43 @@ impl Observer for ForwardObserver {
     }
 }
 
+/// Register a client's lanes: the id, the lease (first client = writer),
+/// the roster broadcast to everyone else. Under the caller's lock hold.
+fn register_client(inner: &mut Inner, lanes: ClientLanes) -> (u32, Role) {
+    inner.next_client += 1;
+    inner.join_counter += 1;
+    let id = inner.next_client;
+    let role = if inner.writer.is_none() {
+        inner.writer = Some(id);
+        Role::Writer
+    } else {
+        Role::Observer
+    };
+    let joined = inner.join_counter;
+    inner.clients.insert(
+        id,
+        Client {
+            lanes,
+            role,
+            joined,
+        },
+    );
+    let lease = lease_view(inner);
+    // Everyone learns the new roster.
+    for (&other, client) in &inner.clients {
+        if other != id {
+            client.lanes.control_text(encode(
+                inner.seq,
+                &ServerMessage::Lease {
+                    lease: lease.clone(),
+                    role: client.role,
+                },
+            ));
+        }
+    }
+    (id, role)
+}
+
 /// A control-plane text to every client (the control lane).
 fn broadcast(inner: &Inner, message: &ServerMessage) {
     let text = encode(inner.seq, message);
@@ -3350,6 +3446,12 @@ impl Core {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    fn lock_picks(&self) -> std::sync::MutexGuard<'_, PickTable> {
+        self.picks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn take_notices(&self) -> Vec<String> {
         std::mem::take(
             &mut *self
@@ -3871,7 +3973,7 @@ impl Core {
                         generation,
                         node_ref,
                         output,
-                        &mut inner.picks,
+                        &mut self.lock_picks(),
                         tolerance,
                     );
                     for frame in frames.frames {
@@ -4396,6 +4498,7 @@ mod tests {
             threads: 2,
             project: ProjectConfig::default(),
             op_clock: None,
+            restream_hold: None,
         };
         (dir, config)
     }
@@ -5585,6 +5688,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
             threads: 2,
             project: ProjectConfig::default(),
             op_clock: None,
+            restream_hold: None,
         };
         let session = Session::open(config).unwrap();
         session.wait_idle();
@@ -5699,6 +5803,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
             threads: 2,
             project: ProjectConfig::default(),
             op_clock: None,
+            restream_hold: None,
         };
         // Python startup included: generous, and only ever waited in full
         // when the bridge is broken — then every hold is released so the

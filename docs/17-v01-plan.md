@@ -564,36 +564,65 @@ same commit (skill `add-stdlib-node`).
 
 ## Follow-ups (found by the v0.1 reviews and measurements; scheduled, not yet placed)
 
-- **Control-plane priority over the display restream** — **done
-  2026-08-20** (`wt/hardening`; docs/13 §Two lanes, one socket). A client
-  that joined received the whole display set on the one socket (the wall:
-  ~350 MB of binary frames) and every text — `preview_policy`, deltas,
-  statuses — queued behind it: `preview_policy` reached a fresh observer
-  ~26 s after the drag on a loaded dev machine. Shipped as the smaller of
-  the two options doc 13 named: two channels per client (`ClientLanes`:
-  control and display) and a write task that drains control first, the
-  display lane FIFO — `display_reset` and `screenshot_request` ride the
-  display lane because their meaning is their place among the frames;
-  nothing on the wire changed (`PROTOCOL_VERSION` unchanged). The "frame
-  bus drops stale-generation frames" premise was half right and is
-  recorded precisely in docs/13: staleness is per output, and a rule
-  keyed to the reset's generation would drop a restream's unchanged
-  outputs; the web test pins the interleavings that ARE safe. Tests: the
-  pump; a 320 MiB synthetic restream + a slider tick whose status goes out
-  behind at most one frame (a permit-paced recording sink — no sleeps);
-  the HTTP e2e's join order. Measured in `compute_on_release.spec.ts`
-  (the observer now grabs mid-restream; the spec asserts the wire ORDER —
-  the text lands before the restream's last frame — plus a 60 s sanity
-  bound): observer `preview_policy` 15.6 s after the grab before, landing
-  after the last of 26 frames (368 MB) → 8.9 s and 3.5 s in two runs
-  after, landing at frame 12 and 17 of 26. The residual is headless
-  Chromium's software WebGL
-  (SwiftShader: ~1.5–2 s per render of the wall's ~13 M triangles, one
-  render per arriving frame, the text's handler queued behind them) — a
-  GPU browser pays milliseconds; docs/13 has the trace. Residual, not
-  scheduled: display-vs-display blocking (a generation completing
-  mid-restream queues behind it) — a per-output latest-wins display queue
-  if it ever shows up.
+- **Control-plane priority over the display restream** — **done on the
+  server and the socket, 2026-08-20** (`wt/hardening`; docs/13 §Two
+  lanes, one socket); **the status cadence at wall scale is NOT reached
+  on the page** and is recorded as the display plane's follow-up, not
+  claimed. A client that joined received the whole display set on the
+  one socket (the wall: 26 frames, 368 MB, the largest 94 MB) and every
+  text — `preview_policy`, deltas, statuses — queued behind it:
+  `preview_policy` reached a fresh observer ~26 s after the drag on a
+  loaded dev machine. Shipped as the smaller of the two options doc 13
+  named: two channels per client (`ClientLanes`: control and display)
+  and a write task that drains control first, the display lane FIFO —
+  `display_reset` and `screenshot_request` ride the display lane because
+  their meaning is their place among the frames; nothing on the wire
+  changed (`PROTOCOL_VERSION` unchanged). Plus the join-time half the
+  review found: the write task starts before the restream is built
+  (`attach_client`), `Session::join` hydrates under the registration's
+  lock hold, and `restream_display` encodes outside the session lock
+  with a per-output compare-and-send (the pick table behind its own
+  mutex) — a joiner used to see nothing for ~3 s while every other
+  client's intents waited on the lock. The "frame bus drops
+  stale-generation frames" premise was half right and is recorded
+  precisely in docs/13: staleness is per output, and a rule keyed to the
+  reset's generation would drop a restream's unchanged outputs; the web
+  test pins the interleavings that ARE safe. Tests: the pump (priority,
+  FIFO, the `biased` select pinned by 64 messages per lane); a wall-sized
+  synthetic restream (the 94 MB frame in flight, 319 MiB behind it) + a
+  slider tick whose status goes out behind exactly the frame in flight;
+  the parked-restream join (hydrated, intents answered, the superseded
+  output not resent); the lane assignment of the two display-plane
+  texts; the HTTP e2e's join order — all on a permit-paced recording
+  sink, no sleeps. Measured with `tools/measure/lanes.mjs` (the wire, no
+  browser; the "before" engine built from `24d558b`'s server sources):
+  a tick at the observer's snapshot reaches it after 368 MB / 278 ms
+  with one queue, behind 48 KB / 1.3 ms with the lanes; socket open →
+  `hello` 3,031 ms → 7 ms; a tick 50 ms into a join is answered in
+  3,202 ms → 1.3 ms. End to end in `compute_on_release.spec.ts`
+  (headless Chromium, software GL; the observer grabs mid-restream; the
+  spec now MEASURES — logs, attaches, annotates — under a 60 s sanity
+  bound): observer `preview_policy` after the grab — paired runs in one
+  session, 2026-08-20, debug engines: **21.0 s** with one queue (the
+  `24d558b` engine; 14 of 26 frames in at the grab, all 26 at the hint)
+  → **5.9 s and 11.7 s** with the lanes and the join fix (24 and 21
+  frames in at the grab, all 26 at the hint); earlier runs 15.6 s →
+  3.5–8.9 s. The writer's own hint 160–176 ms in both (one 4.5 s
+  outlier: the two pages share one headless browser). The residual is
+  the page's own message queue: the
+  browser takes the whole restream in faster than it handles frames,
+  so a text sent once the server has written them is legitimately last
+  on the wire — no socket order can fix that, and the page cannot be
+  the socket's oracle (the order guard the spec used to carry was
+  valid only while the tick beat the server's ~3 s build). Whether the
+  page's seconds per 27–94 MB frame are software-GL renders or
+  decode/upload is unmeasured; "a GPU browser pays milliseconds" was a
+  hypothesis, not evidence. Next, named, not scheduled: frame handling
+  off the main thread (decode in a worker → typed arrays to the scene),
+  the one change that lets the queue drain at memcpy speed;
+  chunked/element-range frames; a per-output latest-wins display queue
+  for display-vs-display blocking; the live `emit_frames` still encodes
+  under the session lock (changed outputs only).
 - **A count/allocation guard for every count-taking node** (`series`,
   `range`, `duplicate`, `repeat`, …): a slider wired into `count` can ask
   for a capacity the allocator refuses, which aborts the process —

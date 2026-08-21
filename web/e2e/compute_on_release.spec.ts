@@ -24,7 +24,11 @@
  * fires no `change` for it — with an observer page open. The release must
  * take both pages' badges down (`end_drag` → `drag_ended`), end the
  * server's drag at once (a re-grab inside the 300 ms gap is a fresh drag,
- * announced again), write nothing and solve nothing.
+ * announced again), write nothing and solve nothing. The observer's
+ * `preview_policy` latency while its 368 MB display set streams is
+ * MEASURED here (logged, attached, bounded by a sanity net) — the socket's
+ * ordering is the server tests' and the wire probe's to assert (docs/13
+ * §Two lanes, one socket).
  */
 import { expect, test, type Page } from "@playwright/test";
 import config from "../playwright.config";
@@ -38,12 +42,18 @@ const SPEC_TIMEOUT_MS = 10 * 60_000;
 const SOLVE_TIMEOUT_MS = 5 * 60_000;
 // The observer's `preview_policy` while its display set is still streaming
 // (docs/13 §Two lanes, one socket). The socket puts the text behind at most
-// one frame; what the page then pays is its own frame handling — headless
-// Chromium renders the wall's ~13 M triangles in software (SwiftShader,
-// ~1.5–2 s per render on a dev machine, once per arriving frame) and the
-// text's handler queues behind those renders. The ORDER guard below (the
-// text lands mid-restream, not after it) is the socket's regression test,
-// independent of render speed; this bound is the sanity net.
+// one frame and the server no longer holds its lock or the joiner's
+// `hello` for the restream's build — both pinned deterministically by the
+// server's tests and measured on the wire by `corpus/measure/lanes.mjs`.
+// What the PAGE then pays is its own: the browser takes the whole restream
+// into its message queue faster than it handles the frames (the wall: 368
+// MB, five frames of 27–94 MB; headless Chromium renders the ~13 M
+// triangles in software, seconds per large frame), so a text sent once the
+// server has written its frames waits behind every frame the page has not
+// handled yet — the page cannot be the socket's oracle, and this spec
+// MEASURES the observer's hint (logged + attached) and bounds it only by
+// this sanity net. Reaching the status cadence here is the display plane's
+// follow-up (docs/17): frame handling off the main thread.
 const OBSERVER_POLICY_BOUND_MS = 60_000;
 
 interface Timing {
@@ -66,6 +76,13 @@ interface DebugState {
     drag: { node: string; port: string | null; mode: string; deferred: number } | null;
   };
   timings: Timing[];
+  /** The display table: every output whose frames a joining client receives. */
+  display: Record<string, { hash: string; generation: number; stats: { bytes: number } }>;
+}
+
+/** The bytes of frames a fresh socket receives: the display table's total. */
+function restreamBytes(state: DebugState): number {
+  return Object.values(state.display).reduce((sum, d) => sum + d.stats.bytes, 0);
 }
 
 interface PendingParam {
@@ -299,8 +316,9 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
   await expect(observer.getByTestId("app")).toBeVisible();
   // The observer, too, receives the whole display set — and the drag below
   // starts WHILE it streams: the control plane has its own lane (docs/13
-  // §Two lanes, one socket), so the snapshot is in already and the
-  // `preview_policy` must not wait for the frames.
+  // §Two lanes, one socket), so the snapshot is in already (the app is
+  // visible above before the first large frame could have been decoded)
+  // and the `preview_policy` does not wait for the frames on the socket.
   await observer.getByTestId("insp-tab-params").click();
   await expect(observer.getByTestId("param-deboss")).toBeVisible();
   await expect(observer.getByTestId("widget-deboss"), "the second page observes").toBeDisabled();
@@ -314,6 +332,13 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
   const xCommitted = xFor(box2, released, min, max);
   const baseline2 = settled.solve.last_complete_generation ?? 0;
   const structuralBefore = settled.timings.filter((t) => t.kind === "structural").length;
+  // What the observer's restream amounts to, read from the server's display
+  // table BEFORE the drags: the socket-order guard below compares against
+  // this, not against the observer's final count — a release that wrote a
+  // new value would broadcast frames after the text and let a one-queue
+  // engine pass a "frames at hint < frames at the end" guard.
+  const observerRestreamBytes = restreamBytes(settled);
+  expect(observerRestreamBytes, "the wall's display set is on the server").toBeGreaterThan(100e6);
 
   // Grab the thumb where it sits and pull it onto cold values.
   const observerFramesAtGrab = await observerFrames(observer);
@@ -333,11 +358,11 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
   // The observer hears the broadcast: the hint, the class, the entry —
   // while its display set is still streaming. Before the lanes (one
   // channel per client) the wall's ~350 MB of frames stood between the
-  // observer and this text: `preview_policy` reached it only after the
-  // last frame — ~26 s after the drag on a loaded dev machine (measured
-  // 2026-08-20; 15.6 s in the spec's own run). Now the text leaves the
-  // server behind at most the one frame in flight; the order guard after
-  // the restream settles (below) asserts it landed mid-restream.
+  // observer and this text on the SOCKET: `preview_policy` reached it only
+  // after the last frame — ~26 s after the drag on a loaded dev machine
+  // (measured 2026-08-20; 15.6 s in the spec's own run). Now the text
+  // leaves the server behind at most the one frame in flight; what is left
+  // is the page's own queue (see OBSERVER_POLICY_BOUND_MS), measured here.
   const observerHint = observer.getByTestId("param-pending-deboss");
   await expect(observerHint).toBeVisible({ timeout: OBSERVER_POLICY_BOUND_MS });
   const observerHintMs = Date.now() - tGrab;
@@ -347,7 +372,8 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
   console.log(
     `[compute-on-release] observer preview_policy: writer hint ${writerHintMs} ms, observer hint ${observerHintMs} ms after the grab · ` +
       `observer frames at grab ${observerFramesAtGrab.received} (${(observerFramesAtGrab.bytes / 1e6).toFixed(0)} MB), ` +
-      `at hint ${observerFramesAtHint.received} (${(observerFramesAtHint.bytes / 1e6).toFixed(0)} MB)`,
+      `at hint ${observerFramesAtHint.received} (${(observerFramesAtHint.bytes / 1e6).toFixed(0)} MB) ` +
+      `of a ${(observerRestreamBytes / 1e6).toFixed(0)} MB restream`,
   );
   await testInfo.attach("observer-preview-policy.json", {
     body: JSON.stringify(
@@ -356,6 +382,8 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
         observer_hint_ms: observerHintMs,
         observer_frames_at_grab: observerFramesAtGrab,
         observer_frames_at_hint: observerFramesAtHint,
+        observer_restream_bytes: observerRestreamBytes,
+        observer_hint_landed_mid_restream: observerFramesAtHint.bytes < observerRestreamBytes,
       },
       null,
       2,
@@ -406,28 +434,31 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
     `[compute-on-release] no-write releases: ${after.solve.previews_deferred - settled.solve.previews_deferred} more ticks withheld · ` +
       `drag ${after.solve.drag === null ? "ended" : "STANDING"} · text ${debossValue(after.text)} · observer cleared`,
   );
+  // Where the text landed among the observer's frames — a measurement, not
+  // a guard. Message events fire in wire order, so "frame bytes handled
+  // before the hint" is where the text sat on the wire. It discriminates
+  // the one-queue engine from the lanes ONLY when the tick reaches the
+  // server while frames are still queued there: with one queue the text
+  // always lands after the last frame; with the lanes it lands behind the
+  // frame in flight — but once the server has written the restream (a
+  // debug engine encodes the wall's in ~3 s, streaming as it goes) the
+  // page's own queue holds whatever it has not handled and the text is
+  // legitimately last on the wire. The restream's size is the server's
+  // display table as read before the drags (`observerRestreamBytes`), so
+  // nothing a later release broadcasts widens the bar.
+  const landedMidRestream = observerFramesAtHint.bytes < observerRestreamBytes;
+  testInfo.annotations.push({
+    type: "note",
+    description:
+      `observer preview_policy landed ${landedMidRestream ? "mid-restream" : "after its whole restream"} ` +
+      `(${(observerFramesAtHint.bytes / 1e6).toFixed(0)} of ${(observerRestreamBytes / 1e6).toFixed(0)} MB in; ` +
+      `${observerFramesAtGrab.received} frames in at the grab)`,
+  });
   // Let the observer's restream finish before the page goes — a frame
-  // decoding error mid-stream would otherwise close with the page unseen —
-  // and read its total: the socket-order guard. Message events fire in
-  // wire order, so "frames handled before the hint" is where the text sat
-  // on the wire, whatever the render speed. One channel per client put it
-  // after the last frame; the lanes put it behind at most the one in
-  // flight. (A machine fast enough to have the whole restream in before
-  // the grab could not tell the two apart — it says so instead of passing.)
+  // decoding error mid-stream would otherwise close with the page unseen.
   await waitForFramesToSettle(observer, 2_000, 180_000);
   const observerFinal = await observerFrames(observer);
-  if (observerFramesAtGrab.received < observerFinal.received) {
-    expect(
-      observerFramesAtHint.received,
-      `preview_policy reached the observer only after its whole restream (${observerFinal.received} frames, ` +
-        `${(observerFinal.bytes / 1e6).toFixed(0)} MB) — the control lane is queued behind the display lane again`,
-    ).toBeLessThan(observerFinal.received);
-  } else {
-    testInfo.annotations.push({
-      type: "note",
-      description: `observer restream (${observerFinal.received} frames) was complete before the grab — the socket-order guard did not apply`,
-    });
-  }
+  expect(observerFinal.bytes, "the observer received its whole display set").toBeGreaterThanOrEqual(observerRestreamBytes);
   await observer.close();
 
   expect(errors, errors.join("\n")).toEqual([]);
