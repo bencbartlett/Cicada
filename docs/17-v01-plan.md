@@ -649,8 +649,10 @@ same commit (skill `add-stdlib-node`).
   observer (CDP network conditions); the live `emit_frames` still
   encodes under the session lock (changed outputs only).
 - **A count/allocation guard for every count-taking node** — **done
-  2026-08-20** (`wt/hardening`, three commits; docs/08 rule 7 is the
-  contract). A slider wired into `count` could ask for a capacity the
+  2026-08-20** (`wt/hardening`, three commits, plus the 2026-08-21
+  re-audit that found every node accounted for and added the one missing
+  boundary case — `series` at 2^22 builds, 2^22 + 1 is red; docs/08 rule
+  7 is the contract). A slider wired into `count` could ask for a capacity the
   allocator refuses, which aborts the process — `catch_unwind` cannot
   catch it. The 2^24 slot ceiling (15112fb) already stood on eight count
   ports; this package gave it its byte half and its product form,
