@@ -20,6 +20,12 @@ pub struct MoveIn {
 ///
 /// The geometry translated by `motion`.
 ///
+/// # Panics
+///
+/// Panics when a `Solid` is the geometry — B-rep transforms run in the OCCT kernel and
+/// arrive with the OCCT-backed solid nodes (v0.1 item 3 WP-C); until then a
+/// Solid input is a loud refusal, never a silent pass-through.
+///
 /// # Examples
 ///
 /// ```cic
@@ -93,5 +99,31 @@ mod tests {
             expect_point_hash(&moved),
             "a7db90a4e876014b114cd583946eedee36b32e54bbf54c09ae9450bb6451a286"
         );
+    }
+
+    #[test]
+    fn a_solid_input_is_the_documented_red_path() {
+        // The `# Panics` contract above (and the catalog's "Red when") names
+        // the Solid refusal; this pins that the NODE — not just
+        // `Similarity::apply` — goes red with exactly that message. The
+        // same `Similarity` path serves rotate / scale / orient /
+        // linear_array, whose contracts say the same sentence.
+        use cicada_core::geometry::{SOLID_CANONICAL_HEADER, Solid};
+        use cicada_geom::transform::SOLID_TRANSFORM_DEFERRED;
+        let solid = Solid::from_canonical_bytes(SOLID_CANONICAL_HEADER.to_vec()).unwrap();
+        let outcome = std::panic::catch_unwind(|| {
+            move_(MoveIn {
+                geometry: Transformable::Solid(solid),
+                motion: Vector::new(1.0, 0.0, 0.0),
+            })
+        });
+        let payload = outcome.expect_err("a Solid must be refused, never passed through");
+        let message = payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+            .expect("a message");
+        assert_eq!(message, SOLID_TRANSFORM_DEFERRED);
+        assert!(message.contains("WP-C"), "{message}");
     }
 }

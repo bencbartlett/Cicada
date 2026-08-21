@@ -258,12 +258,44 @@ Design: DECISIONS.md rows 16 and 42 (revised 2026-08-19), doc 03, doc 08
   every CI job runs `tools/fetch_occt.py` first; until then the
   `occt (ubuntu)` job should add `cargo test --workspace --features occt`
   so the server's Solid display tests run in the kernel world in CI
-  (today they run there only on this machine). Left for WP-C from WP-B:
+  (today they run there only on this machine). **Review fixes (same
+  day)**: a compile-time `!Sync` assertion on `occt::Handle` (the belt
+  behind `canonical_bytes(&self)`); the sharing model proved under the
+  SCHEDULER too — `cicada-server/tests/solid_scheduler.rs`, closures
+  over `cicada_geom::solid` in a `SolveGraph` with a 48-element `each()`
+  fan-out on 8 threads vs 1, hashes equal (the node-level `.cic` form
+  follows WP-C's nodes); the review's UNVERIFIED determinism question
+  answered with evidence — `canonical_bytes_do_not_depend_on_heap_state_or_thread`
+  (a seven-cut, 58-face solid under allocator churn and on 8 threads,
+  byte-identical; WP-C reruns the shape on loft/revolve before blessing
+  goldens); `Deflection::new` floors at the kernel's own
+  (`MIN_LINEAR_DEFLECTION` 1e-7, `MIN_ANGULAR_DEFLECTION` 1e-12 — the
+  mesher throws below them; WP-C's `tessellate` node inherits the "Red
+  when"); `SolidCache` touches and evictions are O(log n) (a recency
+  index, asserted at 2,000 entries without the kernel) and an entry
+  larger than the whole budget is served, counted `oversized`, never
+  kept; `/debug/state` → `display_cache` and the omitted-when-empty
+  `stats.solids`/`stats.errors` are asserted by the session test and
+  listed in docs/13; the five transform nodes' `# Panics` (and the
+  catalog's "Red when") name the Solid refusal, with a node-level test;
+  the Python refusal names `tessellate` as ARRIVING with WP-C, not as a
+  node to use. Not changed, on purpose: the handle cache stays unbuilt
+  (item 4 of the package — the measured ≤ 5 % gain and the fork-glue
+  conditions in docs/03 §No handle cache; an orchestrator-level
+  acceptance, recorded here), and display tessellation still runs under
+  the session lock (§Follow-ups). Left for WP-C from WP-B:
   the kernel-backed transforms (`Similarity::apply`'s Solid arm and the
-  `move`/`rotate`/`scale` `# Panics` docs), a `tessellate` node over
-  `solid::tessellate`, the STEP nodes' `Interface_Static` lock, and — if
-  a handle cache is ever wanted — `SetNonDestructive(true)` booleans plus
-  clean-before-mesh in the fork's glue (docs/03 records the conditions).
+  five transform nodes' `# Panics`, which then lose the Solid sentence),
+  a `tessellate` node over `solid::tessellate` (its "Red when" includes
+  the deflection floor), the STEP nodes' `Interface_Static` lock, and —
+  if a handle cache is ever wanted — `SetNonDestructive(true)` booleans
+  plus clean-before-mesh in the fork's glue (docs/03 records the
+  conditions). One ledger wording for Ben: the "Scheduler internals" row
+  says `LOG_FORMAT` bumps with a new `LogRecord` variant; WP-B bumped it
+  (2 → 3) for a new `StoredValue` (blob codec) variant on the same
+  reasoning — an older engine tombstones and recomputes every memo whose
+  Solid blob it cannot decode — and docs/12 says so; the row's sentence
+  could read "any new record OR value-codec variant".
 - **WP-C nodes**: `box`, `sphere`, `cylinder`, `cone`, `extrude`,
   `extrude_to_point`, `loft`, `revolve`, `sweep`, `pipe`,
   `solid_union/difference/intersection`, `volume`, `bounding_box`,

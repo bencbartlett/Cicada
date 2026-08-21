@@ -45,9 +45,24 @@ pub const DISPLAY_DEFLECTION_MM: f64 = 0.02;
 /// The angular deviation of a display tessellation, in radians.
 pub const DISPLAY_ANGULAR_RAD: f64 = 0.1;
 
+/// The finest linear deflection a [`Deflection`] admits: OCCT's
+/// `Precision::Confusion()` (1e-7). `BRepMesh_IncrementalMesh` throws
+/// `Standard_NumericError` ("invalid parameter value") for anything finer,
+/// so the floor is the kernel's, restated here as a typed refusal at
+/// construction (the seam's tests drive the raw glue below it to prove the
+/// floor is necessary, and the mesher at exactly the floor to prove it is
+/// sufficient).
+pub const MIN_LINEAR_DEFLECTION: f64 = 1e-7;
+
+/// The finest angular deflection a [`Deflection`] admits: OCCT's
+/// `Precision::Angular()` (1e-12 rad), the mesher's other floor.
+pub const MIN_ANGULAR_DEFLECTION: f64 = 1e-12;
+
 /// A tessellation request: absolute linear deflection in document units
-/// and angular deflection in radians, both finite and > 0 by construction
-/// (so the kernel never sees a deflection it would have to refuse).
+/// and angular deflection in radians, both finite and at or above the
+/// kernel's floors ([`MIN_LINEAR_DEFLECTION`], [`MIN_ANGULAR_DEFLECTION`])
+/// by construction — so a deflection the kernel would refuse is refused
+/// here first, with a typed error that names the floor.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Deflection {
     linear: f64,
@@ -59,26 +74,36 @@ impl Deflection {
     ///
     /// # Errors
     ///
-    /// [`GeomError::BadParameter`] for a non-finite or non-positive value.
+    /// [`GeomError::BadParameter`] for a non-finite value, or one below the
+    /// kernel's floor (`linear < 1e-7`, `angular < 1e-12`; zero and
+    /// negatives included).
     pub fn new(linear: f64, angular: f64) -> Result<Self, GeomError> {
-        for (name, value) in [
-            ("linear_deflection", linear),
-            ("angular_deflection", angular),
-        ] {
-            if !(value.is_finite() && value > 0.0) {
-                return Err(GeomError::BadParameter {
-                    name,
-                    value: format!("{value}"),
-                    requirement: "must be finite and > 0",
-                });
-            }
+        if !(linear.is_finite() && linear >= MIN_LINEAR_DEFLECTION) {
+            return Err(GeomError::BadParameter {
+                name: "linear_deflection",
+                value: format!("{linear}"),
+                requirement: "must be finite and >= 1e-7 (OCCT Precision::Confusion — the \
+                              mesher refuses anything finer)",
+            });
+        }
+        if !(angular.is_finite() && angular >= MIN_ANGULAR_DEFLECTION) {
+            return Err(GeomError::BadParameter {
+                name: "angular_deflection",
+                value: format!("{angular}"),
+                requirement: "must be finite and >= 1e-12 rad (OCCT Precision::Angular — the \
+                              mesher refuses anything finer)",
+            });
         }
         Ok(Self { linear, angular })
     }
 
     /// The display deflection for a project — the module docs' formula.
-    /// Infallible: `ProjectConfig` holds finite positive tolerances and
-    /// the constants are positive.
+    /// Infallible: `ProjectConfig` holds finite positive tolerances, the
+    /// constants are positive, and the formula's minimum over every `Unit`
+    /// (0.02 mm in a foot document is 6.6e-5) sits well above the kernel's
+    /// floor — `display_deflection_is_above_the_floor_for_every_unit` pins
+    /// that, so this constructor can never build a value `new` would
+    /// refuse.
     #[must_use]
     pub fn display(config: &ProjectConfig) -> Self {
         let linear = (DISPLAY_DEFLECTION_MM / config.unit().millimeters()).max(config.tol());
@@ -266,6 +291,79 @@ mod tests {
         let ok = Deflection::new(0.5, 0.25).expect("valid");
         assert!(crate::tol::close(ok.linear(), 0.5, 1e-15));
         assert!(crate::tol::close(ok.angular(), 0.25, 1e-15));
+    }
+
+    #[test]
+    fn deflection_refuses_values_below_the_kernel_floor() {
+        // Positive, finite, and still refused: the mesher throws for a
+        // linear deflection under Precision::Confusion (1e-7) and an
+        // angular one under Precision::Angular (1e-12). The refusal is
+        // ours, typed, and names the floor — the kernel never sees it.
+        let error = Deflection::new(1e-12, 0.1).expect_err("below the linear floor");
+        match &error {
+            GeomError::BadParameter {
+                name: "linear_deflection",
+                value,
+                requirement,
+            } => {
+                assert_eq!(value, "0.000000000001");
+                assert!(requirement.contains("1e-7"), "{requirement}");
+                assert!(
+                    requirement.contains("Precision::Confusion"),
+                    "{requirement}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            Deflection::new(MIN_LINEAR_DEFLECTION / 2.0, 0.1),
+            Err(GeomError::BadParameter {
+                name: "linear_deflection",
+                ..
+            })
+        ));
+        assert!(matches!(
+            Deflection::new(0.1, MIN_ANGULAR_DEFLECTION / 2.0),
+            Err(GeomError::BadParameter {
+                name: "angular_deflection",
+                ..
+            })
+        ));
+        // Exactly the floor is admitted (the kernel's comparison is `<`).
+        let floor =
+            Deflection::new(MIN_LINEAR_DEFLECTION, MIN_ANGULAR_DEFLECTION).expect("the floor");
+        assert!(crate::tol::close(floor.linear(), 1e-7, 1e-22));
+        assert!(crate::tol::close(floor.angular(), 1e-12, 1e-27));
+    }
+
+    #[test]
+    fn display_deflection_is_above_the_floor_for_every_unit() {
+        // `Deflection::display` is infallible because the formula cannot
+        // reach the floor: the largest unit gives the finest linear
+        // deflection (0.02 mm in a foot document is 6.6e-5), still more
+        // than two decades above it. Every unit, at the finest tolerances
+        // `ProjectConfig` accepts.
+        for unit in [
+            Unit::Millimeter,
+            Unit::Centimeter,
+            Unit::Meter,
+            Unit::Inch,
+            Unit::Foot,
+        ] {
+            let config = ProjectConfig::new(unit, 1e-12, 1e-12).expect("finest tolerances");
+            let display = Deflection::display(&config);
+            assert!(
+                display.linear() >= MIN_LINEAR_DEFLECTION * 100.0,
+                "{unit:?}: linear {} is too close to the floor",
+                display.linear()
+            );
+            assert!(display.angular() >= MIN_ANGULAR_DEFLECTION);
+            // And what `display` built, `new` would have accepted.
+            assert_eq!(
+                Deflection::new(display.linear(), display.angular()).expect("admitted"),
+                display
+            );
+        }
     }
 
     #[test]

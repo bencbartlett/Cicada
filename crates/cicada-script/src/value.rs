@@ -25,8 +25,9 @@
 //! `Solid` refuses with the typed [`ScriptError::Unmarshallable`]: its
 //! canonical bytes are OCCT `BinTools` that nothing on the Python side can
 //! read, so handing them over would be a silent lie (v0.1 item 3 WP-B);
-//! a Solid ABI is future work, and until then solids are tessellated into
-//! `Watertight<Mesh>` before a script node.
+//! a Solid ABI is future work, and until then a solid reaches a script only
+//! as a `Watertight<Mesh>` — through the `tessellate` node WP-C ships (the
+//! refusal names it as arriving, never as a node to go and use today).
 
 use std::sync::Arc;
 
@@ -134,8 +135,9 @@ fn mesh_wire(mesh: &Mesh) -> Wire {
 /// The typed refusal a `Solid` earns at this boundary — one constant so the
 /// host, the catalog of script kinds and the tests agree on the words.
 pub const SOLID_REFUSAL: &str = "no Solid ABI exists; its canonical bytes are OCCT BinTools that \
-     nothing on the Python side can read — tessellate the solid into a Watertight<Mesh> \
-     before the script node";
+     nothing on the Python side can read — convert the solid to a Watertight<Mesh> first (the \
+     `tessellate` node, arriving with the OCCT-backed solid nodes of v0.1 item 3 WP-C; until it \
+     lands no Solid can reach a script)";
 
 /// A Cicada value onto the wire.
 ///
@@ -559,6 +561,12 @@ mod tests {
             "{shown}"
         );
         assert!(shown.contains("Watertight<Mesh>"), "{shown}");
+        // The way forward is named honestly: the `tessellate` node does not
+        // exist yet (WP-C), so the text says it is arriving, not that it is
+        // there to use — a diagnostic must not send the user to a node the
+        // catalog does not have.
+        assert!(shown.contains("`tessellate` node, arriving"), "{shown}");
+        assert!(shown.contains("WP-C"), "{shown}");
         // Inside a list the refusal propagates; nothing is dropped.
         let list = seal(ValueData::List(List {
             axis: None,

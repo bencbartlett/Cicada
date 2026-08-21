@@ -105,7 +105,11 @@ Two levels:
 an append-only record enum, so every older log replays under a newer
 engine. The other direction is guarded by a marker: the store root
 carries a `format` file naming the newest record kind the log may hold
-(`LOG_FORMAT`; 1 = the spike's records, 2 = entries with cost), and an
+(`LOG_FORMAT`; 1 = the spike's records, 2 = entries with cost, 3 = the
+`Solid` blob kind — a VALUE codec variant rather than a record variant,
+bumped for the same reason: an engine that cannot decode a Solid blob
+treats the memo that promised it as broken, tombstones it and
+recomputes — silently discarding a newer engine's valid work), and an
 engine that finds a higher number there refuses loudly ("written by a
 newer engine") instead of reading the records it cannot decode as
 corruption and truncating the log at the first of them. Adding a
@@ -159,15 +163,22 @@ session (`Core.solids`), NOT in the value store and NOT in the value:
   reconstruction serves the frames and the inspector summary ("Solid,
   N faces, bbox").
 - **Bound**: bytes of mesh buffers as uploaded, default 256 MiB,
-  evicted least-recently-used; eviction costs a re-tessellation, never
-  correctness. Errors are not cached (a solid the kernel refuses is
-  refused again next pass; the refusal fails at the read and is cheap),
-  so a fixed build or a corrected value recovers by itself.
+  evicted least-recently-used — a recency index (touch stamp → key in a
+  `BTreeMap`) makes every touch and every eviction O(log entries), so a
+  display pass over N distinct solids costs O(N log entries) however
+  full the cache is, never O(N × entries). Eviction costs a
+  re-tessellation, never correctness. A tessellation larger than the
+  whole budget is served but never kept (counted as `oversized`):
+  keeping it would evict everything else for an entry that still does
+  not fit. Errors are not cached (a solid the kernel refuses is refused
+  again next pass; the refusal fails at the read and is cheap), so a
+  fixed build or a corrected value recovers by itself.
 - **Observable**: `/debug/state` → `display_cache` carries `entries`,
-  `bytes`, `budget`, `hits`, `misses`, `evictions` (additive), and an
-  output whose solid could not be drawn says why in its display
-  `stats.errors` — a build without the `occt` feature draws no solids
-  and says so per element, never silently.
+  `bytes`, `budget`, `hits`, `misses`, `evictions`, `oversized`
+  (additive; asserted by the session's debug-state test and listed in
+  docs/13), and an output whose solid could not be drawn says why in
+  its display `stats.errors` — a build without the `occt` feature draws
+  no solids and says so per element, never silently.
 - **Frames**: a tessellated solid emits the ordinary mesh frames
   (`frames.rs` unchanged); the instancing key is the solid's own value
   hash, so identical solids in a list travel once as a blob.

@@ -188,7 +188,32 @@ OCCT) in `crates/cicada-geom/src/occt/`.
   13 related values (a block, six cutters through it, their six
   differences), 1,560 tasks that re-serialize, tessellate or recompute a
   difference by index, every result equal to its single-threaded
-  golden. `Handle` is `Send`, not `Sync`; `core::Solid` is both.
+  golden — and, under the scheduler itself,
+  `cicada-server/tests/solid_scheduler.rs`: a `SolveGraph` whose nodes
+  are closures over `cicada_geom::solid` (a block; 48 cutters by
+  `each()`; two difference nodes cutting the SAME block bytes at once;
+  the block and every hole tessellated), solved on 8 threads with the
+  fan-out spread into ≥ 8 chunks, every output hash equal to the
+  1-thread run's and to the direct computation. `Handle` is `Send`, not
+  `Sync`, and the second half is a COMPILE-TIME assertion beside the
+  type (`occt/mod.rs`): `canonical_bytes(&self)` rewrites and restores
+  `TShape` flags through a shared reference, sound only while no other
+  thread can hold a `&Handle` — a fork revision that added
+  `unsafe impl Sync for TopoDS_Shape` would fail the build instead of
+  reopening the race. `core::Solid` is `Send + Sync`.
+  **Determinism across heap states (review question, answered).**
+  OCCT's booleans and mesher iterate maps keyed by `TShape` ADDRESS
+  (`TopTools_ShapeMapHasher`), so the canonical bytes could in principle
+  follow the heap. Measured otherwise on the richest corpus the seam can
+  build today — `canonical_bytes_do_not_depend_on_heap_state_or_thread`:
+  the block minus six slots minus a channel crossing all six (seven
+  cuts, each intersecting the last; 58 faces), computed cold, after
+  deterministic allocator churn under five seeds, and 24 times on 8
+  threads each under its own churn — byte-identical bytes and equal
+  tessellations every time. Evidence, not proof: WP-C's loft / revolve /
+  multi-body booleans must rerun this shape of test on their own
+  corpus before blessing goldens (the per-OS golden policy in
+  DECISIONS.md row 42 hedges across OSes; this hedges across runs).
 - **No handle cache (WP-B, measured).** The plan asked for a cache of
   reconstructed handles keyed by value hash so a chain of nodes would not
   re-read bytes at every step. Under the semantics above a cached handle
@@ -240,6 +265,18 @@ OCCT) in `crates/cicada-geom/src/occt/`.
   turn, matching the 64 segments the analytic curves' display uses. The
   server caches the result by the Solid's VALUE hash plus the deflection
   (docs/12 §Display cache); the deflection never reaches the bytes.
+  `Deflection::new` admits nothing finer than the kernel's own floors —
+  `MIN_LINEAR_DEFLECTION` = 1e-7 (`Precision::Confusion()`) and
+  `MIN_ANGULAR_DEFLECTION` = 1e-12 rad (`Precision::Angular()`) —
+  because `BRepMesh_IncrementalMesh` throws `Standard_NumericError` for
+  anything below them (the seam's test drives the raw glue below the
+  floor to prove it is necessary, and the mesher at exactly the floor to
+  prove it is sufficient); the refusal is a typed `BadParameter` naming
+  the floor, and WP-C's `tessellate` node inherits it as its "Red when".
+  The display formula cannot reach the floor (its minimum over every
+  unit, 0.02 mm in a foot document, is 6.6e-5), which is why
+  `Deflection::display` is infallible — pinned by a test over all five
+  units at the finest tolerances `ProjectConfig` accepts.
 
 ## Build (Cicada's actual code)
 

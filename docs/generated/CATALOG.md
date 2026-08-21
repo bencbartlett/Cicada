@@ -138,11 +138,11 @@ one `.cic` snippet per node, solved by CI).
 
 ## Transform
 
-- `linear_array(geometry: T, direction: Vector, count: Integer) → [T]` — Linear Array · GH: Linear Array — `count` copies stepped along a direction, the first at the original position. Red when: `count < 1` or `count` is above the 2^24 slot ceiling (16,777,216 slots).
-- `move(geometry: T, motion: Vector) → T` — Move · GH: Move — translate geometry along a vector.
-- `orient(geometry: T, source: Plane, target: Plane) → T` — Orient · GH: Orient — the rigid motion carrying the source plane onto the target plane (the wall's part-to-plate workhorse). Red when: either plane is degenerate.
-- `rotate(geometry: T, angle: Number, plane: Plane = xy_plane) → T` — Rotate · GH: Rotate — rotate geometry about a plane's normal through its origin. Red when: the plane is degenerate (zero-length or parallel axes).
-- `scale(geometry: T, center: Point = origin, factor: Number) → T` — Scale · GH: Scale — uniform scale about a center. Negative factors point-reflect (mesh orientation is preserved by winding correction). Red when: `|factor|` is within tolerance of zero — geometry would collapse to a point.
+- `linear_array(geometry: T, direction: Vector, count: Integer) → [T]` — Linear Array · GH: Linear Array — `count` copies stepped along a direction, the first at the original position. Red when: `count < 1` or `count` is above the 2^24 slot ceiling (16,777,216 slots), or when a `Solid` is the geometry — B-rep transforms run in the OCCT kernel and arrive with the OCCT-backed solid nodes (v0.1 item 3 WP-C); until then a Solid input is a loud refusal, never a silent pass-through.
+- `move(geometry: T, motion: Vector) → T` — Move · GH: Move — translate geometry along a vector. Red when: a `Solid` is the geometry — B-rep transforms run in the OCCT kernel and arrive with the OCCT-backed solid nodes (v0.1 item 3 WP-C); until then a Solid input is a loud refusal, never a silent pass-through.
+- `orient(geometry: T, source: Plane, target: Plane) → T` — Orient · GH: Orient — the rigid motion carrying the source plane onto the target plane (the wall's part-to-plate workhorse). Red when: either plane is degenerate, or when a `Solid` is the geometry — B-rep transforms run in the OCCT kernel and arrive with the OCCT-backed solid nodes (v0.1 item 3 WP-C); until then a Solid input is a loud refusal, never a silent pass-through.
+- `rotate(geometry: T, angle: Number, plane: Plane = xy_plane) → T` — Rotate · GH: Rotate — rotate geometry about a plane's normal through its origin. Red when: the plane is degenerate (zero-length or parallel axes), or when a `Solid` is the geometry — B-rep transforms run in the OCCT kernel and arrive with the OCCT-backed solid nodes (v0.1 item 3 WP-C); until then a Solid input is a loud refusal, never a silent pass-through.
+- `scale(geometry: T, center: Point = origin, factor: Number) → T` — Scale · GH: Scale — uniform scale about a center. Negative factors point-reflect (mesh orientation is preserved by winding correction). Red when: `|factor|` is within tolerance of zero — geometry would collapse to a point — or when a `Solid` is the geometry — B-rep transforms run in the OCCT kernel and arrive with the OCCT-backed solid nodes (v0.1 item 3 WP-C); until then a Solid input is a loud refusal, never a silent pass-through.
 
 ## Output, display & export
 

@@ -141,6 +141,24 @@ impl fmt::Debug for Handle {
     }
 }
 
+// The sharing model's type-level belt: `Handle` must NEVER be `Sync`.
+// `canonical_bytes(&self)` rewrites and restores `TShape` flags through a
+// shared reference, which is sound only while no other thread can hold a
+// `&Handle` at the same time. Today that holds because the fork marks
+// `TopoDS_Shape` `Send` and not `Sync` (`UniquePtr<T>` inherits both); if a
+// future fork revision adds `unsafe impl Sync for TopoDS_Shape`, this block
+// stops compiling — the call below becomes ambiguous between the two impls
+// — instead of silently reopening the race the model closed.
+mod not_sync {
+    pub(super) trait NotSync<Marker> {
+        fn check() {}
+    }
+    pub(super) struct IsSync;
+    impl<T: ?Sized> NotSync<()> for T {}
+    impl<T: ?Sized + Sync> NotSync<IsSync> for T {}
+}
+const _: fn() = <Handle as not_sync::NotSync<_>>::check;
+
 /// A kernel failure attributed to the operation that hit it.
 fn kernel(operation: &str, error: &cxx::Exception) -> GeomError {
     GeomError::Kernel {

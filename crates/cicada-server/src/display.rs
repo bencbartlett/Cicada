@@ -14,7 +14,7 @@
 //! the kernel refuses — draws nothing and says why in the output's
 //! [`DisplayStats::errors`] and in its summary; never a silent skip.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -111,30 +111,53 @@ impl TessellationKey {
     }
 }
 
+/// One cached tessellation and its place in the recency order.
+struct Entry {
+    tessellation: Arc<Tessellation>,
+    /// Its footprint, as counted against the budget.
+    size: usize,
+    /// Its stamp in `CacheState::recency` (the key there).
+    touched: u64,
+}
+
 struct CacheState {
-    entries: HashMap<TessellationKey, Arc<Tessellation>>,
-    /// Least recently used first. Re-touching an entry moves it to the
-    /// back; eviction pops the front. Linear in the number of entries per
-    /// touch — bounded by the budget, and a display pass touches each
-    /// solid once.
-    order: VecDeque<TessellationKey>,
+    entries: HashMap<TessellationKey, Entry>,
+    /// The recency index: touch stamp → key, least recently used first.
+    /// Stamps come from `clock`, strictly increasing, so every entry holds
+    /// a distinct one. A touch moves one stamp (two `BTreeMap` operations,
+    /// O(log n)); eviction pops the first. Nothing here is linear in the
+    /// number of entries — a display pass over N distinct solids costs
+    /// O(N log entries), not O(N × entries), however full the cache.
+    recency: BTreeMap<u64, TessellationKey>,
+    clock: u64,
     bytes: usize,
+}
+
+impl CacheState {
+    fn stamp(&mut self) -> u64 {
+        self.clock += 1;
+        self.clock
+    }
 }
 
 /// The hash-keyed solid tessellation cache (docs/12 §Display cache; DECISIONS.md
 /// row 42: "display tessellates Solids through a hash-keyed cache").
 /// Internally synchronized so the frame path and the summary path share
-/// one instance behind `&`; bounded by bytes, evicted least-recently-used;
-/// hit/miss/eviction counts are observable in `/debug/state` (additive).
-/// Errors are not cached: a solid the kernel refuses is refused again on
-/// the next display pass (the refusal itself is cheap — it fails at the
-/// read), so a fixed build or a corrected value recovers by itself.
+/// one instance behind `&`; bounded by bytes, evicted least-recently-used
+/// in O(log n) per touch; hit/miss/eviction counts are observable in
+/// `/debug/state` (additive). Errors are not cached: a solid the kernel
+/// refuses is refused again on the next display pass (the refusal itself
+/// is cheap — it fails at the read), so a fixed build or a corrected value
+/// recovers by itself. A tessellation larger than the whole budget is
+/// served but never kept (`oversized` counts them): keeping it would
+/// evict everything else for one entry the budget cannot hold anyway.
 pub struct SolidCache {
     state: std::sync::Mutex<CacheState>,
     budget: usize,
     hits: AtomicU64,
     misses: AtomicU64,
     evictions: AtomicU64,
+    oversized: AtomicU64,
 }
 
 /// The cache's counters, as `/debug/state` → `display_cache` reports them.
@@ -142,7 +165,7 @@ pub struct SolidCache {
 pub struct SolidCacheStats {
     /// Tessellations held.
     pub entries: usize,
-    /// Bytes held (mesh buffers as uploaded).
+    /// Bytes held (mesh buffers as uploaded) — never above `budget`.
     pub bytes: usize,
     /// The byte budget.
     pub budget: usize,
@@ -152,6 +175,9 @@ pub struct SolidCacheStats {
     pub misses: u64,
     /// Entries evicted to stay within budget.
     pub evictions: u64,
+    /// Tessellations larger than the whole budget: served to the caller,
+    /// never kept (each is a miss every time it is drawn).
+    pub oversized: u64,
 }
 
 impl Default for SolidCache {
@@ -167,13 +193,15 @@ impl SolidCache {
         Self {
             state: std::sync::Mutex::new(CacheState {
                 entries: HashMap::new(),
-                order: VecDeque::new(),
+                recency: BTreeMap::new(),
+                clock: 0,
                 bytes: 0,
             }),
             budget,
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
             evictions: AtomicU64::new(0),
+            oversized: AtomicU64::new(0),
         }
     }
 
@@ -210,16 +238,24 @@ impl SolidCache {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let found = Arc::clone(state.entries.get(&key)?);
-        if let Some(position) = state.order.iter().position(|k| *k == key) {
-            state.order.remove(position);
-        }
-        state.order.push_back(key);
+        let stamp = state.stamp();
+        let entry = state.entries.get_mut(&key)?;
+        let found = Arc::clone(&entry.tessellation);
+        let previous = std::mem::replace(&mut entry.touched, stamp);
+        state.recency.remove(&previous);
+        state.recency.insert(stamp, key);
         Some(found)
     }
 
     fn insert(&self, key: TessellationKey, tessellation: Arc<Tessellation>) {
         let size = mesh_bytes(&tessellation.mesh.0);
+        if size > self.budget {
+            // Nothing in the cache could make room for this; evicting
+            // everything for an entry that still does not fit would only
+            // cost the other solids their hits.
+            self.oversized.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
         let mut state = self
             .state
             .lock()
@@ -230,16 +266,24 @@ impl SolidCache {
             return;
         }
         while state.bytes + size > self.budget {
-            let Some(oldest) = state.order.pop_front() else {
+            let Some((_, oldest)) = state.recency.pop_first() else {
                 break;
             };
             if let Some(evicted) = state.entries.remove(&oldest) {
-                state.bytes -= mesh_bytes(&evicted.mesh.0);
+                state.bytes -= evicted.size;
                 self.evictions.fetch_add(1, Ordering::Relaxed);
             }
         }
-        state.entries.insert(key, tessellation);
-        state.order.push_back(key);
+        let touched = state.stamp();
+        state.entries.insert(
+            key,
+            Entry {
+                tessellation,
+                size,
+                touched,
+            },
+        );
+        state.recency.insert(touched, key);
         state.bytes += size;
     }
 
@@ -257,6 +301,7 @@ impl SolidCache {
             hits: self.hits.load(Ordering::Relaxed),
             misses: self.misses.load(Ordering::Relaxed),
             evictions: self.evictions.load(Ordering::Relaxed),
+            oversized: self.oversized.load(Ordering::Relaxed),
         }
     }
 }
@@ -1249,6 +1294,137 @@ mod tests {
             .tessellation(solid.hash(), bytes, coarser)
             .unwrap();
         assert_eq!(test.solids.stats().misses, before.misses + 1);
+    }
+
+    /// A synthetic tessellation the tests can key and size without the
+    /// kernel: a tetrahedron (4 vertices × 24 B + 4 triangles × 12 B =
+    /// 144 B as the cache counts it) with `faces` set to `tag` so entries
+    /// are distinguishable.
+    fn synthetic(tag: usize) -> Arc<Tessellation> {
+        let mesh = Mesh::new(
+            vec![
+                0.0, 0.0, 0.0, //
+                1.0, 0.0, 0.0, //
+                0.0, 1.0, 0.0, //
+                0.0, 0.0, 1.0,
+            ],
+            vec![0, 2, 1, 0, 1, 3, 0, 3, 2, 1, 2, 3],
+        )
+        .unwrap();
+        assert!(mesh.is_watertight());
+        assert_eq!(mesh_bytes(&mesh), 144);
+        Arc::new(Tessellation {
+            mesh: cicada_core::geometry::Watertight(mesh),
+            faces: tag,
+        })
+    }
+
+    fn synthetic_key(tag: u64) -> TessellationKey {
+        let hash = HashedValue::new(ValueData::Integer(i64::try_from(tag).unwrap()))
+            .unwrap()
+            .hash();
+        TessellationKey::new(hash, Deflection::new(0.02, 0.1).unwrap())
+    }
+
+    #[test]
+    fn recency_order_holds_at_scale_without_the_kernel() {
+        // The recency index replaced a linear scan; this is its contract at
+        // a size where the scan would have mattered (the wall's part count
+        // and then some): 2,000 entries in, every even one re-touched, then
+        // enough new entries to evict half — exactly the untouched (odd)
+        // ones go, in insertion order, and every even one still hits.
+        const N: u64 = 2_000;
+        let cache = SolidCache::new(usize::try_from(N).unwrap() * 144);
+        for tag in 0..N {
+            cache.insert(synthetic_key(tag), synthetic(usize::try_from(tag).unwrap()));
+        }
+        assert_eq!(cache.stats().entries, usize::try_from(N).unwrap());
+        assert_eq!(cache.stats().bytes, usize::try_from(N).unwrap() * 144);
+        for tag in (0..N).step_by(2) {
+            let found = cache.lookup(synthetic_key(tag)).expect("present");
+            assert_eq!(found.faces, usize::try_from(tag).unwrap());
+        }
+        // N/2 new entries: the budget is full, so N/2 evictions, the least
+        // recently used first — the odd tags, never an even one.
+        for tag in N..N + N / 2 {
+            cache.insert(synthetic_key(tag), synthetic(usize::try_from(tag).unwrap()));
+        }
+        let stats = cache.stats();
+        assert_eq!(stats.entries, usize::try_from(N).unwrap());
+        assert_eq!(stats.bytes, stats.budget, "exactly full, never over");
+        assert_eq!(stats.evictions, N / 2);
+        for tag in 0..N {
+            let present = cache.lookup(synthetic_key(tag)).is_some();
+            assert_eq!(
+                present,
+                tag % 2 == 0,
+                "tag {tag}: touched entries survive, untouched ones were evicted"
+            );
+        }
+        for tag in N..N + N / 2 {
+            assert!(cache.lookup(synthetic_key(tag)).is_some());
+        }
+        // The next eviction round takes the oldest SURVIVORS in touch
+        // order: the even tags were touched in ascending order, so tag 0
+        // goes first.
+        cache.insert(synthetic_key(N * 3), synthetic(3));
+        assert!(
+            cache.lookup(synthetic_key(0)).is_none(),
+            "tag 0 was the LRU"
+        );
+        assert!(cache.lookup(synthetic_key(2)).is_some());
+    }
+
+    /// A second synthetic size: an octahedron (6 vertices × 24 B + 8
+    /// triangles × 12 B = 240 B).
+    fn synthetic_octahedron() -> Arc<Tessellation> {
+        let mesh = Mesh::new(
+            vec![
+                1.0, 0.0, 0.0, //
+                -1.0, 0.0, 0.0, //
+                0.0, 1.0, 0.0, //
+                0.0, -1.0, 0.0, //
+                0.0, 0.0, 1.0, //
+                0.0, 0.0, -1.0,
+            ],
+            vec![
+                0, 2, 4, 2, 1, 4, 1, 3, 4, 3, 0, 4, //
+                2, 0, 5, 1, 2, 5, 3, 1, 5, 0, 3, 5,
+            ],
+        )
+        .unwrap();
+        assert!(mesh.is_watertight());
+        assert_eq!(mesh_bytes(&mesh), 240);
+        Arc::new(Tessellation {
+            mesh: cicada_core::geometry::Watertight(mesh),
+            faces: 8,
+        })
+    }
+
+    #[test]
+    fn an_entry_larger_than_the_budget_is_served_but_never_kept() {
+        // Budget 200 B: the 144 B tetrahedron fits; the 240 B octahedron
+        // never can. Keeping it anyway would have evicted the tetrahedron
+        // for an entry that still left the cache over budget — so it is
+        // counted (`oversized`), not kept, and the tetrahedron survives.
+        // `bytes` never exceeds `budget`.
+        let cache = SolidCache::new(200);
+        cache.insert(synthetic_key(1), synthetic(1));
+        assert_eq!(cache.stats().entries, 1);
+        cache.insert(synthetic_key(2), synthetic_octahedron());
+        let stats = cache.stats();
+        assert_eq!(stats.entries, 1, "the oversized entry was not kept");
+        assert_eq!(stats.bytes, 144);
+        assert_eq!(stats.oversized, 1);
+        assert_eq!(stats.evictions, 0, "nothing was thrown out to make room");
+        assert!(stats.bytes <= stats.budget);
+        assert!(cache.lookup(synthetic_key(1)).is_some());
+        assert!(cache.lookup(synthetic_key(2)).is_none());
+        // Exactly the budget fits.
+        let exact = SolidCache::new(240);
+        exact.insert(synthetic_key(2), synthetic_octahedron());
+        assert_eq!(exact.stats().entries, 1);
+        assert_eq!(exact.stats().oversized, 0);
     }
 
     #[test]

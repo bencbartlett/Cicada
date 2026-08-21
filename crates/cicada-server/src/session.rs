@@ -4416,6 +4416,21 @@ mod tests {
         let bounds_before = state["display"]["block.out"]["stats"]["bounds"].clone();
         assert_eq!(bounds_before[1][0], 2.0);
         assert_eq!(state["statuses"]["block"]["state"], "done");
+        // The solid tessellation cache's counters ride along (additive,
+        // docs/13): the budget is the default, and a pipeline without a
+        // Solid touches it never — every counter zero, nothing held.
+        assert_eq!(
+            state["display_cache"],
+            serde_json::json!({
+                "entries": 0, "bytes": 0, "budget": display::SOLID_CACHE_BUDGET,
+                "hits": 0, "misses": 0, "evictions": 0, "oversized": 0,
+            })
+        );
+        // And a mesh output's display stats carry no solid fields: `solids`
+        // and `errors` are omitted when zero/empty (additive, never noise).
+        let block_stats = &state["display"]["block.out"]["stats"];
+        assert!(block_stats.get("solids").is_none(), "{block_stats}");
+        assert!(block_stats.get("errors").is_none(), "{block_stats}");
 
         // Slider drag: preview streams, then the real set_param on release.
         session.handle(

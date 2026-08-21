@@ -230,6 +230,42 @@ fn box_tessellates_to_a_welded_watertight_cube() {
 }
 
 #[test]
+fn the_deflection_floor_is_the_meshers_own() {
+    // Necessary: below Precision::Confusion the mesher throws. Driven
+    // through the raw glue, bypassing `Deflection`'s validation, so this
+    // pins OCCT's behaviour — the reason the floor exists — and proves the
+    // exception arrives as an error, never an abort.
+    let block = probe_box();
+    let mut positions = Vec::new();
+    let mut indices = Vec::new();
+    let error = glue::cicada_tessellate(&block.inner, 1e-12, 0.1, &mut positions, &mut indices)
+        .expect_err("a linear deflection under 1e-7 must be refused by the kernel");
+    assert!(
+        error.what().contains("Standard_NumericError")
+            && error.what().contains("invalid parameter value"),
+        "{}",
+        error.what()
+    );
+    // Sufficient: exactly the floor, for both parameters, meshes.
+    let floor = Deflection::new(solid::MIN_LINEAR_DEFLECTION, solid::MIN_ANGULAR_DEFLECTION)
+        .expect("the floor is admitted");
+    let tessellation = probe_box()
+        .tessellate(floor)
+        .expect("the kernel accepts its own floor");
+    assert_eq!(tessellation.faces, 6);
+    assert_eq!(tessellation.mesh.0.triangle_count(), 12);
+    // And the value-level path refuses below it BEFORE the kernel: the
+    // error is `Deflection::new`'s, so `solid::tessellate` never runs.
+    assert!(matches!(
+        Deflection::new(solid::MIN_LINEAR_DEFLECTION / 10.0, 0.1),
+        Err(GeomError::BadParameter {
+            name: "linear_deflection",
+            ..
+        })
+    ));
+}
+
+#[test]
 fn display_deflection_tessellates_the_probe_solids() {
     // The server's deflection for a default project draws planar solids
     // with exactly their face triangles.
@@ -482,10 +518,16 @@ fn garbage_bytes_are_a_serialization_error() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn handle_is_send() {
+fn handle_is_send_and_the_value_is_sync() {
+    // `Handle` crosses threads (the scheduler hands nodes to workers) but is
+    // never shared between them — the `!Sync` assertion beside the type in
+    // `mod.rs` is compile-time (a `Sync` handle would make that `const`
+    // block ambiguous and fail the build); this test pins the positive half.
     fn assert_send<T: Send>() {}
+    fn assert_sync<T: Sync>() {}
     assert_send::<Handle>();
     assert_send::<Solid>();
+    assert_sync::<Solid>();
 }
 
 #[test]
@@ -604,6 +646,141 @@ fn related_solids_are_safe_across_rayon_workers() {
     // And nothing moved: the inputs are the values they were.
     assert_eq!(block, box_value());
     assert_eq!(blake3_hex(block.bytes()), BOX_GOLDEN);
+}
+
+// ---------------------------------------------------------------------------
+// Determinism of the bytes across heap states and threads
+// ---------------------------------------------------------------------------
+
+/// The richest solid the seam can build today: the block minus six
+/// through-slots along Z (disjoint, y ∈ [2, 17]) minus a channel along X
+/// (y ∈ [8, 9], z ∈ [5, 10]) that crosses every slot — every cut after the
+/// first intersects edges and faces the previous cuts created, so the
+/// boolean's sub-shape maps hold real work, and the result is one solid.
+fn carved_block() -> Solid {
+    let mut shape = box_value();
+    for i in 0..6 {
+        let x = 1.0 + f64::from(i);
+        let slot = solid::extrude_polygon(
+            &[
+                Point::new(x, 2.0, -5.0),
+                Point::new(x + 0.5, 2.0, -5.0),
+                Point::new(x + 0.5, 17.0, -5.0),
+                Point::new(x, 17.0, -5.0),
+            ],
+            Vector::new(0.0, 0.0, 40.0),
+            TOL,
+        )
+        .expect("slot");
+        shape = solid::difference(&shape, &slot).expect("cut");
+    }
+    let channel = solid::extrude_polygon(
+        &[
+            Point::new(-1.0, 8.0, 5.0),
+            Point::new(-1.0, 9.0, 5.0),
+            Point::new(-1.0, 9.0, 10.0),
+            Point::new(-1.0, 8.0, 10.0),
+        ],
+        Vector::new(12.0, 0.0, 0.0),
+        TOL,
+    )
+    .expect("channel");
+    solid::difference(&shape, &channel).expect("channel cut")
+}
+
+/// Deterministic heap churn: allocate and free blocks of LCG-chosen sizes
+/// so the allocator hands OCCT different addresses on every call. OCCT's
+/// `TopTools_ShapeMapHasher` hashes `TShape` ADDRESSES, so if any boolean
+/// or mesher output depended on map iteration order, differing heap states
+/// are exactly what would expose it.
+fn churn_heap(seed: u64, rounds: usize) -> usize {
+    let mut state = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+    let mut kept: Vec<Vec<u8>> = Vec::new();
+    let mut total = 0;
+    for round in 0..rounds {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        #[allow(clippy::cast_possible_truncation)]
+        let size = 16 + (state >> 33) as usize % 4096;
+        total += size;
+        kept.push(vec![0xA5; size]);
+        if round % 3 == 0 {
+            // Free an older block so holes open up mid-sequence.
+            let victim = (state >> 17) as usize % kept.len();
+            kept.swap_remove(victim);
+        }
+    }
+    // `kept` drops here: the holes it leaves are the next operation's heap.
+    total
+}
+
+#[test]
+fn canonical_bytes_do_not_depend_on_heap_state_or_thread() {
+    // The UNVERIFIED question of WP-B's review: OCCT's booleans and mesher
+    // iterate maps keyed by TShape address — is the canonical serialization
+    // (and the tessellation) a pure function of the inputs, or does it
+    // follow the heap? Evidence here: the carved block (seven cuts, each
+    // intersecting the last) computed cold, after deterministic churn of
+    // several different seeds, and on N threads at once (each worker under
+    // its own churn, so the addresses differ per thread too) — every result
+    // byte-identical to the first, and every tessellation equal.
+    const THREADS: usize = 8;
+    const REPEATS: usize = 24;
+
+    let golden = carved_block();
+    let golden_mesh = solid::tessellate(&golden, deflection()).expect("mesh");
+    assert_eq!(
+        golden_mesh.faces, 58,
+        "the block's 6 faces + 6 slots × 4 walls (the 12 x-walls the channel pierces \
+         keep one face each, with a hole) + the channel's 4 walls, each split into \
+         7 pieces by the 6 slots it crosses"
+    );
+    assert!(golden_mesh.mesh.0.is_watertight());
+
+    // Serially, under different heap states.
+    for seed in 1..=5u64 {
+        let _ = churn_heap(seed, 2_000);
+        let again = carved_block();
+        assert_eq!(
+            again.bytes(),
+            golden.bytes(),
+            "seed {seed}: the carved block's bytes followed the heap"
+        );
+        let _ = churn_heap(seed * 7, 500);
+        assert_eq!(
+            solid::tessellate(&again, deflection()).expect("mesh"),
+            golden_mesh,
+            "seed {seed}: the tessellation followed the heap"
+        );
+    }
+
+    // In parallel, every worker churning differently between operations.
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(THREADS)
+        .build()
+        .expect("pool");
+    let outcomes: Vec<Result<(), String>> = pool.install(|| {
+        (0..REPEATS)
+            .into_par_iter()
+            .map(|repeat| {
+                let seed = 100 + u64::try_from(repeat).map_err(|e| e.to_string())?;
+                let _ = churn_heap(seed, 1_000 + repeat * 37);
+                let carved = carved_block();
+                if carved.bytes() != golden.bytes() {
+                    return Err(format!("repeat {repeat}: bytes drifted"));
+                }
+                let _ = churn_heap(seed ^ 0xFF, 300);
+                let mesh = solid::tessellate(&carved, deflection()).map_err(|e| e.to_string())?;
+                (mesh == golden_mesh)
+                    .then_some(())
+                    .ok_or_else(|| format!("repeat {repeat}: tessellation drifted"))
+            })
+            .collect()
+    });
+    let failures: Vec<&String> = outcomes.iter().filter_map(|o| o.as_ref().err()).collect();
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(outcomes.len(), REPEATS);
 }
 
 // ---------------------------------------------------------------------------

@@ -28,7 +28,9 @@ pub struct LinearArrayIn {
 /// # Panics
 ///
 /// Panics when `count < 1` or `count` is above the 2^24 slot ceiling
-/// (16,777,216 slots).
+/// (16,777,216 slots), or when a `Solid` is the geometry — B-rep transforms run in the OCCT kernel and
+/// arrive with the OCCT-backed solid nodes (v0.1 item 3 WP-C); until then a
+/// Solid input is a loud refusal, never a silent pass-through.
 ///
 /// # Examples
 ///
