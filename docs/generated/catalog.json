@@ -4073,6 +4073,51 @@
       ]
     },
     {
+      "name": "pipe",
+      "title": "Pipe",
+      "description": "a circular section of `radius`, normal to the rail at its start, swept along the rail into a B-rep solid: a straight rail gives a cylinder, a circle a torus, a polyline a mitred run of cylinders.",
+      "category": "Surface & solid",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "the radius is not above tolerance, the rail has no length at tolerance, or the kernel refuses (a radius the rail's corners cannot carry, a pipe that does not close into one solid).",
+      "gh": "Pipe",
+      "examples": [
+        "start = construct_point()\nend = construct_point(z=12.0)\nrail = line(a=start, b=end)\ntube = pipe(rail=rail, radius=1.5)"
+      ],
+      "inputs": [
+        {
+          "name": "rail",
+          "type": "Curve",
+          "base": "Curve",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The rail — a line, polyline or circle, open or closed."
+        },
+        {
+          "name": "radius",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The pipe's radius.",
+          "dimension": "length"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The pipe solid."
+        }
+      ]
+    },
+    {
       "name": "revolve",
       "title": "Revolve",
       "description": "revolve a closed planar profile about a line in its plane into a B-rep solid: a full turn by default (a ring from a square, a disc from a profile touching the axis), a partial sweep through any angle domain.",
@@ -4293,6 +4338,50 @@
           "list_depth": 0,
           "optional": false,
           "doc": "The sphere solid."
+        }
+      ]
+    },
+    {
+      "name": "sweep",
+      "title": "Sweep",
+      "description": "sweep a closed planar section along a rail into a B-rep solid (GH Sweep1): the section keeps its orientation relative to the rail's tangent as it travels, corners of a polyline rail are mitred, and the ends are capped.",
+      "category": "Surface & solid",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "the profile is degenerate, non-planar or self-intersecting at tolerance, the rail has no length at tolerance, or the kernel refuses (a section the sweep cannot carry around a corner, a sweep that does not close into one solid).",
+      "gh": "Sweep1",
+      "examples": [
+        "start = construct_point()\ntop = construct_point(z=10.0)\nrail = line(a=start, b=top)\nspan = construct_domain(start=-1.0, end=1.0)\nsection = rectangle(x=span, y=span)\nriser = sweep(rail=rail, profile=section)"
+      ],
+      "inputs": [
+        {
+          "name": "rail",
+          "type": "Curve",
+          "base": "Curve",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The rail to sweep along — a line, polyline or circle, open or closed."
+        },
+        {
+          "name": "profile",
+          "type": "Closed<Curve>",
+          "base": "Closed<Curve>",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The closed, planar section; place it at the rail's start, normal to the rail, for the classic sweep (it is swept exactly where it is)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The swept solid."
         }
       ]
     },
