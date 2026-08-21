@@ -711,9 +711,29 @@ same commit (skill `add-stdlib-node`).
   worker's (docs/12): a per-node cost estimate before the call, and a
   convex fast path in the clipper. Until then, the numbers are in docs/08
   rule 7.
-- **CI solves every `examples/*.cic`.** Only `02-solids` is exercised (by
-  the Playwright smoke); a `cicada-cli` test that runs each example headless
-  with a fresh `--cache-dir` keeps `06-lists` and the rest solving.
+- **CI solves every `examples/*.cic`** — **done 2026-08-20**
+  (`wt/hardening`; `crates/cicada-cli/tests/examples_solve.rs`, the rule
+  stated in `examples/README.md`). Only `02-solids` was exercised (by the
+  Playwright smoke). Now every `examples/**/*.cic` — discovered by
+  extension, never listed, so a new example is covered the moment it is
+  committed — solves in-process through the same `compile::load` →
+  `resolve_targets` → `lower` → `Scheduler::solve` path `cicada run`
+  prints over, with a fresh `DiskStore` per example (nothing can be a memo
+  hit, so every node really computes) and no `--node` (every non-effectful
+  leaf; exporters skipped, their inputs solved, and the test asserts they
+  stayed `Skipped`). Green means: zero checker diagnostics anywhere
+  (stricter than `run`'s cone gate on purpose — a warning outside the cone
+  is still a wrong example), zero red, zero blocked; the failure names the
+  example and the binding in `run`'s own words (`red \`xs\` — range: steps
+  must be >= 1, got 0`, `blocked \`n\` — fed by red \`xs\``; verified by
+  mutating `06-lists`). The wall IS included: measured cold in debug on
+  the 24-core dev machine 6.9 s at cores − 2, 18 s at 4 threads, 34 s at 2
+  — the whole test runs in 7.8 s here; CI's 4-vCPU runners will sit near a
+  minute, and the test's header says where the exclusion list goes if
+  that ever dominates. The runner's own contract is pinned (a red binding,
+  its blocked dependant and a diagnostic are each reported, never
+  skipped), as is discovery (the nested `wall/wall.cic` and a floor of
+  seven files).
 - **Renumber item 4's orbit example**: `examples/06-lists.cic` took the
   number; the transport slice uses the next free one.
 - **Stale catalog on the client after a scripts-change reload**: the app

@@ -47,6 +47,19 @@ touching the committed examples — the app writes what you do.
   `pad_last`) feeding `cull` and a sphere per kept column. Pure
   throughout — the second `--time` run is fully cached.
 
+**The rule: every example must solve.** CI runs each `examples/**/*.cic`
+headlessly with a fresh cache — the same compile → lower → solve path as
+`cicada run <file>` with no `--node` (every non-effectful leaf; the
+exporters' inputs solve, the exporters never run) — and requires zero
+checker diagnostics, zero red and zero blocked bindings
+(`crates/cicada-cli/tests/examples_solve.rs`; the failure names the
+example and the binding). Discovery is by extension, so a new example is
+covered the moment it is committed and needs no registration; an example
+that needs Python needs only the interpreter (the scripts here are
+dependency-free on purpose). The wall is included — it solves cold in
+under ten seconds in debug on the dev machine. A pipeline that is MEANT
+to show a red node does not belong in `examples/`.
+
 Notes that save a first-timer some head-scratching:
 
 - Exporters are **effectful**: a plain run solves up to their inputs and
