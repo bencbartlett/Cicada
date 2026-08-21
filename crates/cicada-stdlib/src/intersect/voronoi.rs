@@ -5,7 +5,7 @@ use cicada_core::geometry::{Closed, Curve};
 use cicada_core::spatial::Point;
 use cicada_macros::{Ports, node};
 
-use crate::red;
+use crate::{checked_count, red};
 
 /// Inputs for [`voronoi`].
 #[derive(Ports, Clone, Debug)]
@@ -35,8 +35,11 @@ pub struct VoronoiOut {
 ///
 /// Panics when the boundary is open, non-convex, or degenerate; when a
 /// seed is off the boundary plane, coincides with another seed within
-/// tolerance, or owns no area inside the boundary; or when `seeds` is
-/// empty.
+/// tolerance, or owns no area inside the boundary; when `seeds` is
+/// empty; when `segments < 3`; or — for a circle boundary, the one that
+/// tessellates to `segments` vertices — when `segments` is above the
+/// shared ceilings (2^22 slots; the message names the count and the
+/// ceiling).
 ///
 /// # Examples
 ///
@@ -52,12 +55,25 @@ pub struct VoronoiOut {
 #[node(
     category = "Intersect & regions",
     tier = "S",
-    version = 1,
+    version = 2,
     gh = "Voronoi",
     uses_tolerance
 )]
 #[must_use]
 pub fn voronoi(config: &ProjectConfig, input: VoronoiIn) -> VoronoiOut {
+    // Only a circle boundary tessellates to `segments` vertices (a
+    // rectangle or polyline is its own corner chain, the port unused), so
+    // only then does `segments` size an allocation — the boundary loop and
+    // the cells' shares of it; the kernel keeps the floor (`segments < 3`).
+    if matches!(input.boundary.0, Curve::Circle(_)) && input.segments >= 3 {
+        let _ = checked_count(
+            "voronoi",
+            "segments",
+            input.segments,
+            3,
+            2 * size_of::<Point>(),
+        );
+    }
     let cells = red(cicada_geom::voronoi::voronoi(
         &input.seeds,
         &input.boundary.0,
@@ -110,6 +126,85 @@ mod tests {
             panic!("cells are polylines")
         };
         assert!(p.vertices.iter().all(|v| v.0.x <= 5.0 + 1e-9));
+    }
+
+    fn disc(radius: f64) -> Closed<Curve> {
+        Closed(Curve::Circle(cicada_core::geometry::Circle {
+            plane: Plane::world_xy(),
+            radius,
+        }))
+    }
+
+    #[test]
+    #[should_panic(expected = "segments = 2 is out of range: must be >= 3")]
+    fn voronoi_too_few_segments_is_red() {
+        let _ = voronoi(
+            &config(),
+            VoronoiIn {
+                seeds: vec![Point::new(2.0, 0.0, 0.0), Point::new(-2.0, 0.0, 0.0)],
+                boundary: disc(5.0),
+                segments: 2,
+            },
+        );
+    }
+
+    // A circle boundary tessellates to `segments` vertices: one past the
+    // slot ceiling is red with the count and the ceiling in the message.
+    // This pins where the guard sits (a guard moved after the tessellation
+    // would pass it too — slowly, through the clipper); the absurd case
+    // below is what detects that mutation.
+    #[test]
+    #[should_panic(
+        expected = "voronoi: segments is 4194305 — above the 4194304 (2^22) slot ceiling of one \
+                    node output"
+    )]
+    fn voronoi_circle_one_past_the_ceiling_is_red() {
+        let _ = voronoi(
+            &config(),
+            VoronoiIn {
+                seeds: vec![Point::new(2.0, 0.0, 0.0), Point::new(-2.0, 0.0, 0.0)],
+                boundary: disc(5.0),
+                segments: crate::MAX_SLOTS + 1,
+            },
+        );
+    }
+
+    // The absurd density a literal or an Integer wire can carry: a circle
+    // boundary at 10^11 segments is a 2.4 TB loop (`tessellate_closed`
+    // sizes its collect up front) no machine holds — with the guard after
+    // it this test binary would abort on allocation failure
+    // (`catch_unwind` cannot catch that), so passing proves the refusal
+    // precedes the allocation.
+    #[test]
+    #[should_panic(
+        expected = "voronoi: segments is 100000000000 — above the 4194304 (2^22) slot ceiling of \
+                    one node output"
+    )]
+    fn voronoi_circle_absurd_segments_are_refused_not_allocated() {
+        let _ = voronoi(
+            &config(),
+            VoronoiIn {
+                seeds: vec![Point::new(2.0, 0.0, 0.0), Point::new(-2.0, 0.0, 0.0)],
+                boundary: disc(5.0),
+                segments: 100_000_000_000,
+            },
+        );
+    }
+
+    // A rectangle boundary is its own corner chain — `segments` sizes
+    // nothing, so the same count partitions the same board it always did.
+    #[test]
+    fn voronoi_chain_boundary_ignores_segments_as_before() {
+        let out = voronoi(
+            &config(),
+            VoronoiIn {
+                seeds: vec![Point::new(2.0, 5.0, 0.0), Point::new(8.0, 5.0, 0.0)],
+                boundary: square(10.0),
+                segments: crate::MAX_SLOTS + 1,
+            },
+        );
+        assert_eq!(out.cells.len(), 2);
+        assert!(out.cells.iter().all(|cell| cell.0.is_closed()));
     }
 
     #[test]

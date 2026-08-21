@@ -564,32 +564,333 @@ same commit (skill `add-stdlib-node`).
 
 ## Follow-ups (found by the v0.1 reviews and measurements; scheduled, not yet placed)
 
-- **Control-plane priority over the display restream.** A client that joins
-  a session receives the whole display set on the one socket (the wall:
-  ~350 MB of binary frames, measured 2026-08-20) and every text frame —
-  `preview_policy`, deltas, statuses — queues behind it; on a loaded dev
-  machine `preview_policy` reached a fresh observer ~26 s after the drag.
-  doc 13 named head-of-line blocking as the trigger for a transport change:
-  the fix is a priority lane for text frames (two channels per client with
-  text-first draining — the frame bus already drops stale-generation frames
-  — or a second socket for binary), with a test that a text frame sent
-  behind a multi-hundred-MB restream arrives within the status cadence.
-  Protocol-change skill; one package. Until then
-  `web/e2e/compute_on_release.spec.ts` waits for delivery, not latency.
-- **A count/allocation guard for every count-taking node** (`series`,
-  `range`, `duplicate`, `repeat`, …): a slider wired into `count` can ask
-  for a capacity the allocator refuses, which aborts the process —
-  `catch_unwind` cannot catch it. A shared `checked_count(count,
-  bytes_per_slot)` that refuses loudly (red, with the number) before
-  allocating; one package in stdlib + a table test per node.
-- **CI solves every `examples/*.cic`.** Only `02-solids` is exercised (by
-  the Playwright smoke); a `cicada-cli` test that runs each example headless
-  with a fresh `--cache-dir` keeps `06-lists` and the rest solving.
+- **Control-plane priority over the display restream** — **done on the
+  server and the socket, 2026-08-20** (`wt/hardening`; docs/13 §Two
+  lanes, one socket); **the status cadence at wall scale is NOT reached
+  on the page** and is recorded as the display plane's follow-up, not
+  claimed. A client that joined received the whole display set on the
+  one socket (the wall: 26 frames, 368 MB, the largest 94 MB) and every
+  text — `preview_policy`, deltas, statuses — queued behind it:
+  `preview_policy` reached a fresh observer ~26 s after the drag on a
+  loaded dev machine. Shipped as the smaller of the two options doc 13
+  named: two channels per client (`ClientLanes`: control and display)
+  and a write task that drains control first, the display lane FIFO —
+  `display_reset` and `screenshot_request` ride the display lane because
+  their meaning is their place among the frames; nothing on the wire
+  changed (`PROTOCOL_VERSION` unchanged). Plus the join-time half the
+  review found: the write task starts before the restream is built
+  (`attach_client`), `Session::join` hydrates under the registration's
+  lock hold, and `restream_display` encodes outside the session lock
+  with a per-output compare-and-send (the pick table behind its own
+  mutex) — a joiner used to see nothing for ~3 s while every other
+  client's intents waited on the lock. The "frame bus drops
+  stale-generation frames" premise was half right and is recorded
+  precisely in docs/13: staleness is per output, and a rule keyed to the
+  reset's generation would drop a restream's unchanged outputs; the web
+  test pins the interleavings that ARE safe. Tests: the pump (priority,
+  FIFO, the `biased` select pinned by 64 messages per lane); a wall-sized
+  synthetic restream (the 94 MB frame in flight, 319 MiB behind it) + a
+  slider tick whose status goes out behind exactly the frame in flight;
+  the parked-restream join (hydrated, intents answered, a control text
+  asked for after the tick's repaint still precedes it, the superseded
+  output not resent); a departed client's restream encoding nothing
+  more; the lane assignment of the two display-plane texts; the HTTP
+  e2e's join order — all on a permit-paced recording sink, no sleeps,
+  and every test that asserts an order attached through
+  `attach_client`, the function `client_loop` uses (the review's
+  2026-08-21 finding: with the tests' own channels, `attach_client`
+  with both lanes MERGED passed everything — now it fails two). The
+  review's second round also narrowed two restream costs: the pick
+  table's mutex is held for one up-front ask of an output's ids
+  (`display::PickIds`), never across its encode — it used to be, and
+  the live path takes that mutex under the session lock, so a join
+  could stall every intent for one 94 MB encode; and a client that
+  leaves mid-restream stops costing before the next output's load, not
+  after its encode. Measured with `tools/measure/lanes.mjs` (the wire,
+  no browser; the "before" engine `24d558b`'s, sha256 `39b1c29f…`;
+  fresh runs 2026-08-21 on the final shape): a tick at the observer's
+  snapshot reaches it after 368 MB / 294–331 ms with one queue, behind
+  no frame / 1.3–1.4 ms with the lanes; socket open → `hello`
+  2,938–3,074 ms → 5.6–6.2 ms; a tick 50 ms into a join is answered in
+  3,160–3,348 ms → 1.3 ms, behind the 19–20 small frames encoded so
+  far. **The app-side number is not a before/after of the lanes.** The
+  heavy spec (`compute_on_release.spec.ts`, headless Chromium,
+  software GL) logs the observer's `preview_policy` latency after the
+  writer's grab, under a 60 s sanity bound, as a diagnostic of the
+  PAGE: it is set by where the page's frame handling stands at the
+  grab, which the spec does not control (its observer setup takes about
+  as long as the debug engine's ~3 s restream), and the one-queue
+  engine can post the better number — reproduced 2026-08-21: `24d558b`
+  192 ms with 26 of 26 frames already handled at the grab, the lanes
+  7,284 ms with 23 in (the 2026-08-20 paired runs, 21.0 s → 5.9/11.7 s,
+  carried the same confound: 14 vs 24/21 frames in at the grab, and
+  are withdrawn as evidence). The residual is the page's own message
+  queue: the browser takes the whole restream in faster than it
+  handles frames, so a text sent once the server has written them is
+  legitimately last on the wire — no socket order can fix that, and
+  the page cannot be the socket's oracle. Whether the page's seconds
+  per 27–94 MB frame are software-GL renders or decode/upload is
+  unmeasured; "a GPU browser pays milliseconds" was a hypothesis, not
+  evidence. The client's ledger now empties on EVERY `display_reset`
+  (counted), not on a change of its generation — the table's max can
+  repeat after an output vanished, and a reconnect's reset then kept
+  the vanished output painted (`frameBus.test.ts`). Definition of done
+  as accepted: the cadence is reached on the socket (a text behind at
+  most the frame in flight) and NOT on the page at wall scale; invariant
+  (a) of the work order — "a `display_reset` overtaking older frames
+  makes the client drop them" — was refuted and replaced by the
+  per-output rule (docs/13 point 4). Next, named, not scheduled: frame
+  handling off the main thread (decode in a worker → typed arrays to
+  the scene), the one change that lets the queue drain at memcpy speed;
+  chunked/element-range frames — the one frame in flight is 94 MB on
+  the wall, seconds by itself off loopback; a per-output latest-wins
+  display queue for display-vs-display blocking; an end-to-end
+  discriminator would need the restream throttled on the wire for the
+  observer (CDP network conditions); the live `emit_frames` still
+  encodes under the session lock (changed outputs only).
+- **A count/allocation guard for every count-taking node** — **done
+  2026-08-20** (`wt/hardening`, three commits, plus the 2026-08-21
+  re-audit that found every node accounted for and added the one missing
+  boundary case — `series` at 2^22 builds, 2^22 + 1 is red; docs/08 rule
+  7 is the contract, DECISIONS.md row of 2026-08-21 the ledger record;
+  the review's fix round of 2026-08-21 is recorded at the end of this
+  entry). A count literal or an Integer wire into `count` (a slider is a
+  `Number`, and the checker widens Integer → Number only — the
+  inspector's set-param, `apply_text` and `length`'s Integer output are
+  the vectors) could ask for a capacity the
+  allocator refuses, which aborts the process — `catch_unwind` cannot
+  catch it. The 2^24 slot ceiling (15112fb) already stood on eight count
+  ports; this package gave it its byte half and its product form,
+  audited every node that allocates from a count, and then — after the
+  adversarial review measured what the ceilings really admitted —
+  lowered the slot half, charged per-copy payloads, counted text spans
+  instead of flattening, and bumped the versions. `slot_count` became
+  `checked_count(node, port, value, least, bytes_per_slot)`: the same
+  floor with the same messages (the run_e2e regression still matches),
+  `MAX_SLOTS` = 2^22 (4,194,304), and `MAX_BYTES` = 1 GiB on `count ×
+  bytes_per_slot`. Why 2^22 and not 2^24: the review measured the
+  end-to-end cost of a slot (value-model hashing + memo log + zstd) —
+  `series` at 2^24 peaked at 9,763 MiB of working set and wrote 1.4 GB
+  to the cache, ~580 bytes a slot for an 8-byte element — so the 2^24
+  band let a count literal reach the allocator-failure abort on an 8–16 GB
+  machine a few million slots UNDER the ceiling; at 2^22 the process
+  peaks at 2,478 MiB in 4.1 s (measured the same way; the numbers are
+  on the constant). `bytes_per_slot` is what a slot makes the node
+  allocate, not the element's `size_of` alone: `linear_array` charges
+  each copy its `Transformable` plus the mesh or polyline it transforms
+  (`transform::support::payload_bytes`; every copy is a fresh geometry —
+  the review measured 3.5 GB committed for 100 copies of a 24 MB sphere
+  against a guard counting 11,200 bytes), so a million-vertex mesh is
+  refused at 30 copies; `duplicate`'s `Arc`-shared slots stay the slot
+  alone. `checked_size(node, what, slots: u128, bytes_per_slot)` is the
+  same check on a derived count, for the nodes whose allocation is a
+  PRODUCT of inputs: the sphere's `segments × rings` vertices (2,897
+  segments is the last allowed, 2,898 the first refused — 4,196,306
+  vertices; `segments = 10^14` is refused with its 5 × 10^27 in the
+  message, u128 so no overflow), and the text nodes' span bound — now
+  from `Font::outline_spans` (cicada-geom), which counts the outline
+  callbacks without flattening: a contour start or a line span is at
+  most one vertex at any density, a bézier span at most `segments`, so
+  the bound holds by construction of the flattener (it only ever drops
+  vertices), a line-only glyph (`A`) is never refused for its density,
+  and the single-closed-loop contour a two-chord counting pass dropped
+  is counted like any other span; asserted over every glyph of every
+  bundled face at 1, 2, 3, 8 and 64 chords, and against a synthetic
+  loop / square / degenerate span in the geom tests. `extrude` / `loft`
+  / `voronoi` police `segments` only where it sizes an allocation (a
+  circle profile, an analytic section, a circle boundary); a chain
+  profile never tessellates and its unused port is not policed. Audited
+  and left alone, with the reason: `chunk`, `partition`, `truncate`,
+  `split_list`, `shift_list`, `item`, `weave`, `insert_items` allocate
+  no more than their input; `jitter`'s integer is a seed. Floors stay
+  where they were (the node's or the kernel's message). **Versions
+  bumped to 2** on the fourteen nodes whose previously-valid band is now
+  red (`series`, `range`, `random`, `repeat`, `duplicate`, `pad_last`,
+  `divide_curve`, `linear_array`, `sphere`, `extrude`, `loft`,
+  `voronoi`, `text_outlines`, `text_solids`): docs/12 says any behaviour
+  change, and the review reproduced the alternative — one binary serving
+  a memo hit for `text_outlines(segments=2000000)` that a cold solve
+  refuses; the wall recomputes once (cold carve 3.8 s). Golden hashes
+  unchanged (value hashes, not keys). Tests: message-exact unit tests
+  for both helpers at both ceilings (inclusive bounds, the overflow-proof
+  product); per node a case one past the ceiling that bites first (red
+  with the exact message) plus, where the port is unused for a chain
+  input, the same count building the same mesh it always did; the
+  sphere's vertex formula pinned to the kernel's count; `linear_array`'s
+  fat-mesh case (36 MB × 30 refused with the per-copy bytes in the
+  message, 2 copies built), its polyline-vs-circle case and its
+  slot-ceiling case; the text bound pinned within 2× of what the layout
+  produces. "No allocation" is proven by the absurd-count cases — with
+  the guard moved after the allocation, `series(10^11)`, `sphere(10^14)`,
+  `linear_array(10^11)` and now `text_outlines("O", 10^11)` /
+  `text_solids("O", 10^11)` (~10^12 outline vertices) cannot complete:
+  the review's mutation showed the earlier line-only `A` cases proved
+  nothing (an `A` is eleven line vertices at any density), and the `O`
+  mutation was re-run here — the test binary was still growing at
+  8.5 GB after 15 s and was killed. The cap+1 cases pin the boundary and
+  the message; only the absurd cases detect a guard-after mutation. A
+  test-only counting `#[global_allocator]` would have proven it at
+  exactly cap+1 but needs `unsafe` outside an FFI seam, which the rules
+  forbid — recorded as the one assertion not made. **The review's fix
+  round (2026-08-21)** closed what the second adversarial pass found.
+  (1) *The ceiling is charged on what a node EMITS, all outputs
+  together* — the justification is per slot the value model hashes, and
+  `divide_curve` emits three lists: charged per port it admitted
+  3 × 2^22 slots and measured 5,332 MiB / 1,172 MB of cache at
+  `count = 2^22` (2.15× the series figure the ceiling is justified by,
+  the allocator-failure abort on the 8 GB class the guard exists to
+  prevent); it now charges `3 × samples` (`count + 1` open, `count`
+  closed — the kernel's own rule, read from `Curve::is_closed`) through
+  `checked_size`, so `count = 1398100` is the last allowed on an open
+  curve and its at-cap footprint is 2,039 MiB / 410 MB against `series`
+  at 2,482 MiB / 365 MB in the same run (branch debug engine; on the
+  constant). The fence-post `range` charges the `steps + 1` it emits the
+  same way (`steps = 4194303` is the last allowed; the port-only check
+  admitted 2^22 + 1 slots). Both take their floor through the shared
+  `checked_floor` and name the port and its value in the red text
+  (`range: values at steps=4194304 (steps + 1) would be 4194305 — above
+  …`). Both went to **version 3**: their version-2 band had been
+  admitted by the branch's engines (docs/12: any behaviour change). (2)
+  *The `…refused_not_allocated` name is held to what it claims*: the
+  review moved the guard after the allocation in `random` and
+  `duplicate` and their tests so named still passed (11/11) — nine
+  guarded files had that assertion only at cap + 1 (32–64 MiB,
+  buildable). Every guarded file now carries the 10^11-shaped case with
+  the exact message (`random`, `range`, `repeat`, `duplicate`,
+  `pad_last`, `divide_curve` at `count = 10^11`; `extrude`, `loft`,
+  `voronoi` at `segments = 10^11` on the tessellated input), the cap + 1
+  cases are renamed `…one_past_the_ceiling_is_red` (they pin the
+  boundary and the message, not the order), and
+  `tests/conformance.rs` holds the rule: a file that calls a guard must
+  hold a `…refused_not_allocated` test, and every test so named must
+  carry a literal ≥ 10^10 and never the cap constant — re-running the
+  review's `random` mutation now aborts the test binary ("memory
+  allocation of 800000000000 bytes failed"), and the rule rejects a
+  cap-constant body with both halves of the reason. (3) The ledger row.
+  (4) The measurements are headless `cicada run` numbers — what `cicada
+  serve` adds by encoding a 1 GiB list of meshes into display frames is
+  unmeasured and belongs with the frame follow-up above; said on the
+  constant. Accepted as-is from the review: the helper shape
+  (`checked_count(node, port, value, least, bytes_per_slot)` → `usize`,
+  panic-based — stdlib has no `NodeError`, the scheduler turns the panic
+  red, and `run_e2e` matches the text); the two files outside the stated
+  stdlib scope (`cicada-geom/src/text.rs`'s `Font::outline_spans`, the
+  sanctioned `stdlib → geom` edge, and the `run_e2e` message).
+- **Tessellation `segments` bound memory, not time** (found by the
+  guard review, verified 2026-08-20): `extrude` of a circle at 50k
+  segments takes 2.0 s, 100k 8.7 s, 200k 37 s (release; the cap ear clip
+  is O(n²)) — everything under the 2^22 ceiling is admitted and a count
+  past ~10^5 is an hours-long, uncancellable solve (Esc cannot interrupt
+  an in-kernel call today). A `segments`-only ceiling would be partial
+  (a 200k-vertex polyline profile from `divide_curve` reaches the same
+  clipper), so this is the cost model's and the cancellable kernel
+  worker's (docs/12): a per-node cost estimate before the call, and a
+  convex fast path in the clipper. Until then, the numbers are in docs/08
+  rule 7.
+- **CI solves every `examples/*.cic`** — **done 2026-08-20**
+  (`wt/hardening`; `crates/cicada-cli/tests/examples_solve.rs`, the rule
+  stated in `examples/README.md`). Only `02-solids` was exercised (by the
+  Playwright smoke). Now every `examples/**/*.cic` — discovered by
+  extension, never listed, so a new example is covered the moment it is
+  committed — solves in-process through the same `compile::load` →
+  `resolve_targets` → `lower` → `Scheduler::solve` functions `cicada run`
+  prints over, with a fresh `DiskStore` per example (nothing comes from an
+  earlier run, so a node that broke cannot hide behind yesterday's memo)
+  and no `--node` (every non-effectful leaf; the exporters' inputs are the
+  targets and the exporters themselves are never lowered — `lower` takes
+  the upstream closure of the leaves — so they have no outcome at all; the
+  test pins that no effectful binding is lowered and, the observable half,
+  that an exporter's file is never written). Green means: zero checker
+  diagnostics anywhere (stricter than `run`'s cone gate on purpose — a
+  warning outside the cone is still a wrong example), zero red, zero
+  blocked; the failure names the example and the binding in `run`'s own
+  words (`red \`xs\` — range: steps must be >= 1, got 0`, `blocked \`n\` —
+  fed by red \`xs\``; verified by mutating `06-lists`). The wall IS
+  included: measured cold in debug on the 24-core dev machine 6.9 s at
+  cores − 2, 18 s at 4 threads, 34 s at 2 — the whole test runs in 7.8 s
+  here; CI's 4-vCPU runners will sit near a minute, and the test's header
+  says where the exclusion list goes if that ever dominates. The runner's
+  own contract is pinned both ways (a red binding, its blocked dependant
+  and a diagnostic are each reported, never skipped; a computed target, a
+  memo hit within the solve and an exporter left alone each pass), as is
+  discovery (the nested `wall/wall.cic` and a floor of seven files). **The
+  review's fix round (2026-08-21)**: the first version demanded `Computed`
+  of every target, and a VALID pipeline with two nodes of one
+  content-addressed key (`reverse` applied twice more to its own result:
+  `d = reverse(c)` has `b`'s key and is answered from `b`'s entry) failed
+  as "`d` did not compute: CacheHit" — a false FAIL `cicada run` never
+  gave ("3 computed, 1 from cache"), and for same-wave twins one that
+  depended on the thread count (serial: a hit; parallel: both compute).
+  An intra-solve hit is now green like `run`'s, and the `reverse³` case
+  pins it (its hit is deterministic: the twin sits two waves downstream).
+  The header and `examples/README.md` now state the exact differences
+  from `run` — two, not one: diagnostics anywhere, and the working
+  directory, which the test does not enter (`set_current_dir` is
+  process-global and its tests run concurrently) — hence the rule that
+  relative paths in non-effectful nodes must not rely on the cwd (nothing
+  in `examples/` does: `export_obj` never runs, the wall's scripts resolve
+  `inputs/` against `__file__`). Named, not done: the script host could
+  spawn its workers with the pipeline's directory as their cwd so scripts
+  see one rule under `run`, `serve` and this test alike — a
+  `cicada-script`/`cicada-server` change, out of this package.
 - **Renumber item 4's orbit example**: `examples/06-lists.cic` took the
   number; the transport slice uses the next free one.
-- **Stale catalog on the client after a scripts-change reload**: the app
-  fetches `/api/catalog` once; search rows and port tooltips for script
-  nodes go stale until a reload. Refetch on the catalog-reload barrier.
+- **Stale catalog on the client after a scripts-change reload** — **done
+  2026-08-20** (`wt/hardening`; `web/src/state/catalog.ts`,
+  `web/src/protocol/catalog.ts`; nothing on the wire changed,
+  `PROTOCOL_VERSION` unchanged). The app fetched `/api/catalog` once at
+  start; search rows and port tooltips for script nodes went stale until
+  a page reload. The server labels no snapshot as a catalog change — the
+  watcher's `reason` is `"external file change"` whether the pipeline
+  text or a `scripts/*.py` moved, `git revert` says `"git revert"` with
+  or without a script, and `apply_text` answers with a (non-barrier)
+  snapshot only when a script changed — so the client cannot key on the
+  reason, and a label would be one more thing a reload path could
+  forget. The rule shipped needs no label: **every `snapshot` re-reads
+  the catalog** (`CatalogRefreshPolicy`, fed from the connection module
+  like the git policy). That is the join's snapshot too — the first
+  connect, and every reconnect, where the scripts may have changed while
+  the socket was down, a staleness the one-shot fetch never saw — so the
+  start-time fetch is gone: the socket's first snapshot reads. One read
+  in flight; any number of snapshots that land meanwhile collapse into
+  exactly one follow-up, so reads land in order and an older catalog
+  never ends on top of a newer one; a failed read is a notice and the
+  previous catalog stays. Cost: one ~100 KB GET per snapshot (text-only
+  reloads included), rare by construction. `window.__cicada.catalog()`
+  reports `{reads, busy, nodes}`. Tests: the feed (every snapshot kind
+  reads, `hello`/`delta`/statuses/lease/notices do not), the
+  sequencing (a burst mid-read = one follow-up; a failed read keeps the
+  owed one; dispose), the store path with an injected fetch (URL + token
+  header, the whole object swapped, failure keeps the old catalog). Real
+  app (debug engine, headless Chromium, a scratch copy of `examples/`
+  with `05-script-geometry` open): the join reads once (108 nodes,
+  `pyramids` in); a script written into `scripts/` → the watcher's
+  barrier → exactly one more read, 109 nodes, search-to-place lists
+  `Zzz Probe`; a text-only edit → one more read, no duplicates. Open, for
+  the server side if the per-reload GET ever matters: an additive
+  `catalog_changed` field on `snapshot` would let the client skip
+  text-only barriers. **The review's fix round (2026-08-21)**: (1) every
+  snapshot still reads, but an answer byte-identical to the one the store
+  holds is no longer re-applied (`readCatalog` compares the response
+  text, and trusts the comparison only while the store still holds the
+  object it applied) — the store used to swap the catalog object on every
+  read, and every canvas node subscribes to it, so a text-only reload
+  re-rendered the whole canvas for a catalog that had not changed
+  (`CicadaNode.tsx`'s "fires once per load" comment was stale and is
+  corrected); `catalog.test.ts` pins that three identical answers leave
+  one object in the store and a changed answer swaps. (2) The WIRING is
+  now unit-tested: the review deleted `feedCatalogPolicy` from
+  `startConnection`'s `onMessage` and 242 tests stayed green (only `tsc`
+  noticed an unused import; a conditional mis-wire would have passed
+  that too), the Playwright search spec being the only net.
+  `connection.test.ts` drives `startConnection` against a fake
+  `WebSocket` and a stubbed `fetch`: `hello` → no read, the join's
+  snapshot → exactly one `GET /api/catalog?pipeline=…` with the token
+  header and the answer in the store, a `delta` → none, a barrier → a
+  second read, and `window.__cicada.catalog()` reports `{reads: 2, busy:
+  false, nodes: 3}`; both mutations (feed removed; feed on `delta`
+  instead) fail it. The Playwright suite was re-run on the branch's debug
+  engine as part of this round (see the commit).
 
 ## Gates that must not regress (re-measured at each geometry or scheduler landing)
 

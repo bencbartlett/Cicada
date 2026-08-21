@@ -54,6 +54,35 @@ pub struct GlyphOutline {
     pub advance: f64,
 }
 
+/// The spans a glyph's outline is drawn with, BEFORE flattening — what
+/// bounds the vertices [`Font::glyph`] can produce at any density, by
+/// construction of the flattener: a `move_to` or a `line_to` pushes at
+/// most one vertex, a quadratic or cubic span pushes at most `segments`
+/// (exact duplicates are dropped and short contours discarded, which only
+/// lowers the count). The text nodes size their allocation guard from it
+/// (docs/08 rule 7) instead of flattening at a counting density, so a
+/// line-only glyph costs its line count at any `segments`, and a contour
+/// that is one closed bézier loop is counted like any other span.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct OutlineSpans {
+    /// Contour starts (`move_to`).
+    pub moves: usize,
+    /// Straight spans (`line_to`).
+    pub lines: usize,
+    /// Bézier spans (`quad_to` + `curve_to`), the ones `segments` multiplies.
+    pub curves: usize,
+}
+
+impl OutlineSpans {
+    /// At most this many outline vertices at `segments` chords per bézier
+    /// span: `moves + lines + curves × segments`. `u128` so an absurd
+    /// `segments` is a true product, never an overflow.
+    #[must_use]
+    pub fn vertex_bound(self, segments: u64) -> u128 {
+        (self.moves as u128) + (self.lines as u128) + (self.curves as u128) * u128::from(segments)
+    }
+}
+
 /// A classified contour of a laid-out glyph, in document units relative to
 /// the text origin (x right, y up, first baseline at y = 0).
 #[derive(Debug, Clone, PartialEq)]
@@ -178,6 +207,25 @@ impl<'a> Font<'a> {
         })
     }
 
+    /// The spans a character's outline is drawn with (see
+    /// [`OutlineSpans`]) — the bound on what [`Font::glyph`] allocates at
+    /// any density, without flattening anything. A glyph without an
+    /// outline (space) has no spans.
+    ///
+    /// # Errors
+    ///
+    /// [`GeomError::MissingGlyph`] when the face has no glyph for the
+    /// character.
+    pub fn outline_spans(&self, character: char) -> Result<OutlineSpans, GeomError> {
+        let id = self
+            .face
+            .glyph_index(character)
+            .ok_or(GeomError::MissingGlyph { character })?;
+        let mut counter = SpanCounter::default();
+        let _bbox = self.face.outline_glyph(id, &mut counter);
+        Ok(counter.0)
+    }
+
     /// The face's glyph id for a character, when mapped.
     #[must_use]
     pub fn glyph_id(&self, character: char) -> Option<u16> {
@@ -265,6 +313,33 @@ impl OutlineBuilder for Flattener {
     fn close(&mut self) {
         self.finish_contour();
     }
+}
+
+/// Counts ttf-parser's outline callbacks without flattening — the
+/// [`OutlineSpans`] behind [`Font::outline_spans`]. Mirrors the
+/// [`Flattener`] call for call: what it counts is what the flattener
+/// would push.
+#[derive(Default)]
+struct SpanCounter(OutlineSpans);
+
+impl OutlineBuilder for SpanCounter {
+    fn move_to(&mut self, _x: f32, _y: f32) {
+        self.0.moves += 1;
+    }
+
+    fn line_to(&mut self, _x: f32, _y: f32) {
+        self.0.lines += 1;
+    }
+
+    fn quad_to(&mut self, _x1: f32, _y1: f32, _x: f32, _y: f32) {
+        self.0.curves += 1;
+    }
+
+    fn curve_to(&mut self, _x1: f32, _y1: f32, _x2: f32, _y2: f32, _x: f32, _y: f32) {
+        self.0.curves += 1;
+    }
+
+    fn close(&mut self) {}
 }
 
 /// Lay text out: glyphs left to right from the origin along +x with the
@@ -1062,6 +1137,132 @@ mod tests {
             classify(contours, 'x', TOL),
             Err(GeomError::NotSimple { .. })
         ));
+    }
+
+    /// A synthetic outline as the callbacks ttf-parser would make.
+    #[derive(Clone, Copy)]
+    enum Op {
+        Move(f32, f32),
+        Line(f32, f32),
+        Quad(f32, f32, f32, f32),
+        Cubic(f32, f32, f32, f32, f32, f32),
+        Close,
+    }
+
+    fn drive<B: OutlineBuilder>(builder: &mut B, ops: &[Op]) {
+        for &op in ops {
+            match op {
+                Op::Move(x, y) => builder.move_to(x, y),
+                Op::Line(x, y) => builder.line_to(x, y),
+                Op::Quad(x1, y1, x, y) => builder.quad_to(x1, y1, x, y),
+                Op::Cubic(x1, y1, x2, y2, x, y) => builder.curve_to(x1, y1, x2, y2, x, y),
+                Op::Close => builder.close(),
+            }
+        }
+    }
+
+    fn flattened_vertices(ops: &[Op], segments: i64) -> usize {
+        let mut flattener = Flattener {
+            segments,
+            contours: Vec::new(),
+            current: Vec::new(),
+        };
+        drive(&mut flattener, ops);
+        flattener.finish_contour();
+        flattener.contours.iter().map(Vec::len).sum()
+    }
+
+    fn spans(ops: &[Op]) -> OutlineSpans {
+        let mut counter = SpanCounter::default();
+        drive(&mut counter, ops);
+        counter.0
+    }
+
+    // The span count bounds the flattened vertex count by construction —
+    // one push per move or line, `segments` pushes per bézier span — for
+    // the shapes a vertex-counting pass gets wrong: a contour that is ONE
+    // closed cubic loop (at two chords it is two vertices and dropped; at
+    // `segments` it is `segments` vertices), a line-only square (its lines
+    // must not be multiplied by the density), and a degenerate span (all
+    // its chord points coincide and are dropped).
+    #[test]
+    fn span_count_bounds_the_flattened_vertices_at_every_density() {
+        let loop_ = [
+            Op::Move(0.0, 0.0),
+            Op::Cubic(10.0, 20.0, -10.0, 20.0, 0.0, 0.0),
+            Op::Close,
+        ];
+        let square = [
+            Op::Move(0.0, 0.0),
+            Op::Line(10.0, 0.0),
+            Op::Line(10.0, 10.0),
+            Op::Line(0.0, 10.0),
+            Op::Line(0.0, 0.0),
+            Op::Close,
+        ];
+        let rounded = [
+            Op::Move(0.0, 0.0),
+            Op::Line(10.0, 0.0),
+            Op::Quad(10.0, 10.0, 0.0, 10.0),
+            Op::Cubic(1.0, 1.0, 1.0, 1.0, 1.0, 1.0), // degenerate: one point
+            Op::Line(0.0, 0.0),
+            Op::Close,
+        ];
+        assert_eq!(
+            spans(&loop_),
+            OutlineSpans {
+                moves: 1,
+                lines: 0,
+                curves: 1
+            }
+        );
+        assert_eq!(
+            spans(&square),
+            OutlineSpans {
+                moves: 1,
+                lines: 4,
+                curves: 0
+            }
+        );
+        assert_eq!(
+            spans(&rounded),
+            OutlineSpans {
+                moves: 1,
+                lines: 2,
+                curves: 2
+            }
+        );
+        for segments in [1i64, 2, 3, 8, 64, 1000] {
+            let density = u64::try_from(segments).unwrap();
+            for (name, ops) in [
+                ("loop", &loop_[..]),
+                ("square", &square[..]),
+                ("rounded", &rounded[..]),
+            ] {
+                let vertices = flattened_vertices(ops, segments);
+                let bound = spans(ops).vertex_bound(density);
+                assert!(
+                    u128::try_from(vertices).unwrap() <= bound,
+                    "{name} at {segments} chords: {vertices} vertices, bound {bound}"
+                );
+            }
+        }
+        // The loop is the shape a two-chord counting pass undercounts: two
+        // vertices there (dropped as a contour), `segments` at the real
+        // density — the span bound is `1 + segments` either way.
+        assert_eq!(flattened_vertices(&loop_, 2), 0);
+        assert_eq!(flattened_vertices(&loop_, 64), 64);
+        assert_eq!(spans(&loop_).vertex_bound(64), 65);
+        // Lines cost one vertex at any density: the square is 4 at 1 chord
+        // and 4 at 1000, and its bound stays 5.
+        assert_eq!(flattened_vertices(&square, 1), 4);
+        assert_eq!(flattened_vertices(&square, 1000), 4);
+        assert_eq!(spans(&square).vertex_bound(1000), 5);
+        // An absurd density is a true product, never an overflow.
+        assert_eq!(
+            spans(&rounded).vertex_bound(u64::MAX),
+            3 + 2 * u128::from(u64::MAX)
+        );
     }
 
     #[test]

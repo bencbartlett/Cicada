@@ -343,6 +343,113 @@ fn every_node_file_holds_its_three_tests() {
     assert_no_failures("three tests", &failures);
 }
 
+/// The smallest count a `…refused_not_allocated` test may carry: 10^10
+/// slots is an 80 GB buffer at 8 bytes a slot — no test machine holds it,
+/// so a guard moved AFTER the allocation aborts the test binary on
+/// allocation failure instead of passing. Anything a machine can build
+/// (cap + 1 is 32–64 MiB) proves the boundary, not the order.
+const ABSURD_COUNT: u128 = 10_000_000_000;
+
+/// The body of the test fn named `name` in `source` — from its `fn` line to
+/// the first `    }` line after it (module-test indentation, stable under
+/// rustfmt) — or `None` when no such fn exists.
+fn test_body<'a>(source: &'a str, name: &str) -> Option<&'a str> {
+    let needle = format!("fn {name}(");
+    let start = source.find(&needle)?;
+    let rest = &source[start..];
+    let end = rest.find("\n    }\n").map_or(rest.len(), |at| at + 6);
+    Some(&rest[..end])
+}
+
+/// The test fn names in `source` that contain `fragment`.
+fn test_names_containing<'a>(source: &'a str, fragment: &str) -> Vec<&'a str> {
+    source
+        .lines()
+        .filter_map(|line| line.trim_start().strip_prefix("fn "))
+        .filter_map(|head| head.split('(').next())
+        .filter(|name| name.contains(fragment))
+        .collect()
+}
+
+/// Does `text` carry an integer literal of at least [`ABSURD_COUNT`]
+/// (digits with `_` separators, as the tests write them)?
+fn has_absurd_literal(text: &str) -> bool {
+    text.split(|c: char| !c.is_ascii_digit() && c != '_')
+        .filter(|run| run.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .filter_map(|run| run.replace('_', "").parse::<u128>().ok())
+        .any(|value| value >= ABSURD_COUNT)
+}
+
+#[test]
+fn every_guarded_node_file_proves_its_refusal_precedes_the_allocation() {
+    // A node that sizes an allocation from a count goes through
+    // `checked_count` / `checked_size` (docs/08 rule 7). Its file must hold
+    // at least one test NAMED `…refused_not_allocated`, and every test so
+    // named must carry an input no guard-after survives: an absurd literal
+    // (≥ 10^10) and never the cap constant. The H2 review's mutation
+    // (2026-08-21) moved the guard after the allocation in `random` and
+    // `duplicate` and their `…refused_not_allocated` tests still passed —
+    // nine files named the assertion with a cap + 1 input that is 32–64 MiB
+    // and buildable. Cap + 1 cases pin the boundary and the message and are
+    // named `…one_past_the_ceiling…` / `…is_red`; only an absurd count
+    // proves the order, and this rule keeps the name honest.
+    let src = src_dir();
+    let failures = collect_failures(|spec| {
+        let mut problems = Vec::new();
+        let Ok(source) = std::fs::read_to_string(src.join(module_file(spec))) else {
+            return problems; // reported by the layout test
+        };
+        let guarded = source.contains("checked_count(") || source.contains("checked_size(");
+        if !guarded {
+            return problems;
+        }
+        let proofs = test_names_containing(&source, "refused_not_allocated");
+        if proofs.is_empty() {
+            problems.push(
+                "calls a count guard but holds no `…refused_not_allocated` test (an absurd count \
+                 a guard-after cannot survive)"
+                    .to_owned(),
+            );
+        }
+        for name in proofs {
+            let body = test_body(&source, name).expect("a listed fn has a body");
+            if body.contains("MAX_SLOTS") || body.contains("MAX_BYTES") {
+                problems.push(format!(
+                    "`{name}` is named as a no-allocation proof but uses the cap constant — \
+                     cap + 1 is buildable; name it `…one_past_the_ceiling_is_red`"
+                ));
+            }
+            if !has_absurd_literal(body) {
+                problems.push(format!(
+                    "`{name}` is named as a no-allocation proof but carries no count of at \
+                     least {ABSURD_COUNT} — a guard moved after the allocation would pass it"
+                ));
+            }
+        }
+        problems
+    });
+    assert_no_failures("no-allocation proof", &failures);
+}
+
+// The proof rule's own proxies: the body ends at the test's closing brace,
+// the literal scan reads separators and ignores small numbers.
+#[test]
+fn no_allocation_proof_proxies_read_the_shapes_the_tests_use() {
+    let source = "    #[test]\n    fn a_is_refused_not_allocated() {\n        let _ = f(100_000_000_000);\n    }\n\n    #[test]\n    fn b_one_past_the_ceiling_is_red() {\n        let _ = f(crate::MAX_SLOTS + 1);\n    }\n";
+    let a = test_body(source, "a_is_refused_not_allocated").expect("a exists");
+    assert!(a.contains("100_000_000_000") && !a.contains("MAX_SLOTS"));
+    assert!(test_body(source, "missing").is_none());
+    assert_eq!(
+        test_names_containing(source, "refused_not_allocated"),
+        vec!["a_is_refused_not_allocated"]
+    );
+    assert!(has_absurd_literal("count: 100_000_000_000,"));
+    assert!(has_absurd_literal("segments: 100_000_000_000_000,"));
+    assert!(has_absurd_literal("vertex_bound(10000000000)"));
+    assert!(!has_absurd_literal("count: 4_194_305, seed: 2026, 1e-9"));
+    assert!(!has_absurd_literal("crate::MAX_SLOTS + 1"));
+}
+
 // The helper's own contract: a sibling name that CONTAINS the node's name
 // is not a call of the node.
 #[test]

@@ -2,7 +2,7 @@
 
 use cicada_macros::{Ports, node};
 
-use crate::slot_count;
+use crate::checked_count;
 
 /// Inputs for [`series`].
 #[derive(Ports, Clone, Copy, Debug)]
@@ -27,7 +27,7 @@ pub struct SeriesIn {
 ///
 /// Panics when `count` is negative — loud refusal, never a silent empty
 /// list (the scheduler turns node panics into red nodes, stage 3) — or
-/// above the 2^24 slot ceiling (16,777,216 slots — an unbounded count once
+/// above the 2^22 slot ceiling (4,194,304 slots — an unbounded count once
 /// aborted the engine on allocation failure instead of going red).
 ///
 /// # Examples
@@ -38,15 +38,15 @@ pub struct SeriesIn {
 #[node(
     category = "Sequences & random",
     tier = "S",
-    version = 1,
+    version = 2,
     gh = "Series"
 )]
 #[must_use]
 pub fn series(input: SeriesIn) -> Vec<f64> {
-    let count = slot_count("series", "count", input.count, 0);
+    let count = checked_count("series", "count", input.count, 0, size_of::<f64>());
     // Per-element multiply (not accumulation) keeps results exact-of-form
     // start + step·i and independent of evaluation order. Counts stay below
-    // 2^24 (the slot ceiling), so the cast is loss-free.
+    // 2^22 (the slot ceiling), so the cast is loss-free.
     #[allow(clippy::cast_precision_loss)]
     (0..count)
         .map(|i| input.start + input.step * i as f64)
@@ -102,7 +102,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "series: count is 100000000000 — above the 16777216 (2^24) slot ceiling"
+        expected = "series: count is 100000000000 — above the 4194304 (2^22) slot ceiling"
     )]
     fn absurd_count_is_refused_not_allocated() {
         let _ = series(SeriesIn {
@@ -110,6 +110,35 @@ mod tests {
             step: 1.0,
             count: 100_000_000_000,
         });
+    }
+
+    // The boundary itself, like every other count port: the ceiling is
+    // inclusive (2^22 values, 32 MiB, built) and one past it is red with
+    // the exact message. The absurd case above is what detects a guard
+    // moved after the allocation; this one pins where the guard sits.
+    #[test]
+    fn count_at_the_slot_ceiling_builds_and_one_past_it_is_refused() {
+        let at = series(SeriesIn {
+            start: 1.0,
+            step: 0.5,
+            count: crate::MAX_SLOTS,
+        });
+        assert_eq!(at.len(), 4_194_304);
+        assert_eq!(at.last(), Some(&(1.0 + 0.5 * 4_194_303.0)));
+        let past = std::panic::catch_unwind(|| {
+            series(SeriesIn {
+                start: 1.0,
+                step: 0.5,
+                count: crate::MAX_SLOTS + 1,
+            })
+        })
+        .expect_err("one past the ceiling refuses");
+        assert_eq!(
+            past.downcast_ref::<String>().map(String::as_str),
+            Some(
+                "series: count is 4194305 — above the 4194304 (2^22) slot ceiling of one node output"
+            )
+        );
     }
 
     proptest::proptest! {

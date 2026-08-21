@@ -7,8 +7,8 @@ use cicada_geom::frame::orthonormal;
 use cicada_geom::text::{PlacedGlyph, glyph_solid, layout};
 use cicada_macros::{Ports, node};
 
-use super::support::bundled_font;
-use crate::red;
+use super::support::{bundled_font, outline_vertex_bound};
+use crate::{PRISM_BYTES_PER_PROFILE_VERTEX, checked_size, red};
 
 /// Inputs for [`text_solids`].
 #[derive(Ports, Clone, Debug)]
@@ -54,10 +54,12 @@ pub struct TextSolidsIn {
 /// Panics when `text_outlines` would (the font is not bundled — the message
 /// lists the bundled names —, `size` is not above tolerance, a glyph is
 /// missing from the font — names the character —, `segments < 1`, the
-/// plane is degenerate), when `depth` is within tolerance of zero, or when
-/// a glyph's contours cannot be triangulated into a watertight prism
-/// (touching or self-intersecting outlines — a font defect, named by
-/// character).
+/// plane is degenerate, the outline vertices the text would flatten to —
+/// its line spans once, its bézier spans × `segments` — would be above the
+/// shared ceilings: 2^22 slots, or 1 GiB of prisms at 96 bytes a vertex),
+/// when `depth` is within tolerance of zero, or when a glyph's contours
+/// cannot be triangulated into a watertight prism (touching or
+/// self-intersecting outlines — a font defect, named by character).
 ///
 /// # Examples
 ///
@@ -67,13 +69,25 @@ pub struct TextSolidsIn {
 #[node(
     category = "Output, display & export",
     tier = "S",
-    version = 1, gh = none,
+    version = 2, gh = none,
     uses_tolerance
 )]
 #[must_use]
 pub fn text_solids(config: &ProjectConfig, input: TextSolidsIn) -> Vec<Watertight<Mesh>> {
     let font = bundled_font(&input.font);
     let frame = red(orthonormal(&input.plane, config.tol()));
+    // The vertex count is a PRODUCT of the text's bézier spans and
+    // `segments`, and each outline vertex becomes a prism's worth of mesh:
+    // checked as the derived size before the layout allocates it (the
+    // layout keeps the floor, `segments < 1`).
+    if input.segments >= 1 {
+        let _ = checked_size(
+            "text_solids",
+            "outline vertices",
+            outline_vertex_bound(font, &input.text, input.segments),
+            PRISM_BYTES_PER_PROFILE_VERTEX,
+        );
+    }
     let glyphs: Vec<PlacedGlyph> = red(layout(
         font,
         &input.text,
@@ -100,6 +114,54 @@ mod tests {
     use crate::output::support::testing::{
         bbox, cap_crossings, config, outline_area, outlines, polyline_vertices, solids,
     };
+
+    // One chord past the slot ceiling for a CURVED glyph (`O`): red with
+    // the bound in the message (a prism vertex is 96 bytes, so 2^22 of
+    // them is 384 MiB and the slot half bites first). This pins where the
+    // guard sits (with the guard after the layout it would still pass —
+    // slowly); the absurd case below is what detects that mutation. The
+    // guard is shared with `text_outlines`, whose tests pin the boundary.
+    #[test]
+    fn one_chord_past_the_vertex_ceiling_is_red() {
+        let font = bundled_font("DejaVu Sans Bold");
+        let ceiling = u128::from(crate::MAX_SLOTS.unsigned_abs());
+        let fixed = outline_vertex_bound(font, "O", 0);
+        let per_chord = outline_vertex_bound(font, "O", 1) - fixed;
+        let segments = i64::try_from((ceiling - fixed) / per_chord + 1).unwrap();
+        let would_be = outline_vertex_bound(font, "O", segments);
+        assert!(would_be > ceiling);
+        let panic = std::panic::catch_unwind(|| solids("O", 5.0, 1.0, segments))
+            .expect_err("one chord past the ceiling refuses");
+        assert_eq!(
+            *panic.downcast_ref::<String>().unwrap(),
+            format!(
+                "text_solids: outline vertices would be {would_be} — above the 4194304 (2^22) \
+                 slot ceiling of one node output"
+            )
+        );
+    }
+
+    // The absurd density: `O` at 10^11 chords a span is ~10^12 prism
+    // vertices — with the guard after the layout the test binary would
+    // abort on allocation failure. Red with the true product, instantly.
+    #[test]
+    fn an_absurd_density_on_a_curved_glyph_is_refused_not_allocated() {
+        let font = bundled_font("DejaVu Sans Bold");
+        let would_be = font
+            .outline_spans('O')
+            .unwrap()
+            .vertex_bound(100_000_000_000);
+        assert!(would_be > 1_000_000_000_000);
+        let panic = std::panic::catch_unwind(|| solids("O", 5.0, 1.0, 100_000_000_000))
+            .expect_err("an absurd density refuses");
+        assert_eq!(
+            *panic.downcast_ref::<String>().unwrap(),
+            format!(
+                "text_solids: outline vertices would be {would_be} — above the 4194304 (2^22) \
+                 slot ceiling of one node output"
+            )
+        );
+    }
 
     #[test]
     #[should_panic(expected = "depth")]

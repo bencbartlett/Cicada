@@ -38,14 +38,81 @@ long tail stays a non-goal.
    that also return an `IndexMap` (wall lesson 2).
 7. **Loud refusal.** A node missing required inputs or shown invalid data
    is red with a reason and IDs; it never guesses (wall lesson 13). Every
-   count port (`series`, `random`, `range`, `repeat`, `duplicate`,
-   `pad_last`, `linear_array`, `divide_curve`) shares one **slot ceiling**,
-   2^24 = 16,777,216 slots (`cicada_stdlib::MAX_SLOTS`): a larger count is
-   red with the count in the message, never an allocation attempt — an
-   unbounded `count` once aborted the whole engine on allocation failure,
-   which is not a panic and so could not go red (C1 review). It is a slot
-   ceiling, not a memory bound; geometry `segments` ports are mesh
-   resolution and keep their own contracts.
+   count that sizes an allocation shares one **two-part ceiling**, checked
+   before the allocation: 2^22 = 4,194,304 slots
+   (`cicada_stdlib::MAX_SLOTS`) and 1 GiB of what the count makes the node
+   allocate (`MAX_BYTES`, at `bytes_per_slot` = the element the buffer
+   holds PLUS whatever the node builds per slot) — whichever bites first
+   is red with the count, the bytes and the ceiling in the message, never
+   an allocation attempt (an unbounded `count` once aborted the whole
+   engine on allocation failure, which is not a panic and so could not go
+   red — C1 review; one fat slot type later the slot ceiling alone was an
+   allocation the allocator may refuse, hence the byte half — v0.1
+   follow-up 2; DECISIONS.md row of 2026-08-21 is the binding record).
+   The two halves bound different things. The SLOT half
+   bounds what a slot costs beyond the node's buffer — the value model
+   hashes every slot, the memo log serialises it, zstd compresses it —
+   and that cost is measured, not assumed: `series` at 2^24 slots peaked
+   at 9.76 GB of working set and wrote 1.4 GB to the cache (~580 bytes a
+   slot end to end, for a 128 MiB `Vec<f64>`), which is why the ceiling
+   is 2^22 and not the 15112fb 2^24: at 2^22 the process peaks at
+   2,478 MiB, what an 8 GB machine survives with room for the rest of
+   the pipeline (the measurements live on the constant's doc comment;
+   they are headless `cicada run` numbers — what `cicada serve` adds by
+   encoding display frames is the frame follow-up's to measure). Because
+   the cost is per slot the value model hashes, the slot half is charged
+   on what the node EMITS, all outputs together: a node with several
+   list outputs charges every one (`divide_curve` emits points AND
+   tangents AND parameters — charged per port it admitted 3 × 2^22
+   slots and measured 5,332 MiB at `count = 2^22`, 2.15× the figure the
+   ceiling is justified by; charged on the total, `count = 1398100` is
+   the last allowed on an open curve), and a fence-post node charges the
+   length it emits (`range` emits `steps + 1`, so `steps = 4194303` is
+   the last allowed). The BYTE half bounds the node's own allocation,
+   per slot at what a slot really costs: `linear_array` charges each
+   copy its `Transformable` AND the mesh or polyline it transforms
+   (every copy is a distinct geometry; a million-vertex mesh is refused
+   at 30 copies), while `duplicate`'s `Arc`-shared slots cost the slot
+   alone. A count port that is exactly the emitted length of one list
+   goes through `checked_count` (`series`, `random`, `repeat`,
+   `duplicate`, `pad_last`, `linear_array`; and `segments` where it is
+   the vertex count an allocation takes: `extrude`'s circle profile,
+   `loft`'s analytic sections, `voronoi`'s circle boundary — a chain
+   profile never tessellates, so its unused port is not policed); every
+   other emitted total goes through `checked_size` on the derived count
+   after the node's own floor (`checked_floor`): `range`'s `steps + 1`
+   values, `divide_curve`'s `count + 1` (open) or `count` (closed)
+   samples × 3 outputs, `sphere`'s `segments × rings` vertices (2,898
+   segments is the first refused), `text_outlines` / `text_solids`: the
+   text's span bound from the font's outline spans without flattening —
+   a contour start or a line span is one vertex at any density, a bézier
+   span `segments` — so a line-only glyph is never refused for its
+   density and the bound holds by construction of the flattener. The
+   floors (`count < 0`, `segments < 3`, `segments < 1`) stay where they
+   were — the node's or the kernel's own message. Chunkers (`chunk`,
+   `partition`, `truncate`, `split_list`) allocate no more than their
+   input and need no ceiling. **Versions bump with the ceilings** when
+   the newly refused band previously produced output (docs/12: any
+   behaviour change; a memo hit must not serve what a cold solve refuses)
+   — the fourteen nodes above went to version 2 with the 2^22 ceiling
+   and the payload charge, and `range` / `divide_curve` to version 3
+   when the review moved their charge to the emitted total (their
+   version-2 band had been admitted by the branch's engines); 15112fb's
+   2^24 landed without a bump only because its refused band had never
+   produced anything (it aborted). **Every guarded node's file proves
+   the order** — that the refusal precedes the allocation — with a test
+   named `…refused_not_allocated` whose count no guard-after survives
+   (≥ 10^10 slots: an 80 GB buffer, so a guard moved after the allocation
+   aborts the test binary instead of passing); cap + 1 cases pin the
+   boundary and the message and are named `…one_past_the_ceiling…` /
+   `…is_red` (`tests/conformance.rs` holds the rule — the review's
+   mutation found nine files whose "not allocated" tests passed with the
+   guard after the allocation). The ceilings bound memory, not time: a prism or loft
+   profile of a few hundred thousand `segments` passes them and is an
+   O(n²) ear clip that Esc cannot interrupt today (measured: 50k
+   segments 2.0 s, 100k 8.7 s, 200k 37 s) — that is the cost model's
+   and the cancellable kernel worker's business (docs/12), named in
+   docs/17 as a follow-up.
 8. **Conversions are explicit, costed nodes** (`Tessellate`, `As Closed`,
    `As Solid`) — never silent coercions. Only total, lossless upcasts
    (Circle → Curve) are implicit.

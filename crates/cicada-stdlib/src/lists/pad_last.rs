@@ -3,7 +3,7 @@
 use cicada_core::marshal::ElemSlot;
 use cicada_macros::{Ports, node};
 
-use crate::slot_count;
+use crate::checked_count;
 
 /// Inputs for [`pad_last`].
 #[derive(Ports, Clone, Debug)]
@@ -29,8 +29,8 @@ pub struct PadLastIn {
 /// # Panics
 ///
 /// Panics when `count` is below the list's slot count (`pad_last` only
-/// lengthens — `truncate` shortens) or above the 2^24 slot ceiling
-/// (16,777,216 slots), or when the list is empty and `count` is positive (no
+/// lengthens — `truncate` shortens) or above the 2^22 slot ceiling
+/// (4,194,304 slots), or when the list is empty and `count` is positive (no
 /// last slot to repeat).
 ///
 /// # Examples
@@ -42,11 +42,11 @@ pub struct PadLastIn {
 /// padded = pad_last(list=few, count=n)
 /// sums = add(a=each(padded), b=each(many))
 /// ```
-#[node(category = "List & axis", tier = "S", version = 1, gh = "Longest List")]
+#[node(category = "List & axis", tier = "S", version = 2, gh = "Longest List")]
 #[must_use]
 pub fn pad_last(input: PadLastIn) -> Vec<ElemSlot> {
     let mut list = input.list;
-    let count = slot_count("pad_last", "count", input.count, 0);
+    let count = checked_count("pad_last", "count", input.count, 0, size_of::<ElemSlot>());
     assert!(
         count >= list.len(),
         "pad_last: count {count} is below the list's {} slots — pad_last only lengthens \
@@ -123,14 +123,36 @@ mod tests {
         });
     }
 
+    // One past the ceiling pins where the guard sits and what it says (a
+    // guard moved after the `resize` would still pass this — 64 MiB of
+    // slots is buildable); the absurd case below is what detects that
+    // mutation.
     #[test]
     #[should_panic(
-        expected = "pad_last: count is 16777217 — above the 16777216 (2^24) slot ceiling"
+        expected = "pad_last: count is 4194305 — above the 4194304 (2^22) slot ceiling of one \
+                    node output"
+    )]
+    fn pad_last_one_past_the_ceiling_is_red() {
+        let _ = pad_last(PadLastIn {
+            list: numbers(&[1.0]),
+            count: crate::MAX_SLOTS + 1,
+        });
+    }
+
+    // The absurd count a literal or an Integer wire can carry: a `resize`
+    // to 10^11 slots is a 1.6 TB buffer no machine holds — with the guard
+    // after it this test binary would abort on allocation failure
+    // (`catch_unwind` cannot catch that), so passing proves the refusal
+    // precedes the allocation.
+    #[test]
+    #[should_panic(
+        expected = "pad_last: count is 100000000000 — above the 4194304 (2^22) slot ceiling of \
+                    one node output"
     )]
     fn pad_last_absurd_count_is_refused_not_allocated() {
         let _ = pad_last(PadLastIn {
             list: numbers(&[1.0]),
-            count: crate::MAX_SLOTS + 1,
+            count: 100_000_000_000,
         });
     }
 

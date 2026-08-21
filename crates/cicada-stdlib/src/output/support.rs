@@ -1,5 +1,5 @@
-//! The bundled-font table shared by the text nodes, plus their test
-//! helpers.
+//! The bundled-font table shared by the text nodes, the outline-vertex
+//! bound their allocation guard checks, plus their test helpers.
 
 use std::sync::LazyLock;
 
@@ -42,6 +42,27 @@ pub(crate) fn bundled_font(name: &str) -> &'static Font<'static> {
                 .join(", ")
         ),
     }
+}
+
+/// An upper bound on the outline vertices `text` flattens to at `segments`
+/// chords per bézier span, from the spans the font draws each glyph with
+/// ([`Font::outline_spans`], no flattening): a contour start or a line
+/// span is at most one vertex at any density, a bézier span at most
+/// `segments` — the bound holds by construction of the flattener (it only
+/// ever drops vertices), so a line-only glyph costs its line count however
+/// fine the chords, and a contour that is one closed bézier loop is
+/// counted like any other span. The guard is the text's, not a per-glyph
+/// constant: the heaviest bundled glyph has hundreds of spans and a
+/// typical one about twenty, and a constant safe for every character would
+/// refuse honest paragraphs. Only characters the face maps are counted —
+/// `layout` names a missing glyph itself, in its own order — and a newline
+/// is layout, not a glyph.
+pub(crate) fn outline_vertex_bound(font: &Font<'_>, text: &str, segments: i64) -> u128 {
+    let segments = segments.unsigned_abs();
+    text.chars()
+        .filter(|&c| c != '\n' && font.has_glyph(c))
+        .map(|c| red(font.outline_spans(c)).vertex_bound(segments))
+        .sum()
 }
 
 #[cfg(test)]
@@ -168,6 +189,91 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The allocation guard's bound, over every glyph EVERY bundled face
+    // maps in the Basic Multilingual Plane (4,699 for DejaVu Sans Bold):
+    // the vertices a glyph flattens to at 1, 2, 3, 8 and 64 chords a span
+    // never exceed its span bound at that density — so `outline_vertex_bound`
+    // is an upper bound on what `layout` allocates, for any text in any
+    // bundled face, and a second face ships under the same assertion.
+    // Lines are counted once: a line-only glyph's bound does not grow with
+    // the density.
+    #[test]
+    fn span_bound_covers_every_glyph_of_every_bundled_face() {
+        for name in bundled_font_names() {
+            let font = bundled_font(name);
+            let points = |c: char, segments: i64| -> usize {
+                font.glyph(c, segments)
+                    .unwrap()
+                    .contours
+                    .iter()
+                    .map(Vec::len)
+                    .sum()
+            };
+            let mut glyphs = 0usize;
+            let mut heaviest = (' ', 0usize);
+            let mut line_only = 0usize;
+            for c in (0x20u32..=0xFFFF).filter_map(char::from_u32) {
+                if !font.has_glyph(c) {
+                    continue;
+                }
+                glyphs += 1;
+                let spans = font.outline_spans(c).unwrap();
+                for density in [1i64, 2, 3, 8, 64] {
+                    let at = points(c, density);
+                    let bound = spans.vertex_bound(u64::try_from(density).unwrap());
+                    assert!(
+                        u128::try_from(at).unwrap() <= bound,
+                        "{name}: {c:?}: {at} vertices at {density} chords, bound {bound} from \
+                         {spans:?}"
+                    );
+                }
+                if spans.curves == 0 && spans.lines > 0 {
+                    line_only += 1;
+                    assert_eq!(
+                        spans.vertex_bound(1_000_000),
+                        spans.vertex_bound(1),
+                        "{name}: {c:?} is line-only; its bound must not grow with the density"
+                    );
+                }
+                if spans.curves > heaviest.1 {
+                    heaviest = (c, spans.curves);
+                }
+            }
+            assert!(glyphs > 4000, "{name} maps {glyphs} BMP characters");
+            assert!(
+                line_only > 10,
+                "{name}: {line_only} line-only glyphs (A, H, L, …)"
+            );
+            assert!(
+                heaviest.1 >= 100,
+                "{name}: the heaviest glyph ({:?}) has {} bézier spans — a per-glyph constant \
+                 would have to be that large for every character",
+                heaviest.0,
+                heaviest.1
+            );
+        }
+        // The bound is the text's: a newline and an unmapped character
+        // count nothing, the rest add up, lines are counted once and the
+        // density multiplies the curves only.
+        let font = bundled_font("DejaVu Sans Bold");
+        let a = font.outline_spans('A').unwrap();
+        let o = font.outline_spans('O').unwrap();
+        assert_eq!(a.curves, 0, "A is straight lines: {a:?}");
+        assert!(o.curves >= 8, "O is béziers: {o:?}");
+        assert_eq!(
+            outline_vertex_bound(font, "A\nO\u{1f41b}", 1),
+            a.vertex_bound(1) + o.vertex_bound(1)
+        );
+        assert_eq!(
+            outline_vertex_bound(font, "AO", 8),
+            a.vertex_bound(1) + o.vertex_bound(8)
+        );
+        assert_eq!(
+            outline_vertex_bound(font, "A", 2_000_000),
+            outline_vertex_bound(font, "A", 1)
+        );
+    }
 
     #[test]
     fn bundled_font_is_dejavu_sans_bold_with_a_cap_height() {

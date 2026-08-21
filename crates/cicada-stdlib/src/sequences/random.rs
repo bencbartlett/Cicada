@@ -3,7 +3,7 @@
 use cicada_macros::{Ports, node};
 
 use super::support::{seed_state, unit_draw};
-use crate::slot_count;
+use crate::checked_count;
 
 /// Inputs for [`random`].
 #[derive(Ports, Clone, Copy, Debug)]
@@ -30,8 +30,8 @@ pub struct RandomIn {
 ///
 /// # Panics
 ///
-/// Panics when `count` is negative or above the 2^24 slot ceiling
-/// (16,777,216 slots).
+/// Panics when `count` is negative or above the 2^22 slot ceiling
+/// (4,194,304 slots).
 ///
 /// # Examples
 ///
@@ -42,12 +42,12 @@ pub struct RandomIn {
 #[node(
     category = "Sequences & random",
     tier = "S",
-    version = 1,
+    version = 2,
     gh = "Random"
 )]
 #[must_use]
 pub fn random(input: RandomIn) -> Vec<f64> {
-    let count = slot_count("random", "count", input.count, 0);
+    let count = checked_count("random", "count", input.count, 0, size_of::<f64>());
     let mut state = seed_state(input.seed);
     let span = input.domain.end - input.domain.start;
     (0..count)
@@ -106,12 +106,36 @@ mod tests {
         });
     }
 
+    // One past the ceiling pins where the guard sits and what it says (a
+    // guard moved after the allocation would still pass this — 32 MiB is
+    // buildable); the absurd case below is what detects that mutation.
     #[test]
-    #[should_panic(expected = "random: count is 16777217 — above the 16777216 (2^24) slot ceiling")]
-    fn random_absurd_count_is_refused_not_allocated() {
+    #[should_panic(
+        expected = "random: count is 4194305 — above the 4194304 (2^22) slot ceiling of one node \
+                    output"
+    )]
+    fn random_one_past_the_ceiling_is_red() {
         let _ = random(RandomIn {
             domain: cicada_core::scalar::Domain::new(0.0, 1.0),
             count: crate::MAX_SLOTS + 1,
+            seed: 0,
+        });
+    }
+
+    // The absurd count a literal or an Integer wire can carry: 10^11 draws
+    // is an 800 GB buffer no machine holds — with the guard after the
+    // allocation this test binary would abort on allocation failure
+    // (`catch_unwind` cannot catch that), so passing proves the refusal
+    // precedes the allocation.
+    #[test]
+    #[should_panic(
+        expected = "random: count is 100000000000 — above the 4194304 (2^22) slot ceiling of one \
+                    node output"
+    )]
+    fn random_absurd_count_is_refused_not_allocated() {
+        let _ = random(RandomIn {
+            domain: cicada_core::scalar::Domain::new(0.0, 1.0),
+            count: 100_000_000_000,
             seed: 0,
         });
     }

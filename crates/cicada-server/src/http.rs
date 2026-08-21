@@ -26,14 +26,14 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use cicada_core::config::ProjectConfig;
 use futures_util::{SinkExt as _, StreamExt as _};
-use tokio::sync::mpsc::unbounded_channel;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::git::{Git, GitRefusal, Scope};
 use crate::protocol::{
     ApplyTextRequest, CommitRequest, DeltaSource, GitErrorKind, IntentEnvelope, PROTOCOL_VERSION,
     RevertRequest, Role, ServerMessage, encode,
 };
-use crate::session::{IntentError, Outgoing, Session, SessionConfig};
+use crate::session::{ClientLanes, IntentError, Outgoing, Session, SessionConfig};
 
 /// The lease hand-off grace after a writer disconnects (docs/13: 5 s).
 pub const LEASE_GRACE: Duration = Duration::from_secs(5);
@@ -333,6 +333,7 @@ fn open_session(state: &AppState, relative: &str) -> Result<Arc<Session>, ServeE
         threads: state.config.threads,
         project: state.config.project,
         op_clock: None,
+        restream_hold: None,
     })?;
     // Two clients racing to open the same pipeline: the second finds the
     // first's session already inserted and drops its own.
@@ -1045,6 +1046,128 @@ async fn debug_screenshot(
 
 // ---------------------------------------------------------------- ws --
 
+/// Where the write task puts a message: the WebSocket's sink in `serve`,
+/// a recording sink in tests. One message at a time — `send` resolves when
+/// the transport accepted it, which is the backpressure the lanes' priority
+/// rides on (at most one display frame is ever "in the sink" ahead of a
+/// control text).
+pub(crate) trait WireSink {
+    /// Hand one message to the transport; `Err` means the socket is gone.
+    fn put(&mut self, message: Message) -> impl Future<Output = Result<(), ()>> + Send;
+}
+
+impl<S> WireSink for S
+where
+    S: futures_util::Sink<Message> + Unpin + Send,
+{
+    async fn put(&mut self, message: Message) -> Result<(), ()> {
+        self.send(message).await.map_err(|_| ())
+    }
+}
+
+/// The per-client write task (docs/13 §Two lanes, one socket): drain the
+/// control lane first — `biased`, so whenever both lanes hold a message
+/// the control text goes — and the display lane otherwise, in its FIFO
+/// order. Control texts are small and ≤ 10 Hz (statuses are coalesced), so
+/// the display lane is never starved in practice; a display frame in
+/// flight is never pre-empted (the sink takes whole messages), which bounds
+/// a control text's wait to one frame. Returns when both lanes are closed
+/// or the sink refuses a message.
+pub(crate) async fn pump_lanes<S: WireSink>(
+    mut control: UnboundedReceiver<Outgoing>,
+    mut display: UnboundedReceiver<Outgoing>,
+    sink: &mut S,
+) {
+    let mut control_open = true;
+    let mut display_open = true;
+    while control_open || display_open {
+        let next = tokio::select! {
+            biased;
+            message = control.recv(), if control_open => {
+                let Some(message) = message else {
+                    control_open = false;
+                    continue;
+                };
+                message
+            },
+            message = display.recv(), if display_open => {
+                let Some(message) = message else {
+                    display_open = false;
+                    continue;
+                };
+                message
+            },
+        };
+        let outgoing = match next {
+            Outgoing::Text(text) => Message::Text(text.into()),
+            Outgoing::Binary(bytes) => Message::Binary(bytes),
+        };
+        if sink.put(outgoing).await.is_err() {
+            break;
+        }
+    }
+}
+
+/// A client attached to its session: the handles `client_loop` keeps.
+pub(crate) struct Attached {
+    /// The client id.
+    pub id: u32,
+    /// Writer or observer.
+    pub role: Role,
+    /// This socket's own control-lane handle (the read loop's protocol
+    /// errors go through it).
+    pub control: UnboundedSender<Outgoing>,
+    /// The write task ([`pump_lanes`]); ends when both lanes close.
+    pub pump: tokio::task::JoinHandle<()>,
+    /// The display restream, on the blocking pool.
+    pub restream: tokio::task::JoinHandle<()>,
+    /// This socket's display-lane handle — only the lane tests need it (a
+    /// wall-sized synthetic restream is enqueued on the lane the real one
+    /// rides); `client_loop` never writes to the display lane itself.
+    #[cfg(test)]
+    pub display: UnboundedSender<Outgoing>,
+}
+
+/// Attach a handshaken socket to its session, in the order the lanes need
+/// (docs/13 §Two lanes, one socket): register + hydrate under one lock
+/// hold (`hello`, `snapshot` on the control lane), START THE WRITE TASK,
+/// and only then start the display restream — on the blocking pool,
+/// because the wall's is seconds of store reads and frame encoding that
+/// must block neither the runtime nor (it is built outside the session
+/// lock) anyone else's intents. The joiner's graph is on the wire while
+/// its frames are still being encoded. `client_loop` and every lane test
+/// that asserts an order come through this one function — the two
+/// channels, the lane each goes to, the pump-before-restream — so the
+/// wiring under test is the wiring served (review 2026-08-21: tests that
+/// built their own lanes passed with both merged into one channel here).
+pub(crate) fn attach_client<S>(session: &Arc<Session>, mut sink: S) -> Attached
+where
+    S: WireSink + Send + 'static,
+{
+    let (control_tx, control_rx) = unbounded_channel::<Outgoing>();
+    let (display_tx, display_rx) = unbounded_channel::<Outgoing>();
+    let (id, role) = session.join(ClientLanes {
+        control: control_tx.clone(),
+        display: display_tx.clone(),
+    });
+    let pump = tokio::spawn(async move {
+        pump_lanes(control_rx, display_rx, &mut sink).await;
+    });
+    let restream = {
+        let session = Arc::clone(session);
+        tokio::task::spawn_blocking(move || session.restream_display(id))
+    };
+    Attached {
+        id,
+        role,
+        control: control_tx,
+        pump,
+        restream,
+        #[cfg(test)]
+        display: display_tx,
+    }
+}
+
 async fn ws_upgrade(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PipelineQuery>,
@@ -1112,23 +1235,21 @@ async fn client_loop(socket: WebSocket, session: Arc<Session>) {
         return;
     }
 
-    let (tx, mut rx) = unbounded_channel::<Outgoing>();
-    let (id, role) = session.connect(tx.clone());
-    let _ = tx.send(Outgoing::Text(session.hello(id, role)));
-    let _ = tx.send(Outgoing::Text(session.snapshot(false, "initial")));
-    session.restream_display(id);
-
-    let send_task = tokio::spawn(async move {
-        while let Some(message) = rx.recv().await {
-            let outgoing = match message {
-                Outgoing::Text(text) => Message::Text(text.into()),
-                Outgoing::Binary(bytes) => Message::Binary(bytes),
-            };
-            if sink.send(outgoing).await.is_err() {
-                break;
-            }
-        }
-    });
+    // Two lanes to one socket (docs/13 §Two lanes, one socket): the
+    // control plane and the display plane each get a channel, and the write
+    // task drains control first — `hello`, `snapshot`, every delta, status
+    // and `preview_policy` go out ahead of whatever display restream is
+    // still queued (the wall's is ~350 MB). The write task starts BEFORE
+    // the restream is built (`attach_client`). `tx` here is this socket's
+    // own control-lane handle for the protocol errors below.
+    let Attached {
+        id,
+        role,
+        control: tx,
+        pump: send_task,
+        restream: _restream,
+        ..
+    } = attach_client(&session, sink);
 
     // Intents are handled IN ORDER on one blocking thread per client.
     let (intent_tx, intent_rx) =
@@ -1294,4 +1415,736 @@ async fn spa_fallback(State(state): State<Arc<AppState>>, uri: Uri) -> Response 
         project = state.config.project_dir.to_string_lossy(),
     ))
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::ClientMessage;
+    use crate::session::RestreamHold;
+    use crate::viewmodel::WireEnd;
+    use std::sync::Mutex as StdMutex;
+    use tokio::sync::Semaphore;
+
+    /// What the mock client saw, in wire order.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Seen {
+        /// A JSON text: its `type`.
+        Text(String),
+        /// A binary message that is not a frame (the synthetic restreams
+        /// below are zeros — the pump and the sink never look inside):
+        /// its length.
+        Binary(usize),
+        /// A real frame: who it draws, at which generation.
+        Frame {
+            node: u32,
+            output: u32,
+            generation: u64,
+        },
+    }
+
+    /// A recording sink that models the wire: it accepts one message per
+    /// permit, so the test decides exactly when the link has room — no
+    /// sleeps, no wall clock — and records what went out, in which order.
+    /// A message awaiting a permit is "in flight": handed to the transport,
+    /// not yet on the wire — exactly a WebSocket sink's `send` blocked on a
+    /// full socket buffer.
+    struct GatedRecorder {
+        room: Arc<Semaphore>,
+        seen: Arc<StdMutex<Vec<Seen>>>,
+        sent: UnboundedSender<Seen>,
+    }
+
+    impl WireSink for GatedRecorder {
+        async fn put(&mut self, message: Message) -> Result<(), ()> {
+            let permit = self.room.acquire().await.map_err(|_| ())?;
+            permit.forget();
+            let entry = match message {
+                Message::Text(text) => Seen::Text(
+                    serde_json::from_str::<serde_json::Value>(&text)
+                        .ok()
+                        .and_then(|v| v["type"].as_str().map(str::to_owned))
+                        .unwrap_or_else(|| "<not json>".to_owned()),
+                ),
+                Message::Binary(bytes) => match crate::frames::decode(&bytes) {
+                    Ok(frame) => {
+                        let header = frame.header();
+                        Seen::Frame {
+                            node: header.node,
+                            output: header.output,
+                            generation: header.generation,
+                        }
+                    }
+                    Err(_) => Seen::Binary(bytes.len()),
+                },
+                Message::Ping(_) | Message::Pong(_) | Message::Close(_) => return Err(()),
+            };
+            self.seen
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(entry.clone());
+            let _ = self.sent.send(entry);
+            Ok(())
+        }
+    }
+
+    /// The mock client: the recorder plus the test's side of it.
+    struct Wire {
+        room: Arc<Semaphore>,
+        seen: Arc<StdMutex<Vec<Seen>>>,
+        sent: tokio::sync::mpsc::UnboundedReceiver<Seen>,
+    }
+
+    /// A deadline on "something reaches the wire" — never what a pass
+    /// depends on; the loud alternative to hanging when the lock is held
+    /// or the pump is not running.
+    const STALL: Duration = Duration::from_secs(60);
+
+    impl Wire {
+        fn new() -> (Self, GatedRecorder) {
+            let room = Arc::new(Semaphore::new(0));
+            let seen = Arc::new(StdMutex::new(Vec::new()));
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            (
+                Self {
+                    room: Arc::clone(&room),
+                    seen: Arc::clone(&seen),
+                    sent: rx,
+                },
+                GatedRecorder {
+                    room,
+                    seen,
+                    sent: tx,
+                },
+            )
+        }
+
+        /// Let ONE message onto the wire and return it.
+        async fn release_one(&mut self) -> Seen {
+            self.room.add_permits(1);
+            let Ok(received) = tokio::time::timeout(STALL, self.sent.recv()).await else {
+                panic!(
+                    "nothing reached the wire within {STALL:?}: the pump is not running, or the session lock is held — seen so far: {:?}",
+                    self.seen()
+                );
+            };
+            received.expect("the pump ended with a permit outstanding")
+        }
+
+        /// Unlimited room: whatever is still queued or in flight goes out,
+        /// so a pump whose lanes were closed can end (the tests assert on
+        /// `seen()` afterwards, not on the order of this tail).
+        fn open(&self) {
+            self.room.add_permits(Semaphore::MAX_PERMITS / 2);
+        }
+
+        fn seen(&self) -> Vec<Seen> {
+            self.seen
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        }
+    }
+
+    fn text(type_tag: &str) -> Outgoing {
+        Outgoing::Text(format!(
+            r#"{{"v":1,"seq":0,"type":"{type_tag}","payload":{{}}}}"#
+        ))
+    }
+
+    fn binary(len: usize) -> Outgoing {
+        Outgoing::Binary(bytes::Bytes::from(vec![0_u8; len]))
+    }
+
+    const BOX_PIPELINE: &str = "# cicada 1\n\
+         size = slider(value=2.0, min=0.5, max=5.0)\n\
+         span = construct_domain(start=0.0, end=size)\n\
+         block = box(x=span, y=span, z=span)\n";
+
+    /// The box plus an output no slider reaches: what a restream must
+    /// still send when the box moved on under it.
+    const BOX_AND_BALL_PIPELINE: &str = "# cicada 1\n\
+         size = slider(value=2.0, min=0.5, max=5.0)\n\
+         span = construct_domain(start=0.0, end=size)\n\
+         block = box(x=span, y=span, z=span)\n\
+         ball = sphere(radius=1.0)\n";
+
+    /// An open, solved session over `pipeline`, with an optional restream
+    /// hold.
+    fn session(pipeline: &str, hold: Option<RestreamHold>) -> (tempfile::TempDir, Arc<Session>) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.cic");
+        std::fs::write(&path, pipeline).unwrap();
+        let session = Session::open(SessionConfig {
+            project_dir: dir.path().to_owned(),
+            pipeline: path,
+            cache_dir: Some(dir.path().join("cache")),
+            threads: 2,
+            project: ProjectConfig::default(),
+            op_clock: None,
+            restream_hold: hold,
+        })
+        .unwrap();
+        session.wait_idle();
+        (dir, session)
+    }
+
+    /// A node's view-model ref (frames name nodes by it).
+    fn node_ref(session: &Session, name: &str) -> u32 {
+        let state = session.debug_state(false);
+        let node = state["graph"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["name"] == name)
+            .unwrap_or_else(|| panic!("no node {name} in the graph"));
+        u32::try_from(node["ref"].as_u64().unwrap()).unwrap()
+    }
+
+    fn tick(session: &Session, id: u32, value: &str) {
+        session.handle(
+            id,
+            Some(format!("tick-{value}")),
+            ClientMessage::ParamPreview {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: value.into(),
+            },
+        );
+        session.wait_idle();
+    }
+
+    /// A read intent answered at once on the control lane (`wire_probe`):
+    /// the control text a test enqueues at a chosen moment.
+    fn probe(session: &Session, id: u32, intent_id: &str) {
+        session.handle(
+            id,
+            Some(intent_id.into()),
+            ClientMessage::ProbeWire {
+                from: WireEnd {
+                    node: "size".into(),
+                    port: "out".into(),
+                },
+            },
+        );
+    }
+
+    /// `/debug/state`'s `picks.encodes`: outputs encoded against the pick
+    /// table so far (live emissions + restreams).
+    fn encodes(session: &Session) -> u64 {
+        session.debug_state(false)["picks"]["encodes"]
+            .as_u64()
+            .expect("the pick table's encode counter")
+    }
+
+    #[tokio::test]
+    async fn the_pump_prefers_the_control_lane_and_keeps_the_display_lane_fifo() {
+        let (control_tx, control_rx) = unbounded_channel::<Outgoing>();
+        let (display_tx, display_rx) = unbounded_channel::<Outgoing>();
+        let (mut wire, mut recorder) = Wire::new();
+        let pump = tokio::spawn(async move {
+            pump_lanes(control_rx, display_rx, &mut recorder).await;
+        });
+
+        // Both lanes pre-filled: control goes first, display keeps its order.
+        for len in [1, 2, 3] {
+            display_tx.send(binary(len)).unwrap();
+        }
+        control_tx.send(text("status")).unwrap();
+        assert_eq!(wire.release_one().await, Seen::Text("status".into()));
+        assert_eq!(wire.release_one().await, Seen::Binary(1));
+        // The pump now holds frame 2 in flight; a control text enqueued here
+        // waits for exactly that one frame, then overtakes frame 3.
+        control_tx.send(text("delta")).unwrap();
+        assert_eq!(wire.release_one().await, Seen::Binary(2));
+        assert_eq!(wire.release_one().await, Seen::Text("delta".into()));
+        assert_eq!(wire.release_one().await, Seen::Binary(3));
+
+        // Closing one lane does not end the pump while the other still
+        // speaks; closing both does.
+        drop(control_tx);
+        display_tx.send(binary(4)).unwrap();
+        assert_eq!(wire.release_one().await, Seen::Binary(4));
+        drop(display_tx);
+        pump.await.unwrap();
+        assert_eq!(
+            wire.seen(),
+            vec![
+                Seen::Text("status".into()),
+                Seen::Binary(1),
+                Seen::Binary(2),
+                Seen::Text("delta".into()),
+                Seen::Binary(3),
+                Seen::Binary(4),
+            ]
+        );
+    }
+
+    /// The `biased` in the pump's select is the priority. Without it
+    /// `tokio::select!` picks randomly among ready branches and a short
+    /// interleaving passes by luck (review 2026-08-20: the two-message
+    /// test above survived its removal 1 run in 12). Here both lanes hold
+    /// 64 messages before the wire has room for any: an unbiased pump
+    /// lets some frame out ahead of some text with probability 1 − 2⁻⁶⁴.
+    #[tokio::test]
+    async fn the_pump_never_lets_a_frame_out_while_a_control_text_waits() {
+        const EACH: usize = 64;
+        let (control_tx, control_rx) = unbounded_channel::<Outgoing>();
+        let (display_tx, display_rx) = unbounded_channel::<Outgoing>();
+        let (mut wire, mut recorder) = Wire::new();
+        let pump = tokio::spawn(async move {
+            pump_lanes(control_rx, display_rx, &mut recorder).await;
+        });
+        for i in 0..EACH {
+            display_tx.send(binary(i + 1)).unwrap();
+            control_tx.send(text("status")).unwrap();
+        }
+        // Give the pump the chance to have taken a message before the
+        // first permit exists: the lanes were filled first.
+        tokio::task::yield_now().await;
+        let mut order = Vec::with_capacity(2 * EACH);
+        for _ in 0..2 * EACH {
+            order.push(wire.release_one().await);
+        }
+        let texts: Vec<_> = order.iter().take(EACH).collect();
+        assert!(
+            texts.iter().all(|s| **s == Seen::Text("status".into())),
+            "every control text precedes every frame: {order:?}"
+        );
+        let frames: Vec<_> = order.iter().skip(EACH).cloned().collect();
+        let fifo: Vec<Seen> = (1..=EACH).map(Seen::Binary).collect();
+        assert_eq!(frames, fifo, "the display lane keeps its FIFO");
+        drop(control_tx);
+        drop(display_tx);
+        pump.await.unwrap();
+    }
+
+    /// The follow-up that made the lanes (docs/17, measured 2026-08-20): a
+    /// fresh page receives the whole display set — the wall: 26 frames,
+    /// 368 MB, the largest 94.4 MB — and every text queued behind it.
+    /// What the socket side can promise, and what this test asserts, is
+    /// structural: a control text goes out behind AT MOST ONE display
+    /// message, whatever its size, and the display lane stays FIFO behind
+    /// it. It is NOT a latency claim: the one frame in flight may be the
+    /// wall's 94 MB one (it is here), and what a page pays per frame is
+    /// the page's (docs/13 §Two lanes, one socket — measured 3.5–8.9 s
+    /// end to end on headless Chromium's software GL). The synthetic
+    /// restream's contents are zeros: the wire, the pump and the sink
+    /// never look inside a frame.
+    const WALL_LARGEST_FRAME_BYTES: usize = 94_436_116;
+    const FRAME_BYTES: usize = 1 << 20;
+    const RESTREAM_FRAMES: usize = 320;
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)] // one story: join, a wall-sized restream, an edit's texts overtake it
+    async fn a_control_text_overtakes_the_restream_behind_at_most_the_frame_in_flight() {
+        let (_dir, session) = session(BOX_PIPELINE, None);
+        let block = node_ref(&session, "block");
+
+        // The join through `attach_client` — the channels and the lane
+        // wiring `client_loop` serves, not a copy of them (review
+        // 2026-08-21: with its own two channels this test passed with
+        // `attach_client`'s lanes merged into one). Its real restream (the
+        // box's frame) is awaited, then the wall-sized restream the box
+        // cannot produce goes on the SAME display lane: the wall's largest
+        // frame first, then 319 distinct 1 MiB frames (distinct lengths:
+        // the FIFO is asserted by them).
+        let (mut wire, recorder) = Wire::new();
+        let attached = attach_client(&session, recorder);
+        assert_eq!(attached.role, Role::Writer);
+        let id = attached.id;
+        attached.restream.await.unwrap();
+        let display_tx = attached.display;
+        let synthetic: Vec<usize> = std::iter::once(WALL_LARGEST_FRAME_BYTES)
+            .chain((1..RESTREAM_FRAMES).map(|i| FRAME_BYTES + i))
+            .collect();
+        for len in &synthetic {
+            display_tx.send(binary(*len)).unwrap();
+        }
+
+        // The join's texts lead; the restream header and the box's frame
+        // follow. The pump then takes the 94 MB frame in flight.
+        assert_eq!(wire.release_one().await, Seen::Text("hello".into()));
+        assert_eq!(wire.release_one().await, Seen::Text("snapshot".into()));
+        assert_eq!(wire.release_one().await, Seen::Text("display_reset".into()));
+        assert!(
+            matches!(wire.release_one().await, Seen::Frame { node, .. } if node == block),
+            "the box's own frame"
+        );
+        tokio::task::yield_now().await;
+
+        // The edit: a slider drag tick. Its statuses are control texts; the
+        // repaint it earns is a frame, behind the restream.
+        tick(&session, id, "3.0");
+
+        // Exactly the frame in flight precedes the tick's first text — the
+        // 94 MB one — and nothing else of the 319 queued behind it.
+        assert_eq!(
+            wire.release_one().await,
+            Seen::Binary(WALL_LARGEST_FRAME_BYTES),
+            "the frame already handed to the socket goes out first"
+        );
+        assert_eq!(
+            wire.release_one().await,
+            Seen::Text("status".into()),
+            "the tick's first text overtakes the remaining restream"
+        );
+        // Not vacuous: the backlog the text overtook is the whole rest of
+        // the restream (one queue per client put the text behind it).
+        let backlog: usize = synthetic[1..].iter().sum();
+        assert!(
+            backlog >= 300 * FRAME_BYTES,
+            "{backlog} bytes queued behind"
+        );
+
+        // Every further control text drains before the next restream frame;
+        // the restream then resumes where it stopped, FIFO.
+        let mut texts_after = Vec::new();
+        let resumed_at = loop {
+            match wire.release_one().await {
+                Seen::Text(kind) => texts_after.push(kind),
+                Seen::Binary(len) => break len,
+                Seen::Frame { .. } => panic!("the tick's repaint must follow the restream"),
+            }
+        };
+        assert!(
+            texts_after.iter().all(|k| k == "status"),
+            "only statuses were pending: {texts_after:?}"
+        );
+        assert_eq!(
+            resumed_at, synthetic[1],
+            "FIFO: the next frame is the next frame"
+        );
+        let mut sent = 2;
+        while sent < RESTREAM_FRAMES {
+            match wire.release_one().await {
+                Seen::Binary(len) => {
+                    assert_eq!(len, synthetic[sent], "FIFO among the restream's frames");
+                    sent += 1;
+                }
+                // A late coalesced status may still overtake.
+                Seen::Text(kind) => assert_eq!(kind, "status"),
+                Seen::Frame { .. } => panic!("the tick's repaint must follow the restream"),
+            }
+        }
+        // Then the tick's own repaint: the box at its new generation.
+        loop {
+            match wire.release_one().await {
+                Seen::Frame { node, .. } => {
+                    assert_eq!(node, block, "the box's preview frame");
+                    break;
+                }
+                Seen::Text(kind) => assert_eq!(kind, "status"),
+                Seen::Binary(len) => panic!("a restream frame after the restream: {len}"),
+            }
+        }
+
+        session.disconnect(id);
+        drop(attached.control);
+        drop(display_tx);
+        drop(session);
+        wire.open();
+        attached.pump.await.unwrap();
+        let seen = wire.seen();
+        assert_eq!(
+            seen.iter().filter(|s| matches!(s, Seen::Binary(_))).count(),
+            RESTREAM_FRAMES,
+            "every restream frame went out exactly once"
+        );
+    }
+
+    /// A hold a test can park a restream on: the hold reports the client
+    /// id it is holding and blocks until the test says go.
+    struct Hold {
+        held: tokio::sync::mpsc::UnboundedReceiver<u32>,
+        go: std::sync::mpsc::Sender<()>,
+    }
+
+    impl Hold {
+        fn new() -> (Self, RestreamHold) {
+            let (held_tx, held_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+            let go_rx = StdMutex::new(go_rx);
+            let hold: RestreamHold = Arc::new(move |client: u32| {
+                let _ = held_tx.send(client);
+                // A deadline, never a pass condition: a restream parked
+                // past it is a test that lost its way (see STALL).
+                let _ = go_rx
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .recv_timeout(STALL);
+            });
+            (
+                Self {
+                    held: held_rx,
+                    go: go_tx,
+                },
+                hold,
+            )
+        }
+
+        async fn held(&mut self) -> u32 {
+            tokio::time::timeout(STALL, self.held.recv())
+                .await
+                .expect("a restream reaches its hold")
+                .expect("the hold is alive")
+        }
+
+        fn release(&self) {
+            self.go.send(()).unwrap();
+        }
+    }
+
+    /// The join-time half of control-plane priority (review 2026-08-20:
+    /// the pump used to start after the restream was built, and the build
+    /// held the session lock — the wall's joiner saw nothing for ~3 s and
+    /// every other client's intents waited as long). With the restream
+    /// parked on its hold: the joiner's `hello`, `snapshot` and the
+    /// restream's header are on the wire; an intent lands and is answered
+    /// (the lock is free); and when the restream resumes it does not
+    /// resend what the intent superseded — the box moved on (hash and
+    /// generation), so its planned frames are dropped and the client keeps
+    /// the live one; the ball, unchanged, is sent.
+    #[tokio::test]
+    async fn the_joiner_is_hydrated_and_the_session_answers_while_its_restream_builds() {
+        let (mut hold, restream_hold) = Hold::new();
+        let (_dir, session) = session(BOX_AND_BALL_PIPELINE, Some(restream_hold));
+        let block = node_ref(&session, "block");
+        let ball = node_ref(&session, "ball");
+        let before = session.debug_state(false);
+        let shown = before["display"]["block.out"]["generation"]
+            .as_u64()
+            .expect("the box is displayed");
+        assert_eq!(before["display"]["ball.out"]["generation"], shown);
+
+        let (mut wire, recorder) = Wire::new();
+        let attached = attach_client(&session, recorder);
+        assert_eq!(attached.role, Role::Writer);
+        let id = attached.id;
+        assert_eq!(hold.held().await, id, "the join's restream is parked");
+
+        // Hydrated while the restream is parked: the control lane, then the
+        // restream's header (enqueued with the plan, before the hold).
+        assert_eq!(wire.release_one().await, Seen::Text("hello".into()));
+        assert_eq!(wire.release_one().await, Seen::Text("snapshot".into()));
+        assert_eq!(wire.release_one().await, Seen::Text("display_reset".into()));
+
+        // A control text takes the wire's one in-flight slot (the pump
+        // holds it until the wire has room): whatever the tick enqueues
+        // next queues behind it, each message on its lane.
+        probe(&session, id, "probe-before");
+
+        // An intent lands while the restream is parked — off the runtime,
+        // with a deadline, so a lock held across the build fails loudly
+        // instead of hanging the test. The tick changes the box.
+        let ticker = Arc::clone(&session);
+        tokio::time::timeout(
+            STALL,
+            tokio::task::spawn_blocking(move || tick(&ticker, id, "3.0")),
+        )
+        .await
+        .expect("the session answers an intent while a restream builds: the lock is free")
+        .unwrap();
+        let after = session.debug_state(false);
+        let moved = after["display"]["block.out"]["generation"]
+            .as_u64()
+            .unwrap();
+        assert!(moved > shown, "the tick repainted the box");
+        // The tick's repaint is queued on the display lane behind the probe
+        // in flight. A control-plane answer asked for NOW must overtake it:
+        // the lanes `attach_client` wired are two — with one merged channel
+        // the frame, enqueued first, would precede it (review 2026-08-21:
+        // no test through `attach_client` told the two apart).
+        probe(&session, id, "probe-after");
+        assert_eq!(
+            wire.release_one().await,
+            Seen::Text("wire_probe".into()),
+            "the text that held the in-flight slot"
+        );
+        // The tick's texts and the second probe's answer, then its repaint
+        // — all on the wire before the restream's frames exist.
+        let mut texts_before_frame = Vec::new();
+        let live = loop {
+            match wire.release_one().await {
+                Seen::Text(kind) => texts_before_frame.push(kind),
+                Seen::Frame {
+                    node, generation, ..
+                } => break (node, generation),
+                Seen::Binary(len) => panic!("an undecodable frame: {len} bytes"),
+            }
+        };
+        assert!(
+            texts_before_frame
+                .iter()
+                .all(|k| k == "status" || k == "wire_probe"),
+            "only the tick's statuses and the probe's answer were pending: {texts_before_frame:?}"
+        );
+        assert!(
+            texts_before_frame.iter().any(|k| k == "wire_probe"),
+            "the control text enqueued AFTER the repaint overtakes it — two lanes, not one: {texts_before_frame:?}"
+        );
+        assert_eq!(live, (block, moved), "the tick's live repaint");
+
+        // The restream resumes: the ball at the generation the plan read;
+        // the box's planned frame — superseded — is dropped, not sent.
+        hold.release();
+        attached.restream.await.unwrap();
+        let mut restreamed = Vec::new();
+        loop {
+            match wire.release_one().await {
+                Seen::Text(kind) => assert_eq!(kind, "status"),
+                Seen::Frame {
+                    node, generation, ..
+                } => {
+                    restreamed.push((node, generation));
+                    if node == ball {
+                        break;
+                    }
+                }
+                Seen::Binary(len) => panic!("an undecodable frame: {len} bytes"),
+            }
+        }
+        assert_eq!(
+            restreamed,
+            vec![(ball, shown)],
+            "only the unchanged output is restreamed"
+        );
+
+        session.disconnect(id);
+        drop(attached.control);
+        drop(attached.display);
+        wire.open();
+        attached.pump.await.unwrap();
+        let boxes: Vec<u64> = wire
+            .seen()
+            .iter()
+            .filter_map(|s| match s {
+                Seen::Frame {
+                    node, generation, ..
+                } if *node == block => Some(*generation),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            boxes,
+            vec![moved],
+            "the client saw the box once, live — never the restream's stale copy behind it"
+        );
+    }
+
+    /// A client that leaves during its restream stops costing at the next
+    /// output boundary — before that output's load and encode, not after
+    /// (review 2026-08-21: the leave check sat behind the encode, so a page
+    /// reload on the wall paid one load plus up to a 94 MB encode for
+    /// nobody, and rapid reloads stacked them on the blocking pool). With
+    /// the restream parked on its hold, the client disconnects; when the
+    /// restream resumes it encodes nothing (`picks.encodes` unchanged), sends
+    /// nothing, and ends.
+    #[tokio::test]
+    async fn a_departed_clients_restream_encodes_nothing_more() {
+        let (mut hold, restream_hold) = Hold::new();
+        let (_dir, session) = session(BOX_AND_BALL_PIPELINE, Some(restream_hold));
+        let (mut wire, recorder) = Wire::new();
+        let attached = attach_client(&session, recorder);
+        let id = attached.id;
+        assert_eq!(hold.held().await, id, "the join's restream is parked");
+        assert_eq!(wire.release_one().await, Seen::Text("hello".into()));
+        assert_eq!(wire.release_one().await, Seen::Text("snapshot".into()));
+        assert_eq!(wire.release_one().await, Seen::Text("display_reset".into()));
+        let encoded_before = encodes(&session);
+        assert!(
+            encoded_before >= 2,
+            "the live path encoded the box and the ball"
+        );
+
+        // The page went away (a reload) while its restream was parked.
+        session.disconnect(id);
+        hold.release();
+        attached.restream.await.unwrap();
+        assert_eq!(
+            encodes(&session),
+            encoded_before,
+            "no output is loaded or encoded for a client that left"
+        );
+        drop(attached.control);
+        drop(attached.display);
+        wire.open();
+        attached.pump.await.unwrap();
+        let frames = wire
+            .seen()
+            .iter()
+            .filter(|s| matches!(s, Seen::Frame { .. } | Seen::Binary(_)))
+            .count();
+        assert_eq!(frames, 0, "nothing was sent to the departed client");
+    }
+
+    /// The two texts whose meaning is their place among the frames ride the
+    /// display lane (docs/13 §What stays ordered with the frames). Pinned
+    /// here because every other test passes with either on the control
+    /// lane (review 2026-08-20): frames already queued to the client must
+    /// precede `display_reset` (a resync's header) and the restream's
+    /// frames must precede `screenshot_request`, while a control text
+    /// enqueued last overtakes them all.
+    #[tokio::test]
+    async fn display_reset_and_screenshot_request_ride_the_display_lane() {
+        let (_dir, session) = session(BOX_PIPELINE, None);
+        let block = node_ref(&session, "block");
+        let shown = session.debug_state(false)["display"]["block.out"]["generation"]
+            .as_u64()
+            .expect("the box is displayed");
+        let (mut wire, mut recorder) = Wire::new();
+        let (control_tx, control_rx) = unbounded_channel::<Outgoing>();
+        let (display_tx, display_rx) = unbounded_channel::<Outgoing>();
+        let (id, _) = session.connect(ClientLanes {
+            control: control_tx.clone(),
+            display: display_tx.clone(),
+        });
+        // Frames already queued to this client …
+        for len in [1, 2, 3] {
+            display_tx.send(binary(len)).unwrap();
+        }
+        // … then a resync, a screenshot ask, and a control text.
+        session.restream_display(id);
+        let _reply = session
+            .request_screenshot("viewport")
+            .expect("a client is connected");
+        session.handle(
+            id,
+            Some("probe".into()),
+            ClientMessage::ProbeWire {
+                from: WireEnd {
+                    node: "size".into(),
+                    port: "out".into(),
+                },
+            },
+        );
+        let pump = tokio::spawn(async move {
+            pump_lanes(control_rx, display_rx, &mut recorder).await;
+        });
+        let mut order = Vec::new();
+        for _ in 0..7 {
+            order.push(wire.release_one().await);
+        }
+        assert_eq!(
+            order,
+            vec![
+                Seen::Text("wire_probe".into()),
+                Seen::Binary(1),
+                Seen::Binary(2),
+                Seen::Binary(3),
+                Seen::Text("display_reset".into()),
+                Seen::Frame {
+                    node: block,
+                    output: 0,
+                    generation: shown,
+                },
+                Seen::Text("screenshot_request".into()),
+            ]
+        );
+        session.disconnect(id);
+        drop(control_tx);
+        drop(display_tx);
+        wire.open();
+        pump.await.unwrap();
+    }
 }
