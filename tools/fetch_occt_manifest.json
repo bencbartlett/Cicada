@@ -1,0 +1,1997 @@
+{
+ "format": 1,
+ "generated": "2026-08-20T22:36:54+00:00",
+ "generator": "tools/fetch_occt.py regenerate-manifest",
+ "occt_version": "7.8.1",
+ "occt_build_number": 103,
+ "download_url": "https://api.anaconda.org/download/conda-forge/{name}/{version}/{subdir}/{filename}",
+ "ignored_dependencies": [
+  "fonts-conda-ecosystem",
+  "fonts-conda-forge",
+  "vc",
+  "vc14_runtime",
+  "ucrt",
+  "__*",
+  "font-ttf-*",
+  "vs20*_runtime"
+ ],
+ "platforms": {
+  "win-64": {
+   "packages": [
+    {
+     "name": "occt",
+     "version": "7.8.1",
+     "build": "novtk_hdfbec02_103",
+     "filename": "occt-7.8.1-novtk_hdfbec02_103.conda",
+     "size": 24745172,
+     "sha256": "28e3da6feaec750f1a7b64f0aebc7a5f209d64ce3cbc49a3d1a22d2c81ff32d1",
+     "license": "LGPL-2.1-only",
+     "depends": [
+      "fontconfig >=2.14.2,<3.0a0",
+      "fonts-conda-ecosystem",
+      "freeimage >=3.18.0,<3.19.0a0",
+      "freetype >=2.12.1,<3.0a0",
+      "rapidjson",
+      "ucrt >=10.0.20348.0",
+      "vc >=14.2,<15",
+      "vc14_runtime >=14.29.30139"
+     ]
+    },
+    {
+     "name": "fontconfig",
+     "version": "2.18.3",
+     "build": "hd47e2ca_1",
+     "filename": "fontconfig-2.18.3-hd47e2ca_1.conda",
+     "size": 217988,
+     "sha256": "f26139e3c774a6434c8a73381c08e3d2a4c2f9d9ef9587c66aab8836211ee2ec",
+     "license": "MIT",
+     "depends": [
+      "libexpat >=2.8.1,<3.0a0",
+      "libfreetype >=2.14.3",
+      "libfreetype6 >=2.14.3",
+      "libiconv >=1.18,<2.0a0",
+      "libintl >=0.22.5,<1.0a0",
+      "libzlib >=1.3.2,<2.0a0",
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+     ]
+    },
+    {
+     "name": "freeglut",
+     "version": "3.2.2",
+     "build": "hac47afa_4",
+     "filename": "freeglut-3.2.2-hac47afa_4.conda",
+     "size": 113837,
+     "sha256": "d4d255236a305e0fde4f9b360cca647331fad5348f70333c88fc50b3a6eabccc",
+     "license": "MIT",
+     "depends": [
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+     ]
+    },
+    {
+     "name": "freeimage",
+     "version": "3.18.0",
+     "build": "h81f0cfa_25",
+     "filename": "freeimage-3.18.0-h81f0cfa_25.conda",
+     "size": 469775,
+     "sha256": "cb60aec276cf6188599aa333bf156242347fd8b20d25a8b4c7f61258c0d7fcfb",
+     "license": "GPL-2.0-or-later OR GPL-3.0-or-later OR FreeImage",
+     "depends": [
+      "imath >=3.2.2,<3.2.3.0a0",
+      "jxrlib >=1.1,<1.2.0a0",
+      "libjpeg-turbo >=3.1.4.1,<4.0a0",
+      "libpng >=1.6.58,<1.7.0a0",
+      "libraw >=0.22.1,<0.23.0a0",
+      "libtiff >=4.7.1,<4.8.0a0",
+      "libwebp-base >=1.6.0,<2.0a0",
+      "libzlib >=1.3.2,<2.0a0",
+      "openexr >=3.4.12,<3.5.0a0",
+      "openjpeg >=2.5.4,<3.0a0",
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+     ]
+    },
+    {
+     "name": "freetype",
+     "version": "2.14.3",
+     "build": "h57928b3_2",
+     "filename": "freetype-2.14.3-h57928b3_2.conda",
+     "size": 186945,
+     "sha256": "32f7dd8ffe62fd485e9e6570e871f5be45af74c84fde62241a2417046a373efd",
+     "license": "GPL-2.0-only OR FTL",
+     "depends": [
+      "libfreetype 2.14.3 h57928b3_2",
+      "libfreetype6 2.14.3 hdbac1cb_2",
+      "zlib"
+     ]
+    },
+    {
+     "name": "imath",
+     "version": "3.2.2",
+     "build": "h1608b31_0",
+     "filename": "imath-3.2.2-h1608b31_0.conda",
+     "size": 162099,
+     "sha256": "2aa57a5ed668ab34cc061b61082e3cee893d2e45ebc33f9432d13f7f292a990e",
+     "license": "BSD-3-Clause",
+     "depends": [
+      "libzlib >=1.3.1,<2.0a0",
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+     ]
+    },
+    {
+     "name": "jasper",
+     "version": "4.2.9",
+     "build": "h8ad263b_1",
+     "filename": "jasper-4.2.9-h8ad263b_1.conda",
+     "size": 447034,
+     "sha256": "aed571899460d314013fff76c6c1bb8e908788667f382f319e0daf920b85d103",
+     "license": "JasPer-2.0",
+     "depends": [
+      "freeglut >=3.2.2,<4.0a0",
+      "libjpeg-turbo >=3.1.2,<4.0a0",
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+     ]
+    },
+    {
+     "name": "jxrlib",
+     "version": "1.1",
+     "build": "hcfcfb64_3",
+     "filename": "jxrlib-1.1-hcfcfb64_3.conda",
+     "size": 355340,
+     "sha256": "a9ac265bcf65fce57cfb6512a1b072d5489445d14aa1b60c9bdf73370cf261b2",
+     "license": "BSD-2-Clause",
+     "depends": [
+      "ucrt >=10.0.20348.0",
+      "vc >=14.2,<15",
+      "vc14_runtime >=14.29.30139"
+     ]
+    },
+    {
+     "name": "lcms2",
+     "version": "2.19.1",
+     "build": "hf2c6c5f_1",
+     "filename": "lcms2-2.19.1-hf2c6c5f_1.conda",
+     "size": 523194,
+     "sha256": "5ed63a32639a130564a870becb679fd52dfb816666a61ed3c023917389010480",
+     "license": "MIT",
+     "depends": [
+      "libjpeg-turbo >=3.1.4.1,<4.0a0",
+      "libtiff >=4.7.1,<4.8.0a0",
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+     ]
+    },
+    {
+     "name": "lerc",
+     "version": "4.2.0",
+     "build": "hd936e49_0",
+     "filename": "lerc-4.2.0-hd936e49_0.conda",
+     "size": 175297,
+     "sha256": "93d666f63f284ef77b87b0b1f77b70f7d36d315a132f9afa64bc0012d937ba39",
+     "license": "Apache-2.0",
+     "depends": [
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+     ]
+    },
+    {
+     "name": "libdeflate",
+     "version": "1.25",
+     "build": "h1a1d4e4_1",
+     "filename": "libdeflate-1.25-h1a1d4e4_1.conda",
+     "size": 157828,
+     "sha256": "af1cda21d4653f594fbef20aa4e1ff158a546902b3307ef8af9a9b44b43862d2",
+     "license": "MIT",
+     "depends": [
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+     ]
+    },
+    {
+     "name": "libexpat",
+     "version": "2.8.1",
+     "build": "hac47afa_1",
+     "filename": "libexpat-2.8.1-hac47afa_1.conda",
+     "size": 71631,
+     "sha256": "1a54d874addda73b6f7164d5f3905821277a1831bcc05edd74b3085391688571",
+     "license": "MIT",
+     "depends": [
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+     ]
+    },
+    {
+     "name": "libfreetype",
+     "version": "2.14.3",
+     "build": "h57928b3_2",
+     "filename": "libfreetype-2.14.3-h57928b3_2.conda",
+     "size": 8742,
+     "sha256": "d794d7fddb6eea50e18a62fa27ab3819f40d51bad00b90cf4ca591fb0d4006c2",
+     "license": "GPL-2.0-only OR FTL",
+     "depends": [
+      "libfreetype6 >=2.14.3"
+     ]
+    },
+    {
+     "name": "libfreetype6",
+     "version": "2.14.3",
+     "build": "hdbac1cb_2",
+     "filename": "libfreetype6-2.14.3-hdbac1cb_2.conda",
+     "size": 340385,
+     "sha256": "cbc650854003e434d4ff6c7b1a2667e38a4242ad8a391a1c5ff89721624065ce",
+     "license": "GPL-2.0-only OR FTL",
+     "depends": [
+      "libpng >=1.6.58,<1.7.0a0",
+      "libzlib >=1.3.2,<2.0a0",
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+     ]
+    },
+    {
+     "name": "libiconv",
+     "version": "1.18",
+     "build": "hc1393d2_3",
+     "filename": "libiconv-1.18-hc1393d2_3.conda",
+     "size": 694899,
+     "sha256": "35e04e3ddac7720fc7c550a1c9f998604299d6a7bd1f3ec9b2825d825061daa2",
+     "license": "LGPL-2.1-only",
+     "depends": [
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+     ]
+    },
+    {
+     "name": "libintl",
+     "version": "0.22.5",
+     "build": "h5728263_3",
+     "filename": "libintl-0.22.5-h5728263_3.conda",
+     "size": 95568,
+     "sha256": "c7e4600f28bcada8ea81456a6530c2329312519efcf0c886030ada38976b0511",
+     "license": "LGPL-2.1-or-later",
+     "depends": [
+      "libiconv >=1.17,<2.0a0"
+     ]
+    },
+    {
+     "name": "libjpeg-turbo",
+     "version": "3.2.0",
+     "build": "hfd05255_1",
+     "filename": "libjpeg-turbo-3.2.0-hfd05255_1.conda",
+     "size": 990125,
+     "sha256": "df78ab4c0eecb3dd9331898f96baeed8e5ca1c363346332517abeb0b614b9a53",
+     "license": "IJG AND BSD-3-Clause AND Zlib",
+     "depends": [
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+     ]
+    },
+    {
+     "name": "liblzma",
+     "version": "5.8.3",
+     "build": "hfd05255_1",
+     "filename": "liblzma-5.8.3-hfd05255_1.conda",
+     "size": 105809,
+     "sha256": "d36c4a1e1f80fd08e18a407e03622ff2f34dfdd022da6488ad19603dea19e6d5",
+     "license": "0BSD",
+     "depends": [
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+     ]
+    },
+    {
+     "name": "libpng",
+     "version": "1.6.58",
+     "build": "hdc8cecf_1",
+     "filename": "libpng-1.6.58-hdc8cecf_1.conda",
+     "size": 385462,
+     "sha256": "8c49c32adf3ba2c59783630b82377f54ab72204ea99e2bafc90a47a8e25c1032",
+     "license": "zlib-acknowledgement",
+     "depends": [
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208",
+      "ucrt >=10.0.20348.0",
+      "libzlib >=1.3.2,<2.0a0"
+     ]
+    },
+    {
+     "name": "libraw",
+     "version": "0.22.2",
+     "build": "h345c428_0",
+     "filename": "libraw-0.22.2-h345c428_0.conda",
+     "size": 581445,
+     "sha256": "347df3aa8db67e51702d3478bcba7a85745dde82c6824b252744e8de676e5e23",
+     "license": "LGPL-2.1-only",
+     "depends": [
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208",
+      "ucrt >=10.0.20348.0",
+      "jasper >=4.2.9,<5.0a0",
+      "libjpeg-turbo >=3.2.0,<4.0a0",
+      "lcms2 >=2.19.1,<3.0a0",
+      "libzlib >=1.3.2,<2.0a0"
+     ]
+    },
+    {
+     "name": "libtiff",
+     "version": "4.7.2",
+     "build": "h8f73337_0",
+     "filename": "libtiff-4.7.2-h8f73337_0.conda",
+     "size": 1014598,
+     "sha256": "ec6d66308a6d6abaf3225f2f185113e6172e77eb0fa8622af982d7a5d6d47a2c",
+     "license": "HPND",
+     "depends": [
+      "lerc >=4.1.0,<5.0a0",
+      "libdeflate >=1.25,<1.26.0a0",
+      "libjpeg-turbo >=3.1.4.1,<4.0a0",
+      "liblzma >=5.8.3,<6.0a0",
+      "libzlib >=1.3.2,<2.0a0",
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208",
+      "zstd >=1.5.7,<1.6.0a0"
+     ]
+    },
+    {
+     "name": "libwebp-base",
+     "version": "1.6.0",
+     "build": "h4d5522a_1",
+     "filename": "libwebp-base-1.6.0-h4d5522a_1.conda",
+     "size": 278886,
+     "sha256": "4470d98d3178b0d45492eed4808afe421d2e7808352b8d06c2dc29166b75d94d",
+     "license": "BSD-3-Clause",
+     "depends": [
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+     ]
+    },
+    {
+     "name": "libzlib",
+     "version": "1.3.2",
+     "build": "hfd05255_3",
+     "filename": "libzlib-1.3.2-hfd05255_3.conda",
+     "size": 58529,
+     "sha256": "0629c2cc0404d3bb29d6baa7b4ba62da80797015e86de050db81ea5a07050527",
+     "license": "Zlib",
+     "depends": [
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+     ]
+    },
+    {
+     "name": "openexr",
+     "version": "3.4.14",
+     "build": "hea798b2_0",
+     "filename": "openexr-3.4.14-hea798b2_0.conda",
+     "size": 953766,
+     "sha256": "77f0441f16905cd1d7a37c8b3446e2b40c6df7f33a0885cb86aee5b7a9d2fa5d",
+     "license": "BSD-3-Clause",
+     "depends": [
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208",
+      "ucrt >=10.0.20348.0",
+      "openjph >=0.31.0,<0.32.0a0",
+      "libdeflate >=1.25,<1.26.0a0",
+      "imath >=3.2.2,<3.2.3.0a0",
+      "libzlib >=1.3.2,<2.0a0"
+     ]
+    },
+    {
+     "name": "openjpeg",
+     "version": "2.5.4",
+     "build": "h0e57b4f_0",
+     "filename": "openjpeg-2.5.4-h0e57b4f_0.conda",
+     "size": 245594,
+     "sha256": "24342dee891a49a9ba92e2018ec0bde56cc07fdaec95275f7a55b96f03ea4252",
+     "license": "BSD-2-Clause",
+     "depends": [
+      "libpng >=1.6.55,<1.7.0a0",
+      "libtiff >=4.7.1,<4.8.0a0",
+      "libzlib >=1.3.1,<2.0a0",
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+     ]
+    },
+    {
+     "name": "openjph",
+     "version": "0.31.0",
+     "build": "hf13a347_0",
+     "filename": "openjph-0.31.0-hf13a347_0.conda",
+     "size": 227064,
+     "sha256": "37a5104c0adb4bbdccc856dd9458c631fc260da4ba1aaced3fb27b4a08a0c341",
+     "license": "BSD-2-Clause",
+     "depends": [
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208",
+      "ucrt >=10.0.20348.0",
+      "libtiff >=4.7.2,<4.8.0a0"
+     ]
+    },
+    {
+     "name": "rapidjson",
+     "version": "1.1.0.post20250205",
+     "build": "h5112557_0",
+     "filename": "rapidjson-1.1.0.post20250205-h5112557_0.conda",
+     "size": 153975,
+     "sha256": "1c41755b6ce3ebe2c5c31e082a2b965d82b5e68bae4857531ccf9ba8a790b107",
+     "license": "MIT",
+     "depends": [
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208",
+      "ucrt >=10.0.20348.0"
+     ]
+    },
+    {
+     "name": "zlib",
+     "version": "1.3.2",
+     "build": "hfd05255_3",
+     "filename": "zlib-1.3.2-hfd05255_3.conda",
+     "size": 851288,
+     "sha256": "5a0b55df66ff07b4342e04967cef69f8bf348f6a0fb1cc1eca741c7b015dfe77",
+     "license": "Zlib",
+     "depends": [
+      "libzlib 1.3.2 hfd05255_3",
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+     ]
+    },
+    {
+     "name": "zstd",
+     "version": "1.5.7",
+     "build": "h534d264_7",
+     "filename": "zstd-1.5.7-h534d264_7.conda",
+     "size": 387535,
+     "sha256": "ca7daae4f218a11fab82cc2857f0ea518ec3f46acec60490485347a4c22c6b3e",
+     "license": "BSD-3-Clause",
+     "depends": [
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208",
+      "ucrt >=10.0.20348.0",
+      "libzlib >=1.3.2,<2.0a0"
+     ]
+    }
+   ]
+  },
+  "linux-64": {
+   "packages": [
+    {
+     "name": "occt",
+     "version": "7.8.1",
+     "build": "novtk_he2768ca_103",
+     "filename": "occt-7.8.1-novtk_he2768ca_103.conda",
+     "size": 28405633,
+     "sha256": "801a89aad7276a56117f418ed0ebf1a94fc94b559651898bf679fadef6f98fe9",
+     "license": "LGPL-2.1-only",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "fontconfig >=2.14.2,<3.0a0",
+      "fonts-conda-ecosystem",
+      "freeimage >=3.18.0,<3.19.0a0",
+      "freetype >=2.12.1,<3.0a0",
+      "libgcc >=13",
+      "libstdcxx >=13",
+      "rapidjson",
+      "xorg-libxt >=1.3.0,<2.0a0"
+     ]
+    },
+    {
+     "name": "_openmp_mutex",
+     "version": "4.5",
+     "build": "20_gnu",
+     "filename": "_openmp_mutex-4.5-20_gnu.conda",
+     "size": 28948,
+     "sha256": "1dd3fffd892081df9726d7eb7e0dea6198962ba775bd88842135a4ddb4deb3c9",
+     "license": "BSD-3-Clause",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgomp >=7.5.0"
+     ]
+    },
+    {
+     "name": "fontconfig",
+     "version": "2.18.3",
+     "build": "h4db4eae_1",
+     "filename": "fontconfig-2.18.3-h4db4eae_1.conda",
+     "size": 296288,
+     "sha256": "5a3eb10b18a97223ab06b3a7f0d7f56658db2f2800e2f2af95836fe3bf55ba63",
+     "license": "MIT",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libexpat >=2.8.1,<3.0a0",
+      "libfreetype >=2.14.3",
+      "libfreetype6 >=2.14.3",
+      "libgcc >=15",
+      "libuuid >=2.42.2,<3.0a0",
+      "libzlib >=1.3.2,<2.0a0"
+     ]
+    },
+    {
+     "name": "freeglut",
+     "version": "3.2.2",
+     "build": "h215f996_4",
+     "filename": "freeglut-3.2.2-h215f996_4.conda",
+     "size": 146159,
+     "sha256": "f94040a0d7c449038811097e145f223bd3b2ab4c5181870c6e27e1b9dd777d48",
+     "license": "MIT",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=14",
+      "libgl >=1.7.0,<2.0a0",
+      "libglu >=9.0.3,<9.1.0a0",
+      "libstdcxx >=14",
+      "libxcb >=1.17.0,<2.0a0",
+      "xorg-libx11 >=1.8.13,<2.0a0",
+      "xorg-libxau >=1.0.12,<2.0a0",
+      "xorg-libxext >=1.3.7,<2.0a0",
+      "xorg-libxfixes >=6.0.2,<7.0a0",
+      "xorg-libxi >=1.8.2,<2.0a0",
+      "xorg-libxxf86vm >=1.1.7,<2.0a0"
+     ]
+    },
+    {
+     "name": "freeimage",
+     "version": "3.18.0",
+     "build": "hd1b7436_25",
+     "filename": "freeimage-3.18.0-hd1b7436_25.conda",
+     "size": 469606,
+     "sha256": "ca05af4414acfe03f041f1616b039a12b99f50ec04716d4597889aba87bf4df2",
+     "license": "GPL-2.0-or-later OR GPL-3.0-or-later OR FreeImage",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "imath >=3.2.2,<3.2.3.0a0",
+      "jxrlib >=1.1,<1.2.0a0",
+      "libgcc >=14",
+      "libjpeg-turbo >=3.1.4.1,<4.0a0",
+      "libpng >=1.6.58,<1.7.0a0",
+      "libraw >=0.22.1,<0.23.0a0",
+      "libstdcxx >=14",
+      "libtiff >=4.7.1,<4.8.0a0",
+      "libwebp-base >=1.6.0,<2.0a0",
+      "libzlib >=1.3.2,<2.0a0",
+      "openexr >=3.4.12,<3.5.0a0",
+      "openjpeg >=2.5.4,<3.0a0"
+     ]
+    },
+    {
+     "name": "freetype",
+     "version": "2.14.3",
+     "build": "ha770c72_2",
+     "filename": "freetype-2.14.3-ha770c72_2.conda",
+     "size": 175239,
+     "sha256": "612a8e0c1a6ecae23da54d81ef395f6ebb5c8e4468ec2611593ebce75876a4e0",
+     "license": "GPL-2.0-only OR FTL",
+     "depends": [
+      "libfreetype 2.14.3 ha770c72_2",
+      "libfreetype6 2.14.3 h5e6c136_2"
+     ]
+    },
+    {
+     "name": "imath",
+     "version": "3.2.2",
+     "build": "hde8ca8f_0",
+     "filename": "imath-3.2.2-hde8ca8f_0.conda",
+     "size": 160289,
+     "sha256": "43f30e6fd8cbe1fef59da760d1847c9ceff3fb69ceee7fd4a34538b0927959dd",
+     "license": "BSD-3-Clause",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=14",
+      "libstdcxx >=14",
+      "libzlib >=1.3.1,<2.0a0"
+     ]
+    },
+    {
+     "name": "jasper",
+     "version": "4.2.9",
+     "build": "h1588d4d_1",
+     "filename": "jasper-4.2.9-h1588d4d_1.conda",
+     "size": 684185,
+     "sha256": "a6a9858eadb4c794b56a1c954c1d4f4b57d96c9fb87092dd46f5bff9b0697b35",
+     "license": "JasPer-2.0",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "freeglut >=3.2.2,<4.0a0",
+      "libexpat >=2.7.4,<3.0a0",
+      "libgcc >=14",
+      "libgl >=1.7.0,<2.0a0",
+      "libglu >=9.0.3,<10.0a0",
+      "libglu >=9.0.3,<9.1.0a0",
+      "libjpeg-turbo >=3.1.2,<4.0a0"
+     ]
+    },
+    {
+     "name": "jxrlib",
+     "version": "1.1",
+     "build": "hd590300_3",
+     "filename": "jxrlib-1.1-hd590300_3.conda",
+     "size": 239104,
+     "sha256": "2057ca87b313bde5b74b93b0e696f8faab69acd4cb0edebb78469f3f388040c0",
+     "license": "BSD-2-Clause",
+     "depends": [
+      "libgcc-ng >=12"
+     ]
+    },
+    {
+     "name": "lcms2",
+     "version": "2.19.1",
+     "build": "h0c24ade_1",
+     "filename": "lcms2-2.19.1-h0c24ade_1.conda",
+     "size": 251971,
+     "sha256": "112b5b9462572d970f4abd2912f76a25ee7db158b1e7260163d91dd8a630db84",
+     "license": "MIT",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=14",
+      "libjpeg-turbo >=3.1.4.1,<4.0a0",
+      "libtiff >=4.7.1,<4.8.0a0"
+     ]
+    },
+    {
+     "name": "lerc",
+     "version": "4.2.0",
+     "build": "hdb68285_0",
+     "filename": "lerc-4.2.0-hdb68285_0.conda",
+     "size": 271158,
+     "sha256": "bf9fdebf55d8bc99d83531cdffda00703f4dc5f93a1a956768c147362c72feda",
+     "license": "Apache-2.0",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=14",
+      "libstdcxx >=14"
+     ]
+    },
+    {
+     "name": "libdeflate",
+     "version": "1.25",
+     "build": "hd45a770_1",
+     "filename": "libdeflate-1.25-hd45a770_1.conda",
+     "size": 73710,
+     "sha256": "82e134c8a08b1eed9a2ed8ab578b89aa1730dcde3dea8dd87645ed0637878e54",
+     "license": "MIT",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=14"
+     ]
+    },
+    {
+     "name": "libexpat",
+     "version": "2.8.1",
+     "build": "hecca717_1",
+     "filename": "libexpat-2.8.1-hecca717_1.conda",
+     "size": 77856,
+     "sha256": "16feffd9ddbbe5b718515d38ee376c685ba95491cd901244e24671d20b952a77",
+     "license": "MIT",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=14"
+     ]
+    },
+    {
+     "name": "libfreetype",
+     "version": "2.14.3",
+     "build": "ha770c72_2",
+     "filename": "libfreetype-2.14.3-ha770c72_2.conda",
+     "size": 8407,
+     "sha256": "fb12ecb46c30d18d928c0e8fc346ab13b5f6fc8a9cacae4f2f4bb188782586f5",
+     "license": "GPL-2.0-only OR FTL",
+     "depends": [
+      "libfreetype6 >=2.14.3"
+     ]
+    },
+    {
+     "name": "libfreetype6",
+     "version": "2.14.3",
+     "build": "h5e6c136_2",
+     "filename": "libfreetype6-2.14.3-h5e6c136_2.conda",
+     "size": 387671,
+     "sha256": "ec607dd5445dd17ff6bf8b7fe6832e5504c226dd91d3aaea7ba83569808b0ce4",
+     "license": "GPL-2.0-only OR FTL",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=15",
+      "libpng >=1.6.58,<1.7.0a0",
+      "libzlib >=1.3.2,<2.0a0"
+     ]
+    },
+    {
+     "name": "libgcc",
+     "version": "16.1.0",
+     "build": "ha9f2e26_2",
+     "filename": "libgcc-16.1.0-ha9f2e26_2.conda",
+     "size": 1056637,
+     "sha256": "4b733b68027a638fd24a38aaed1ebb05e055bef694970fab745b1c7678ca16f1",
+     "license": "GPL-3.0-only WITH GCC-exception-3.1",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "_openmp_mutex >=4.5"
+     ]
+    },
+    {
+     "name": "libgcc-ng",
+     "version": "16.1.0",
+     "build": "h69a702a_2",
+     "filename": "libgcc-ng-16.1.0-h69a702a_2.conda",
+     "size": 28293,
+     "sha256": "23bfa3ade2de6e0b9af4a04cacd0d4d526c80a16686f264498475339f01d17d3",
+     "license": "GPL-3.0-only WITH GCC-exception-3.1",
+     "depends": [
+      "libgcc 16.1.0 ha9f2e26_2"
+     ]
+    },
+    {
+     "name": "libgl",
+     "version": "1.7.0",
+     "build": "ha4b6fd6_3",
+     "filename": "libgl-1.7.0-ha4b6fd6_3.conda",
+     "size": 133469,
+     "sha256": "ec353b3076ed8e357ed961d0e9ff6997491cade0e603de5bd18a2e301ac78ebd",
+     "license": "LicenseRef-libglvnd",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libglvnd 1.7.0 ha4b6fd6_3",
+      "libglx 1.7.0 ha4b6fd6_3"
+     ]
+    },
+    {
+     "name": "libglu",
+     "version": "9.0.3",
+     "build": "h5888daf_1",
+     "filename": "libglu-9.0.3-h5888daf_1.conda",
+     "size": 325262,
+     "sha256": "a0105eb88f76073bbb30169312e797ed5449ebb4e964a756104d6e54633d17ef",
+     "license": "SGI-B-2.0",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=13",
+      "libopengl >=1.7.0,<2.0a0",
+      "libstdcxx >=13"
+     ]
+    },
+    {
+     "name": "libglvnd",
+     "version": "1.7.0",
+     "build": "ha4b6fd6_3",
+     "filename": "libglvnd-1.7.0-ha4b6fd6_3.conda",
+     "size": 133586,
+     "sha256": "e019ebe4e3f5cdf23e2f5e58ddf7ade27988c53820115b17b98f218ebcc87748",
+     "license": "LicenseRef-libglvnd",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0"
+     ]
+    },
+    {
+     "name": "libglx",
+     "version": "1.7.0",
+     "build": "ha4b6fd6_3",
+     "filename": "libglx-1.7.0-ha4b6fd6_3.conda",
+     "size": 76586,
+     "sha256": "2f74713c9ca408ea84e88a30a9028153e7b553e8bb42e06139eac9a753c27da9",
+     "license": "LicenseRef-libglvnd",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libglvnd 1.7.0 ha4b6fd6_3",
+      "xorg-libx11 >=1.8.13,<2.0a0"
+     ]
+    },
+    {
+     "name": "libgomp",
+     "version": "16.1.0",
+     "build": "he0feb66_2",
+     "filename": "libgomp-16.1.0-he0feb66_2.conda",
+     "size": 640468,
+     "sha256": "7d4d1891d5fe5d75a73dd7268e8f2d7c11b7b637dea901a429f8056511960267",
+     "license": "GPL-3.0-only WITH GCC-exception-3.1",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0"
+     ]
+    },
+    {
+     "name": "libjpeg-turbo",
+     "version": "3.2.0",
+     "build": "hb03c661_1",
+     "filename": "libjpeg-turbo-3.2.0-hb03c661_1.conda",
+     "size": 650434,
+     "sha256": "bba8538e6538ed58a8479b332337b96986561f975d06cfa2039a016c2d246ee4",
+     "license": "IJG AND BSD-3-Clause AND Zlib",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=14"
+     ]
+    },
+    {
+     "name": "liblzma",
+     "version": "5.8.3",
+     "build": "hb03c661_1",
+     "filename": "liblzma-5.8.3-hb03c661_1.conda",
+     "size": 112995,
+     "sha256": "9787df8c22a59c9a70d3e5a10db9ad663485e75e9ccc3f09bd092cb7b95e0dab",
+     "license": "0BSD",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=14"
+     ]
+    },
+    {
+     "name": "libopengl",
+     "version": "1.7.0",
+     "build": "ha4b6fd6_3",
+     "filename": "libopengl-1.7.0-ha4b6fd6_3.conda",
+     "size": 51767,
+     "sha256": "90777039b48529283df5f16383fc399866024257a8bd93de583f4730db1ab30a",
+     "license": "LicenseRef-libglvnd",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libglvnd 1.7.0 ha4b6fd6_3"
+     ]
+    },
+    {
+     "name": "libpng",
+     "version": "1.6.58",
+     "build": "h922cc85_1",
+     "filename": "libpng-1.6.58-h922cc85_1.conda",
+     "size": 316643,
+     "sha256": "c19eefb87d70d9b4b0629fa48414a155a47a1be4f04583ae71ed8c5a9a32fdcb",
+     "license": "zlib-acknowledgement",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=15",
+      "libzlib >=1.3.2,<2.0a0"
+     ]
+    },
+    {
+     "name": "libraw",
+     "version": "0.22.2",
+     "build": "h074291d_0",
+     "filename": "libraw-0.22.2-h074291d_0.conda",
+     "size": 742828,
+     "sha256": "fa3ccb18cf22f8ac94ec4f6bfcc9fd5805bf7af11cf56bf19c27fb051b36dd6a",
+     "license": "LGPL-2.1-only",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=14",
+      "libstdcxx >=14",
+      "_openmp_mutex >=4.5",
+      "libzlib >=1.3.2,<2.0a0",
+      "lcms2 >=2.19.1,<3.0a0",
+      "jasper >=4.2.9,<5.0a0",
+      "libjpeg-turbo >=3.2.0,<4.0a0"
+     ]
+    },
+    {
+     "name": "libstdcxx",
+     "version": "16.1.0",
+     "build": "h934c35e_2",
+     "filename": "libstdcxx-16.1.0-h934c35e_2.conda",
+     "size": 6630263,
+     "sha256": "af96a5fcf1ce0659d257ababc1b8d0bbb698250e8140c6b8352f60d3be075392",
+     "license": "GPL-3.0-only WITH GCC-exception-3.1",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc 16.1.0 ha9f2e26_2"
+     ]
+    },
+    {
+     "name": "libtiff",
+     "version": "4.7.2",
+     "build": "h9d88235_0",
+     "filename": "libtiff-4.7.2-h9d88235_0.conda",
+     "size": 452337,
+     "sha256": "b31346e1c01ab40a170e91147092ee8fd92b1dee3c66ee47ef025571c879b159",
+     "license": "HPND",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "lerc >=4.1.0,<5.0a0",
+      "libdeflate >=1.25,<1.26.0a0",
+      "libgcc >=14",
+      "libjpeg-turbo >=3.1.4.1,<4.0a0",
+      "liblzma >=5.8.3,<6.0a0",
+      "libstdcxx >=14",
+      "libwebp-base >=1.6.0,<2.0a0",
+      "libzlib >=1.3.2,<2.0a0",
+      "zstd >=1.5.7,<1.6.0a0"
+     ]
+    },
+    {
+     "name": "libuuid",
+     "version": "2.42.2",
+     "build": "h5347b49_0",
+     "filename": "libuuid-2.42.2-h5347b49_0.conda",
+     "size": 40017,
+     "sha256": "9b1bdce27a7e31f7d241aeecff67a1f3101d52a2b1e33ccc2cdf2613072bf81f",
+     "license": "BSD-3-Clause",
+     "depends": [
+      "libgcc >=14",
+      "__glibc >=2.17,<3.0.a0"
+     ]
+    },
+    {
+     "name": "libwebp-base",
+     "version": "1.6.0",
+     "build": "hd42ef1d_1",
+     "filename": "libwebp-base-1.6.0-hd42ef1d_1.conda",
+     "size": 428430,
+     "sha256": "8415001414f488c85b72b9d8cc2071dfb3981a47bc3c8eb56ef91a57d12eae7f",
+     "license": "BSD-3-Clause",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=14"
+     ]
+    },
+    {
+     "name": "libxcb",
+     "version": "1.17.0",
+     "build": "hb83e432_1",
+     "filename": "libxcb-1.17.0-hb83e432_1.conda",
+     "size": 397355,
+     "sha256": "ce25a1efa85a78a3ce3b16721d9c36153814adbf2fb004a15f72ec69894b4cb1",
+     "license": "MIT",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=15",
+      "pthread-stubs",
+      "xorg-libxau >=1.0.12,<2.0a0",
+      "xorg-libxdmcp >=1.1.5,<2.0a0"
+     ]
+    },
+    {
+     "name": "libzlib",
+     "version": "1.3.2",
+     "build": "h25fd6f3_3",
+     "filename": "libzlib-1.3.2-h25fd6f3_3.conda",
+     "size": 63713,
+     "sha256": "eb8a0db0aa570124f7d2a93d7c7f596e3390df5e047818d873baad32985fc736",
+     "license": "Zlib",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0"
+     ]
+    },
+    {
+     "name": "openexr",
+     "version": "3.4.14",
+     "build": "h6de6307_0",
+     "filename": "openexr-3.4.14-h6de6307_0.conda",
+     "size": 1227012,
+     "sha256": "922e812863259635fb72d9207c71deea03deee0fb5ff75d6e182e6c30dff62f3",
+     "license": "BSD-3-Clause",
+     "depends": [
+      "libstdcxx >=14",
+      "libgcc >=14",
+      "__glibc >=2.17,<3.0.a0",
+      "libzlib >=1.3.2,<2.0a0",
+      "imath >=3.2.2,<3.2.3.0a0",
+      "libdeflate >=1.25,<1.26.0a0",
+      "openjph >=0.31.0,<0.32.0a0"
+     ]
+    },
+    {
+     "name": "openjpeg",
+     "version": "2.5.4",
+     "build": "h55fea9a_0",
+     "filename": "openjpeg-2.5.4-h55fea9a_0.conda",
+     "size": 355400,
+     "sha256": "3900f9f2dbbf4129cf3ad6acf4e4b6f7101390b53843591c53b00f034343bc4d",
+     "license": "BSD-2-Clause",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=14",
+      "libpng >=1.6.50,<1.7.0a0",
+      "libstdcxx >=14",
+      "libtiff >=4.7.1,<4.8.0a0",
+      "libzlib >=1.3.1,<2.0a0"
+     ]
+    },
+    {
+     "name": "openjph",
+     "version": "0.31.0",
+     "build": "h8d634f6_0",
+     "filename": "openjph-0.31.0-h8d634f6_0.conda",
+     "size": 295193,
+     "sha256": "3c7a4118c678c43952ea10183388f175a4bcee16a1c61d90dab2fbdafddc45d7",
+     "license": "BSD-2-Clause",
+     "depends": [
+      "libgcc >=14",
+      "libstdcxx >=14",
+      "__glibc >=2.17,<3.0.a0",
+      "libtiff >=4.7.2,<4.8.0a0"
+     ]
+    },
+    {
+     "name": "pthread-stubs",
+     "version": "0.4",
+     "build": "hb03c661_1003",
+     "filename": "pthread-stubs-0.4-hb03c661_1003.conda",
+     "size": 9115,
+     "sha256": "afc3b27b2cbb0487c1d0e963f96e71181ecfb623a24fb393bb19ff974a6382a1",
+     "license": "MIT",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=14"
+     ]
+    },
+    {
+     "name": "rapidjson",
+     "version": "1.1.0.post20250205",
+     "build": "h54a6638_0",
+     "filename": "rapidjson-1.1.0.post20250205-h54a6638_0.conda",
+     "size": 156127,
+     "sha256": "6f56a91c14ca82f7df65adeedbcd45d6496baa34535c231e18c5cc45ba284821",
+     "license": "MIT",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=14",
+      "libstdcxx >=14"
+     ]
+    },
+    {
+     "name": "xorg-libice",
+     "version": "1.1.2",
+     "build": "h280c20c_0",
+     "filename": "xorg-libice-1.1.2-h280c20c_0.conda",
+     "size": 62517,
+     "sha256": "49b532d1df875c6749d9078b56a76f3f5db49a5abe0ca620b593ed474ef0ebf1",
+     "license": "MIT",
+     "depends": [
+      "libgcc >=14",
+      "__glibc >=2.17,<3.0.a0"
+     ]
+    },
+    {
+     "name": "xorg-libsm",
+     "version": "1.2.6",
+     "build": "h0d788c3_1",
+     "filename": "xorg-libsm-1.2.6-h0d788c3_1.conda",
+     "size": 30739,
+     "sha256": "ef907caee0665cf3b0f775602cc50e388e3bade8ce22ecade0873ff26604b2fd",
+     "license": "MIT",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=14",
+      "xorg-libice >=1.1.2,<2.0a0",
+      "libuuid >=2.42.2,<3.0a0"
+     ]
+    },
+    {
+     "name": "xorg-libx11",
+     "version": "1.8.13",
+     "build": "he1eb515_1",
+     "filename": "xorg-libx11-1.8.13-he1eb515_1.conda",
+     "size": 839578,
+     "sha256": "68053eebfa9f0d91666786c8fb5839d989aa9b869add92cb8815228bb2d7302c",
+     "license": "MIT",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=14",
+      "libxcb >=1.17.0,<2.0a0"
+     ]
+    },
+    {
+     "name": "xorg-libxau",
+     "version": "1.0.12",
+     "build": "hb03c661_2",
+     "filename": "xorg-libxau-1.0.12-hb03c661_2.conda",
+     "size": 16419,
+     "sha256": "cbf891f6cc1a859347680af1c8562bc6b033bf182a2a3bb536016932be3206de",
+     "license": "MIT",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=14"
+     ]
+    },
+    {
+     "name": "xorg-libxdmcp",
+     "version": "1.1.5",
+     "build": "hb03c661_2",
+     "filename": "xorg-libxdmcp-1.1.5-hb03c661_2.conda",
+     "size": 21120,
+     "sha256": "c50a16c05ccd7fe7dd6d6cfb539f4e9a491d50f9ed7a5c902fec638f7d0d27be",
+     "license": "MIT",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=14"
+     ]
+    },
+    {
+     "name": "xorg-libxext",
+     "version": "1.3.7",
+     "build": "h7cc23a3_1",
+     "filename": "xorg-libxext-1.3.7-h7cc23a3_1.conda",
+     "size": 53124,
+     "sha256": "aa9bbe8b278aacc194e280ff5037f9f9a1f2c5b33ed97de8e7f01cfbe90dda43",
+     "license": "MIT",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=15",
+      "xorg-libx11 >=1.8.13,<2.0a0"
+     ]
+    },
+    {
+     "name": "xorg-libxfixes",
+     "version": "6.0.2",
+     "build": "h7cc23a3_1",
+     "filename": "xorg-libxfixes-6.0.2-h7cc23a3_1.conda",
+     "size": 21440,
+     "sha256": "aec84f554fc897bf4085c7bc8b8f0740e4c224e13bca3cc51c93e7699d56f83a",
+     "license": "MIT",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=15",
+      "xorg-libx11 >=1.8.13,<2.0a0"
+     ]
+    },
+    {
+     "name": "xorg-libxi",
+     "version": "1.8.3",
+     "build": "h7cc23a3_1",
+     "filename": "xorg-libxi-1.8.3-h7cc23a3_1.conda",
+     "size": 49165,
+     "sha256": "a523d71344a2f640efe6fc42b88fc261d9cd389d4f9838a5d42dcdb120c2b0c8",
+     "license": "MIT",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=15",
+      "xorg-libx11 >=1.8.13,<2.0a0",
+      "xorg-libxext >=1.3.7,<2.0a0",
+      "xorg-libxfixes >=6.0.2,<7.0a0"
+     ]
+    },
+    {
+     "name": "xorg-libxt",
+     "version": "1.3.1",
+     "build": "h7cc23a3_1",
+     "filename": "xorg-libxt-1.3.1-h7cc23a3_1.conda",
+     "size": 384261,
+     "sha256": "dff31677674be86f98ee929a796edf2cf7c78bf38610b122a63af9af752d5bf7",
+     "license": "MIT",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=15",
+      "xorg-libice >=1.1.2,<2.0a0",
+      "xorg-libsm >=1.2.6,<2.0a0",
+      "xorg-libx11 >=1.8.13,<2.0a0"
+     ]
+    },
+    {
+     "name": "xorg-libxxf86vm",
+     "version": "1.1.7",
+     "build": "hb03c661_0",
+     "filename": "xorg-libxxf86vm-1.1.7-hb03c661_0.conda",
+     "size": 18701,
+     "sha256": "64db17baaf36fa03ed8fae105e2e671a7383e22df4077486646f7dbf12842c9f",
+     "license": "MIT",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libgcc >=14",
+      "xorg-libx11 >=1.8.12,<2.0a0",
+      "xorg-libxext >=1.3.6,<2.0a0"
+     ]
+    },
+    {
+     "name": "zstd",
+     "version": "1.5.7",
+     "build": "hb78ec9c_7",
+     "filename": "zstd-1.5.7-hb78ec9c_7.conda",
+     "size": 601301,
+     "sha256": "47d682b9f6d6ec9eb1a6e6c3e75ea6273e899e78fb7fc59f81d39745009fbc60",
+     "license": "BSD-3-Clause",
+     "depends": [
+      "__glibc >=2.17,<3.0.a0",
+      "libzlib >=1.3.2,<2.0a0"
+     ]
+    }
+   ]
+  },
+  "osx-64": {
+   "packages": [
+    {
+     "name": "occt",
+     "version": "7.8.1",
+     "build": "novtk_h6d54593_103",
+     "filename": "occt-7.8.1-novtk_h6d54593_103.conda",
+     "size": 24934160,
+     "sha256": "4a20b71ca27c5a0cfb18e6821e46fce8beef8e659583fc43ea9575e55c3e3fc9",
+     "license": "LGPL-2.1-only",
+     "depends": [
+      "__osx >=10.13",
+      "fontconfig >=2.14.2,<3.0a0",
+      "fonts-conda-ecosystem",
+      "freeimage >=3.18.0,<3.19.0a0",
+      "freetype >=2.12.1,<3.0a0",
+      "libcxx >=17",
+      "rapidjson"
+     ]
+    },
+    {
+     "name": "fontconfig",
+     "version": "2.18.3",
+     "build": "h7f3b9c9_1",
+     "filename": "fontconfig-2.18.3-h7f3b9c9_1.conda",
+     "size": 264035,
+     "sha256": "4637141fa4f3a0f9b58afe4bda831adcb6964495600e97e7e2ed9763cd4f7eda",
+     "license": "MIT",
+     "depends": [
+      "__osx >=11.0",
+      "libexpat >=2.8.1,<3.0a0",
+      "libfreetype >=2.14.3",
+      "libfreetype6 >=2.14.3",
+      "libintl >=0.25.1,<1.0a0",
+      "libzlib >=1.3.2,<2.0a0"
+     ]
+    },
+    {
+     "name": "freeimage",
+     "version": "3.18.0",
+     "build": "h0f7f9a8_25",
+     "filename": "freeimage-3.18.0-h0f7f9a8_25.conda",
+     "size": 413129,
+     "sha256": "663bca3ceac75a73868ab558730ca881c46ccc20b32d5e81708ecd201370d388",
+     "license": "GPL-2.0-or-later OR GPL-3.0-or-later OR FreeImage",
+     "depends": [
+      "__osx >=11.0",
+      "imath >=3.2.2,<3.2.3.0a0",
+      "jxrlib >=1.1,<1.2.0a0",
+      "libcxx >=19",
+      "libjpeg-turbo >=3.1.4.1,<4.0a0",
+      "libpng >=1.6.58,<1.7.0a0",
+      "libraw >=0.22.1,<0.23.0a0",
+      "libtiff >=4.7.1,<4.8.0a0",
+      "libwebp-base >=1.6.0,<2.0a0",
+      "libzlib >=1.3.2,<2.0a0",
+      "openexr >=3.4.12,<3.5.0a0",
+      "openjpeg >=2.5.4,<3.0a0"
+     ]
+    },
+    {
+     "name": "freetype",
+     "version": "2.14.3",
+     "build": "h694c41f_2",
+     "filename": "freetype-2.14.3-h694c41f_2.conda",
+     "size": 174876,
+     "sha256": "a9f6d77b27b67e681d4b3e214a0861a9d4aa87e0e824d8ef6c5bbfcf0cbb556e",
+     "license": "GPL-2.0-only OR FTL",
+     "depends": [
+      "libfreetype 2.14.3 h694c41f_2",
+      "libfreetype6 2.14.3 h8afe040_2"
+     ]
+    },
+    {
+     "name": "imath",
+     "version": "3.2.2",
+     "build": "h6337977_0",
+     "filename": "imath-3.2.2-h6337977_0.conda",
+     "size": 157231,
+     "sha256": "d1fb13e40349261077c9fbd91c848513cf3e130ced9141496329f0f31d5e54d1",
+     "license": "BSD-3-Clause",
+     "depends": [
+      "__osx >=11.0",
+      "libcxx >=19",
+      "libzlib >=1.3.2,<2.0a0"
+     ]
+    },
+    {
+     "name": "jasper",
+     "version": "4.2.9",
+     "build": "hbeb4536_1",
+     "filename": "jasper-4.2.9-hbeb4536_1.conda",
+     "size": 574390,
+     "sha256": "dc013823ea75791ec93889455bf64680db4f756111f9ea791f4336f002973dd2",
+     "license": "JasPer-2.0",
+     "depends": [
+      "__osx >=11.0",
+      "libjpeg-turbo >=3.1.2,<4.0a0"
+     ]
+    },
+    {
+     "name": "jxrlib",
+     "version": "1.1",
+     "build": "h10d778d_3",
+     "filename": "jxrlib-1.1-h10d778d_3.conda",
+     "size": 220376,
+     "sha256": "a548a4be14a4c76d6d992a5c1feffcbb08062f5c57abc6e4278d40c2c9a7185b",
+     "license": "BSD-2-Clause",
+     "depends": []
+    },
+    {
+     "name": "lcms2",
+     "version": "2.19.1",
+     "build": "h5ea7634_1",
+     "filename": "lcms2-2.19.1-h5ea7634_1.conda",
+     "size": 229477,
+     "sha256": "8bae1207dc7cf0e670ae920a549b1d55486514213ca808b8119067cbad0db43a",
+     "license": "MIT",
+     "depends": [
+      "__osx >=11.0",
+      "libjpeg-turbo >=3.1.4.1,<4.0a0",
+      "libtiff >=4.7.1,<4.8.0a0"
+     ]
+    },
+    {
+     "name": "lerc",
+     "version": "4.2.0",
+     "build": "h35c7297_0",
+     "filename": "lerc-4.2.0-h35c7297_0.conda",
+     "size": 217900,
+     "sha256": "5ae9e18ec7f8134a009765bd1454687d5057482fbe9a4c661a672746d4a29b0b",
+     "license": "Apache-2.0",
+     "depends": [
+      "__osx >=11.0",
+      "libcxx >=19"
+     ]
+    },
+    {
+     "name": "libcxx",
+     "version": "22.1.8",
+     "build": "h19cb2f5_0",
+     "filename": "libcxx-22.1.8-h19cb2f5_0.conda",
+     "size": 566717,
+     "sha256": "57ee997f1f800cf38abc743c0f0a9ddfe6a101c697c35510452ce6f4ddf96361",
+     "license": "Apache-2.0 WITH LLVM-exception",
+     "depends": [
+      "__osx >=11.0"
+     ]
+    },
+    {
+     "name": "libdeflate",
+     "version": "1.25",
+     "build": "h7ad9622_1",
+     "filename": "libdeflate-1.25-h7ad9622_1.conda",
+     "size": 71148,
+     "sha256": "210ee1d6a5aa201cf6d02b10edd02738cc35a4e8fb0866e4fb425010d6dd2c49",
+     "license": "MIT",
+     "depends": [
+      "__osx >=11.0"
+     ]
+    },
+    {
+     "name": "libexpat",
+     "version": "2.8.1",
+     "build": "hcc62823_1",
+     "filename": "libexpat-2.8.1-hcc62823_1.conda",
+     "size": 76020,
+     "sha256": "9c96cc05e056e1bba5b545cbbd57b6e01db622dc2c82934caaaa25cfb22fe666",
+     "license": "MIT",
+     "depends": [
+      "__osx >=11.0"
+     ]
+    },
+    {
+     "name": "libfreetype",
+     "version": "2.14.3",
+     "build": "h694c41f_2",
+     "filename": "libfreetype-2.14.3-h694c41f_2.conda",
+     "size": 8384,
+     "sha256": "cabaa404fde84dcf154c3394f7a86cbaa7cff1ce32e3951b0b6aad567c457e3f",
+     "license": "GPL-2.0-only OR FTL",
+     "depends": [
+      "libfreetype6 >=2.14.3"
+     ]
+    },
+    {
+     "name": "libfreetype6",
+     "version": "2.14.3",
+     "build": "h8afe040_2",
+     "filename": "libfreetype6-2.14.3-h8afe040_2.conda",
+     "size": 366001,
+     "sha256": "9c81d42ca311a1283fb8f79d05dae5659d86cf20f4e5d146a97836456537ccff",
+     "license": "GPL-2.0-only OR FTL",
+     "depends": [
+      "__osx >=11.0",
+      "libpng >=1.6.58,<1.7.0a0",
+      "libzlib >=1.3.2,<2.0a0"
+     ]
+    },
+    {
+     "name": "libiconv",
+     "version": "1.18",
+     "build": "h4ae439b_3",
+     "filename": "libiconv-1.18-h4ae439b_3.conda",
+     "size": 736150,
+     "sha256": "2389e03a58ed0f5e8f2469eb4d4ba80d0af378b38854ae5eee65e5b641244082",
+     "license": "LGPL-2.1-only",
+     "depends": [
+      "__osx >=11.0"
+     ]
+    },
+    {
+     "name": "libintl",
+     "version": "0.25.1",
+     "build": "h3184127_1",
+     "filename": "libintl-0.25.1-h3184127_1.conda",
+     "size": 96909,
+     "sha256": "8c352744517bc62d24539d1ecc813b9fdc8a785c780197c5f0b84ec5b0dfe122",
+     "license": "LGPL-2.1-or-later",
+     "depends": [
+      "__osx >=10.13",
+      "libiconv >=1.18,<2.0a0"
+     ]
+    },
+    {
+     "name": "libjpeg-turbo",
+     "version": "3.2.0",
+     "build": "ha1e9b39_1",
+     "filename": "libjpeg-turbo-3.2.0-ha1e9b39_1.conda",
+     "size": 614315,
+     "sha256": "0792824360a9e59802c9464157c1098c3d84330dcab5dbde762abaca16f580a8",
+     "license": "IJG AND BSD-3-Clause AND Zlib",
+     "depends": [
+      "__osx >=11.0"
+     ]
+    },
+    {
+     "name": "liblzma",
+     "version": "5.8.3",
+     "build": "hbb4bfdb_1",
+     "filename": "liblzma-5.8.3-hbb4bfdb_1.conda",
+     "size": 104919,
+     "sha256": "7915dac7c71c208e40e716e2f6d3eff41a8d5584e0e7c2d46f9bf9bd5f9aa739",
+     "license": "0BSD",
+     "depends": [
+      "__osx >=11.0"
+     ]
+    },
+    {
+     "name": "libpng",
+     "version": "1.6.58",
+     "build": "h4382c61_1",
+     "filename": "libpng-1.6.58-h4382c61_1.conda",
+     "size": 298934,
+     "sha256": "4677159f77da07eba37618f2e0c9887233dacf5e23290bb6d978732d0f5f896d",
+     "license": "zlib-acknowledgement",
+     "depends": [
+      "__osx >=11.0",
+      "libzlib >=1.3.2,<2.0a0"
+     ]
+    },
+    {
+     "name": "libraw",
+     "version": "0.22.2",
+     "build": "h3650196_0",
+     "filename": "libraw-0.22.2-h3650196_0.conda",
+     "size": 703167,
+     "sha256": "a39f49ab1c0f7fbb7598e573e14ce72214d8bc5805fc92888d9702633971e3fe",
+     "license": "LGPL-2.1-only",
+     "depends": [
+      "libcxx >=19",
+      "__osx >=11.0",
+      "jasper >=4.2.9,<5.0a0",
+      "libjpeg-turbo >=3.2.0,<4.0a0",
+      "lcms2 >=2.19.1,<3.0a0",
+      "libzlib >=1.3.2,<2.0a0"
+     ]
+    },
+    {
+     "name": "libtiff",
+     "version": "4.7.2",
+     "build": "h95d6d7f_0",
+     "filename": "libtiff-4.7.2-h95d6d7f_0.conda",
+     "size": 418681,
+     "sha256": "8e43d2a3538f45848c61cdda4baa6728ce0a48bc665b306de5a31dd3464a30c1",
+     "license": "HPND",
+     "depends": [
+      "__osx >=11.0",
+      "lerc >=4.1.0,<5.0a0",
+      "libcxx >=19",
+      "libdeflate >=1.25,<1.26.0a0",
+      "libjpeg-turbo >=3.1.4.1,<4.0a0",
+      "liblzma >=5.8.3,<6.0a0",
+      "libwebp-base >=1.6.0,<2.0a0",
+      "libzlib >=1.3.2,<2.0a0",
+      "zstd >=1.5.7,<1.6.0a0"
+     ]
+    },
+    {
+     "name": "libwebp-base",
+     "version": "1.6.0",
+     "build": "hb276fe9_1",
+     "filename": "libwebp-base-1.6.0-hb276fe9_1.conda",
+     "size": 364823,
+     "sha256": "96263e9134164b6ca015a8cfba3a4cac9ca2429ddfebd25c120817fa608d2fdc",
+     "license": "BSD-3-Clause",
+     "depends": [
+      "__osx >=11.0"
+     ]
+    },
+    {
+     "name": "libzlib",
+     "version": "1.3.2",
+     "build": "hbb4bfdb_3",
+     "filename": "libzlib-1.3.2-hbb4bfdb_3.conda",
+     "size": 58993,
+     "sha256": "b2dba286dd6632292b12296e761193b5ef9fb0eaeecaa481f5ba9af72c0c18e1",
+     "license": "Zlib",
+     "depends": [
+      "__osx >=11.0"
+     ]
+    },
+    {
+     "name": "openexr",
+     "version": "3.4.14",
+     "build": "hc0c9beb_0",
+     "filename": "openexr-3.4.14-hc0c9beb_0.conda",
+     "size": 1026218,
+     "sha256": "4b01c0244ecb8cc577c50a0f6c615b9768d29c64f5a4ce1fb56b25ad38540217",
+     "license": "BSD-3-Clause",
+     "depends": [
+      "__osx >=11.0",
+      "libcxx >=19",
+      "libdeflate >=1.25,<1.26.0a0",
+      "imath >=3.2.2,<3.2.3.0a0",
+      "libzlib >=1.3.2,<2.0a0",
+      "openjph >=0.31.0,<0.32.0a0"
+     ]
+    },
+    {
+     "name": "openjpeg",
+     "version": "2.5.4",
+     "build": "h52bb76a_0",
+     "filename": "openjpeg-2.5.4-h52bb76a_0.conda",
+     "size": 335227,
+     "sha256": "9a37ecf9c086f3a50d0132e6087dcbe7ea978d80e2da267fa3199c486529b311",
+     "license": "BSD-2-Clause",
+     "depends": [
+      "__osx >=11.0",
+      "libcxx >=19",
+      "libpng >=1.6.55,<1.7.0a0",
+      "libtiff >=4.7.1,<4.8.0a0",
+      "libzlib >=1.3.1,<2.0a0"
+     ]
+    },
+    {
+     "name": "openjph",
+     "version": "0.31.0",
+     "build": "h2c0e27e_0",
+     "filename": "openjph-0.31.0-h2c0e27e_0.conda",
+     "size": 280912,
+     "sha256": "aa1a9be70abca41b4e94ddd9e29e30c53252c2a2160b7dd44282f3c01fb0b06d",
+     "license": "BSD-2-Clause",
+     "depends": [
+      "libcxx >=19",
+      "__osx >=11.0",
+      "libtiff >=4.7.2,<4.8.0a0"
+     ]
+    },
+    {
+     "name": "rapidjson",
+     "version": "1.1.0.post20250205",
+     "build": "h2fb4741_0",
+     "filename": "rapidjson-1.1.0.post20250205-h2fb4741_0.conda",
+     "size": 157162,
+     "sha256": "b6687a2f065eed0f3065aa157039b8d201fe2372fa2f0dccc3a7853c914cc47a",
+     "license": "MIT",
+     "depends": [
+      "libcxx >=19",
+      "__osx >=11.0"
+     ]
+    },
+    {
+     "name": "zstd",
+     "version": "1.5.7",
+     "build": "hbc1a06c_7",
+     "filename": "zstd-1.5.7-hbc1a06c_7.conda",
+     "size": 528228,
+     "sha256": "5277886d9704a624dc9b79ac985861e1e431bdb39a57c082507ab577a138ec6c",
+     "license": "BSD-3-Clause",
+     "depends": [
+      "__osx >=11.0",
+      "libzlib >=1.3.2,<2.0a0"
+     ]
+    }
+   ]
+  },
+  "osx-arm64": {
+   "packages": [
+    {
+     "name": "occt",
+     "version": "7.8.1",
+     "build": "novtk_hbec2736_103",
+     "filename": "occt-7.8.1-novtk_hbec2736_103.conda",
+     "size": 23594903,
+     "sha256": "f9bd9cb02ab1c48208bec8bed3bc7206ea9595d8dc82964398654cb92216a625",
+     "license": "LGPL-2.1-only",
+     "depends": [
+      "__osx >=11.0",
+      "fontconfig >=2.14.2,<3.0a0",
+      "fonts-conda-ecosystem",
+      "freeimage >=3.18.0,<3.19.0a0",
+      "freetype >=2.12.1,<3.0a0",
+      "libcxx >=17",
+      "rapidjson"
+     ]
+    },
+    {
+     "name": "fontconfig",
+     "version": "2.18.3",
+     "build": "h81aa574_1",
+     "filename": "fontconfig-2.18.3-h81aa574_1.conda",
+     "size": 265659,
+     "sha256": "004570d35fb0eff73ce3ae49b209a47622d0c2e580dd0dc4c61d59626b386a09",
+     "license": "MIT",
+     "depends": [
+      "__osx >=11.0",
+      "libexpat >=2.8.1,<3.0a0",
+      "libfreetype >=2.14.3",
+      "libfreetype6 >=2.14.3",
+      "libintl >=0.25.1,<1.0a0",
+      "libzlib >=1.3.2,<2.0a0"
+     ]
+    },
+    {
+     "name": "freeimage",
+     "version": "3.18.0",
+     "build": "h87663b4_25",
+     "filename": "freeimage-3.18.0-h87663b4_25.conda",
+     "size": 367990,
+     "sha256": "3223ff0cb9719748f86b1d5644fb60302a9d8c656b568b0821bba673f1eaae65",
+     "license": "GPL-2.0-or-later OR GPL-3.0-or-later OR FreeImage",
+     "depends": [
+      "__osx >=11.0",
+      "imath >=3.2.2,<3.2.3.0a0",
+      "jxrlib >=1.1,<1.2.0a0",
+      "libcxx >=19",
+      "libjpeg-turbo >=3.1.4.1,<4.0a0",
+      "libpng >=1.6.58,<1.7.0a0",
+      "libraw >=0.22.1,<0.23.0a0",
+      "libtiff >=4.7.1,<4.8.0a0",
+      "libwebp-base >=1.6.0,<2.0a0",
+      "libzlib >=1.3.2,<2.0a0",
+      "openexr >=3.4.12,<3.5.0a0",
+      "openjpeg >=2.5.4,<3.0a0"
+     ]
+    },
+    {
+     "name": "freetype",
+     "version": "2.14.3",
+     "build": "hce30654_2",
+     "filename": "freetype-2.14.3-hce30654_2.conda",
+     "size": 175388,
+     "sha256": "90681f1d0658cb2fd49a074f644eb4774272499290487a4bebb1c4df01d6997b",
+     "license": "GPL-2.0-only OR FTL",
+     "depends": [
+      "libfreetype 2.14.3 hce30654_2",
+      "libfreetype6 2.14.3 h2ed5691_2"
+     ]
+    },
+    {
+     "name": "imath",
+     "version": "3.2.2",
+     "build": "h13e8271_0",
+     "filename": "imath-3.2.2-h13e8271_0.conda",
+     "size": 155893,
+     "sha256": "18986a94213497b9e60880fbbb71c54ac4f34adf948373d8298af8316fab17fc",
+     "license": "BSD-3-Clause",
+     "depends": [
+      "__osx >=11.0",
+      "libcxx >=19",
+      "libzlib >=1.3.2,<2.0a0"
+     ]
+    },
+    {
+     "name": "jasper",
+     "version": "4.2.9",
+     "build": "h7543a42_1",
+     "filename": "jasper-4.2.9-h7543a42_1.conda",
+     "size": 584700,
+     "sha256": "58bfd15b7426f99ca2b1854535d4ede1ca2a35be4f8c43c5e34b6ffdcfd7a5c8",
+     "license": "JasPer-2.0",
+     "depends": [
+      "__osx >=11.0",
+      "libjpeg-turbo >=3.1.2,<4.0a0"
+     ]
+    },
+    {
+     "name": "jxrlib",
+     "version": "1.1",
+     "build": "h93a5062_3",
+     "filename": "jxrlib-1.1-h93a5062_3.conda",
+     "size": 197843,
+     "sha256": "c9e0d3cf9255d4585fa9b3d07ace3bd934fdc6a67ef4532e5507282eff2364ab",
+     "license": "BSD-2-Clause",
+     "depends": []
+    },
+    {
+     "name": "lcms2",
+     "version": "2.19.1",
+     "build": "hdfa7624_1",
+     "filename": "lcms2-2.19.1-hdfa7624_1.conda",
+     "size": 213747,
+     "sha256": "ccb5598fad3694e79bf54f0eb812e3b3c3dd63d1497e631f5978800eadb9bcc4",
+     "license": "MIT",
+     "depends": [
+      "__osx >=11.0",
+      "libjpeg-turbo >=3.1.4.1,<4.0a0",
+      "libtiff >=4.7.1,<4.8.0a0"
+     ]
+    },
+    {
+     "name": "lerc",
+     "version": "4.2.0",
+     "build": "h1eee2c3_0",
+     "filename": "lerc-4.2.0-h1eee2c3_0.conda",
+     "size": 166477,
+     "sha256": "c97aa17d16d2ac332ba9f184e82ce8f72dcb10e9a10c5f299030be2d44e191b9",
+     "license": "Apache-2.0",
+     "depends": [
+      "__osx >=11.0",
+      "libcxx >=19"
+     ]
+    },
+    {
+     "name": "libcxx",
+     "version": "22.1.8",
+     "build": "h55c6f16_0",
+     "filename": "libcxx-22.1.8-h55c6f16_0.conda",
+     "size": 569349,
+     "sha256": "a2e7abab5add9750fab064c024394de48e49f97631c605ad5db5c8ac3fc769ef",
+     "license": "Apache-2.0 WITH LLVM-exception",
+     "depends": [
+      "__osx >=11.0"
+     ]
+    },
+    {
+     "name": "libdeflate",
+     "version": "1.25",
+     "build": "he7e0567_1",
+     "filename": "libdeflate-1.25-he7e0567_1.conda",
+     "size": 55727,
+     "sha256": "d896f4aa4ce4c590c2838678cb1917356fdb461d2a189991c0280c818c362172",
+     "license": "MIT",
+     "depends": [
+      "__osx >=11.0"
+     ]
+    },
+    {
+     "name": "libexpat",
+     "version": "2.8.1",
+     "build": "hf6b4638_1",
+     "filename": "libexpat-2.8.1-hf6b4638_1.conda",
+     "size": 69362,
+     "sha256": "5af74261101e3c777399c6294b2b5d290e508153268eb2e9ff99c4d69834612f",
+     "license": "MIT",
+     "depends": [
+      "__osx >=11.0"
+     ]
+    },
+    {
+     "name": "libfreetype",
+     "version": "2.14.3",
+     "build": "hce30654_2",
+     "filename": "libfreetype-2.14.3-hce30654_2.conda",
+     "size": 8367,
+     "sha256": "19ce8bd320414cb6b9889ecbf48a3ded848b0d1068b76ff6bea099bd7387d6f3",
+     "license": "GPL-2.0-only OR FTL",
+     "depends": [
+      "libfreetype6 >=2.14.3"
+     ]
+    },
+    {
+     "name": "libfreetype6",
+     "version": "2.14.3",
+     "build": "h2ed5691_2",
+     "filename": "libfreetype6-2.14.3-h2ed5691_2.conda",
+     "size": 340923,
+     "sha256": "d9b203d6484ad491b5b5f33d49a9d7a91189d776a9adae53d2b63af18ec11e6a",
+     "license": "GPL-2.0-only OR FTL",
+     "depends": [
+      "__osx >=11.0",
+      "libpng >=1.6.58,<1.7.0a0",
+      "libzlib >=1.3.2,<2.0a0"
+     ]
+    },
+    {
+     "name": "libiconv",
+     "version": "1.18",
+     "build": "he4c29f2_3",
+     "filename": "libiconv-1.18-he4c29f2_3.conda",
+     "size": 750816,
+     "sha256": "689a14968267f2f97c07112fca5636e7d756036b9aee969911267c20bd3eea1f",
+     "license": "LGPL-2.1-only",
+     "depends": [
+      "__osx >=11.0"
+     ]
+    },
+    {
+     "name": "libintl",
+     "version": "0.25.1",
+     "build": "h493aca8_0",
+     "filename": "libintl-0.25.1-h493aca8_0.conda",
+     "size": 90957,
+     "sha256": "99d2cebcd8f84961b86784451b010f5f0a795ed1c08f1e7c76fbb3c22abf021a",
+     "license": "LGPL-2.1-or-later",
+     "depends": [
+      "__osx >=11.0",
+      "libiconv >=1.18,<2.0a0"
+     ]
+    },
+    {
+     "name": "libjpeg-turbo",
+     "version": "3.2.0",
+     "build": "h84a0fba_1",
+     "filename": "libjpeg-turbo-3.2.0-h84a0fba_1.conda",
+     "size": 558459,
+     "sha256": "05006418f9392c9b723e8428808db106de0350a497832f95f921b85ff1072310",
+     "license": "IJG AND BSD-3-Clause AND Zlib",
+     "depends": [
+      "__osx >=11.0"
+     ]
+    },
+    {
+     "name": "liblzma",
+     "version": "5.8.3",
+     "build": "h8088a28_1",
+     "filename": "liblzma-5.8.3-h8088a28_1.conda",
+     "size": 91720,
+     "sha256": "23d0630046a3e8b164d8f80f2b74ed2605af2e7050ab9913018056402fae4311",
+     "license": "0BSD",
+     "depends": [
+      "__osx >=11.0"
+     ]
+    },
+    {
+     "name": "libpng",
+     "version": "1.6.58",
+     "build": "hf5e6511_1",
+     "filename": "libpng-1.6.58-hf5e6511_1.conda",
+     "size": 290219,
+     "sha256": "f88da60b348ee1f3e1a9c20fe02142fdafe889f08da0b1cc33c1f3f14460239d",
+     "license": "zlib-acknowledgement",
+     "depends": [
+      "__osx >=11.0",
+      "libzlib >=1.3.2,<2.0a0"
+     ]
+    },
+    {
+     "name": "libraw",
+     "version": "0.22.2",
+     "build": "h2d05ff4_0",
+     "filename": "libraw-0.22.2-h2d05ff4_0.conda",
+     "size": 692346,
+     "sha256": "e3e654527f10346ca39fe628bb6f81dadf946647e5c081f84703ab654ae15a45",
+     "license": "LGPL-2.1-only",
+     "depends": [
+      "__osx >=11.0",
+      "libcxx >=19",
+      "libjpeg-turbo >=3.2.0,<4.0a0",
+      "libzlib >=1.3.2,<2.0a0",
+      "lcms2 >=2.19.1,<3.0a0",
+      "jasper >=4.2.9,<5.0a0"
+     ]
+    },
+    {
+     "name": "libtiff",
+     "version": "4.7.2",
+     "build": "h282da08_0",
+     "filename": "libtiff-4.7.2-h282da08_0.conda",
+     "size": 387825,
+     "sha256": "253153cabf9469170e02b21a6bc9aa598048e7c34966b1103af52d27d2a708a4",
+     "license": "HPND",
+     "depends": [
+      "__osx >=11.0",
+      "lerc >=4.1.0,<5.0a0",
+      "libcxx >=19",
+      "libdeflate >=1.25,<1.26.0a0",
+      "libjpeg-turbo >=3.1.4.1,<4.0a0",
+      "liblzma >=5.8.3,<6.0a0",
+      "libwebp-base >=1.6.0,<2.0a0",
+      "libzlib >=1.3.2,<2.0a0",
+      "zstd >=1.5.7,<1.6.0a0"
+     ]
+    },
+    {
+     "name": "libwebp-base",
+     "version": "1.6.0",
+     "build": "h202fb40_1",
+     "filename": "libwebp-base-1.6.0-h202fb40_1.conda",
+     "size": 294522,
+     "sha256": "0ff54650d470c7e54cbeffdd53a8c063e055a7bcf784388c0385ce5c4741b0f4",
+     "license": "BSD-3-Clause",
+     "depends": [
+      "__osx >=11.0"
+     ]
+    },
+    {
+     "name": "libzlib",
+     "version": "1.3.2",
+     "build": "h8088a28_3",
+     "filename": "libzlib-1.3.2-h8088a28_3.conda",
+     "size": 47822,
+     "sha256": "a18fa5d5bac452401459f966cf0d872224e8080c4ff93c77e168d43ab42ef9d7",
+     "license": "Zlib",
+     "depends": [
+      "__osx >=11.0"
+     ]
+    },
+    {
+     "name": "openexr",
+     "version": "3.4.14",
+     "build": "he09da85_0",
+     "filename": "openexr-3.4.14-he09da85_0.conda",
+     "size": 988715,
+     "sha256": "6bcd834a38a21cdd08026bb17ab4a8f323633aa1ffcb8bd43e9c41d2688edd45",
+     "license": "BSD-3-Clause",
+     "depends": [
+      "__osx >=11.0",
+      "libcxx >=19",
+      "libzlib >=1.3.2,<2.0a0",
+      "openjph >=0.31.0,<0.32.0a0",
+      "imath >=3.2.2,<3.2.3.0a0",
+      "libdeflate >=1.25,<1.26.0a0"
+     ]
+    },
+    {
+     "name": "openjpeg",
+     "version": "2.5.4",
+     "build": "hd9e9057_0",
+     "filename": "openjpeg-2.5.4-hd9e9057_0.conda",
+     "size": 319697,
+     "sha256": "60aca8b9f94d06b852b296c276b3cf0efba5a6eb9f25feb8708570d3a74f00e4",
+     "license": "BSD-2-Clause",
+     "depends": [
+      "__osx >=11.0",
+      "libcxx >=19",
+      "libpng >=1.6.55,<1.7.0a0",
+      "libtiff >=4.7.1,<4.8.0a0",
+      "libzlib >=1.3.1,<2.0a0"
+     ]
+    },
+    {
+     "name": "openjph",
+     "version": "0.31.0",
+     "build": "h2a4d681_0",
+     "filename": "openjph-0.31.0-h2a4d681_0.conda",
+     "size": 191450,
+     "sha256": "853c41f0e041a5c1acce60490ec065e4ca1b43d7b63fbad504980de3a822f719",
+     "license": "BSD-2-Clause",
+     "depends": [
+      "libcxx >=19",
+      "__osx >=11.0",
+      "libtiff >=4.7.2,<4.8.0a0"
+     ]
+    },
+    {
+     "name": "rapidjson",
+     "version": "1.1.0.post20250205",
+     "build": "h784d473_0",
+     "filename": "rapidjson-1.1.0.post20250205-h784d473_0.conda",
+     "size": 157334,
+     "sha256": "1357623ce7d878448658a68605e564da578bb65a294a6143ceecd760de35e798",
+     "license": "MIT",
+     "depends": [
+      "__osx >=11.0",
+      "libcxx >=19"
+     ]
+    },
+    {
+     "name": "zstd",
+     "version": "1.5.7",
+     "build": "hf451053_7",
+     "filename": "zstd-1.5.7-hf451053_7.conda",
+     "size": 433687,
+     "sha256": "da867f5092eb0cb746d353694f0098031fd9817a4ce7d5743121209ae0f406ca",
+     "license": "BSD-3-Clause",
+     "depends": [
+      "__osx >=11.0",
+      "libzlib >=1.3.2,<2.0a0"
+     ]
+    }
+   ]
+  }
+ }
+}

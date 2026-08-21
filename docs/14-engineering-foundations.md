@@ -12,7 +12,7 @@ Cargo.toml                # workspace root
 crates/
   cicada-core/       # value model: hashing, interning, axes, Optional slots, ProjectConfig
   cicada-macros/     # #[node], #[derive(Ports)] proc macros
-  cicada-geom/       # geometry types, tolerance ops, kernel seams (manifold3d, opencascade-rs, spade, curvo, lyon, cavalier_contours, ttf-parser)
+  cicada-geom/       # geometry types, tolerance ops, kernel seams (manifold3d, spade, curvo, lyon, cavalier_contours, ttf-parser; opencascade-rs behind the `occt` feature — src/occt, docs/03)
   cicada-lang/       # .cic lexer/parser/AST, minimal-edit writer, fmt; kind lattice, unification, axis rules, diagnostics; tree-sitter grammar
   cicada-stdlib/     # the node catalog (docs/08)
   cicada-sched/      # generations, stores, executor, cost models, scrub warming
@@ -256,12 +256,27 @@ review` / `--bless`), never by hand.
   the suite stays fast — the determinism-hash DoD is cross-platform, so
   it should hold at merge time, not nightly-after (demote to
   `cargo check` when suite runtime demands); web `tsc` + eslint +
-  vitest; WASM guest build check; Playwright smoke. Rust build caching
-  via `rust-cache`.
-- **Nightly**: full test matrix (Linux/Windows/macOS); wall-corpus
-  end-to-end with hash comparison; criterion benchmarks against
-  stored baselines (fail on >10% regression); `cargo deny` +
-  `cargo audit`.
+  vitest; WASM guest build check; Playwright smoke; **`occt (ubuntu)`**
+  — the one job that compiles C++: `tools/fetch_occt.py` installs the
+  sha256-pinned prebuilt OCCT 7.8.1 (cached on the manifest hash) and
+  prints the env, then `cargo test` + `clippy -D warnings` run for
+  `-p cicada-geom --features occt`. Rust build caching via `rust-cache`.
+- **Nightly**: full test matrix (Linux/Windows/macOS); `occt (<os>)` on
+  the same three OSes (macOS arm64 with an rpath instead of
+  `DYLD_LIBRARY_PATH`) — where the canonical-bytes golden hashes'
+  cross-OS identity is measured; wall-corpus end-to-end with hash
+  comparison; criterion benchmarks against stored baselines (fail on
+  >10% regression); `cargo deny` + `cargo audit`.
+- **The `occt` feature rule**: default builds compile no C++ and link
+  no OCCT. Only the `occt` jobs pass `--features occt`; nothing in CI
+  runs `--all-features`. What default builds DO pay is the git clone of
+  the fork (cargo must load every locked manifest, optional or not):
+  6 MB in `~/.cargo/git` since the fork dropped the OCCT source
+  submodule — keep it that way (no submodules on branch `cicada`).
+  Locally: `python tools/fetch_occt.py
+  --print-env bash` (or `powershell`) gives the three lines a shell
+  needs (`DEP_OCCT_ROOT`, the loader path, `CMAKE_POLICY_VERSION_MINIMUM`);
+  cmake and a C++ toolchain must be on PATH.
 - The corpus's bulky inputs live in git LFS if they exceed tens of
   MB (flagged below).
 

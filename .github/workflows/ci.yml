@@ -54,6 +54,45 @@ jobs:
         run: cargo build --locked -p cicada-geom || cargo build --locked -p cicada-geom
       - run: cargo test --locked --workspace
 
+  occt:
+    # The OCCT seam (docs/17 Item 3 WP-A; docs/03 §The seam): the ONLY per-PR
+    # job that compiles C++ against OCCT. tools/fetch_occt.py fetches the
+    # sha256-pinned conda-forge OCCT 7.8.1 prefix (+ the run-time closure its
+    # libraries load) into the runner's temp dir — cached by actions/cache on
+    # the manifest hash — verifies its import closure statically, and prints
+    # the env (DEP_OCCT_ROOT, LD_LIBRARY_PATH, CMAKE_POLICY_VERSION_MINIMUM)
+    # the cargo commands run under. Rule: nothing outside the occt jobs may
+    # run `--features occt` or `--all-features`; default builds compile no C++.
+    name: occt (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: occt
+      - name: Cache the prebuilt OCCT prefix (key = the pinned manifest)
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/cicada-occt
+          key: cicada-occt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/fetch_occt_manifest.json') }}
+      - name: Prime the Manifold kernel build (retry once — belt; see AGENTS.md)
+        run: cargo build --locked -p cicada-geom || cargo build --locked -p cicada-geom
+      - name: Fetch the prebuilt OCCT (sha256-pinned) and verify its import closure
+        run: |
+          python -m pip install --quiet zstandard
+          python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --check-closure
+      - name: Test + clippy the seam against the prebuilt
+        run: |
+          eval "$(python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --print-env bash --quiet)"
+          cargo test --locked -p cicada-geom --features occt
+          cargo clippy --locked -p cicada-geom --features occt --all-targets -- -D warnings
+
   web:
     name: web tsc · eslint · vitest
     runs-on: ubuntu-latest
