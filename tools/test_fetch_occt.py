@@ -10,7 +10,7 @@ import struct
 import tempfile
 import unittest
 import urllib.error
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import fetch_occt as fo
 
@@ -121,10 +121,12 @@ class PlatformAndLayoutTest(unittest.TestCase):
             fo.default_cache_root({}, "Windows")
 
     def test_windows_layout_puts_the_prefix_under_library(self):
-        layout = fo.Layout(Path(r"C:\cache"), "win-64", "7.8.1")
-        self.assertEqual(layout.prefix, Path(r"C:\cache\occt-7.8.1-win-64"))
-        self.assertEqual(layout.dep_occt_root, Path(r"C:\cache\occt-7.8.1-win-64\Library"))
-        self.assertEqual(layout.library_dir, Path(r"C:\cache\occt-7.8.1-win-64\Library\bin"))
+        # PureWindowsPath: the layout's Windows rules hold on every host (the
+        # offline suite runs on ubuntu in CI, where a backslash is a character).
+        layout = fo.Layout(PureWindowsPath(r"C:\cache"), "win-64", "7.8.1")
+        self.assertEqual(layout.prefix, PureWindowsPath(r"C:\cache\occt-7.8.1-win-64"))
+        self.assertEqual(layout.dep_occt_root, PureWindowsPath(r"C:\cache\occt-7.8.1-win-64\Library"))
+        self.assertEqual(layout.library_dir, PureWindowsPath(r"C:\cache\occt-7.8.1-win-64\Library\bin"))
         self.assertEqual(layout.loader_variable, "PATH")
 
     def test_unix_layouts(self):
