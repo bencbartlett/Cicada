@@ -12,11 +12,11 @@
 import { useEffect } from "react";
 import { asOneOp, type GestureMessage } from "./protocol/messages";
 import { canWrite, nodeByName, useCicada, writeBlockReason } from "./state/store";
+import { hasTimeParams } from "./state/transport";
 import { viewportApi } from "./viewport/api";
 
 const NOT_YET = {
   group: "groups arrive later",
-  transport: "transport arrives with time params",
 } as const;
 
 /**
@@ -256,10 +256,23 @@ export function handleHotkey(event: KeyboardEvent): boolean {
     state.send(asOneOp(ops, `${verb} ${ops.length} nodes`));
     return true;
   }
-  // Space reaches here only from `useKeyboard`'s keyup path (see below):
-  // React Flow's Space+drag pan owns the keydown.
+  // Space: play / pause the transport (docs/16 keyboard map; docs/13
+  // §Animation transport). Reaches here only from `useKeyboard`'s keyup
+  // path (see below): React Flow's Space+drag pan owns the keydown. The
+  // toggle is decided on the LAST VIEW HEARD — the server answers with the
+  // state it is actually in, and two quick taps are two intents either way.
   if (key === " " || event.code === "Space") {
-    notice("info", NOT_YET.transport);
+    const transport = state.transport;
+    if (transport === null) {
+      notice("info", "no pipeline loaded yet — nothing to play");
+      return true;
+    }
+    if (!hasTimeParams(transport)) {
+      notice("info", "no time params in this pipeline — place a `cycle` or `clock` to animate");
+      return true;
+    }
+    if (needsLease("drive the transport")) return true;
+    state.send({ type: transport.view.playing ? "transport_pause" : "transport_play", payload: {} });
     return true;
   }
 

@@ -29,6 +29,7 @@ import type {
   ValueSummary,
   WireEnd,
 } from "../protocol/messages";
+import { nowMs, type TransportState } from "./transport";
 
 /**
  * Socket lifecycle. `reconnecting` = the socket dropped without us closing
@@ -302,6 +303,17 @@ export interface CicadaState {
    */
   gitMarkers: Record<string, NodeChange>;
 
+  // ---- transport (docs/13 §Animation transport)
+  /**
+   * The session's transport as last heard — the snapshot's `transport` or
+   * a `transport` broadcast, replaced whole every time, with the arrival
+   * stamp the play bar extrapolates from (`state/transport.ts`). Null
+   * before the first snapshot and while the socket is down (the session's
+   * transport is unknown then; re-hydration brings it back — paused, if
+   * this was the last client). Deltas never touch it.
+   */
+  transport: TransportState | null;
+
   // ---- ephemeral drag state
   /**
    * The param whose current drag is compute-on-release, or null
@@ -424,6 +436,8 @@ export const useCicada = create<CicadaState>((set, get) => ({
   git: EMPTY_GIT,
   gitMarkers: {},
 
+  transport: null,
+
   pending: null,
 
   selection: { nodes: [], wire: null, element: null },
@@ -457,6 +471,9 @@ export const useCicada = create<CicadaState>((set, get) => ({
       // The drag died with the socket: the re-hydrated session knows
       // nothing of it, and the next tick is announced afresh.
       pending: null,
+      // So did our knowledge of the transport: extrapolating a playhead
+      // nobody can confirm would animate a counter over a dead socket.
+      transport: null,
     }),
   setReconnect: (reconnect) => set({ reconnect }),
   setIdentity: (token, pipeline) => set({ token, pipeline }),
@@ -513,6 +530,8 @@ export const useCicada = create<CicadaState>((set, get) => ({
           wireValues: {},
           // A reload barrier (and a fresh hydration) ends the drag.
           pending: null,
+          // Every snapshot carries the transport; replace, never merge.
+          transport: { view: p.transport, receivedAt: nowMs() },
         });
         if (p.barrier) {
           get().addNotice("info", `reloaded from disk (${p.reason})`);
@@ -666,6 +685,15 @@ export const useCicada = create<CicadaState>((set, get) => ({
         // policy for another param has already replaced this one.
         const p = envelope.payload;
         set((state) => (pendingIs(state.pending, p.node, p.port ?? null) ? { pending: null } : state));
+        break;
+      }
+      case "transport": {
+        // After every control (refused or not), after Esc, after the last
+        // client's departure paused playback, and when an edit or reload
+        // changed the loop or the driven set: the whole view, replacing
+        // ours — the position at the moment of the message, which the bar
+        // extrapolates from until the next one.
+        set({ transport: { view: envelope.payload, receivedAt: nowMs() } });
         break;
       }
       case "screenshot_request":

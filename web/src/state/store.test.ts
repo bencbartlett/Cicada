@@ -11,6 +11,7 @@ import {
   useCicada,
   writeBlockReason,
 } from "./store";
+import { TRANSPORT_AT_REST } from "./transport";
 
 describe("canWrite", () => {
   it("needs the lease AND an open socket", () => {
@@ -185,6 +186,7 @@ test("a delta prunes dead bindings from statuses and follows renames / my placem
       barrier: false,
       reason: "initial",
       history: EMPTY_HISTORY,
+      transport: TRANSPORT_AT_REST,
     },
   });
   useCicada.getState().selectNodes(["b"]);
@@ -275,6 +277,7 @@ describe("history (docs/13 §Undo/redo)", () => {
       barrier,
       reason: barrier ? "external change" : "initial",
       history,
+      transport: TRANSPORT_AT_REST,
     },
   });
   const delta = (label: string, history: HistoryView): ServerEnvelope => ({
@@ -618,6 +621,7 @@ describe("compute-on-release (docs/13 §Slider drags — the frozen client contr
         barrier: true,
         reason: "external change",
         history: EMPTY_HISTORY,
+        transport: TRANSPORT_AT_REST,
       },
     });
     expect(useCicada.getState().pending, "the watcher's reload ends the drag").toBeNull();

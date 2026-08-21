@@ -21,6 +21,7 @@ import {
   stopGitStatus,
 } from "./git";
 import { markersByName, sameGitStatus, staleAfter, useCicada, type GitSlice } from "./store";
+import { TRANSPORT_AT_REST } from "./transport";
 
 const EMPTY_SLICE: GitSlice = { status: null, error: null, loading: false, busy: null, answers: 0, stale: false, writes: 0 };
 
@@ -99,6 +100,7 @@ describe("feedGitPolicy", () => {
         barrier,
         reason: barrier ? "git revert" : "initial",
         history: HISTORY,
+        transport: TRANSPORT_AT_REST,
       },
     });
     feed(snapshot(false));

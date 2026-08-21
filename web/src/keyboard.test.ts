@@ -338,14 +338,65 @@ describe("handleHotkey", () => {
   });
 
   it("deferred features answer with a notice and consume the key (Ctrl+S is no longer one: it opens the commit dialog)", () => {
-    for (const [k, mods] of [
-      ["g", { ctrlKey: true }],
-      [" ", {}],
-    ] as [string, Partial<KeyboardEvent>][]) {
+    for (const [k, mods] of [["g", { ctrlKey: true }]] as [string, Partial<KeyboardEvent>][]) {
       expect(handleHotkey(key(k, mods))).toBe(true);
     }
     expect(sent).toEqual([]);
-    expect(useCicada.getState().notices.length).toBe(2);
+    expect(useCicada.getState().notices.length).toBe(1);
+  });
+
+  // Space = play / pause the transport (docs/16 keyboard map; docs/13
+  // §Animation transport). The toggle reads the LAST VIEW HEARD: paused →
+  // `transport_play`, playing → `transport_pause`; the server's broadcast
+  // is what flips the view, never the keypress.
+  describe("Space toggles the transport", () => {
+    const driven = [{ node: "spin", port: "frame", signal: "frame" as const }];
+    const view = (playing: boolean) => ({
+      view: { playing, speed: 1, t_ms: 0, frame: 0, frames: 120, period_ms: 4000, driven },
+      receivedAt: 0,
+    });
+
+    it("sends transport_play when paused and transport_pause when playing; consumed either way", () => {
+      useCicada.setState({ transport: view(false) });
+      expect(handleHotkey(key(" "))).toBe(true);
+      useCicada.setState({ transport: view(true) });
+      expect(handleHotkey(key(" "))).toBe(true);
+      expect(sent).toEqual([
+        { type: "transport_play", payload: {} },
+        { type: "transport_pause", payload: {} },
+      ]);
+      expect(useCicada.getState().notices).toEqual([]);
+    });
+
+    it("answers by `code` too (the keyup path carries whichever the event has)", () => {
+      useCicada.setState({ transport: view(false) });
+      expect(handleHotkey({ ...key("Unidentified"), code: "Space" } as KeyboardEvent)).toBe(true);
+      expect(sent).toEqual([{ type: "transport_play", payload: {} }]);
+    });
+
+    it("with no time params (driven []) it says so and sends nothing; before the first snapshot too", () => {
+      useCicada.setState({ transport: null });
+      expect(handleHotkey(key(" "))).toBe(true);
+      useCicada.setState({ transport: { ...view(false), view: { ...view(false).view, driven: [] } } });
+      expect(handleHotkey(key(" "))).toBe(true);
+      expect(sent).toEqual([]);
+      const notices = useCicada.getState().notices;
+      expect(notices.map((n) => n.level)).toEqual(["info", "info"]);
+      expect(notices[0]?.message).toMatch(/no pipeline loaded/);
+      expect(notices[1]?.message).toMatch(/no time params/);
+    });
+
+    it("is a write: an observer (or a dropped socket) gets the lease notice, no intent", () => {
+      useCicada.setState({ transport: view(false), role: "observer" });
+      expect(handleHotkey(key(" "))).toBe(true);
+      useCicada.setState({ role: "writer", connection: "reconnecting" });
+      expect(handleHotkey(key(" "))).toBe(true);
+      expect(sent).toEqual([]);
+      const notices = useCicada.getState().notices;
+      expect(notices.map((n) => n.level)).toEqual(["warning", "warning"]);
+      expect(notices[0]?.message).toMatch(/read-only observer.*drive the transport/);
+      expect(notices[1]?.message).toMatch(/not connected.*drive the transport/);
+    });
   });
 
   it("leaves unknown keys alone", () => {

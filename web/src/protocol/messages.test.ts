@@ -9,10 +9,12 @@ import { describe, expect, it } from "vitest";
 import {
   asOneOp,
   isGesture,
+  isTransport,
   isWrite,
   type ApplyTextRequest,
   type ClientMessage,
   type GestureMessage,
+  type TransportMessage,
 } from "./messages";
 
 const gestures: GestureMessage[] = [
@@ -44,6 +46,20 @@ const writesNotGestures: ClientMessage[] = [
   { type: "apply_text", payload: applyText },
 ];
 
+/**
+ * The five transport controls, spelled exactly as `protocol.rs`'s
+ * `transport_messages_have_the_documented_shapes` decodes them (the
+ * envelope adds `v` and `id`): empty payloads are `{}`, a seek carries
+ * `frame`, a speed carries `factor`.
+ */
+const transportControls: TransportMessage[] = [
+  { type: "transport_play", payload: {} },
+  { type: "transport_pause", payload: {} },
+  { type: "transport_seek", payload: { frame: 57 } },
+  { type: "transport_speed", payload: { factor: 0.5 } },
+  { type: "transport_reset", payload: {} },
+];
+
 const reads: ClientMessage[] = [
   { type: "hello", payload: { v: 1 } },
   { type: "inspect", payload: { node: "a" } },
@@ -71,7 +87,26 @@ describe("isWrite / isGesture (mirrors of protocol::is_write / is_gesture)", () 
     for (const m of reads) {
       expect(isWrite(m), m.type).toBe(false);
       expect(isGesture(m), m.type).toBe(false);
+      expect(isTransport(m), m.type).toBe(false);
     }
+  });
+});
+
+describe("isTransport (mirror of protocol::is_transport)", () => {
+  it("the five controls are writes (writer-only) and transport, never gestures — so never batch elements", () => {
+    for (const m of transportControls) {
+      expect(isTransport(m), m.type).toBe(true);
+      expect(isWrite(m), m.type).toBe(true);
+      expect(isGesture(m), m.type).toBe(false);
+    }
+    expect(JSON.stringify(transportControls.map((m) => m.type))).toBe(
+      JSON.stringify(["transport_play", "transport_pause", "transport_seek", "transport_speed", "transport_reset"]),
+    );
+  });
+  it("cancel pauses the transport server-side but is not a transport control", () => {
+    expect(isTransport({ type: "cancel", payload: {} })).toBe(false);
+    for (const g of gestures) expect(isTransport(g), g.type).toBe(false);
+    for (const m of writesNotGestures) expect(isTransport(m), m.type).toBe(false);
   });
 });
 
