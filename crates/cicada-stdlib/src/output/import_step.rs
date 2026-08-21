@@ -34,12 +34,14 @@ pub struct ImportStepIn {
 ///
 /// # Examples
 ///
-/// The path is a fixture committed with the stdlib (a 1 × 2 × 3 block
-/// written by `export_step`), relative to where the example runner starts;
-/// point `path` at your own file.
+/// A STEP file next to the pipeline (relative paths resolve against the
+/// pipeline's directory, which `cicada run` and `cicada serve` enter
+/// before solving); the example runner provides `block.step` — the
+/// stdlib's committed fixture, a 1 × 2 × 3 block written by `export_step`
+/// — beside the example.
 ///
 /// ```cic
-/// parts = import_step(path="../cicada-stdlib/fixtures/block.step")
+/// parts = import_step(path="block.step")
 /// count = length(list=parts)
 /// ```
 #[node(

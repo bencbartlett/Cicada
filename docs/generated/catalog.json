@@ -5455,7 +5455,7 @@
       "panics": "the file cannot be read or translated, or holds no solid (shells and faces alone are not solids).",
       "gh": null,
       "examples": [
-        "parts = import_step(path=\"../cicada-stdlib/fixtures/block.step\")\ncount = length(list=parts)"
+        "parts = import_step(path=\"block.step\")\ncount = length(list=parts)"
       ],
       "inputs": [
         {

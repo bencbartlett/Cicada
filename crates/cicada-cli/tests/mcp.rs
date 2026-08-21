@@ -634,3 +634,33 @@ fn a_broken_scripts_directory_refuses_at_startup() {
     assert!(stderr.contains("slider"), "{stderr}");
     assert!(output.stdout.is_empty(), "nothing but JSON-RPC on stdout");
 }
+
+// The registration Claude Code reads must carry the OCCT loader path: the
+// binary links the kernel, Claude Code launches MCP servers from its own
+// environment, and a process that cannot find the shared libraries dies
+// before `main` with no message at all (WP-C review finding 4). The
+// example is the Windows layout; `tools/fetch_occt.py --print-env mcp`
+// writes the same shape for any OS (its own test covers the three).
+#[test]
+fn the_example_registration_carries_the_kernel_loader_path() {
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.mcp.json.example");
+    let text = std::fs::read_to_string(&example).unwrap();
+    let registration: Value = serde_json::from_str(&text).unwrap();
+    let server = &registration["mcpServers"]["cicada"];
+    assert_eq!(
+        server["command"].as_str().unwrap(),
+        "${CARGO_TARGET_DIR:-target}/debug/cicada"
+    );
+    assert_eq!(server["args"], json!(["mcp", "--project", "examples"]));
+    let path = server["env"]["PATH"]
+        .as_str()
+        .expect("an `env` block with the loader variable");
+    assert!(
+        path.contains("cicada-occt") && path.contains("Library") && path.contains("bin"),
+        "the prebuilt's library dir: {path}"
+    );
+    assert!(
+        path.ends_with(";${PATH:-}"),
+        "the previous PATH follows, unset-safe: {path}"
+    );
+}

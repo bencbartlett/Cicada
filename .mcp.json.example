@@ -2,7 +2,14 @@
   "mcpServers": {
     "cicada": {
       "command": "${CARGO_TARGET_DIR:-target}/debug/cicada",
-      "args": ["mcp", "--project", "examples"]
+      "args": [
+        "mcp",
+        "--project",
+        "examples"
+      ],
+      "env": {
+        "PATH": "${LOCALAPPDATA}\\cicada-occt\\occt-7.8.1-win-64\\Library\\bin;${PATH:-}"
+      }
     }
   }
 }
