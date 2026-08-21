@@ -27,6 +27,7 @@ pub struct PickTable {
     next: u32,
     ids: HashMap<(u32, u32, u32), u32>,
     back: HashMap<u32, (u32, u32, u32)>,
+    encodes: u64,
 }
 
 impl PickTable {
@@ -42,12 +43,54 @@ impl PickTable {
         self.next
     }
 
+    /// The ids of one output's elements, in one call — what
+    /// [`frames_for_value`] asks its [`PickIds`] for exactly once, before
+    /// any encoding, so the table's lock is held for this call and not for
+    /// the encode. Counts the call: [`Self::encodes`].
+    pub fn ids_for(&mut self, node: u32, output: u32, elements: &[u32]) -> Vec<u32> {
+        self.encodes += 1;
+        elements
+            .iter()
+            .map(|&element| self.id_for(node, output, element))
+            .collect()
+    }
+
+    /// How many outputs have been encoded against this table
+    /// ([`Self::ids_for`] calls) — the `/debug/state` counter a test reads
+    /// to know whether a restream paid for an output.
+    #[must_use]
+    pub fn encodes(&self) -> u64 {
+        self.encodes
+    }
+
+    /// Distinct pick ids allocated so far.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    /// No id allocated yet.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+
     /// Resolve a pick id back to `(node ref, output, element)`.
     #[must_use]
     pub fn resolve(&self, id: u32) -> Option<(u32, u32, u32)> {
         self.back.get(&id).copied()
     }
 }
+
+/// How [`frames_for_value`] gets its pick ids: ONE call with every element
+/// index the output draws (ascending, deduplicated — nested lists share
+/// their outer slot), answered with the id of each, in order — normally
+/// [`PickTable::ids_for`] under whatever mutex guards the table, held for
+/// that call only. The encode that follows (the wall's largest output:
+/// most of a second on a debug engine) runs outside it, so a joiner's
+/// restream never holds the table against the live path, which encodes
+/// under the session lock (docs/13 §Two lanes, one socket).
+pub type PickIds<'a> = &'a mut dyn FnMut(&[u32]) -> Vec<u32>;
 
 /// What one output's frames contained (the `/debug/state` display report
 /// and the "geometry changed" oracle Playwright asserts on).
@@ -116,7 +159,9 @@ pub fn is_drawable(value: &HashedValue) -> bool {
 }
 
 /// Encode the display frames of `value` for `(node, output)` at
-/// `generation`. `tolerance` feeds curve tessellation.
+/// `generation`. `tolerance` feeds curve tessellation. `picks` is asked
+/// once, up front, for every drawn element's id ([`PickIds`]); nothing
+/// below it holds a lock.
 #[must_use]
 #[allow(clippy::too_many_lines)] // one pass over points, curves, meshes — splitting hides the frame order
 pub fn frames_for_value(
@@ -124,13 +169,39 @@ pub fn frames_for_value(
     generation: u64,
     node: u32,
     output: u32,
-    picks: &mut PickTable,
+    picks: PickIds<'_>,
     tolerance: f64,
 ) -> DisplayFrames {
     let mut points: Vec<(u32, [f64; 3])> = Vec::new();
     let mut curves: Vec<(u32, &Curve)> = Vec::new();
     let mut meshes: Vec<(u32, &HashedValue)> = Vec::new();
     collect(value, None, &mut points, &mut curves, &mut meshes);
+    // The pick ids, in ONE ask — before the tessellation and the encoding
+    // below, which the table's lock must not outlast.
+    let mut elements: Vec<u32> = points
+        .iter()
+        .map(|(element, _)| *element)
+        .chain(curves.iter().map(|(element, _)| *element))
+        .chain(meshes.iter().map(|(element, _)| *element))
+        .collect();
+    elements.sort_unstable();
+    elements.dedup();
+    let ids = picks(&elements);
+    assert_eq!(
+        ids.len(),
+        elements.len(),
+        "PickIds answered {} ids for {} elements of ({node}, {output})",
+        ids.len(),
+        elements.len()
+    );
+    let pick_of: HashMap<u32, u32> = elements.iter().copied().zip(ids).collect();
+    let pick = |element: u32| -> u32 {
+        // Every element below came from the same collect — absent here
+        // would be a bug in this function, never a data condition.
+        pick_of.get(&element).copied().unwrap_or_else(|| {
+            unreachable!("element {element} of ({node}, {output}) has no pick id")
+        })
+    };
     let element_count = u32::try_from(match value.data() {
         ValueData::List(list) => list.slots.len(),
         _ => 1,
@@ -153,8 +224,7 @@ pub fn frames_for_value(
     if !points.is_empty() {
         let mut batch = Batch::new();
         for (element, xyz) in &points {
-            let pick = picks.id_for(node, output, *element);
-            batch.push_element(*element, pick, xyz, &[]);
+            batch.push_element(*element, pick(*element), xyz, &[]);
             out.stats.grow(xyz);
         }
         out.stats.points += points.len();
@@ -176,12 +246,11 @@ pub fn frames_for_value(
             if positions.is_empty() {
                 continue;
             }
-            let pick = picks.id_for(node, output, *element);
             out.stats.grow(&positions);
             out.stats.segments += indices.len() / 2;
             out.stats.vertices += positions.len() / 3;
             out.stats.elements += 1;
-            batch.push_element(*element, pick, &positions, &indices);
+            batch.push_element(*element, pick(*element), &positions, &indices);
         }
         if !batch.is_empty() {
             out.stats.kinds.push("curve");
@@ -213,8 +282,7 @@ pub fn frames_for_value(
             let mesh = group[0].1;
             if group.len() == 1 {
                 let (element, mesh) = group[0];
-                let pick = picks.id_for(node, output, element);
-                batch.push_element(element, pick, mesh.positions(), mesh.indices());
+                batch.push_element(element, pick(element), mesh.positions(), mesh.indices());
                 out.stats.grow(mesh.positions());
                 out.stats.triangles += mesh.triangle_count();
                 out.stats.vertices += mesh.vertex_count();
@@ -233,7 +301,7 @@ pub fn frames_for_value(
                 .iter()
                 .map(|&(element, _)| Instance {
                     element_index: element,
-                    pick_id: picks.id_for(node, output, element),
+                    pick_id: pick(element),
                     transform: IDENTITY,
                 })
                 .collect();
@@ -561,7 +629,7 @@ mod tests {
         }))
         .unwrap();
         let mut picks = PickTable::default();
-        let first = frames_for_value(&list, 1, 5, 0, &mut picks, 1e-6);
+        let first = frames_for_value(&list, 1, 5, 0, &mut |e| picks.ids_for(5, 0, e), 1e-6);
         assert_eq!(first.stats.kinds, vec!["point"]);
         assert_eq!(first.stats.points, 2);
         assert_eq!(first.stats.bounds, Some([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]]));
@@ -579,11 +647,87 @@ mod tests {
         let pick_of_third = batch.elements[1].pick_id;
         assert_eq!(picks.resolve(pick_of_third), Some((5, 0, 2)));
         // Same triple next generation → same pick id.
-        let second = frames_for_value(&list, 2, 5, 0, &mut picks, 1e-6);
+        let second = frames_for_value(&list, 2, 5, 0, &mut |e| picks.ids_for(5, 0, e), 1e-6);
         let Frame::Batch { batch, .. } = decode(&second.frames[0]).unwrap() else {
             panic!("point batch")
         };
         assert_eq!(batch.elements[1].pick_id, pick_of_third);
+    }
+
+    /// The pick ids are asked for ONCE, before any encoding, for every
+    /// element the output draws — the contract that lets the session hold
+    /// the pick table's mutex for that ask alone (review 2026-08-21: the
+    /// encoder used to take an id per element while it encoded, so a
+    /// joiner's restream held the table across a 94 MB encode and the live
+    /// path, which takes it under the session lock, waited with every
+    /// intent behind it). Points, curves and meshes of one list, a nested
+    /// list sharing its outer slot, an absent slot: one ask, the distinct
+    /// slots ascending, and the frames carry exactly the ids answered.
+    #[test]
+    fn pick_ids_are_asked_for_once_up_front_for_every_drawn_element() {
+        let nested = HashedValue::new(ValueData::List(List {
+            axis: None,
+            slots: vec![Some(point(7.0)), Some(point(8.0))],
+        }))
+        .unwrap();
+        let circle = HashedValue::new(ValueData::Curve(Curve::Circle(
+            cicada_core::geometry::Circle {
+                plane: cicada_core::spatial::Plane::world_xy(),
+                radius: 2.0,
+            },
+        )))
+        .unwrap();
+        let list = HashedValue::new(ValueData::List(List {
+            axis: None,
+            slots: vec![
+                Some(HashedValue::new(ValueData::Mesh(tetra(0.0))).unwrap()),
+                None,
+                Some(circle),
+                Some(nested),
+                Some(point(1.0)),
+            ],
+        }))
+        .unwrap();
+        let mut asks: Vec<Vec<u32>> = Vec::new();
+        let out = frames_for_value(
+            &list,
+            1,
+            9,
+            0,
+            &mut |elements: &[u32]| {
+                asks.push(elements.to_vec());
+                // Ids of the test's choosing: element + 100.
+                elements.iter().map(|e| e + 100).collect()
+            },
+            1e-6,
+        );
+        assert_eq!(
+            asks,
+            vec![vec![0, 2, 3, 4]],
+            "one ask, the distinct drawn slots ascending (the absent slot 1 is no element)"
+        );
+        let mut carried: Vec<(u32, u32)> = Vec::new();
+        for bytes in &out.frames {
+            if let Frame::Batch { batch, .. } = decode(bytes).unwrap() {
+                for element in &batch.elements {
+                    carried.push((element.element_index, element.pick_id));
+                }
+            }
+        }
+        carried.sort_unstable();
+        assert_eq!(
+            carried,
+            vec![(0, 100), (2, 102), (3, 103), (3, 103), (4, 104)],
+            "every element carries the id answered for its slot — the nested list's two points share slot 3"
+        );
+        // A scalar draws nothing and still makes its one (empty) ask: the
+        // ask count is the encode count the session's `picks.encodes` reads.
+        let number = HashedValue::new(ValueData::Number(1.0)).unwrap();
+        let mut table = PickTable::default();
+        let before = table.encodes();
+        let _ = frames_for_value(&number, 1, 9, 0, &mut |e| table.ids_for(9, 0, e), 1e-6);
+        assert_eq!(table.encodes(), before + 1);
+        assert!(table.is_empty(), "no element, no id");
     }
 
     #[test]
@@ -597,7 +741,7 @@ mod tests {
         }))
         .unwrap();
         let mut picks = PickTable::default();
-        let out = frames_for_value(&list, 3, 1, 0, &mut picks, 1e-6);
+        let out = frames_for_value(&list, 3, 1, 0, &mut |e| picks.ids_for(1, 0, e), 1e-6);
         assert_eq!(out.stats.instanced, 2);
         assert_eq!(out.stats.elements, 3);
         assert_eq!(out.stats.triangles, 12);
@@ -627,7 +771,8 @@ mod tests {
     fn scalars_clear_and_curves_tessellate() {
         let number = HashedValue::new(ValueData::Number(1.0)).unwrap();
         assert!(!is_drawable(&number));
-        let out = frames_for_value(&number, 1, 1, 0, &mut PickTable::default(), 1e-6);
+        let mut picks = PickTable::default();
+        let out = frames_for_value(&number, 1, 1, 0, &mut |e| picks.ids_for(1, 0, e), 1e-6);
         assert_eq!(out.stats.kinds, vec!["clear"]);
         let circle = HashedValue::new(ValueData::Curve(Curve::Circle(
             cicada_core::geometry::Circle {
@@ -636,7 +781,7 @@ mod tests {
             },
         )))
         .unwrap();
-        let out = frames_for_value(&circle, 1, 1, 0, &mut PickTable::default(), 1e-6);
+        let out = frames_for_value(&circle, 1, 1, 0, &mut |e| picks.ids_for(1, 0, e), 1e-6);
         assert_eq!(out.stats.kinds, vec!["curve"]);
         assert_eq!(
             out.stats.segments,

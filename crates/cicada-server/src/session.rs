@@ -28,9 +28,11 @@
 //! neither is held while calling into the solve loop, and the solve loop
 //! holds none of its own while calling back in. The pick table has its own
 //! mutex (`picks`) so a display restream can encode frames without the
-//! session lock; the one order is `inner` → `picks` (the live frame
-//! emission holds `inner` and takes `picks` per value) — nothing takes
-//! `inner` while holding `picks`.
+//! session lock; it is held only for the one ask of an output's ids
+//! (`display::PickIds`), never across an encode, so no restream holds it
+//! against the live path for longer than a hash-map walk; the one order is
+//! `inner` → `picks` (the live frame emission holds `inner` and takes
+//! `picks` per value) — nothing takes `inner` while holding `picks`.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -755,7 +757,8 @@ struct Core {
     inner: Mutex<Inner>,
     status: Mutex<StatusBoard>,
     /// Pick ids per `(node ref, output, element)` — its own mutex so a
-    /// display restream encodes frames without `inner` (lock order:
+    /// display restream encodes frames without `inner`, held for the one
+    /// ask of an output's ids and never across its encode (lock order:
     /// `inner` → `picks`, never the reverse).
     picks: Mutex<PickTable>,
     scheduler: Arc<Scheduler>,
@@ -1238,10 +1241,19 @@ impl Session {
             hold(id);
         }
         // Phase 2, per output, without the session lock: load and encode
-        // (the pick table's own lock), then the compare-and-send.
+        // (the pick table's lock for the one ask of the ids, never across
+        // the encode), then the compare-and-send.
         let store = Arc::clone(self.core.scheduler.store());
         let tolerance = self.core.config.project.tol();
         for ((node, output), displayed) in plan {
+            // The client may have left while the previous output encoded
+            // (a page reload on the wall): check BEFORE paying for this one
+            // — a load and a 94 MB encode for nobody — not only before the
+            // hand-over (review 2026-08-21; `picks.encodes` in
+            // `/debug/state` is the counter the test reads).
+            if !self.core.lock_inner().clients.contains_key(&id) {
+                return;
+            }
             match store.load_value(&displayed.hash) {
                 Ok(value) => {
                     let frames = display::frames_for_value(
@@ -1249,12 +1261,14 @@ impl Session {
                         displayed.generation,
                         node,
                         output,
-                        &mut self.core.lock_picks(),
+                        &mut |elements: &[u32]| {
+                            self.core.lock_picks().ids_for(node, output, elements)
+                        },
                         tolerance,
                     );
                     let inner = self.core.lock_inner();
                     if !inner.clients.contains_key(&id) {
-                        // The client left mid-restream: nothing to send to.
+                        // The client left during the encode: nothing to send to.
                         return;
                     }
                     let unchanged = inner.display.get(&(node, output)).is_some_and(|now| {
@@ -2721,6 +2735,13 @@ impl Session {
                 })
                 .collect()
         });
+        // The pick table's counters: distinct ids, and how many outputs were
+        // encoded against it (live emissions + restreams) — the oracle for
+        // "a restream did not pay for a departed client". `inner` → `picks`.
+        let picks = {
+            let picks = self.core.lock_picks();
+            serde_json::json!({ "ids": picks.len(), "encodes": picks.encodes() })
+        };
         serde_json::json!({
             "protocol": crate::protocol::PROTOCOL_VERSION,
             "engine": format!("cicada {}", env!("CARGO_PKG_VERSION")),
@@ -2747,6 +2768,7 @@ impl Session {
                 })),
             },
             "display": display,
+            "picks": picks,
             "lease": lease_view(&inner),
             "values": values,
             "timings": *self.core.timings.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
@@ -3973,7 +3995,9 @@ impl Core {
                         generation,
                         node_ref,
                         output,
-                        &mut self.lock_picks(),
+                        &mut |elements: &[u32]| {
+                            self.lock_picks().ids_for(node_ref, output, elements)
+                        },
                         tolerance,
                     );
                     for frame in frames.frames {
