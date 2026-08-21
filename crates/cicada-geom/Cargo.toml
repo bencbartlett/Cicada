@@ -28,5 +28,10 @@ rayon.workspace = true
 # shared libraries on the loader path at run time. CI: the `occt` jobs.
 occt = ["dep:opencascade-sys", "dep:cxx"]
 
+# The solid seam's cost table (docs/03 numbers); needs the kernel.
+[[example]]
+name = "solid_bench"
+required-features = ["occt"]
+
 [lints]
 workspace = true

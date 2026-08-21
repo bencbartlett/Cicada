@@ -8,20 +8,29 @@
 //! transcendental-free solids — the probe's box (10 × 20 × 30 at the origin)
 //! and its extruded 4 × 6 rectangle (at (3, 7, −5), 40 along Z) — so any
 //! change in OCCT build, format version, flag normalization or construction
-//! path shows up here first. Set `CICADA_OCCT_DUMP=<dir>` to also write the
-//! bytes to files (e.g. to sha256 them against the probe's recorded dumps).
+//! path shows up here first, both as the raw blake3 of the bytes (WP-A's
+//! goldens, unchanged) and as the `HashedValue` hash of the `core::Solid`
+//! built from them through the value-level API (WP-B). Set
+//! `CICADA_OCCT_DUMP=<dir>` to also write the bytes to files (e.g. to
+//! sha256 them against the probe's recorded dumps).
 
+use cicada_core::config::ProjectConfig;
 use cicada_core::spatial::{Point, Vector};
+use cicada_core::value::{HashedValue, ValueData};
 use opencascade_sys::cicada as glue;
+use rayon::prelude::*;
 
 use super::*;
 use crate::meshbuild::signed_volume;
+use crate::solid;
 
 const TOL: f64 = 1e-6;
-const DEFLECTION: f64 = 0.01;
-const ANGULAR: f64 = 0.5;
 
-/// blake3 of the canonical bytes, as the golden hashes are written.
+fn deflection() -> Deflection {
+    Deflection::new(0.01, 0.5).expect("valid")
+}
+
+/// blake3 of the canonical bytes, as WP-A's golden hashes are written.
 fn blake3_hex(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }
@@ -34,8 +43,11 @@ fn dump(name: &str, bytes: &[u8]) {
     }
 }
 
-fn probe_box() -> Solid {
-    Solid::box_at(Point::origin(), Vector::new(10.0, 20.0, 30.0)).expect("box")
+const BOX_GOLDEN: &str = "e220198abe7f57ebfc21340ff4291859f9681d17c9c9ac60f2005e3d4c1aa9e9";
+const PRISM_GOLDEN: &str = "1f6c4615803ed53852f4d6904f520d6d2b9e15f8a08ada9fecae636a5fc962b6";
+
+fn probe_box() -> Handle {
+    Handle::box_at(Point::origin(), Vector::new(10.0, 20.0, 30.0)).expect("box")
 }
 
 fn probe_rectangle() -> [Point; 4] {
@@ -47,8 +59,17 @@ fn probe_rectangle() -> [Point; 4] {
     ]
 }
 
-fn probe_prism() -> Solid {
-    Solid::extrude_polygon(&probe_rectangle(), Vector::new(0.0, 0.0, 40.0), TOL).expect("prism")
+fn probe_prism() -> Handle {
+    Handle::extrude_polygon(&probe_rectangle(), Vector::new(0.0, 0.0, 40.0), TOL).expect("prism")
+}
+
+/// The value-level box and prism (what a node would produce).
+fn box_value() -> Solid {
+    solid::box_at(Point::origin(), Vector::new(10.0, 20.0, 30.0)).expect("box")
+}
+
+fn prism_value() -> Solid {
+    solid::extrude_polygon(&probe_rectangle(), Vector::new(0.0, 0.0, 40.0), TOL).expect("prism")
 }
 
 fn assert_golden(name: &str, bytes: &[u8], expected: &str) {
@@ -71,11 +92,7 @@ fn golden_canonical_bytes_box() {
     let bytes = probe_box().canonical_bytes().expect("bytes");
     assert!(bytes.starts_with(CANONICAL_HEADER));
     assert_eq!(bytes.len(), 4494, "the probe's size for this box");
-    assert_golden(
-        "box",
-        &bytes,
-        "e220198abe7f57ebfc21340ff4291859f9681d17c9c9ac60f2005e3d4c1aa9e9",
-    );
+    assert_golden("box", &bytes, BOX_GOLDEN);
 }
 
 #[test]
@@ -83,24 +100,65 @@ fn golden_canonical_bytes_extruded_rectangle() {
     let bytes = probe_prism().canonical_bytes().expect("bytes");
     assert!(bytes.starts_with(CANONICAL_HEADER));
     assert_eq!(bytes.len(), 2303, "the probe's size for this prism");
-    assert_golden(
-        "extrude",
-        &bytes,
-        "1f6c4615803ed53852f4d6904f520d6d2b9e15f8a08ada9fecae636a5fc962b6",
-    );
+    assert_golden("extrude", &bytes, PRISM_GOLDEN);
+}
+
+/// WP-B: the same bytes through the value-level path, and the value hash
+/// the scheduler, store and display key on. The raw blake3 goldens are
+/// WP-A's, unchanged — the core path adds nothing to the bytes; the
+/// `HashedValue` goldens (kind tag 20 over the length-prefixed bytes) are
+/// blessed via run-once here.
+#[test]
+fn golden_value_hashes_through_the_core_path() {
+    let cases = [
+        (
+            "box",
+            box_value(),
+            BOX_GOLDEN,
+            "c17f91abe11669178363650582426abbf0e2c8c23f5dd173689475f9763d142b",
+        ),
+        (
+            "extrude",
+            prism_value(),
+            PRISM_GOLDEN,
+            "a00fdcf81271793de1b46d9416d31e56245fe9e3cb6aabc2671db5f2702be727",
+        ),
+    ];
+    for (name, value, raw_golden, value_golden) in cases {
+        assert_eq!(
+            blake3_hex(value.bytes()),
+            raw_golden,
+            "{name}: the value-level path must yield WP-A's bytes"
+        );
+        let sealed = HashedValue::new(ValueData::Solid(value.clone())).expect("sealed");
+        assert_eq!(
+            sealed.hash().to_hex(),
+            value_golden,
+            "{name}: HashedValue hash of the Solid moved — bless via run-once"
+        );
+        // And the hash is a pure function of the bytes: a second construction
+        // and a value rebuilt from the bytes agree.
+        let again = Solid::from_canonical_bytes(value.bytes().to_vec()).expect("bytes");
+        assert_eq!(
+            HashedValue::new(ValueData::Solid(again))
+                .expect("sealed")
+                .hash(),
+            sealed.hash()
+        );
+    }
 }
 
 #[test]
 fn canonical_bytes_round_trip_is_a_fixed_point() {
-    for (name, solid) in [("box", probe_box()), ("extrude", probe_prism())] {
-        let first = solid.canonical_bytes().expect("bytes");
-        let reread = Solid::from_canonical_bytes(&first).expect("read back");
+    for (name, handle) in [("box", probe_box()), ("extrude", probe_prism())] {
+        let first = handle.canonical_bytes().expect("bytes");
+        let reread = Handle::from_canonical_bytes(&first).expect("read back");
         let second = reread.canonical_bytes().expect("bytes again");
         assert_eq!(
             first, second,
             "{name}: serialize → deserialize → serialize is byte-identical"
         );
-        let again = Solid::from_canonical_bytes(&second).expect("read back again");
+        let again = Handle::from_canonical_bytes(&second).expect("read back again");
         assert_eq!(again.canonical_bytes().expect("bytes"), first);
     }
 }
@@ -108,20 +166,21 @@ fn canonical_bytes_round_trip_is_a_fixed_point() {
 #[test]
 fn canonical_bytes_ignore_display_tessellation() {
     // The hazard the fork fixed: meshing flips the faces' Checked flag and
-    // attaches triangulation; neither may reach the canonical bytes.
-    let solid = probe_box();
-    let before = solid.canonical_bytes().expect("bytes");
-    let mesh = solid.tessellate(DEFLECTION, ANGULAR).expect("mesh");
-    assert_eq!(mesh.0.triangle_count(), 12);
-    let after = solid.canonical_bytes().expect("bytes");
+    // attaches triangulation; neither may reach the canonical bytes. At the
+    // value level this is immediate — tessellation consumes an op-local
+    // handle and the value's bytes are never touched — so the assertion is
+    // on the bytes produced AFTER a tessellation of a handle read from them.
+    let value = box_value();
+    let before = value.bytes().to_vec();
+    let tessellation = solid::tessellate(&value, deflection()).expect("mesh");
+    assert_eq!(tessellation.mesh.0.triangle_count(), 12);
+    assert_eq!(tessellation.faces, 6);
+    let rebuilt = Handle::from_value(&value).expect("read");
     assert_eq!(
-        before, after,
+        rebuilt.canonical_bytes().expect("bytes"),
+        before,
         "tessellation is not part of a solid's identity"
     );
-    // And equal solids reached via different histories hash equally: a
-    // solid rebuilt from bytes is the same value as the fresh one.
-    let rebuilt = Solid::from_canonical_bytes(&after).expect("read");
-    assert_eq!(rebuilt.canonical_bytes().expect("bytes"), before);
 }
 
 #[test]
@@ -132,6 +191,7 @@ fn canonical_bytes_are_identical_across_constructions() {
         probe_box().canonical_bytes().expect("b"),
         "same inputs, same bytes, in one process (the probe proved it across processes)"
     );
+    assert_eq!(box_value(), box_value());
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +200,9 @@ fn canonical_bytes_are_identical_across_constructions() {
 
 #[test]
 fn box_tessellates_to_a_welded_watertight_cube() {
-    let mesh = probe_box().tessellate(DEFLECTION, ANGULAR).expect("mesh").0;
+    let Tessellation { mesh, faces } = probe_box().tessellate(deflection()).expect("mesh");
+    let mesh = mesh.0;
+    assert_eq!(faces, 6);
     assert_eq!(mesh.triangle_count(), 12, "6 faces × 2 triangles");
     assert_eq!(
         mesh.vertex_count(),
@@ -153,32 +215,30 @@ fn box_tessellates_to_a_welded_watertight_cube() {
         (volume - 6000.0).abs() < 1e-9,
         "outward orientation, exact planar volume: {volume}"
     );
-    // Deterministic buffers run to run.
+    // Deterministic buffers run to run, and identical through the value path.
     assert_eq!(
         mesh,
-        probe_box().tessellate(DEFLECTION, ANGULAR).expect("mesh").0
+        probe_box().tessellate(deflection()).expect("mesh").mesh.0
+    );
+    assert_eq!(
+        mesh,
+        solid::tessellate(&box_value(), deflection())
+            .expect("mesh")
+            .mesh
+            .0
     );
 }
 
 #[test]
-fn tessellation_rejects_bad_deflections() {
-    let solid = probe_box();
-    for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
-        assert!(matches!(
-            solid.tessellate(bad, ANGULAR),
-            Err(GeomError::BadParameter {
-                name: "linear_deflection",
-                ..
-            })
-        ));
-        assert!(matches!(
-            solid.tessellate(DEFLECTION, bad),
-            Err(GeomError::BadParameter {
-                name: "angular_deflection",
-                ..
-            })
-        ));
-    }
+fn display_deflection_tessellates_the_probe_solids() {
+    // The server's deflection for a default project draws planar solids
+    // with exactly their face triangles.
+    let display = Deflection::display(&ProjectConfig::default());
+    let hole = solid::difference(&box_value(), &prism_value()).expect("cut");
+    let tessellation = solid::tessellate(&hole, display).expect("mesh");
+    assert_eq!(tessellation.faces, 10);
+    assert_eq!(tessellation.mesh.0.triangle_count(), 32);
+    assert!((signed_volume(&tessellation.mesh.0) - 5280.0).abs() < 1e-6);
 }
 
 // ---------------------------------------------------------------------------
@@ -190,27 +250,58 @@ fn difference_volume_matches_the_analytic_value() {
     // 10 × 20 × 30 box minus a 4 × 6 prism piercing it along Z:
     // 6000 − 4 · 6 · 30 = 5280. Planar faces, so the tessellated volume is
     // exact up to floating point.
-    let hole = probe_box().difference(&probe_prism()).expect("cut");
-    let mesh = hole.tessellate(DEFLECTION, ANGULAR).expect("mesh").0;
-    assert!(mesh.is_watertight());
-    assert_eq!(mesh.triangle_count(), 32, "the probe's count (10 faces)");
-    let volume = signed_volume(&mesh);
-    assert!((volume - 5280.0).abs() < 1e-6, "got {volume}");
-    // The result is one solid with its own canonical bytes, stable and
-    // re-readable like any other.
+    let hole = probe_box().difference(probe_prism()).expect("cut");
     let bytes = hole.canonical_bytes().expect("bytes");
     // The probe measured 8,821 B for the COMPOUND BRepAlgoAPI_Cut returns;
     // the seam unwraps it to the one solid inside, 18 B less.
     assert_eq!(bytes.len(), 8803);
-    let reread = Solid::from_canonical_bytes(&bytes).expect("read");
+    let Tessellation { mesh, faces } = hole.tessellate(deflection()).expect("mesh");
+    assert!(mesh.0.is_watertight());
+    assert_eq!(faces, 10);
+    assert_eq!(mesh.0.triangle_count(), 32, "the probe's count (10 faces)");
+    let volume = signed_volume(&mesh.0);
+    assert!((volume - 5280.0).abs() < 1e-6, "got {volume}");
+    // The result is one solid with its own canonical bytes, stable and
+    // re-readable like any other — and the value-level cut yields exactly
+    // these bytes.
+    let reread = Handle::from_canonical_bytes(&bytes).expect("read");
     assert_eq!(reread.canonical_bytes().expect("bytes"), bytes);
+    let value = solid::difference(&box_value(), &prism_value()).expect("cut");
+    assert_eq!(value.bytes(), &bytes[..]);
+}
+
+#[test]
+fn a_warm_difference_equals_a_cold_one() {
+    // The determinism the sharing model buys: operating on a value several
+    // times, in any order, yields the same bytes as the first time — the
+    // inputs are re-read from their bytes, so no earlier boolean's
+    // tolerance updates and no earlier tessellation can leak in.
+    let block = box_value();
+    let prism = prism_value();
+    let cold = solid::difference(&block, &prism).expect("cut");
+    let _ = solid::tessellate(&block, deflection()).expect("mesh");
+    let _ = solid::tessellate(&prism, deflection()).expect("mesh");
+    let other_cutter = solid::extrude_polygon(
+        &[
+            Point::new(1.0, 1.0, -5.0),
+            Point::new(2.0, 1.0, -5.0),
+            Point::new(2.0, 2.0, -5.0),
+            Point::new(1.0, 2.0, -5.0),
+        ],
+        Vector::new(0.0, 0.0, 40.0),
+        TOL,
+    )
+    .expect("cutter");
+    let _ = solid::difference(&block, &other_cutter).expect("other cut");
+    let warm = solid::difference(&block, &prism).expect("cut again");
+    assert_eq!(cold, warm);
+    assert_eq!(block, box_value(), "the input value never changed");
 }
 
 #[test]
 fn difference_that_splits_or_empties_the_solid_is_refused() {
-    let block = probe_box();
     // A slab through the middle (y ∈ [9, 11]) leaves two solids.
-    let slab = Solid::extrude_polygon(
+    let slab = Handle::extrude_polygon(
         &[
             Point::new(-1.0, 9.0, -1.0),
             Point::new(11.0, 9.0, -1.0),
@@ -221,8 +312,8 @@ fn difference_that_splits_or_empties_the_solid_is_refused() {
         TOL,
     )
     .expect("slab");
-    let error = block
-        .difference(&slab)
+    let error = probe_box()
+        .difference(slab)
         .expect_err("two solids must be refused");
     assert!(
         matches!(&error, GeomError::Kernel { reason } if reason.contains("found 2")),
@@ -230,9 +321,9 @@ fn difference_that_splits_or_empties_the_solid_is_refused() {
     );
     // A cutter that swallows the block leaves nothing.
     let bigger =
-        Solid::box_at(Point::new(-1.0, -1.0, -1.0), Vector::new(12.0, 22.0, 32.0)).expect("big");
-    let error = block
-        .difference(&bigger)
+        Handle::box_at(Point::new(-1.0, -1.0, -1.0), Vector::new(12.0, 22.0, 32.0)).expect("big");
+    let error = probe_box()
+        .difference(bigger)
         .expect_err("no solid must be refused");
     assert!(
         matches!(&error, GeomError::Kernel { reason } if reason.contains("found 0")),
@@ -252,7 +343,11 @@ fn degenerate_box_is_refused_before_the_kernel() {
         Vector::new(1.0, 1.0, f64::NAN),
     ] {
         assert!(matches!(
-            Solid::box_at(Point::origin(), extents),
+            Handle::box_at(Point::origin(), extents),
+            Err(GeomError::BadParameter { .. })
+        ));
+        assert!(matches!(
+            solid::box_at(Point::origin(), extents),
             Err(GeomError::BadParameter { .. })
         ));
     }
@@ -303,12 +398,12 @@ fn degenerate_profiles_are_refused_with_the_mesh_tier_errors() {
     let up = Vector::new(0.0, 0.0, 1.0);
     // Too few points.
     assert!(matches!(
-        Solid::extrude_polygon(&[Point::origin(), Point::new(1.0, 0.0, 0.0)], up, TOL),
+        Handle::extrude_polygon(&[Point::origin(), Point::new(1.0, 0.0, 0.0)], up, TOL),
         Err(GeomError::NotSimple { .. })
     ));
     // Collinear: OCCT would build a zero-volume solid; we refuse first.
     assert!(matches!(
-        Solid::extrude_polygon(
+        Handle::extrude_polygon(
             &[
                 Point::origin(),
                 Point::new(1.0, 0.0, 0.0),
@@ -321,7 +416,7 @@ fn degenerate_profiles_are_refused_with_the_mesh_tier_errors() {
     ));
     // Non-planar.
     assert!(matches!(
-        Solid::extrude_polygon(
+        Handle::extrude_polygon(
             &[
                 Point::origin(),
                 Point::new(1.0, 0.0, 0.0),
@@ -337,7 +432,7 @@ fn degenerate_profiles_are_refused_with_the_mesh_tier_errors() {
     // post-validation catch — a symmetric bow tie would already fail the
     // Newell frame as zero-area).
     assert!(matches!(
-        Solid::extrude_polygon(
+        Handle::extrude_polygon(
             &[
                 Point::origin(),
                 Point::new(4.0, 0.0, 0.0),
@@ -351,7 +446,7 @@ fn degenerate_profiles_are_refused_with_the_mesh_tier_errors() {
     ));
     // Direction in the profile plane.
     assert!(matches!(
-        Solid::extrude_polygon(&probe_rectangle(), Vector::new(1.0, 0.0, 0.0), TOL),
+        Handle::extrude_polygon(&probe_rectangle(), Vector::new(1.0, 0.0, 0.0), TOL),
         Err(GeomError::BadParameter {
             name: "direction",
             ..
@@ -366,64 +461,149 @@ fn garbage_bytes_are_a_serialization_error() {
         b"not a brep",
         b"\nOpen CASCADE Topology V4, (c) Open Cascade\ntruncated",
     ] {
-        let error = Solid::from_canonical_bytes(bytes).expect_err("garbage must fail");
+        let error = Handle::from_canonical_bytes(bytes).expect_err("garbage must fail");
         assert!(matches!(error, GeomError::Serialization { .. }), "{error}");
     }
+    // A value core accepted (header only) is still garbage to the kernel:
+    // the value-level operations refuse it the same way, never crash.
+    let pseudo = Solid::from_canonical_bytes(CANONICAL_HEADER.to_vec()).expect("header");
+    assert!(matches!(
+        solid::tessellate(&pseudo, deflection()),
+        Err(GeomError::Serialization { .. })
+    ));
+    assert!(matches!(
+        solid::difference(&box_value(), &pseudo),
+        Err(GeomError::Serialization { .. })
+    ));
 }
 
+// ---------------------------------------------------------------------------
+// The sharing model: ownership, threads
+// ---------------------------------------------------------------------------
+
 #[test]
-fn solid_is_send() {
+fn handle_is_send() {
     fn assert_send<T: Send>() {}
+    assert_send::<Handle>();
     assert_send::<Solid>();
 }
 
 #[test]
-fn related_solids_are_safe_to_use_from_two_threads() {
-    // The module docs' hazard: `box − prism` shares its untouched faces'
-    // TShapes with `box`. Thread A serializes the input (the canonical
-    // writer rewrites and restores the shared history flags) while thread
-    // B tessellates the result (attaches triangulation, flips the same
-    // flags) — the shape of work the rayon wavefront does for sibling
-    // nodes. Under the kernel lock both are serialized; the bytes stay the
-    // golden ones and the mesh stays the analytic one, every iteration.
-    // (No sleeps, no timing: the assertion is on the results.)
-    // `Solid` is Send, not Sync: each thread OWNS its solid (moved in,
-    // handed back) — the sharing is inside OCCT, invisible to the types.
-    const ROUNDS: usize = 64;
+fn kernel_operations_consume_their_handles() {
+    // The type enforces rule 2 of the sharing model: `difference` and
+    // `tessellate` take `self`, so a handle that has been through a kernel
+    // operation cannot be used again — it no longer exists. What survives
+    // is the value, and a fresh handle from it is pristine.
     let block = probe_box();
-    let hole = block.difference(&probe_prism()).expect("cut");
     let golden = block.canonical_bytes().expect("bytes");
-    let (block, hole) = std::thread::scope(|scope| {
-        let golden = &golden;
-        let writer = scope.spawn(move || {
-            for _ in 0..ROUNDS {
-                assert_eq!(&block.canonical_bytes().expect("bytes"), golden);
-            }
-            block
-        });
-        let mesher = scope.spawn(move || {
-            for _ in 0..ROUNDS {
-                let mesh = hole.tessellate(DEFLECTION, ANGULAR).expect("mesh").0;
-                assert_eq!(mesh.triangle_count(), 32);
-                assert!((signed_volume(&mesh) - 5280.0).abs() < 1e-6);
-            }
-            hole
-        });
-        (
-            writer.join().expect("writer thread"),
-            mesher.join().expect("mesher thread"),
-        )
-    });
-    // And neither side's identity moved.
-    assert_eq!(block.canonical_bytes().expect("bytes"), golden);
+    let hole = block.difference(probe_prism()).expect("cut");
+    // `block` is gone; rebuild from the value and compare.
+    let rebuilt = Handle::from_value(&box_value()).expect("read");
+    assert_eq!(rebuilt.canonical_bytes().expect("bytes"), golden);
+    let _ = hole.tessellate(deflection()).expect("mesh");
+    // `hole` is gone too; the value path reproduces its bytes.
     assert_eq!(
-        hole.canonical_bytes().expect("bytes"),
-        probe_box()
-            .difference(&probe_prism())
+        solid::difference(&box_value(), &prism_value())
             .expect("cut")
-            .canonical_bytes()
-            .expect("bytes")
+            .bytes()
+            .len(),
+        8803
     );
+}
+
+#[test]
+fn related_solids_are_safe_across_rayon_workers() {
+    // The module docs' hazard, made hard: M related values — a base block,
+    // M_CUTTERS prisms through it at different offsets, and the M_CUTTERS
+    // differences (which in OCCT share the block's untouched faces with it
+    // at the moment they are computed) — worked on by N rayon threads at
+    // once, every task picking a value and an operation by index: re-
+    // serialize it, tessellate it, or recompute a difference. Under WP-A's
+    // process-wide lock this was serialized; under the sharing model it is
+    // genuinely parallel, and sound because every operation reads its own
+    // graph from bytes and consumes it. Goldens are computed single-
+    // threaded first; every parallel result must equal them. No sleeps, no
+    // timing: the assertions are on the results.
+    const THREADS: usize = 8;
+    const M_CUTTERS: usize = 6;
+    const ROUNDS: usize = 40;
+
+    let block = box_value();
+    let cutters: Vec<Solid> = (0..M_CUTTERS)
+        .map(|i| {
+            #[allow(clippy::cast_precision_loss)]
+            let x = 1.0 + i as f64;
+            solid::extrude_polygon(
+                &[
+                    Point::new(x, 2.0, -5.0),
+                    Point::new(x + 0.5, 2.0, -5.0),
+                    Point::new(x + 0.5, 17.0, -5.0),
+                    Point::new(x, 17.0, -5.0),
+                ],
+                Vector::new(0.0, 0.0, 40.0),
+                TOL,
+            )
+            .expect("cutter")
+        })
+        .collect();
+    let holes: Vec<Solid> = cutters
+        .iter()
+        .map(|cutter| solid::difference(&block, cutter).expect("cut"))
+        .collect();
+    let values: Vec<&Solid> = std::iter::once(&block)
+        .chain(cutters.iter())
+        .chain(holes.iter())
+        .collect();
+    let golden_meshes: Vec<Tessellation> = values
+        .iter()
+        .map(|value| solid::tessellate(value, deflection()).expect("mesh"))
+        .collect();
+
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(THREADS)
+        .build()
+        .expect("pool");
+    let tasks = values.len() * 3 * ROUNDS;
+    let outcomes: Vec<Result<(), String>> = pool.install(|| {
+        (0..tasks)
+            .into_par_iter()
+            .map(|task| {
+                let index = (task / 3) % values.len();
+                let value = values[index];
+                match task % 3 {
+                    0 => {
+                        // Re-serialize: a fresh handle's bytes are the value's.
+                        let handle = Handle::from_value(value).map_err(|e| e.to_string())?;
+                        let bytes = handle.canonical_bytes().map_err(|e| e.to_string())?;
+                        (bytes == value.bytes())
+                            .then_some(())
+                            .ok_or_else(|| format!("value {index}: bytes drifted"))
+                    }
+                    1 => {
+                        let mesh =
+                            solid::tessellate(value, deflection()).map_err(|e| e.to_string())?;
+                        (mesh == golden_meshes[index])
+                            .then_some(())
+                            .ok_or_else(|| format!("value {index}: tessellation drifted"))
+                    }
+                    _ => {
+                        let cutter = index % M_CUTTERS;
+                        let hole = solid::difference(&block, &cutters[cutter])
+                            .map_err(|e| e.to_string())?;
+                        (hole == holes[cutter])
+                            .then_some(())
+                            .ok_or_else(|| format!("cutter {cutter}: difference drifted"))
+                    }
+                }
+            })
+            .collect()
+    });
+    let failures: Vec<&String> = outcomes.iter().filter_map(|o| o.as_ref().err()).collect();
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(outcomes.len(), tasks);
+    // And nothing moved: the inputs are the values they were.
+    assert_eq!(block, box_value());
+    assert_eq!(blake3_hex(block.bytes()), BOX_GOLDEN);
 }
 
 // ---------------------------------------------------------------------------

@@ -1,8 +1,9 @@
 //! Geometry operations and the typed seams to rented kernels (docs/03,
 //! docs/14): tolerance-aware comparisons, frames, curve evaluation,
 //! triangulation, mesh construction, similarity transforms, spade-backed
-//! Voronoi, Manifold-backed mesh booleans, and — behind the `occt` feature
-//! — the OCCT B-rep seam ([`occt`]).
+//! Voronoi, Manifold-backed mesh booleans, the value-level solid API
+//! ([`solid`] — the same signatures in every build) and — behind the
+//! `occt` feature — the OCCT B-rep seam it runs on ([`occt`]).
 //!
 //! The VALUE types live in `cicada-core` (dependency law); this crate is
 //! the constructive layer the stdlib nodes call. Heavy kernel FFI is
@@ -26,6 +27,7 @@ pub mod frame;
 pub mod meshbuild;
 #[cfg(feature = "occt")]
 pub mod occt;
+pub mod solid;
 pub mod text;
 pub mod tol;
 pub mod transform;
@@ -109,5 +111,21 @@ pub enum GeomError {
     NotWatertight {
         /// What failed.
         reason: String,
+    },
+    /// The operation needs a rented kernel this build does not link (its
+    /// cargo feature is off). Loud by design: a `Solid` in a build without
+    /// OCCT cannot be drawn or operated on, and says so instead of falling
+    /// back to anything.
+    #[error(
+        "{operation} needs the {kernel} kernel, which this build does not link \
+         (cicada-geom feature `{feature}` is off)"
+    )]
+    KernelUnavailable {
+        /// The kernel's name (`OCCT`).
+        kernel: &'static str,
+        /// The cargo feature that links it.
+        feature: &'static str,
+        /// The operation that was asked for.
+        operation: &'static str,
     },
 }

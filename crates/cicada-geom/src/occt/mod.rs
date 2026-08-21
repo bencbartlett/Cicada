@@ -1,13 +1,69 @@
-//! The OCCT seam (docs/03 §The seam; DECISIONS.md rented-kernels and
-//! B-rep-first rows; built from the probe docs/probes/occt-2026-08.md).
-//! Behind the `occt` Cargo feature: a typed, `Result`-returning surface over
-//! Ben's fork of `opencascade-rs`, linked against a PREBUILT OCCT 7.8.1 that
+//! The OCCT seam (docs/03 §The OCCT seam as built; DECISIONS.md rows 16 and
+//! 42; built from the probe docs/probes/occt-2026-08.md). Behind the `occt`
+//! Cargo feature: a typed, `Result`-returning surface over Ben's fork of
+//! `opencascade-rs`, linked against a PREBUILT OCCT 7.8.1 that
 //! `tools/fetch_occt.py` installs and `DEP_OCCT_ROOT` names.
 //!
-//! What is wrapped (docs/17 Item 3 WP-A's set): a box, a planar-polygon
-//! extrusion, the boolean difference, tessellation into core's
-//! [`Watertight<Mesh>`], and the canonical byte form a content-hashed
-//! `Solid` value (WP-B) needs — in both directions.
+//! This module is the KERNEL level: [`Handle`]s are live `TopoDS_Shape`s.
+//! The VALUE level — `core::Solid` in, `core::Solid` out, feature-independent
+//! signatures — is [`crate::solid`], which every caller outside this crate's
+//! tests and benches uses.
+//!
+//! # The sharing model (v0.1 item 3 WP-B)
+//!
+//! A `core::Solid` is its canonical bytes; a kernel handle is a derived,
+//! op-local artifact. Three rules make two solids on two rayon workers safe
+//! without any lock, and make a warm solve compute the same bytes as a cold
+//! one:
+//!
+//! 1. **Every handle exclusively owns its `TShape` graph.** A handle is
+//!    born either from a constructor (`BRepPrimAPI_MakeBox`, a prism over a
+//!    profile that dies inside the glue call) or from reading canonical
+//!    bytes (`BinTools` builds a fresh object graph — the deep copy the
+//!    WP-A plan spelled `BRepBuilderAPI_Copy`, obtained for free from the
+//!    path every value already takes). No two live handles ever share a
+//!    `TShape`.
+//! 2. **Kernel operations CONSUME their handles** (`self` by value):
+//!    [`Handle::difference`] takes both operands and returns the result,
+//!    which shares untouched faces with inputs that no longer exist — so
+//!    the result exclusively owns its graph again (rule 1 is an
+//!    invariant, not a convention). [`Handle::tessellate`] consumes too:
+//!    OCCT attaches the triangulation to the `TShape`s and a later mesh at
+//!    a coarser deflection would keep the finer one (`BRepMesh` reuses a
+//!    triangulation that already satisfies the request), so a re-used
+//!    handle would make a `tessellate` result depend on what was displayed
+//!    before it. Booleans update the tolerances of input sub-shapes in
+//!    place when the intersection needs it (`BOPAlgo_Builder`'s default,
+//!    non-`NonDestructive` mode), so a re-used input would make the NEXT
+//!    operation depend on the previous one. Consumption ends both hazards
+//!    by type: there is no handle left to re-use.
+//! 3. **Results go back to bytes** ([`Handle::into_value`]) and the handle
+//!    dies. The next node reads the bytes again. That re-read is the price
+//!    of the model; [`crate::solid`]'s docs and docs/03 carry the measured
+//!    numbers (a `BinTools` read is a small fraction of the boolean it
+//!    feeds).
+//!
+//! Consequently there is no process-wide kernel lock any more (WP-A's
+//! stand-in while the model was undecided): the glue's calls touch no OCCT
+//! global — `BRepPrimAPI_*`, `BRepBuilderAPI_*`, `BRepAlgoAPI_Cut` (run
+//! sequentially, `RunParallel` off), `BRepMesh_IncrementalMesh`
+//! (`isInParallel` off), `BinTools_ShapeSet` and `TopExp_Explorer` keep
+//! their state in locals; `Standard_Type` registration and the memory
+//! manager are thread-safe in OCCT 7.x; the statics they read
+//! (`BRepLib::Precision`, `BOPAlgo_Options::GetParallelMode`) are never
+//! written. The one OCCT subsystem known to keep mutable globals is
+//! `Interface_Static` (STEP reader/writer parameters): WP-C's
+//! `import_step`/`export_step` must run those calls under a lock of their
+//! own, documented there. The thread-safety test below runs N rayon
+//! workers over M related values (a base, its cutters, their differences)
+//! and checks every result against single-threaded goldens.
+//!
+//! A handle-RE-USE cache (keep handles keyed by value hash across nodes)
+//! is deliberately NOT here: under the semantics above a cached handle is
+//! pristine only until its first kernel operation, and the measured re-read
+//! cost does not justify a cache that would have to evict on every use.
+//! [`Handle::from_value`] is the one choke point such a cache would wrap if
+//! WP-C's glue makes booleans non-destructive and meshing idempotent.
 //!
 //! # Exception policy
 //!
@@ -21,14 +77,15 @@
 //! triangulation) are turned into errors on the C++ side, and a final
 //! `catch (...)` makes the boundary total rather than an inventory of
 //! known exception types. Nothing in this module calls a bridge function
-//! that lacks `Result`, so no C++ exception can reach Rust unhandled; the
-//! tests drive a real `Standard_DomainError` and, through the fork's
-//! `cicada_selftest_throw`, one exception of each kind through the
+//! that lacks `Result` except `TopExp_Explorer`'s `More`/`Next`, which do
+//! not throw when `Next` follows a true `More` (the only way it is called
+//! here); the tests drive a real `Standard_DomainError` and, through the
+//! fork's `cicada_selftest_throw`, one exception of each kind through the
 //! boundary to prove every clause is active in this build.
 //!
 //! # Canonical bytes
 //!
-//! [`Solid::canonical_bytes`] is OCCT's `BinTools` format at the PINNED
+//! [`Handle::canonical_bytes`] is OCCT's `BinTools` format at the PINNED
 //! [`CANONICAL_FORMAT_VERSION`], written with `theWithTriangles = false,
 //! theWithNormals = false`, after normalizing what is history rather than
 //! geometry: single-solid compounds are unwrapped at construction, and the
@@ -38,75 +95,49 @@
 //! across processes and two independent OCCT builds (probe Q2), a fixed
 //! point under read → write, and unaffected by tessellating the solid.
 //! Cross-OS identity is what the CI `occt` jobs measure.
-//!
-//! # Threads
-//!
-//! A [`Solid`] is `Send` (the fork marks `TopoDS_Shape` so) and not `Sync`.
-//! The hazard is wider than one solid on two threads: OCCT results SHARE
-//! `TShape`s with their inputs (a boolean reuses the faces it did not
-//! touch), and both [`Solid::tessellate`] (attaches triangulation, flips
-//! `Modified`/`Checked`) and [`Solid::canonical_bytes`] (rewrites and
-//! restores `Free`/`Modified`/`Checked` on a snapshot) write to those
-//! shared objects. So `box` on thread A and `box - prism` on thread B —
-//! exactly what the rayon wavefront does for sibling nodes — would race
-//! in C++ without any `Sync` involved. Every kernel call in this module
-//! therefore runs under ONE process-wide [`kernel_lock`]; `Send` is sound
-//! because the lock, not the type, serializes the shared state. The lock
-//! is not re-entrant: glue is called only from methods that already hold
-//! the guard, and `from_shape` takes the guard as proof. It serializes all
-//! OCCT work in the process (fine for WP-A: nothing else calls the seam);
-//! WP-B's sharing model — deep copies at the seam, or doc 12's kernel
-//! worker — replaces it deliberately, not by accident.
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use cicada_core::geometry::{Mesh, Watertight};
+use cicada_core::geometry::{Mesh, SOLID_CANONICAL_HEADER, Solid, Watertight};
 use cicada_core::spatial::{Point, Vector};
 use cxx::UniquePtr;
 use glam::DVec2;
+use opencascade_sys::top_abs::TopAbs_ShapeEnum;
+use opencascade_sys::top_exp::TopExp_Explorer_new;
 use opencascade_sys::topo_ds::TopoDS_Shape;
 use opencascade_sys::{bin_tools, cicada as glue};
 
 use crate::frame::polygon_frame;
+use crate::solid::{Deflection, Tessellation};
 use crate::triangulate::ear_clip;
 use crate::{GeomError, tol};
 
-/// The `BinTools_FormatVersion` of [`Solid::canonical_bytes`]: 4 ("Open
+/// The `BinTools_FormatVersion` of [`Handle::canonical_bytes`]: 4 ("Open
 /// CASCADE Topology V4", OCCT 7.6+). PINNED — OCCT's `_CURRENT` moves with
 /// releases and would silently change every `Solid` hash. Changing this
 /// value is a determinism-policy change (DECISIONS.md), not a tweak.
 pub const CANONICAL_FORMAT_VERSION: i32 = 4;
 
-/// The first bytes of every canonical serialization (the V4 header).
-pub const CANONICAL_HEADER: &[u8] = b"\nOpen CASCADE Topology V4";
+/// The first bytes of every canonical serialization (the V4 header) — the
+/// same constant core checks at value construction.
+pub const CANONICAL_HEADER: &[u8] = SOLID_CANONICAL_HEADER;
 
-/// The one lock every OCCT call in this module runs under (module docs
-/// §Threads). Guards no data of its own: the data is OCCT's shared
-/// `TShape`s, which several [`Solid`]s may point at.
-static KERNEL: Mutex<()> = Mutex::new(());
-
-/// Proof that the caller holds the kernel lock.
-type KernelGuard = MutexGuard<'static, ()>;
-
-/// Take the kernel lock. A poisoned lock is taken anyway: the guarded unit
-/// carries no state a panicking thread could have left half-written (the
-/// glue restores the kernel's own flags on its `catch (...)` paths).
-fn kernel_lock() -> KernelGuard {
-    KERNEL.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// One OCCT solid: a `TopoDS_Shape` that IS a single `TopAbs_SOLID`
+/// One live OCCT solid: a `TopoDS_Shape` that IS a single `TopAbs_SOLID`
 /// (compounds holding exactly one solid are unwrapped at construction;
-/// anything else is refused). Immutable from Rust's point of view.
-pub struct Solid {
+/// anything else is refused), exclusively owning its `TShape` graph
+/// (module docs §The sharing model). Op-local: it is made from a value or
+/// a constructor, used by ONE kernel operation, and either consumed by it
+/// or turned back into a value. `Send` (the fork marks `TopoDS_Shape` so)
+/// and not `Sync` — a handle belongs to one thread at a time, and nothing
+/// else points at its `TShape`s.
+pub struct Handle {
     inner: UniquePtr<TopoDS_Shape>,
 }
 
-impl fmt::Debug for Solid {
+impl fmt::Debug for Handle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("occt::Solid").finish_non_exhaustive()
+        f.debug_struct("occt::Handle").finish_non_exhaustive()
     }
 }
 
@@ -117,15 +148,10 @@ fn kernel(operation: &str, error: &cxx::Exception) -> GeomError {
     }
 }
 
-impl Solid {
+impl Handle {
     /// Wrap a kernel result, unwrapping a single-solid compound and refusing
-    /// everything that is not exactly one solid. Runs under the caller's
-    /// kernel lock (`_kernel` is the proof).
-    fn from_shape(
-        _kernel: &KernelGuard,
-        shape: &TopoDS_Shape,
-        operation: &str,
-    ) -> Result<Self, GeomError> {
+    /// everything that is not exactly one solid.
+    fn from_shape(shape: &TopoDS_Shape, operation: &str) -> Result<Self, GeomError> {
         let inner = glue::cicada_single_solid(shape).map_err(|error| kernel(operation, &error))?;
         Ok(Self { inner })
     }
@@ -158,7 +184,6 @@ impl Solid {
                 requirement: "must be finite",
             });
         }
-        let guard = kernel_lock();
         let shape = glue::cicada_make_box(
             min_corner.0.x,
             min_corner.0.y,
@@ -168,7 +193,7 @@ impl Solid {
             extents.0.z,
         )
         .map_err(|error| kernel("make_box", &error))?;
-        Self::from_shape(&guard, &shape, "make_box")
+        Self::from_shape(&shape, "make_box")
     }
 
     /// A closed planar polygon (vertices in order; the closing edge is
@@ -223,87 +248,89 @@ impl Solid {
         for point in profile {
             xyz.extend_from_slice(&[point.0.x, point.0.y, point.0.z]);
         }
-        let guard = kernel_lock();
         let shape = glue::cicada_extrude_polygon(&xyz, direction.0.x, direction.0.y, direction.0.z)
             .map_err(|error| kernel("extrude_polygon", &error))?;
-        Self::from_shape(&guard, &shape, "extrude_polygon")
+        Self::from_shape(&shape, "extrude_polygon")
     }
 
-    /// `self` minus `cutter` (`BRepAlgoAPI_Cut`). The result must again be
-    /// exactly one solid: a cut that splits the solid in two, or removes it
-    /// entirely, is refused loudly rather than returned as a compound.
+    /// `self` minus `cutter` (`BRepAlgoAPI_Cut`), consuming both: the
+    /// result shares the faces the cut did not touch with its inputs, and
+    /// the cut may have raised tolerances inside them — so the inputs are
+    /// gone, and the result owns its graph alone (module docs, rule 2).
+    /// The result must again be exactly one solid: a cut that splits the
+    /// solid in two, or removes it entirely, is refused loudly rather than
+    /// returned as a compound.
     ///
     /// # Errors
     ///
     /// [`GeomError::Kernel`] with OCCT's error report, or when the result
     /// is not a single solid.
-    pub fn difference(&self, cutter: &Self) -> Result<Self, GeomError> {
-        let guard = kernel_lock();
+    // Taking `cutter` by value IS the point (rule 2: the cut may raise the
+    // tolerances of sub-shapes inside it and the result shares faces with
+    // it), so the lint that asks for `&Self` is overruled here on purpose.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn difference(self, cutter: Self) -> Result<Self, GeomError> {
         let shape =
             glue::cicada_cut(&self.inner, &cutter.inner).map_err(|error| kernel("cut", &error))?;
-        Self::from_shape(&guard, &shape, "cut")
+        drop(cutter);
+        drop(self);
+        Self::from_shape(&shape, "cut")
     }
 
-    /// Tessellate (`BRepMesh_IncrementalMesh` at ABSOLUTE `linear_deflection`
-    /// and `angular_deflection` in radians) into a welded, watertight core
-    /// mesh: per-face vertices are merged exactly (bit-identical positions,
-    /// `-0.0` canonicalized to `0.0` first), zero-area triangles the weld
-    /// produces are dropped, and the structural watertight predicate is
-    /// checked — a tessellation that is not closed is an error, never a
-    /// leaky mesh.
-    ///
-    /// Meshing attaches the triangulation to the shape's shared `TShape`s
-    /// (OCCT semantics — shared with every solid derived from or feeding
-    /// this one, hence the kernel lock); [`Solid::canonical_bytes`] is
-    /// unaffected by design.
+    /// Number of faces (`TopAbs_FACE` sub-shapes, each counted once per
+    /// location, as `TopExp_Explorer` visits them).
+    #[must_use]
+    pub fn face_count(&self) -> usize {
+        let mut explorer = TopExp_Explorer_new(&self.inner, TopAbs_ShapeEnum::TopAbs_FACE);
+        let mut count = 0;
+        while explorer.More() {
+            count += 1;
+            explorer.pin_mut().Next();
+        }
+        count
+    }
+
+    /// Tessellate (`BRepMesh_IncrementalMesh` at ABSOLUTE linear and
+    /// angular deflection) into a welded, watertight core mesh, consuming
+    /// the handle (module docs, rule 2: the mesher attaches its
+    /// triangulation to the `TShape`s). Per-face vertices are merged
+    /// exactly (bit-identical positions, `-0.0` canonicalized to `0.0`
+    /// first), zero-area triangles the weld produces are dropped, and the
+    /// structural watertight predicate is checked — a tessellation that is
+    /// not closed is an error, never a leaky mesh. The face count rides
+    /// along so the display path reconstructs once for both.
     ///
     /// # Errors
     ///
-    /// [`GeomError::BadParameter`] for a non-positive deflection;
     /// [`GeomError::Kernel`] if the mesher fails; [`GeomError::NotWatertight`]
-    /// if the welded result is not closed.
-    pub fn tessellate(
-        &self,
-        linear_deflection: f64,
-        angular_deflection: f64,
-    ) -> Result<Watertight<Mesh>, GeomError> {
-        for (name, value) in [
-            ("linear_deflection", linear_deflection),
-            ("angular_deflection", angular_deflection),
-        ] {
-            if !(value.is_finite() && value > 0.0) {
-                return Err(GeomError::BadParameter {
-                    name,
-                    value: format!("{value}"),
-                    requirement: "must be finite and > 0",
-                });
-            }
-        }
+    /// if the welded result is not closed. (A non-positive deflection cannot
+    /// reach here: [`Deflection`] is validated at construction.)
+    pub fn tessellate(self, deflection: Deflection) -> Result<Tessellation, GeomError> {
+        let faces = self.face_count();
         let mut positions = Vec::new();
         let mut indices = Vec::new();
-        {
-            let _kernel = kernel_lock();
-            glue::cicada_tessellate(
-                &self.inner,
-                linear_deflection,
-                angular_deflection,
-                &mut positions,
-                &mut indices,
-            )
-            .map_err(|error| kernel("tessellate", &error))?;
-        }
-        // Welding is pure Rust over our own buffers: outside the lock.
-        weld(&positions, &indices)
+        glue::cicada_tessellate(
+            &self.inner,
+            deflection.linear(),
+            deflection.angular(),
+            &mut positions,
+            &mut indices,
+        )
+        .map_err(|error| kernel("tessellate", &error))?;
+        drop(self);
+        // Welding is pure Rust over our own buffers.
+        let mesh = weld(&positions, &indices)?;
+        Ok(Tessellation { mesh, faces })
     }
 
-    /// The canonical serialization — see the module docs. Read back with
-    /// [`Solid::from_canonical_bytes`].
+    /// The canonical serialization — see the module docs. Side-effect free
+    /// (the flag snapshot is restored), so it does not consume the handle.
+    /// Read back with [`Handle::from_canonical_bytes`].
     ///
     /// # Errors
     ///
     /// [`GeomError::Serialization`] if the kernel's writer fails.
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, GeomError> {
-        let _kernel = kernel_lock();
         let bytes = glue::cicada_canonical_bytes(&self.inner, CANONICAL_FORMAT_VERSION).map_err(
             |error| GeomError::Serialization {
                 reason: format!("OCCT BinTools write: {}", error.what()),
@@ -317,20 +344,46 @@ impl Solid {
         Ok(bytes)
     }
 
-    /// Rebuild a solid from [`Solid::canonical_bytes`] output (or any
-    /// `BinTools` V1–V4 stream that holds exactly one solid).
+    /// Rebuild a solid from [`Handle::canonical_bytes`] output (or any
+    /// `BinTools` V1–V4 stream that holds exactly one solid). `BinTools`
+    /// builds a fresh object graph: the handle shares nothing with anyone.
     ///
     /// # Errors
     ///
     /// [`GeomError::Serialization`] for bytes `BinTools` cannot read;
     /// [`GeomError::Kernel`] if they hold anything but one solid.
     pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, GeomError> {
-        let guard = kernel_lock();
         let shape =
             bin_tools::read_brep_binary_bytes(bytes).map_err(|error| GeomError::Serialization {
                 reason: format!("OCCT BinTools read: {}", error.what()),
             })?;
-        Self::from_shape(&guard, &shape, "from_canonical_bytes")
+        Self::from_shape(&shape, "from_canonical_bytes")
+    }
+
+    /// The handle for a value: its canonical bytes read into a fresh graph.
+    /// THE choke point between values and the kernel — every operation in
+    /// [`crate::solid`] starts here, and a handle cache (if WP-C's glue ever
+    /// makes one sound) would wrap exactly this function.
+    ///
+    /// # Errors
+    ///
+    /// As [`Handle::from_canonical_bytes`].
+    pub fn from_value(solid: &Solid) -> Result<Self, GeomError> {
+        Self::from_canonical_bytes(solid.bytes())
+    }
+
+    /// The value of this handle: its canonical bytes, sealed as a
+    /// `core::Solid`. Consumes the handle — after this the bytes are the
+    /// solid (module docs, rule 3).
+    ///
+    /// # Errors
+    ///
+    /// As [`Handle::canonical_bytes`].
+    pub fn into_value(self) -> Result<Solid, GeomError> {
+        let bytes = self.canonical_bytes()?;
+        Solid::from_canonical_bytes(bytes).map_err(|error| GeomError::Serialization {
+            reason: error.to_string(),
+        })
     }
 }
 

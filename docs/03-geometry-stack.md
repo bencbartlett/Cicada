@@ -74,20 +74,43 @@ OCCT) in `crates/cicada-geom/src/occt/`.
   `kicad-parser` and a second `glam` stay out of the graph). Patches are
   read line by line and carry their provenance in the commit message;
   blind merges of upstream PRs never.
-- **What is wrapped (WP-A's set).** `occt::Solid` — a `TopoDS_Shape` that
-  IS one solid; single-solid compounds (what `BRepAlgoAPI_Cut` returns)
-  are unwrapped at construction and anything else refused — with
-  `box_at`, `extrude_polygon` (validated with the mesh tier's planarity
-  and simplicity rules and the explicit tolerance, because OCCT accepts
+- **What is wrapped (WP-A's set, WP-B's shape).** Two levels. The
+  KERNEL level, `occt::Handle` — a `TopoDS_Shape` that IS one solid;
+  single-solid compounds (what `BRepAlgoAPI_Cut` returns) are unwrapped
+  at construction and anything else refused — with `box_at`,
+  `extrude_polygon` (validated with the mesh tier's planarity and
+  simplicity rules and the explicit tolerance, because OCCT accepts
   collinear points and returns a zero-volume solid), `difference` (a cut
   that splits or empties the solid is refused, not returned as a
-  compound), `tessellate → Watertight<Mesh>` (absolute linear + angular
-  deflection; per-face nodes welded on bit-identical positions, `-0.0 →
-  0.0`; zero-area triangles dropped; `is_watertight` required), and
-  `canonical_bytes` / `from_canonical_bytes`. Errors are `GeomError`
-  (+ `Serialization`, `NotWatertight`). WP-C adds the rest of the node
-  set on the same pattern: one glue function per kernel operation,
-  declared `Result`.
+  compound), `tessellate` (absolute linear + angular deflection; per-face
+  nodes welded on bit-identical positions, `-0.0 → 0.0`; zero-area
+  triangles dropped; `is_watertight` required; the face count rides
+  along), `face_count`, `canonical_bytes` / `from_canonical_bytes`, and
+  the two doors to the value model, `from_value` / `into_value`. The
+  VALUE level, `cicada_geom::solid` — `core::Solid` in, `core::Solid`
+  out: `box_at`, `extrude_polygon`, `difference`, `tessellate →
+  Tessellation { mesh: Watertight<Mesh>, faces }`, plus `Deflection`
+  (validated; `Deflection::display(&ProjectConfig)` is the display
+  policy below) and `kernel_available()`. Its signatures exist in EVERY
+  build; without the `occt` feature each returns the typed
+  `GeomError::KernelUnavailable { kernel, feature, operation }` — a loud
+  refusal, never a mesh-tier fallback. Stdlib nodes (WP-C) and the
+  server's display path use the value level only. Errors are
+  `GeomError` (+ `Serialization`, `NotWatertight`, `KernelUnavailable`).
+  WP-C adds the rest of the node set on the same pattern: one glue
+  function per kernel operation, declared `Result`, one value-level
+  function over it.
+- **The `Solid` value (WP-B).** `core::Solid` holds the canonical bytes
+  (`Arc<[u8]>`) and nothing else; core checks the `BinTools` V4 header
+  (`SOLID_CANONICAL_HEADER`, the same constant the seam pins as
+  `CANONICAL_FORMAT_VERSION = 4`) and leaves the rest to the kernel. Its
+  hash is KindTag `Solid` over the length-prefixed bytes, like every
+  value; the store keeps the bytes verbatim (`StoredValue::Solid`); the
+  Python boundary refuses it with a typed "not marshallable yet"; the
+  checker admits it into `T` ports and display sinks
+  (`TRANSFORMABLE_KINDS` / `GEOMETRY_KINDS`), with the kernel-backed
+  transforms themselves WP-C's — until then `Similarity::apply` on a
+  Solid is a red node saying so.
 - **Exception policy.** OCCT's `Standard_Failure` does not derive from
   `std::exception`; cxx's default handler lets it unwind into Rust and
   the process dies (`0xC0000409`, probe `throw`). The fork's
@@ -118,21 +141,105 @@ OCCT) in `crates/cicada-geom/src/occt/`.
   drafts (`docs/probes/occt-2026-08.md`): they record the fork and its
   patch stack, the pinned format version, the single-solid unwrapping,
   the flag normalization and the per-OS goldens rule.
-- **Threads.** `occt::Solid` is `Send`, not `Sync`, and the hazard is
-  wider than one solid: OCCT results SHARE `TShape`s with their inputs (a
-  boolean reuses the faces it did not touch), `tessellate` attaches
-  triangulation and flips `Modified`/`Checked` on them, `canonical_bytes`
-  rewrites and restores `Free`/`Modified`/`Checked` — so `box` serialized
-  on one thread while `box − prism` is tessellated on another (the rayon
-  wavefront's sibling-node shape) is a C++ data race with no `Sync` in
-  sight; measured: the INPUT's canonical bytes come back wrong. Every
-  kernel call in the seam therefore runs under one process-wide kernel
-  lock (`from_shape` takes the guard as proof; welding runs outside it),
-  which is what makes `Send` sound. It serializes all OCCT work in the
-  process — acceptable while only the seam's tests call it. WP-B's
-  sharing model replaces it on purpose: deep copies at the seam
-  (`BRepBuilderAPI_Copy`, so no two `Solid`s share `TShape`s) or doc 12's
-  kernel worker that owns all OCCT state.
+- **The sharing model (decided 2026-08-20, WP-B; DECISIONS.md row 16
+  revised the same day).** The hazard WP-A found: OCCT results SHARE
+  `TShape`s with their inputs (a boolean reuses the faces it did not
+  touch), `tessellate` attaches triangulation and flips
+  `Modified`/`Checked` on them, `canonical_bytes` rewrites and restores
+  `Free`/`Modified`/`Checked` — so `box` serialized on one thread while
+  `box − prism` is tessellated on another (the rayon wavefront's
+  sibling-node shape) was a C++ data race with no `Sync` in sight;
+  measured: the INPUT's canonical bytes came back wrong. WP-A's
+  process-wide kernel lock serialized all OCCT work. WP-B replaces it
+  with **op-local, linear handles** — option (b) of the plan, the deep
+  copy obtained from the path every value already takes instead of
+  `BRepBuilderAPI_Copy`:
+  1. A `core::Solid` IS its bytes; a kernel handle is a derived,
+     op-local artifact. Every `occt::Handle` exclusively owns its
+     `TShape` graph: it is born from a constructor or from a `BinTools`
+     read of canonical bytes, which builds a fresh object graph. No two
+     live handles share a `TShape`.
+  2. Kernel operations CONSUME their handles (`self` by value).
+     `difference(self, cutter)` returns a result that shares untouched
+     faces with inputs that no longer exist, so it owns its graph alone;
+     `tessellate(self)` consumes because the mesher attaches its
+     triangulation and a later mesh at a coarser deflection would keep
+     the finer one (`BRepMesh` reuses a triangulation that already
+     satisfies the request) — a re-used handle would make a `tessellate`
+     result depend on what was displayed before it; booleans raise the
+     tolerances of input sub-shapes in place when the intersection needs
+     it (`BOPAlgo_Builder`'s default, non-`NonDestructive` mode) — a
+     re-used input would make the NEXT operation depend on the previous
+     one. Consumption ends both hazards by type, not by convention.
+  3. Results go back to bytes (`into_value`) and the handle dies; the
+     next node reads the bytes again. A warm solve computes exactly what
+     a cold one does (`a_warm_difference_equals_a_cold_one`).
+  The kernel lock is retired: the glue's calls touch no OCCT global
+  (`BRepPrimAPI_*`, `BRepBuilderAPI_*`, `BRepAlgoAPI_Cut` with
+  `RunParallel` off, `BRepMesh_IncrementalMesh` with `isInParallel` off,
+  `BinTools_ShapeSet`, `TopExp_Explorer` keep their state in locals;
+  `Standard_Type` registration and the memory manager are thread-safe in
+  OCCT 7.x; the statics read — `BRepLib::Precision`,
+  `BOPAlgo_Options::GetParallelMode` — are never written). The one OCCT
+  subsystem known to keep mutable globals is `Interface_Static` (the
+  STEP reader/writer parameters): WP-C's `import_step` / `export_step`
+  run those calls under a lock of their own. Proof as shipped:
+  `related_solids_are_safe_across_rayon_workers` — 8 rayon threads,
+  13 related values (a block, six cutters through it, their six
+  differences), 1,560 tasks that re-serialize, tessellate or recompute a
+  difference by index, every result equal to its single-threaded
+  golden. `Handle` is `Send`, not `Sync`; `core::Solid` is both.
+- **No handle cache (WP-B, measured).** The plan asked for a cache of
+  reconstructed handles keyed by value hash so a chain of nodes would not
+  re-read bytes at every step. Under the semantics above a cached handle
+  is pristine only until its first kernel operation (rule 2), so such a
+  cache could only ever serve the FIRST use of a value — and the re-read
+  it would save is small next to the work it feeds. Measured with
+  `cargo run --release -p cicada-geom --features occt --example
+  solid_bench` (2026-08-20, Windows, release, single-threaded unless
+  stated; the probe's 10 × 20 × 30 block and its 4 × 6 cutter, one pair
+  per part):
+
+  | step (per part) | 1 part | 100 parts | 1,000 parts |
+  |---|---|---|---|
+  | `box` construct + serialize (4,494 B) | 73 µs | 68 µs | 67 µs |
+  | `extrude` construct + serialize (2,303 B) | 505 µs | 130 µs | 146 µs |
+  | read block, bytes → handle (the "copy") | 75 µs | 39 µs | 41 µs |
+  | read cutter, bytes → handle | 74 µs | 19 µs | 20 µs |
+  | serialize block, handle → bytes | 63 µs | 41 µs | 43 µs |
+  | `difference` FROM VALUES (2 reads + cut + serialize) | 3.99 ms | 3.09 ms | 3.13 ms |
+  | `difference` FROM HANDLES (cut + serialize) | 3.28 ms | 3.04 ms | 3.09 ms |
+  | `tessellate` hole FROM VALUE (read + mesh + weld; 8,803 B) | 1.24 ms | 990 µs | 981 µs |
+  | `tessellate` hole FROM HANDLE (mesh + weld) | 996 µs | 920 µs | 907 µs |
+  | CHAIN box → extrude → difference → tessellate, values (as shipped) | 4.56 ms | 4.62 ms | 4.54 ms |
+  | CHAIN, handles kept (no re-reads — a cache's best case) | 4.38 ms | 4.33 ms | 4.30 ms |
+  | CHAIN, values, on the rayon pool (24 logical threads), wall per part | 4.58 ms | 837 µs | 710 µs |
+
+  Reading a block's bytes costs 41 µs against a 3.1 ms boolean (1.3 %);
+  the whole chain pays 5 % for re-reading at every step (4.54 vs 4.30 ms
+  per part; "prohibitive" would have been a copy costing more than the
+  boolean itself). With no lock in the way the same chain runs 6.4×
+  faster on the pool than serially (710 µs wall per part over 1,000
+  parts).
+
+  The cache is therefore not built; `Handle::from_value` is the one choke
+  point it would wrap. It becomes both sound and worth building only if
+  WP-C's glue makes the operations non-mutating — booleans in
+  `SetNonDestructive(true)` mode (measure its cost: it copies the
+  sub-shapes whose tolerances would change) and meshing preceded by
+  `BRepTools::Clean` or run with `ForceFaceDeflection` — at which point
+  rule 2 can be relaxed to "tessellate and booleans borrow" and a bounded
+  per-hash handle map with per-handle locks slots in at that function.
+- **Display tessellation (WP-B).** A `Solid` in a display set is drawn
+  through `solid::tessellate` at `Deflection::display(&ProjectConfig)`:
+  `linear = max(0.02 mm / unit.millimeters(), tol)`,
+  `angular = max(0.1 rad, tol_angle)` — a PHYSICAL chord deviation of two
+  hundredths of a millimetre (the same part looks the same in a mm, inch
+  or metre document), floored at the coincidence tolerance because a
+  finer tessellation is noise; 0.1 rad ≈ 5.7° gives ~63 facets per full
+  turn, matching the 64 segments the analytic curves' display uses. The
+  server caches the result by the Solid's VALUE hash plus the deflection
+  (docs/12 §Display cache); the deflection never reaches the bytes.
 
 ## Build (Cicada's actual code)
 
