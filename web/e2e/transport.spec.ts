@@ -19,6 +19,11 @@
  *     IS the thumb's, including on the frames a nominal seek used to land
  *     short of (the engine's `Playhead::at_frame`), and the display
  *     generation moves;
+ *   - a refused control (a seek beyond the loop, a speed above 64×, sent on
+ *     the socket — the bar offers neither) is answered by the error toast
+ *     alone: nothing is broadcast, the server's view and the bar stand; a
+ *     `set_param` into the driven port is refused by the server with the
+ *     reason and the text stands;
  *   - speed and reset; a transport-driven port is hidden on the node and in
  *     the inspector; an observer gets the bar read-only;
  *   - (a second pipeline, written into the scratch project) two cycles and
@@ -288,6 +293,34 @@ test("play bar: play → frames advance, file untouched; second loop cached; Spa
   const at31 = await debugState(page, true);
   expect(at31.transport.frame, "a seek to 31 lands on 31, not 30").toBe(31);
   expect(at31.text_hash).toBe(textHash);
+
+  // ---- a refused control broadcasts nothing: the error toast is the whole
+  // answer and the bar keeps the last view. The bar offers neither a seek
+  // beyond the loop nor a speed above the server's 64× bound; a script on
+  // the same socket can send both.
+  await send(page, { type: "transport_seek", payload: { frame: 500 } });
+  await expect(page.locator(".notice", { hasText: "frame 500 is outside the loop (frames 0..120)" }).first()).toBeVisible();
+  await send(page, { type: "transport_speed", payload: { factor: 1e300 } });
+  await expect(page.locator(".notice", { hasText: "speed must be at most 64×, got 1e300" }).first()).toBeVisible();
+  const refused = await debugState(page, true);
+  expect(refused.transport, "a refused control changes nothing").toMatchObject({ playing: false, frame: 31, speed: 1 });
+  expect(await bar(page), "the bar shows the view that stands").toMatchObject({ playing: "false", frame: 31, speed: 1 });
+
+  // ---- the server owns the driven-port rule: a `set_param` into
+  // `spin.frame` — no editor reaches it in the UI, any script on the socket
+  // can — is refused with the reason, and the text stands.
+  await send(page, { type: "set_param", payload: { node: "spin", port: "frame", value: "5" } });
+  await expect(
+    page
+      .locator(".notice", {
+        hasText: /`spin`: `frame` is driven by the transport — the session fills it with the loop frame whatever the text says, so a param edit cannot set it in the app/,
+      })
+      .first(),
+  ).toBeVisible();
+  const untouched = await debugState(page, true);
+  expect(untouched.text_hash, "the refused edit never reached the file").toBe(textHash);
+  expect(untouched.history.depth).toBe(0);
+  expect(untouched.text).not.toContain("frame=");
 
   // ---- speed: the menu sends the factor; the server's speed comes back.
   await page.getByTestId("tr-speed").selectOption("2");

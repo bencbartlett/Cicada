@@ -5,12 +5,13 @@
  * intent the docs name and nothing flips locally — the server's broadcast
  * does; the counter and the thumb extrapolate the playhead while playing
  * and freeze on the server's frame while paused; a scrub shows the sought
- * frame at once and hands back to the view on the answering broadcast;
- * observers get the bar read-only with the reason on hover.
+ * frame at once and hands back to the view on the answer — the broadcast
+ * of an accepted seek, or the `error` of a refused one (which broadcasts
+ * nothing); observers get the bar read-only with the reason on hover.
  */
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClientMessage, ServerEnvelope, TransportView } from "../protocol/messages";
+import type { ClientMessage, ErrorPayload, ServerEnvelope, TransportView } from "../protocol/messages";
 import { useCicada } from "../state/store";
 import { DISPLAY_TICK_MS, nowMs } from "../state/transport";
 import { TransportBar } from "./TransportBar";
@@ -26,6 +27,13 @@ const orbit: TransportView = {
 };
 
 const broadcast = (view: TransportView): ServerEnvelope => ({ v: 1, seq: 9, type: "transport", payload: view });
+/** The server's unicast refusal of this client's intent `id` — the whole answer to a refused control. */
+const refusal = (id: string, kind: ErrorPayload["kind"], message: string): ServerEnvelope => ({
+  v: 1,
+  seq: 10,
+  type: "error",
+  payload: { intent_id: id, kind, message },
+});
 
 function seed(view: TransportView, receivedAt = nowMs()): void {
   useCicada.setState({ transport: { view, receivedAt } });
@@ -35,10 +43,11 @@ describe("TransportBar", () => {
   let sent: ClientMessage[];
   beforeEach(() => {
     sent = [];
-    useCicada.setState({ connection: "open", role: "writer", transport: null, notices: [] });
+    useCicada.setState({ connection: "open", role: "writer", transport: null, notices: [], lastError: null });
+    // Ids like the real client's: "1", "2", … in sending order.
     useCicada.getState().installSender((message) => {
       sent.push(message);
-      return "";
+      return String(sent.length);
     });
   });
   afterEach(() => {
@@ -152,6 +161,53 @@ describe("TransportBar", () => {
     expect(scrub.value, "the view still says 30; the thumb must not snap back").toBe("90");
     act(() => useCicada.getState().applyServerMessage(broadcast({ ...orbit, t_ms: 3000, frame: 90 })));
     expect(scrub.value).toBe("90");
+  });
+
+  it("a refused seek broadcasts nothing, so its error hands the thumb back to the view (after the release if the pointer is down)", () => {
+    seed(orbit);
+    render(<TransportBar />);
+    const scrub = screen.getByTestId("tr-scrub") as HTMLInputElement;
+    // Released before the answer: the refusal (the loop shrank under the
+    // pointer — frame 90 of a loop now 40 long) is the whole answer; the
+    // view still says 30 and the thumb goes back to it, the notice says why.
+    fireEvent.pointerDown(scrub);
+    fireEvent.change(scrub, { target: { value: "90" } });
+    fireEvent.pointerUp(scrub);
+    expect(sent).toEqual([{ type: "transport_seek", payload: { frame: 90 } }]);
+    expect(scrub.value).toBe("90");
+    act(() => useCicada.getState().applyServerMessage(refusal("1", "transport", "frame 90 is outside the loop (frames 0..40)")));
+    expect(scrub.value, "the refused seek's thumb hands back to the view").toBe("30");
+    expect(screen.getByTestId("tr-frame").textContent).toBe("30 / 120");
+    expect(useCicada.getState().notices.map((n) => [n.level, n.message])).toEqual([
+      ["error", "frame 90 is outside the loop (frames 0..40)"],
+    ]);
+
+    // Refused mid-drag (the lease went to another client under the
+    // pointer): the pointer keeps the thumb until the release, which hands
+    // back because the last seek's answer has landed — a refusal.
+    fireEvent.pointerDown(scrub);
+    fireEvent.change(scrub, { target: { value: "57" } });
+    fireEvent.change(scrub, { target: { value: "58" } });
+    expect(sent.length).toBe(3);
+    act(() => useCicada.getState().applyServerMessage(refusal("3", "lease", "read-only observer")));
+    expect(scrub.value, "the pointer still owns the thumb").toBe("58");
+    fireEvent.pointerUp(scrub);
+    expect(scrub.value, "the release finds the last seek answered (refused) and hands back").toBe("30");
+
+    // A refusal of an EARLIER seek is not the last seek's answer: the held
+    // frame waits for the broadcast that answers the last one.
+    fireEvent.pointerDown(scrub);
+    fireEvent.change(scrub, { target: { value: "10" } });
+    fireEvent.change(scrub, { target: { value: "11" } });
+    fireEvent.pointerUp(scrub);
+    act(() => useCicada.getState().applyServerMessage(refusal("4", "transport", "frame 10 is outside the loop (frames 0..10)")));
+    expect(scrub.value, "the last seek (11) is unanswered").toBe("11");
+    act(() => useCicada.getState().applyServerMessage(broadcast({ ...orbit, t_ms: 366.7, frame: 11 })));
+    expect(scrub.value).toBe("11");
+    expect(screen.getByTestId("tr-frame").textContent).toBe("11 / 120");
+    // An unrelated refusal (a slider's) never touches the thumb.
+    act(() => useCicada.getState().applyServerMessage(refusal("99", "refused", "unrelated")));
+    expect(scrub.value).toBe("11");
   });
 
   it("while playing, the counter and the thumb extrapolate the playhead at the speed and tick on the display clock", () => {

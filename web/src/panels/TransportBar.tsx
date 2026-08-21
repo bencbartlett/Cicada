@@ -13,8 +13,11 @@
  * The scrubber: every change is a `transport_seek` — a scrub stream is a
  * stream of generations on the latest-wins loop, each painting the frame
  * it names (paused or playing). The thumb shows the sought frame at once
- * and hands back to the server's view on the broadcast that answers, so
- * a release never snaps back to where the drag began.
+ * and hands back to the server's view on the answer — the broadcast of an
+ * accepted seek, or the `error` of a refused one (a refusal broadcasts
+ * nothing, so the error IS the answer; the lease lost mid-drag, a loop
+ * that shrank under the pointer) — so a release never snaps back to where
+ * the drag began and a held frame never outlives its answer.
  */
 import { useEffect, useRef, useState } from "react";
 import { canWrite, useCicada, writeBlockReason } from "../state/store";
@@ -27,16 +30,30 @@ export function TransportBar() {
   const writer = useCicada(canWrite);
   const blockReason = useCicada(writeBlockReason);
   const send = useCicada((s) => s.send);
+  const lastError = useCicada((s) => s.lastError);
   // The frame the thumb shows while a scrub is under way (and until the
   // server's answer lands), else null = follow the view.
   const [scrub, setScrub] = useState<number | null>(null);
   const scrubbing = useRef(false);
+  // The intent id of the latest seek, and whether the server refused it
+  // (a refusal is unicast with the intent's id and broadcasts no view, so
+  // it is the one answer the `transport` effect below never sees).
+  const lastSeek = useRef<string | null>(null);
+  const lastSeekRefused = useRef(false);
 
   // A new view from the server (the seek's own broadcast, Esc, a reload)
   // takes the thumb back unless the pointer is still down.
   useEffect(() => {
     if (!scrubbing.current) setScrub(null);
   }, [transport]);
+
+  // The latest seek was refused: the view stands, and so must the thumb —
+  // back to the view now, or at the release if the pointer is still down.
+  useEffect(() => {
+    if (lastError === null || lastError.intentId === undefined || lastError.intentId !== lastSeek.current) return;
+    lastSeekRefused.current = true;
+    if (!scrubbing.current) setScrub(null);
+  }, [lastError]);
 
   if (transport === null || playhead === null || !hasTimeParams(transport)) return null;
   const view = transport.view;
@@ -47,15 +64,16 @@ export function TransportBar() {
   const play = () => send({ type: view.playing ? "transport_pause" : "transport_play", payload: {} });
   const seek = (next: number) => {
     setScrub(next);
-    send({ type: "transport_seek", payload: { frame: next } });
+    lastSeekRefused.current = false;
+    lastSeek.current = send({ type: "transport_seek", payload: { frame: next } });
   };
   // The pointer came up: hand the thumb back now if the server's answer to
-  // the last seek already landed while the pointer was down (the view
-  // names the sought frame — nothing later would clear it); otherwise the
-  // answer clears it when it arrives.
+  // the last seek already landed while the pointer was down — the view
+  // names the sought frame, or the seek was refused — since nothing later
+  // would clear it; otherwise the answer clears it when it arrives.
   const released = () => {
     scrubbing.current = false;
-    setScrub((held) => (held !== null && held === view.frame ? null : held));
+    setScrub((held) => (held !== null && (held === view.frame || lastSeekRefused.current) ? null : held));
   };
   const drivenLabel =
     view.driven.length === 1

@@ -122,7 +122,11 @@ export type ErrorKind =
   | "path_not_allowed"
   | "io_error"
   | "encode"
-  /** A refused transport control: a seek outside the loop, a speed that is not positive and finite. */
+  /**
+   * A refused transport control: a seek outside the loop, a speed that is
+   * not positive and finite or is above 64× (the server's `MAX_SPEED`). No
+   * `transport` broadcast follows a refusal — this error is the whole answer.
+   */
   | "transport"
   | (string & {});
 
@@ -309,7 +313,9 @@ export type DrivenView =
 /**
  * The transport as every client sees it (`protocol::TransportView`): in
  * every `snapshot` as `payload.transport` and the whole payload of the
- * `transport` broadcast after every control (refused or not), after Esc,
+ * `transport` broadcast after every ACCEPTED control (a refused one changes
+ * nothing and broadcasts nothing — the refusing client gets its `error`,
+ * kind `transport` or `lease`, and that is the whole answer), after Esc,
  * when the last client's departure paused playback, and when an edit or
  * reload changed the loop or the driven set. REPLACE the client's state
  * with it, never stack. Server-authoritative: the clock is the session's,
@@ -812,9 +818,11 @@ export type ClientMessage =
  * shared session state every client sees, and the lease is the one arbiter
  * of shared state (an observer's control is refused kind `lease`) — and
  * nothing else: not a gesture (never a `batch` element), never an op
- * (nothing to undo), never a delta, never the file. Each is answered by a
- * `transport` broadcast to every client, refused or not. Play, seek and
- * reset paint the frame at once (a generation, a paused seek included).
+ * (nothing to undo), never a delta, never the file, never a drag-ender
+ * (`dragStandsAfter`). An ACCEPTED control is answered by a `transport`
+ * broadcast to every client; a refused one by the `error` to this client
+ * alone — nothing is broadcast, the view stands. Play, seek and reset
+ * paint the frame at once (a generation, a paused seek included).
  */
 export type TransportMessage =
   /** The playhead advances from where it stands at `speed`. Idempotent while playing. */
@@ -823,7 +831,11 @@ export type TransportMessage =
   | { type: "transport_pause"; payload: Record<string, never> }
   /** Move the playhead to a frame of the primary loop, `0 ≤ frame < frames` (beyond: refused, kind `transport`). */
   | { type: "transport_seek"; payload: { frame: number } }
-  /** The playback rate, playhead ms per wall ms — finite and > 0 (else refused, kind `transport`). */
+  /**
+   * The playback rate, playhead ms per wall ms — finite, > 0 and at most 64
+   * (the server's `MAX_SPEED`; else refused, kind `transport`). The play
+   * bar's menu stops at 4×.
+   */
   | { type: "transport_speed"; payload: { factor: number } }
   /** Pause and rewind to `t_ms = 0`: frame 0, `clock` at 0 — the values a headless run evaluates. */
   | { type: "transport_reset"; payload: Record<string, never> };

@@ -691,11 +691,12 @@ export const useCicada = create<CicadaState>((set, get) => ({
         break;
       }
       case "transport": {
-        // After every control (refused or not), after Esc, after the last
-        // client's departure paused playback, and when an edit or reload
-        // changed the loop or the driven set: the whole view, replacing
-        // ours — the position at the moment of the message, which the bar
-        // extrapolates from until the next one.
+        // After every ACCEPTED control (a refused one broadcasts nothing:
+        // its `error` above is the whole answer, and the view stands),
+        // after Esc, after the last client's departure paused playback,
+        // and when an edit or reload changed the loop or the driven set:
+        // the whole view, replacing ours — the position at the moment of
+        // the message, which the bar extrapolates from until the next one.
         set({ transport: { view: envelope.payload, receivedAt: nowMs() } });
         break;
       }
