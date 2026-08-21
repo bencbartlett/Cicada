@@ -3940,6 +3940,68 @@
       ]
     },
     {
+      "name": "deconstruct_solid",
+      "title": "Deconstruct Solid",
+      "description": "a B-rep solid's topology as values: its distinct edges as curves, its distinct vertices as points, and its face count (the faces themselves wait for the `Surface` kind).",
+      "category": "Surface & solid",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "the deflection is below the kernel's floor (1e-7), or the kernel refuses.",
+      "gh": "Deconstruct Brep",
+      "examples": [
+        "span = construct_domain(start=0.0, end=2.0)\nblock = box(x=span, y=span, z=span)\nedges, corners, faces = deconstruct_solid(solid=block)"
+      ],
+      "inputs": [
+        {
+          "name": "solid",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The solid to take apart."
+        },
+        {
+          "name": "deflection",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "0.01",
+          "doc": "The chord deviation for edges the value model cannot hold exactly (arcs, ellipses, B-splines): they come back as polylines this close to the true edge, in document units.",
+          "dimension": "length"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "edges",
+          "type": "[Curve]",
+          "base": "Curve",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "Every distinct edge: straight edges as `Line`s, full circles as `Circle`s, everything else a polyline at `deflection`; degenerate edges (a sphere's poles) are left out."
+        },
+        {
+          "name": "vertices",
+          "type": "[Point]",
+          "base": "Point",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "Every distinct vertex."
+        },
+        {
+          "name": "face_count",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "How many faces the solid has (there is no `Surface` kind yet, so the faces themselves are not output — this port's name leaves `faces` free for them)."
+        }
+      ]
+    },
+    {
       "name": "extrude",
       "title": "Extrude",
       "description": "extrude a closed planar profile into a B-rep solid with exact edges for every curve kind: a polyline or rectangle becomes a prism of planar faces, a circle an exact cylinder (no `segments` — the mesh tier's `mesh_extrude` tessellates instead).",
@@ -4864,6 +4926,61 @@
           "list_depth": 0,
           "optional": false,
           "doc": "The welded, watertight mesh of the solid."
+        }
+      ]
+    },
+    {
+      "name": "section",
+      "title": "Section",
+      "description": "the planar section of a B-rep solid: one closed curve per loop the plane cuts (a through-hole makes two). A loop that is one full circle comes back as an exact `Circle`; every other loop is a closed polyline — exact corners for planar faces, `deflection`-close points for curved ones. An empty list when the plane misses the solid.",
+      "category": "Intersect & regions",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "the plane is degenerate, the deflection is below the kernel's floor (1e-7), or the kernel refuses.",
+      "gh": "Brep | Plane",
+      "examples": [
+        "span = construct_domain(start=0.0, end=20.0)\nthick = construct_domain(start=0.0, end=6.0)\nplate = box(x=span, y=span, z=thick)\nmid = construct_point(z=3.0)\ncut_plane = xy_plane(origin=mid)\noutline = section(solid=plate, plane=cut_plane)"
+      ],
+      "inputs": [
+        {
+          "name": "solid",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The solid to cut."
+        },
+        {
+          "name": "plane",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "default": "xy_plane",
+          "doc": "The cutting plane."
+        },
+        {
+          "name": "deflection",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "0.01",
+          "doc": "The chord deviation for curves the value model cannot hold exactly (ellipses, B-splines): they come back as polylines this close to the true curve, in document units.",
+          "dimension": "length"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[Closed<Curve>]",
+          "base": "Closed<Curve>",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The section loops, each a closed curve."
         }
       ]
     },

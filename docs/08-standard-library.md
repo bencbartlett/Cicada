@@ -302,7 +302,7 @@ it (doc 09).
 | Bounding Box | `(geometry: [Geometry], plane: Plane = xy_plane) → Solid` | 1 | **shipped 2026-08-20 (WP-C)**: one box around everything in the list (per item: lift with `each()` over singleton lists); exact on points, polylines, rectangles, circles and meshes, a solid's bounds from the kernel's faces (`BRepBndLib::AddOptimal`, moved into the frame first when the plane is not the world); the box is a `Solid`, so flat geometry (no extent along a frame axis) is red |
 | Area | `(g: Surface \| Closed<Planar<Curve>>) → (area: Number, centroid: Point)` | 1 | |
 | Volume | `(solid: Solid) → (volume: Number, centroid: Point)` | 1 | **shipped 2026-08-20 (WP-C)**: `BRepGProp::VolumeProperties`, adaptive (exact on planar/quadric faces, 1e-9 relative elsewhere) |
-| Deconstruct Solid | `(solid: Solid) → (faces: [Surface], edges: [Curve], vertices: [Point])` | 1 | |
+| Deconstruct Solid | `deconstruct_solid(solid: Solid, deflection: Number = 0.01) → (edges: [Curve], vertices: [Point], face_count: Integer)` | 1 | **shipped 2026-08-20 (WP-C) without `faces`**: there is no `Surface` kind yet, so the faces come back as a COUNT under a name that will not collide with the future `faces: [Surface]` port; edges are exact where the value model can hold them (lines, full circles) and polylines discretized at `deflection` (document units) otherwise; degenerate edges (a sphere's poles) are skipped; GH: Deconstruct Brep |
 | Evaluate / Divide Surface | `(surface: Surface, uv…) → …` | 1 | Isotrim: tier 2 |
 | Fillet Edge / Chamfer Edge | `(brep: Brep, edges…, radius) → Brep` | 2 | B-rep tier, OCCT |
 
@@ -332,7 +332,7 @@ it (doc 09).
 | Delaunay | `(points: [Point]) → Mesh` | 1 | |
 | Curve \| Curve | `(a: Curve, b: Curve) → (points: [Point], tA: [Number], tB: [Number])` | 1 | |
 | Curve \| Plane | `(curve: Curve, plane: Plane) → (points: [Point], t: [Number])` | 1 | |
-| Section | `(solid: Solid, plane: Plane) → [Closed<Curve>]` | 1 | |
+| Section | `(solid: Solid, plane: Plane = xy_plane, deflection: Number = 0.01) → [Closed<Curve>]` | 1 | **shipped 2026-08-20 (WP-C)**: `BRepAlgoAPI_Section` against the plane, the edges connected into loops at the project tolerance; a loop that is one full circular edge is an exact `Circle` (it re-feeds `area` and `extrude` exactly), every other loop a closed polyline discretized at `deflection` (document units); an empty list when the plane misses the solid; GH: Brep \| Plane |
 | Contours | `(solid: Solid, plane: Plane, step: Number) → levels: [[Closed<Curve>]]` | 1 | named-axis output |
 | Project to Plane | `(g: Curve \| [Point], plane: Plane) → same` | 1 | kind-preserving |
 | Region Union / Difference / Intersection | `(a: [Closed<Planar<Curve>>], b: […]) → […]` | 1 | i_overlay |

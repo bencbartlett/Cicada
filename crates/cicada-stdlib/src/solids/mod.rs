@@ -12,6 +12,7 @@ pub mod bounding_box;
 pub mod r#box;
 pub mod cone;
 pub mod cylinder;
+pub mod deconstruct_solid;
 pub mod extrude;
 pub mod extrude_to_point;
 pub mod loft;
