@@ -9582,8 +9582,8 @@ size = slider(value=4.0, min=0.5, max=5.0)
         assert_eq!(excluded.status, "red");
         assert_eq!(
             excluded.reason,
-            "`spin`: `frames` must be a literal in the app — the transport places the frame \
-             from `frames` and `period`"
+            "`spin`: `frames` must be a literal in the app — the transport quantizes the \
+             frame from the node's own frames and period"
         );
         assert_eq!(
             inner

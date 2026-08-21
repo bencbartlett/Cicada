@@ -240,7 +240,7 @@ pub enum LowerError {
     /// to quantize into (in the app only: headless, `cicada run` has no
     /// transport and the node computes from whatever it is fed).
     #[error(
-        "`{node}`: `{port}` must be a literal in the app — the transport places the frame from `frames` and `period`"
+        "`{node}`: `{port}` must be a literal in the app — the transport quantizes the frame from the node's own frames and period"
     )]
     TransportLiteral {
         /// The binding.
@@ -1400,8 +1400,8 @@ mod tests {
         assert_eq!(
             app.excluded.get("spin"),
             Some(&Exclusion::Lowering(
-                "`spin`: `frames` must be a literal in the app — the transport places the \
-                 frame from `frames` and `period`"
+                "`spin`: `frames` must be a literal in the app — the transport quantizes \
+                 the frame from the node's own frames and period"
                     .to_owned()
             ))
         );

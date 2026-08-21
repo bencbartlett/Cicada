@@ -285,9 +285,9 @@ edit while paused at frame 3 paints frame 3, an export writes the frame
 the viewport shows. Headless, `cicada run` passes no playhead and the
 ports evaluate as written (frame 0, t 0). A `cycle` whose `frames` or
 `period` is wired rather than literal is the ONE red the transport adds
-(`` `spin`: `frames` must be a literal in the app — the transport places
-the frame from `frames` and `period` ``); headless it is an ordinary
-node. **Playback.** A ticker at the display rate (60 Hz) reads the
+(`` `spin`: `frames` must be a literal in the app — the transport
+quantizes the frame from the node's own frames and period ``); headless
+it is an ordinary node. **Playback.** A ticker at the display rate (60 Hz) reads the
 playhead and, when the driven ports' values moved since the last
 hand-over, lowers the committed text at it and submits a transport job
 to the one-slot latest-wins loop — the preview's policy: the in-flight
