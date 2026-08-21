@@ -62,4 +62,22 @@ describe("CatalogNode mirrors docs/generated/catalog.json (format 2)", () => {
       }
     }
   });
+
+  it("marks exactly the two transport-driven ports — cycle.frame (frame) and clock.t (time), inputs only, each with a default", () => {
+    const driven: string[] = [];
+    for (const node of catalog.nodes) {
+      for (const port of node.outputs) {
+        expect(port.transport_driven, `${node.name}.${port.name} is an output`).toBeUndefined();
+      }
+      for (const port of node.inputs) {
+        if (port.transport_driven === undefined) continue;
+        expect(["frame", "time"], `${node.name}.${port.name}`).toContain(port.transport_driven);
+        // The macro refuses a transport-driven port without a default: the
+        // default IS the headless value (frame 0, t 0).
+        expect(port.default, `${node.name}.${port.name} has a headless default`).toBeDefined();
+        driven.push(`${node.name}.${port.name}=${port.transport_driven}`);
+      }
+    }
+    expect(driven.sort()).toEqual(["clock.t=time", "cycle.frame=frame"]);
+  });
 });

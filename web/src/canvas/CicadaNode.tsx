@@ -3,7 +3,8 @@
  * function dim · state badge · eye · effectful hint), one port row per unit
  * (inputs left, outputs right, handles colored by kind family; required
  * filled, optional hollow, refinement double-ringed; lift badges; inline
- * literals), an optional param widget row, comment note above, excluded
+ * literals — a transport-driven port shows the transport in its row
+ * instead: no handle, no literal), an optional param widget row, comment note above, excluded
  * outline, a git change badge when the binding differs from HEAD (docs/16
  * canvas badges; doc 10's status strip markers — added / modified /
  * renamed; removed nodes live only in the Git tab), and — at the closest
@@ -16,11 +17,11 @@ import { Handle, Position, useConnection, type NodeProps } from "@xyflow/react";
 import { memo, useEffect, useState } from "react";
 import { kindColor } from "../kinds";
 import { markerBadge } from "../panels/gitFormat";
-import type { InputView, NodeView, OutputView, ProbeVerdict, ValueSummary } from "../protocol/messages";
+import type { DrivenSignal, InputView, NodeView, OutputView, ProbeVerdict, ValueSummary } from "../protocol/messages";
 import { literalKindOf } from "../state/literals";
 import { canWrite, useCicada } from "../state/store";
 import { sendWrite, type CanvasNode } from "./flow";
-import { firstLine, isRefinement, outputDoc, portTitle, statusBadge } from "./grid";
+import { drivenTitle, firstLine, isRefinement, outputDoc, portTitle, statusBadge, transportDrivenSignal } from "./grid";
 import { LiteralWidget } from "./LiteralWidgets";
 import { useLodTier } from "./lod";
 import { ParamWidget } from "./ParamWidget";
@@ -140,6 +141,56 @@ function InputRow({
   );
 }
 
+/**
+ * The row of a transport-driven input (docs/13 §Animation transport; the
+ * catalog's `transport_driven`): the port is the session's, so it is HIDDEN
+ * as a port — no connectable handle (nothing to drop on: the server's
+ * probe answers `blocked` and `connect` refuses), no literal editor — and
+ * the row shows the transport driving it instead, lit while this port is
+ * in the current graph's driven set. What a human wrote by hand in the
+ * text is the headless value and is never hidden: a kwarg (`frame=5`) is
+ * named in the tooltip; a WIRE (`frame=n`) keeps a target handle — not
+ * connectable, but React Flow draws an edge only between two handles, and
+ * a wire the text carries and `cicada run` evaluates must be visible and
+ * removable (drag it off, or the wire menu's disconnect), never silently
+ * dropped.
+ */
+function DrivenRow({ node, input, signal }: { node: NodeView; input: InputView; signal: DrivenSignal }) {
+  const driven = useCicada((s) =>
+    s.transport?.view.driven.some((d) => d.node === node.name && d.port === input.name) ?? false,
+  );
+  const title = drivenTitle(input.name, input.type, signal, driven, input.literal, input.wired);
+  return (
+    <div
+      className={`cn-port cn-in cn-driven${driven ? " on" : ""}${input.wired !== undefined ? " wired" : ""}`}
+      title={title}
+      data-testid={`driven-${node.name}-${input.name}`}
+      data-signal={signal}
+      data-driven={driven}
+      data-wired={input.wired === undefined ? undefined : `${input.wired.node}.${input.wired.port}`}
+    >
+      {input.wired !== undefined && (
+        <Handle
+          type="target"
+          position={Position.Left}
+          id={input.name}
+          className={`${handleClass(input.base, input.required, input.unknown)} driven`}
+          style={{ ["--port-color" as string]: kindColor(input.base) }}
+          isConnectable={false}
+          isConnectableStart={false}
+          isConnectableEnd={false}
+          data-port={`${node.name}.${input.name}`}
+          data-verdict="blocked"
+        />
+      )}
+      <span className="cn-port-label">{input.name}</span>
+      <span className="cn-transport-chip mono" aria-label={`${input.name} is driven by the transport`}>
+        {driven ? "▶" : "▷"} transport
+      </span>
+    </div>
+  );
+}
+
 function summaryText(summary: ValueSummary | null): string {
   if (summary === null) return "—";
   const parts: string[] = [];
@@ -248,6 +299,11 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
   // is not re-applied), so this subscription fires when a script node
   // appeared or changed, not per reload.
   const catalog = useCicada((s) => s.catalog);
+  // Until the catalog arrives, the snapshot's driven set stands in for its
+  // `transport_driven` flag (`transportDrivenSignal`). Read only while the
+  // catalog is missing: afterwards the selector is a constant, so a
+  // `transport` broadcast (every seek of a scrub) re-renders no node.
+  const preCatalogDriven = useCicada((s) => (s.catalog === null ? s.transport?.view.driven : undefined));
   const dragSource = useDragSource();
   const tier = useLodTier();
 
@@ -368,9 +424,19 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
         {Array.from({ length: rows }, (_, i) => {
           const input = view.inputs[i];
           const output = view.outputs[i];
+          const signal = input
+            ? transportDrivenSignal(
+                catalog,
+                view.func,
+                input.name,
+                preCatalogDriven?.find((d) => d.node === name && d.port === input.name),
+              )
+            : undefined;
           return (
             <div className="cn-row" key={i}>
-              {input ? (
+              {input && signal !== undefined ? (
+                <DrivenRow node={view} input={input} signal={signal} />
+              ) : input ? (
                 <InputRow
                   node={view}
                   input={input}

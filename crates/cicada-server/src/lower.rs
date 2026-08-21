@@ -22,13 +22,22 @@
 //! nodes key on `expr` v1 plus a **normalized IR hash** — variables hash by
 //! ordinal of first appearance, so renaming a binding never recomputes
 //! (docs/10 round-trip discipline).
+//!
+//! **The transport's injection point** (v0.1 item 4; docs/13 §Animation
+//! transport): the `_with_playhead` forms take the session's [`Playhead`]
+//! and fill every transport-driven port (`cycle.frame`, `clock.t` —
+//! `PortSpec::transport_driven`) with the value the playhead dictates, as a
+//! literal input — so the cycle's cone keys on the frame exactly as if the
+//! text said `frame=57`, without the text ever saying it. The plain forms
+//! pass no playhead: `cicada run` has no transport, and the ports evaluate
+//! as written (their defaults — frame 0, t 0).
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use cicada_core::config::ProjectConfig;
 use cicada_core::hash::{KindTag, ValueHash, ValueHasher};
-use cicada_core::spec::NodeSpec;
+use cicada_core::spec::{NodeSpec, PortSpec, TransportSignal};
 use cicada_core::value::{HashedValue, List, ValueData, ValueError};
 use cicada_lang::ast::{BinOp, Expr, Lit, LitWithSpan, Rhs, Statement, ValueExpr};
 use cicada_lang::check::{BindingType, Resolution};
@@ -71,6 +80,105 @@ pub struct Lowered {
     /// Bindings excluded from the graph, with why (ordered by name for
     /// deterministic reporting). Always empty from [`lower`].
     pub excluded: BTreeMap<String, Exclusion>,
+    /// The ports the playhead filled, in lowering order — empty without a
+    /// playhead (headless) and for a pipeline with no time params.
+    pub driven: Vec<DrivenPort>,
+}
+
+/// The session's playhead — what the transport injects into transport-
+/// driven ports at lowering (docs/13 §Animation transport; DECISIONS.md
+/// time row). Milliseconds of playhead time: 0 at reset, advanced at the
+/// transport's speed while playing, unbounded.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Playhead {
+    /// Playhead milliseconds.
+    pub t_ms: f64,
+}
+
+impl Playhead {
+    /// The playhead at rest (reset, or a session just opened): frame 0,
+    /// t 0 — the same values a headless run evaluates.
+    pub const ZERO: Self = Self { t_ms: 0.0 };
+
+    /// The playhead in seconds — `clock`'s `t`.
+    #[must_use]
+    pub fn seconds(self) -> f64 {
+        self.t_ms / 1000.0
+    }
+
+    /// The frame of a loop of `frames` frames over `period` seconds at
+    /// this playhead: `floor(t × frames / period) mod frames` — `cycle`'s
+    /// `frame`. Frame-quantized so a pass of the loop visits exactly
+    /// `frames` values (docs/12 §Cycle loops). Both arguments positive;
+    /// `None` when the index is not exactly representable (a playhead so
+    /// far out that `floor` lost integer precision — beyond 2^53 frames).
+    #[must_use]
+    pub fn frame(self, frames: i64, period: f64) -> Option<i64> {
+        debug_assert!(frames > 0 && period > 0.0);
+        #[allow(clippy::cast_precision_loss)]
+        // frames < 2^53 is checked by the caller's literal read
+        let raw = (self.t_ms * frames as f64 / (period * 1000.0)).floor();
+        if !raw.is_finite() || raw.abs() >= 9_007_199_254_740_992.0 {
+            return None;
+        }
+        #[allow(clippy::cast_possible_truncation)] // |raw| < 2^53 and integral
+        let index = raw as i64;
+        Some(index.rem_euclid(frames))
+    }
+
+    /// The first representable playhead inside frame `frame` of a loop of
+    /// `frames` frames over `period` seconds — where `transport_seek`
+    /// lands. The frame's nominal start, `frame × period × 1000 / frames`,
+    /// is not exactly representable in general, and the rounded value can
+    /// sit a few ulps BELOW the boundary [`Self::frame`] quantizes at, so
+    /// that it reads one frame short (frames 31, 62 and 65 of the default
+    /// 120-frame / 4 s loop do). The nominal is nudged up one ulp at a
+    /// time until [`Self::frame`] agrees: the playhead returned is inside
+    /// the frame by the one arithmetic that matters, and a seek never
+    /// lands short. `None` when `frame` is not in `0..frames`, or when the
+    /// nudge does not converge within [`Self::SEEK_NUDGES`] ulps — a bug,
+    /// since the nominal is within four roundings of the boundary; never
+    /// silent. `a_seek_lands_inside_every_frame_of_many_loops` sweeps
+    /// every frame of a spread of loops.
+    #[must_use]
+    pub fn at_frame(frame: i64, frames: i64, period: f64) -> Option<Self> {
+        debug_assert!(frames > 0 && period > 0.0);
+        if frame < 0 || frame >= frames {
+            return None;
+        }
+        #[allow(clippy::cast_precision_loss)] // both < 2^53 (the literal read)
+        let mut t_ms = frame as f64 * (period * 1000.0) / frames as f64;
+        for _ in 0..Self::SEEK_NUDGES {
+            let playhead = Self { t_ms };
+            if playhead.frame(frames, period) == Some(frame) {
+                return Some(playhead);
+            }
+            t_ms = t_ms.next_up();
+        }
+        None
+    }
+
+    /// How many ulps [`Self::at_frame`] nudges at most: the nominal start
+    /// is within four roundings (each ≤ half an ulp) of the boundary, and
+    /// one ulp of `t_ms` moves the quantized ratio by at least half an ulp
+    /// — eight is twice the bound.
+    const SEEK_NUDGES: u32 = 8;
+}
+
+/// One transport-driven port the lowering filled from the playhead.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrivenPort {
+    /// The binding whose call holds the port.
+    pub node: String,
+    /// The port's name (`frame`, `t`).
+    pub port: &'static str,
+    /// Which signal fills it.
+    pub signal: TransportSignal,
+    /// The loop a `Frame` port quantizes: `(frames, period seconds)` from
+    /// the call's literals or the spec's defaults; `None` for `Time`.
+    pub r#loop: Option<(i64, f64)>,
+    /// The injected value.
+    pub value: Arc<HashedValue>,
 }
 
 /// Why a binding is not in the solve graph (docs/12: red cones are
@@ -164,6 +272,31 @@ pub enum LowerError {
         /// The name.
         name: String,
     },
+    /// A loop port of a frame-driven node (`cycle`'s `frames` / `period`)
+    /// is not a literal while a transport is placing the frame — the
+    /// transport reads the loop from the text; a wired loop has no frame
+    /// to quantize into (in the app only: headless, `cicada run` has no
+    /// transport and the node computes from whatever it is fed).
+    #[error(
+        "`{node}`: `{port}` must be a literal in the app — the transport quantizes the frame from the node's own frames and period"
+    )]
+    TransportLiteral {
+        /// The binding.
+        node: String,
+        /// The non-literal loop port.
+        port: &'static str,
+    },
+    /// The playhead is so far out that the frame index is not exactly
+    /// representable — reset the transport.
+    #[error(
+        "`{node}`: the playhead ({t_ms} ms) is beyond the exact frame range — reset the transport"
+    )]
+    PlayheadRange {
+        /// The binding.
+        node: String,
+        /// The playhead.
+        t_ms: f64,
+    },
     /// Graph assembly failed (should be unreachable after checking).
     #[error("graph assembly: {0}")]
     Graph(#[from] cicada_sched::GraphError),
@@ -208,8 +341,9 @@ pub fn reachable_bindings(document: &Document, targets: &[String]) -> HashSet<St
 }
 
 /// Lower the statements reachable from `targets` (all statements when
-/// empty). The caller has already gated checker diagnostics on the same
-/// closure.
+/// empty) with no transport — `cicada run`: transport-driven ports evaluate
+/// as written. The caller has already gated checker diagnostics on the
+/// same closure.
 ///
 /// # Errors
 ///
@@ -222,6 +356,25 @@ pub fn lower(
     config: &ProjectConfig,
     targets: &[String],
     scripts: &HashMap<String, ScriptNode>,
+) -> Result<Lowered, LowerError> {
+    lower_with_playhead(document, resolution, specs, config, targets, scripts, None)
+}
+
+/// [`lower`] with the session's playhead filling every transport-driven
+/// port (`None` = no transport).
+///
+/// # Errors
+///
+/// [`LowerError`] — see the variants; all loud.
+#[allow(clippy::implicit_hasher)] // one internal call site; genericity buys nothing
+pub fn lower_with_playhead(
+    document: &Document,
+    resolution: &Resolution,
+    specs: &[&'static NodeSpec],
+    config: &ProjectConfig,
+    targets: &[String],
+    scripts: &HashMap<String, ScriptNode>,
+    playhead: Option<Playhead>,
 ) -> Result<Lowered, LowerError> {
     for target in targets {
         if document.find_binding(target).is_none() {
@@ -239,9 +392,11 @@ pub fn lower(
         spec_by_name,
         config,
         scripts,
+        playhead,
         nodes: Vec::new(),
         output_names: Vec::new(),
         bindings: HashMap::new(),
+        driven: Vec::new(),
     };
 
     // Kahn over the needed statements (iterative — forward references of
@@ -323,10 +478,14 @@ pub fn lower(
         bindings: lowering.bindings,
         output_names: lowering.output_names,
         excluded: BTreeMap::new(),
+        driven: lowering.driven,
     })
 }
 
-/// Lower everything that can lower (the live-session form). Statements
+/// Lower everything that can lower (the live-session form) with no
+/// transport — the headless view; the view-model's tests use it, and
+/// `cicada mcp`'s `check` takes the `_with_playhead` form at rest, the
+/// app's view (a wired `cycle` loop is red there, solvable here). Statements
 /// with diagnostics, disabled statements, and statements whose lowering
 /// refuses are excluded with their reason; everything downstream of an
 /// exclusion (or of an unknown name) is excluded as `FedBy`. Kahn order,
@@ -336,13 +495,34 @@ pub fn lower(
 ///
 /// Only [`LowerError::Graph`] — graph assembly over the lowered subset
 /// failing is a bug, never a user problem.
-#[allow(clippy::implicit_hasher, clippy::too_many_lines)] // one Kahn pass; genericity buys nothing
+#[allow(clippy::implicit_hasher)] // one internal call site; genericity buys nothing
 pub fn lower_partial(
     document: &Document,
     resolution: &Resolution,
     specs: &[&'static NodeSpec],
     config: &ProjectConfig,
     scripts: &HashMap<String, ScriptNode>,
+) -> Result<Lowered, LowerError> {
+    lower_partial_with_playhead(document, resolution, specs, config, scripts, None)
+}
+
+/// [`lower_partial`] with the session's playhead filling every
+/// transport-driven port (`None` = no transport). A frame-driven node whose
+/// loop ports are wired is excluded red with [`LowerError::TransportLiteral`]
+/// as its reason — the one lowering refusal the transport adds.
+///
+/// # Errors
+///
+/// Only [`LowerError::Graph`] — graph assembly over the lowered subset
+/// failing is a bug, never a user problem.
+#[allow(clippy::implicit_hasher, clippy::too_many_lines)] // one Kahn pass; genericity buys nothing
+pub fn lower_partial_with_playhead(
+    document: &Document,
+    resolution: &Resolution,
+    specs: &[&'static NodeSpec],
+    config: &ProjectConfig,
+    scripts: &HashMap<String, ScriptNode>,
+    playhead: Option<Playhead>,
 ) -> Result<Lowered, LowerError> {
     let spec_by_name: HashMap<&str, &'static NodeSpec> =
         specs.iter().map(|spec| (spec.name, *spec)).collect();
@@ -351,9 +531,11 @@ pub fn lower_partial(
         spec_by_name,
         config,
         scripts,
+        playhead,
         nodes: Vec::new(),
         output_names: Vec::new(),
         bindings: HashMap::new(),
+        driven: Vec::new(),
     };
     let mut excluded: BTreeMap<String, Exclusion> = BTreeMap::new();
 
@@ -472,6 +654,7 @@ pub fn lower_partial(
         bindings: lowering.bindings,
         output_names: lowering.output_names,
         excluded,
+        driven: lowering.driven,
     })
 }
 
@@ -498,9 +681,13 @@ struct Lowering<'a> {
     spec_by_name: HashMap<&'static str, &'static NodeSpec>,
     config: &'a ProjectConfig,
     scripts: &'a HashMap<String, ScriptNode>,
+    /// The transport's playhead, when a session is lowering.
+    playhead: Option<Playhead>,
     nodes: Vec<NodeDecl>,
     output_names: Vec<Vec<String>>,
     bindings: HashMap<String, LoweredBinding>,
+    /// The ports the playhead filled so far.
+    driven: Vec<DrivenPort>,
 }
 
 impl Lowering<'_> {
@@ -612,6 +799,17 @@ impl Lowering<'_> {
         let mut inputs = Vec::with_capacity(spec.inputs.len());
         let mut fan = Vec::with_capacity(spec.inputs.len());
         for port in spec.inputs {
+            // The transport's injection point: a transport-driven port
+            // takes the playhead's value as a literal input — whatever the
+            // text says (the text's kwarg is the headless value).
+            if let (Some(signal), Some(playhead)) = (port.transport_driven, self.playhead)
+                && let Some(driven) = transport_value(&name, call, spec, port, signal, playhead)?
+            {
+                inputs.push(Input::Value(Arc::clone(&driven.value)));
+                fan.push(0);
+                self.driven.push(driven);
+                continue;
+            }
             let kwarg = call
                 .kwargs
                 .iter()
@@ -733,6 +931,111 @@ impl Lowering<'_> {
                 name: name.to_owned(),
             }),
         }
+    }
+}
+
+/// The playhead's value for one transport-driven port of `call`
+/// (docs/13 §Animation transport): `Time` → the playhead in seconds;
+/// `Frame` → the loop frame quantized from the node's `frames` and `period`
+/// literals (or the spec's defaults) — `None` when that loop is not
+/// positive (the node's own contract reds it with its own message; nothing
+/// to quantize), [`LowerError::TransportLiteral`] when a loop port is
+/// wired.
+fn transport_value(
+    node: &str,
+    call: &cicada_lang::ast::Call,
+    spec: &NodeSpec,
+    port: &'static PortSpec,
+    signal: TransportSignal,
+    playhead: Playhead,
+) -> Result<Option<DrivenPort>, LowerError> {
+    let (value, r#loop) = match signal {
+        TransportSignal::Time => (ValueData::Number(playhead.seconds()), None),
+        TransportSignal::Frame => {
+            let Some((frames, period)) = frame_loop(node, call, spec)? else {
+                return Ok(None);
+            };
+            let frame = playhead
+                .frame(frames, period)
+                .ok_or(LowerError::PlayheadRange {
+                    node: node.to_owned(),
+                    t_ms: playhead.t_ms,
+                })?;
+            (ValueData::Integer(frame), Some((frames, period)))
+        }
+    };
+    let value = HashedValue::new(value).map_err(|error: ValueError| LowerError::BadLiteral {
+        node: node.to_owned(),
+        message: error.to_string(),
+    })?;
+    Ok(Some(DrivenPort {
+        node: node.to_owned(),
+        port: port.name,
+        signal,
+        r#loop,
+        value,
+    }))
+}
+
+/// The loop a frame-driven call quantizes — `(frames, period seconds)` from
+/// its literal kwargs or the spec's defaults; `None` when either is not
+/// positive (the node reds itself). Shared by the lowering and the session's
+/// transport (which derives its loop length and the tick positions from the
+/// same numbers, so the two never disagree).
+///
+/// # Errors
+///
+/// [`LowerError::TransportLiteral`] for a wired loop port;
+/// [`LowerError::Unresolved`] for a spec whose loop port has no default
+/// (a registry bug — the checker would have refused the missing kwarg).
+pub fn frame_loop(
+    node: &str,
+    call: &cicada_lang::ast::Call,
+    spec: &NodeSpec,
+) -> Result<Option<(i64, f64)>, LowerError> {
+    let frames = loop_literal(node, call, spec, "frames")?;
+    let period = loop_literal(node, call, spec, "period")?;
+    if frames.fract() != 0.0 || frames.abs() >= 9_007_199_254_740_992.0 {
+        // A non-integral `frames` is a checker refusal (Integer port); an
+        // inexact one reds in the node. Nothing to quantize either way.
+        return Ok(None);
+    }
+    #[allow(clippy::cast_possible_truncation)] // integral and < 2^53
+    let frames = frames as i64;
+    Ok((frames > 0 && period > 0.0).then_some((frames, period)))
+}
+
+/// One loop port's number: the call's literal kwarg, else the spec's
+/// default (rendered text, parsed back — the one place the catalog string
+/// is read as a number, for the two ports whose defaults the transport
+/// needs before any node runs).
+fn loop_literal(
+    node: &str,
+    call: &cicada_lang::ast::Call,
+    spec: &NodeSpec,
+    port: &'static str,
+) -> Result<f64, LowerError> {
+    let kwarg = call.kwargs.iter().find(|kwarg| kwarg.name.name == port);
+    match kwarg {
+        Some(kwarg) => match kwarg.value.unlifted() {
+            ValueExpr::Literal(LitWithSpan {
+                lit: Lit::Number { value, .. },
+                ..
+            }) if kwarg.value.each_depth() == 0 => Ok(*value),
+            _ => Err(LowerError::TransportLiteral {
+                node: node.to_owned(),
+                port,
+            }),
+        },
+        None => spec
+            .inputs
+            .iter()
+            .find(|input| input.name == port)
+            .and_then(|input| input.default)
+            .and_then(|default| default.parse::<f64>().ok())
+            .ok_or_else(|| LowerError::Unresolved {
+                name: format!("{node}.{port}"),
+            }),
     }
 }
 
@@ -933,5 +1236,310 @@ fn eval_float(expr: &Expr, variables: &[(String, &Arc<HashedValue>)]) -> Result<
                 BinOp::Pow => a.powf(b),
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cicada_lang::{Catalog, resolve};
+    use cicada_sched::{
+        CancelToken, DiskStore, MonotonicClock, NoopObserver, Scheduler, SchedulerConfig,
+    };
+
+    use super::*;
+
+    const SOURCE: &str = "# cicada 1\n\
+                          spin = cycle(period=4.0, frames=100)\n\
+                          angle = spin * 6.0\n\
+                          elapsed = clock(speed=2.0)\n";
+
+    fn specs() -> Vec<&'static NodeSpec> {
+        cicada_stdlib::registry().to_vec()
+    }
+
+    fn lowered(source: &str, playhead: Option<Playhead>) -> Lowered {
+        let document = Document::parse(source);
+        let specs = specs();
+        let resolution = resolve(&document, &Catalog::new(&specs));
+        assert!(
+            resolution.diagnostics.is_empty(),
+            "{:?}",
+            resolution.diagnostics
+        );
+        lower_partial_with_playhead(
+            &document,
+            &resolution,
+            &specs,
+            &ProjectConfig::default(),
+            &HashMap::new(),
+            playhead,
+        )
+        .unwrap()
+    }
+
+    /// The input of `node`'s port named `port`, by spec order.
+    fn input_of<'a>(lowered: &'a Lowered, node: &str, port: &str) -> &'a Input {
+        let id = lowered.graph.find(node).unwrap();
+        let decl = lowered.graph.node(id);
+        let spec = specs()
+            .into_iter()
+            .find(|spec| spec.name == decl.op)
+            .unwrap();
+        let index = spec
+            .inputs
+            .iter()
+            .position(|input| input.name == port)
+            .unwrap();
+        &decl.inputs[index]
+    }
+
+    fn literal(input: &Input) -> &ValueData {
+        match input {
+            Input::Value(value) => value.data(),
+            Input::Absent => panic!("absent input, not a literal"),
+            Input::Port { .. } => panic!("a wire, not a literal"),
+        }
+    }
+
+    // Headless — no transport: the transport-driven ports evaluate as
+    // written (absent → the node's default; written → the text's value),
+    // and nothing is driven.
+    #[test]
+    fn without_a_playhead_transport_driven_ports_evaluate_as_written() {
+        let plain = lowered(SOURCE, None);
+        assert!(matches!(input_of(&plain, "spin", "frame"), Input::Absent));
+        assert!(matches!(input_of(&plain, "elapsed", "t"), Input::Absent));
+        assert!(plain.driven.is_empty());
+
+        let written = lowered(
+            "# cicada 1\nspin = cycle(period=4.0, frames=100, frame=5)\n",
+            None,
+        );
+        assert_eq!(
+            literal(input_of(&written, "spin", "frame")),
+            &ValueData::Integer(5)
+        );
+    }
+
+    // The headless value is frame 0 / t 0 end to end: solve the graph
+    // with a fresh store and read the numbers `cicada run` would print.
+    #[test]
+    fn a_headless_solve_yields_frame_zero_and_t_zero() {
+        let document = Document::parse(SOURCE);
+        let specs = specs();
+        let resolution = resolve(&document, &Catalog::new(&specs));
+        let lowered = lower(
+            &document,
+            &resolution,
+            &specs,
+            &ProjectConfig::default(),
+            &["angle".to_owned(), "elapsed".to_owned()],
+            &HashMap::new(),
+        )
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = DiskStore::open(&dir.path().join("cache")).unwrap();
+        let scheduler = Scheduler::new(
+            Arc::new(store),
+            Arc::new(MonotonicClock::new()),
+            SchedulerConfig {
+                threads: 1,
+                ..SchedulerConfig::default()
+            },
+        )
+        .unwrap();
+        let targets: Vec<NodeId> = ["spin", "angle", "elapsed"]
+            .iter()
+            .map(|name| lowered.graph.find(name).unwrap())
+            .collect();
+        let report = scheduler
+            .solve(
+                &lowered.graph,
+                &targets,
+                1,
+                &CancelToken::new(),
+                &NoopObserver,
+            )
+            .unwrap();
+        assert!(report.failures().is_empty(), "{:?}", report.failures());
+        let value_of = |name: &str| -> Arc<HashedValue> {
+            let id = lowered.graph.find(name).unwrap();
+            let hash = report.outcome(id).output_hashes().unwrap()[0];
+            scheduler.store().load_value(&hash).unwrap()
+        };
+        assert_eq!(value_of("spin").data(), &ValueData::Number(0.0));
+        assert_eq!(value_of("angle").data(), &ValueData::Number(0.0));
+        assert_eq!(value_of("elapsed").data(), &ValueData::Number(0.0));
+    }
+
+    // With a playhead the transport owns the ports: the frame is
+    // quantized from the node's own loop, the clock gets seconds, and a
+    // `frame=` in the text is overridden (it is the headless value).
+    #[test]
+    fn a_playhead_fills_the_transport_driven_ports() {
+        // 1.0 s into a 4 s / 100-frame loop = frame 25.
+        let at_1s = lowered(SOURCE, Some(Playhead { t_ms: 1000.0 }));
+        assert_eq!(
+            literal(input_of(&at_1s, "spin", "frame")),
+            &ValueData::Integer(25)
+        );
+        assert_eq!(
+            literal(input_of(&at_1s, "elapsed", "t")),
+            &ValueData::Number(1.0)
+        );
+        let driven: Vec<String> = at_1s
+            .driven
+            .iter()
+            .map(|d| format!("{}.{} {:?} {:?}", d.node, d.port, d.signal, d.r#loop))
+            .collect();
+        assert_eq!(
+            driven,
+            ["spin.frame Frame Some((100, 4.0))", "elapsed.t Time None",]
+        );
+
+        // The loop wraps: 9.0 s = 2 loops + 1 s → frame 25 again.
+        let at_9s = lowered(SOURCE, Some(Playhead { t_ms: 9000.0 }));
+        assert_eq!(
+            literal(input_of(&at_9s, "spin", "frame")),
+            &ValueData::Integer(25)
+        );
+
+        // The text's `frame=5` is the headless value only.
+        let written = lowered(
+            "# cicada 1\nspin = cycle(period=4.0, frames=100, frame=5)\n",
+            Some(Playhead { t_ms: 1000.0 }),
+        );
+        assert_eq!(
+            literal(input_of(&written, "spin", "frame")),
+            &ValueData::Integer(25)
+        );
+
+        // The spec's defaults (4 s, 120 frames) when the text omits them:
+        // 1.0 s → frame 30.
+        let defaults = lowered(
+            "# cicada 1\nspin = cycle()\n",
+            Some(Playhead { t_ms: 1000.0 }),
+        );
+        assert_eq!(
+            literal(input_of(&defaults, "spin", "frame")),
+            &ValueData::Integer(30)
+        );
+        assert_eq!(defaults.driven[0].r#loop, Some((120, 4.0)));
+    }
+
+    // Where `transport_seek` lands must read back as the frame it asked
+    // for, by the one arithmetic the lowering uses (`Playhead::frame`).
+    // The nominal start `frame × period_ms / frames` does NOT: it rounds
+    // below the boundary for frames 31, 62 and 65 of the default loop, and
+    // the web's scrubber would land one frame short there (found by the
+    // play-bar package, 2026-08-20). The sweep covers every frame of loops
+    // with awkward periods and frame counts, and pins the nominal's
+    // failure so the nudge is never "simplified" away.
+    #[test]
+    fn a_seek_lands_inside_every_frame_of_many_loops() {
+        let loops: [(i64, f64); 10] = [
+            (120, 4.0),
+            (10, 1.0),
+            (24, 1.0),
+            (30, 1.0),
+            (60, 2.5),
+            (7, 0.3),
+            (3, 0.1),
+            (1, 4.0),
+            (1000, 33.3),
+            (360, 12.7),
+        ];
+        let mut nudged = 0usize;
+        for (frames, period) in loops {
+            for frame in 0..frames {
+                let playhead = Playhead::at_frame(frame, frames, period)
+                    .unwrap_or_else(|| panic!("frame {frame} of {frames} / {period} s"));
+                assert_eq!(
+                    playhead.frame(frames, period),
+                    Some(frame),
+                    "frame {frame} of {frames} / {period} s at t_ms {}",
+                    playhead.t_ms
+                );
+                #[allow(clippy::cast_precision_loss)]
+                let nominal = frame as f64 * (period * 1000.0) / frames as f64;
+                assert!(
+                    playhead.t_ms >= nominal,
+                    "a seek never lands before the frame's nominal start"
+                );
+                if playhead.t_ms > nominal {
+                    nudged += 1;
+                }
+            }
+            assert_eq!(Playhead::at_frame(frames, frames, period), None);
+            assert_eq!(Playhead::at_frame(-1, frames, period), None);
+        }
+        // The nudge exists for a reason: the nominal start of frame 31 of
+        // the default loop quantizes to 30.
+        let nominal = Playhead {
+            t_ms: 31.0 * 4000.0 / 120.0,
+        };
+        assert_eq!(nominal.frame(120, 4.0), Some(30));
+        assert!(nudged > 0, "some nominal start needed nudging");
+    }
+
+    // The one refusal the transport adds: a wired loop port. Red with the
+    // reason in the app, and nothing at all headless (the node computes
+    // from what it is fed).
+    #[test]
+    fn a_wired_loop_port_is_red_under_a_playhead_and_fine_headless() {
+        let source = "# cicada 1\n\
+                      n = 50\n\
+                      spin = cycle(period=4.0, frames=n)\n\
+                      angle = spin * 6.0\n";
+        let app = lowered(source, Some(Playhead::ZERO));
+        assert_eq!(
+            app.excluded.get("spin"),
+            Some(&Exclusion::Lowering(
+                "`spin`: `frames` must be a literal in the app — the transport quantizes \
+                 the frame from the node's own frames and period"
+                    .to_owned()
+            ))
+        );
+        assert_eq!(
+            app.excluded.get("angle"),
+            Some(&Exclusion::FedBy("spin".to_owned()))
+        );
+        let headless = lowered(source, None);
+        assert!(headless.excluded.is_empty());
+        assert!(headless.graph.find("spin").is_some());
+    }
+
+    // A non-positive loop is the node's own red (its `# Panics`), so the
+    // lowering injects nothing and lets it speak.
+    #[test]
+    fn a_non_positive_loop_is_left_to_the_node() {
+        let lowered = lowered(
+            "# cicada 1\nspin = cycle(period=4.0, frames=0)\n",
+            Some(Playhead { t_ms: 1000.0 }),
+        );
+        assert!(lowered.excluded.is_empty());
+        assert!(matches!(input_of(&lowered, "spin", "frame"), Input::Absent));
+        assert!(lowered.driven.is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)] // exact by construction
+    fn playhead_frames_are_floor_mod_frames_and_seconds_are_ms_over_1000() {
+        let frame = |t_ms: f64| Playhead { t_ms }.frame(100, 4.0).unwrap();
+        assert_eq!(frame(0.0), 0);
+        assert_eq!(frame(39.0), 0);
+        assert_eq!(frame(40.0), 1);
+        assert_eq!(frame(3999.0), 99);
+        assert_eq!(frame(4000.0), 0);
+        assert_eq!(frame(4040.0), 1);
+        // Exact steps of period/frames visit every frame exactly once per
+        // loop — the property the second-pass-cached test relies on.
+        let visited: Vec<i64> = (0..200).map(|k| frame(40.0 * f64::from(k))).collect();
+        let expected: Vec<i64> = (0..200).map(|k| i64::from(k) % 100).collect();
+        assert_eq!(visited, expected);
+        assert_eq!(Playhead { t_ms: 2500.0 }.seconds(), 2.5);
+        assert_eq!(Playhead::ZERO.seconds(), 0.0);
+        // Beyond exact range: refused, never saturated.
+        assert_eq!(Playhead { t_ms: 1.0e300 }.frame(100, 4.0), None);
     }
 }

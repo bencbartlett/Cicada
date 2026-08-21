@@ -23,6 +23,17 @@
 //! `apply_text` replaces whole files atomically against a base hash; an
 //! external change (the watcher) is the reload barrier that clears the log.
 //!
+//! The transport (docs/13 §Animation transport; DECISIONS.md time row;
+//! v0.1 item 4) is session state beside the document, never in it: a
+//! playhead driven by the session clock, advanced by a ticker at the
+//! display rate while playing. Every lowering the session does — the
+//! structural graph, a preview tick's scratch, a hypothetical, an explicit
+//! run — passes the playhead, so the time params read the same frame
+//! whatever generation paints next; a frame that changed goes down the
+//! one-slot latest-wins loop as a `Transport` job, exactly a preview's
+//! path, and the solve bounds the rate. Nothing about the transport is
+//! ever written to the file (the test `playback_never_writes_the_file`).
+//!
 //! Locking discipline: `inner` (document/graph/clients) and `status` (the
 //! per-node board, written from rayon worker threads) are separate mutexes;
 //! neither is held while calling into the solve loop, and the solve loop
@@ -43,7 +54,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use cicada_core::config::ProjectConfig;
 use cicada_core::hash::ValueHash;
-use cicada_core::spec::NodeSpec;
+use cicada_core::spec::{NodeSpec, TransportSignal};
 use cicada_lang::ast::Rhs;
 use cicada_lang::check::BindingType;
 use cicada_lang::diag::{Diagnostic, DiagnosticKind};
@@ -58,11 +69,15 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::atomic::write_atomic;
 use crate::compile::{self, Loaded};
 use crate::display::{self, DisplayStats, PickTable};
-use crate::lower::{Lowered, LoweredBinding, lower, lower_partial};
+use crate::lower::{
+    DrivenPort, Exclusion, Lowered, LoweredBinding, Playhead, lower_partial_with_playhead,
+    lower_with_playhead,
+};
 use crate::protocol::{
-    Actor, ApplyTextRequest, ClientMessage, DeltaSource, HistoryView, LeaseView, NodeState,
-    NodeStatus, PreviewMode, ProbeCatalogEntry, ProbeVerdict, Role, ServerMessage, SolveSummary,
-    ValueSummary, encode, is_gesture, is_write, type_tag,
+    Actor, ApplyTextRequest, ClientMessage, DeltaSource, DrivenSignal, DrivenView, HistoryView,
+    LeaseView, LoopView, NodeState, NodeStatus, PreviewMode, ProbeCatalogEntry, ProbeVerdict, Role,
+    ServerMessage, SolveSummary, TransportView, ValueSummary, encode, is_gesture, is_write,
+    type_tag,
 };
 use crate::scripts::ScriptCancel;
 use crate::sidecar::Sidecar;
@@ -105,6 +120,54 @@ pub const COMPUTE_ON_RELEASE_MS: f64 = 1000.0;
 /// the pointer moves; a pause this long is the user holding still or a
 /// new grab — a repeated announcement is idempotent for the client.
 pub const DRAG_GAP_MS: u64 = 300;
+
+/// The transport ticker's period while playing — the display rate (60 Hz,
+/// docs/13 §Latency targets: "warmed cycle loop playback 60 fps"). Each
+/// tick reads the playhead off the session clock and, when the driven
+/// ports' values changed since the last tick it handed over, lowers and
+/// submits a `Transport` job to the one-slot latest-wins loop; the solve
+/// bounds the real rate (a slow cone skips frames, never queues them).
+///
+/// The ticks lie on an ABSOLUTE grid — tick N is due at `anchor + N ×
+/// TRANSPORT_TICK`, the anchor being the instant of the last control that
+/// touched playback — walked with `std::thread::sleep` until each
+/// deadline ([`transport_loop`]). Not a `Condvar::wait_timeout` per tick:
+/// its resolution on Windows is the 15.6 ms scheduler quantum, so a
+/// 16.7 ms timeout rounds to ~31 ms and the ticker ran at ~33 Hz (the
+/// review of 2026-08-21 measured a 60 fps loop warming 133 of its 240
+/// frames on the first pass); `sleep` uses the high-resolution waitable
+/// timer there (Rust ≥ 1.75): 16.67 ms per grid step, under 1 ms late,
+/// and the grid keeps the lateness from accumulating. Exactly 1/60 s in
+/// nanoseconds, so a 60 fps loop's frame boundaries and the grid do not
+/// beat against each other (16.667 ms would drift a frame every 14 min).
+pub const TRANSPORT_TICK: Duration = Duration::from_nanos(16_666_667);
+
+/// The loop the transport shows when no frame-driven node is solvable:
+/// `cycle`'s defaults — 120 frames over 4 s. (`frames`, `period` in
+/// seconds — the lowering's units, so seek and view quantize exactly as
+/// the injected frame does; the wire carries `period_ms`.)
+const DEFAULT_LOOP: (i64, f64) = (120, 4.0);
+
+/// The fastest `transport_speed` accepted — sixteen times the play bar's
+/// fastest (4×). Above it the playhead is useless (a 30 fps loop shows
+/// one frame in thirty at 64×) and only grows `t_ms`: unbounded, a factor
+/// like 1e300 put the playhead beyond the exact frame range within one
+/// frame, and the cycle's cone was dropped from the transport generations
+/// with no red on the canvas (review 2026-08-21; the tick now also says
+/// so — [`Core::transport_tick`]). At 64× a 1,000-frames-per-second loop
+/// stays inside the exact range (2^53 frames) for 4,400 years of playback.
+pub const MAX_SPEED: f64 = 64.0;
+
+/// A `transport_speed` factor as a refusal spells it: plainly for the
+/// numbers a play bar sends, in exponent form once `{}` would print a
+/// 300-digit integer for `1e300`.
+fn spell_speed(factor: f64) -> String {
+    if factor.is_finite() && factor.abs() >= 1.0e6 {
+        format!("{factor:e}")
+    } else {
+        format!("{factor}")
+    }
+}
 
 /// Session construction options.
 #[derive(Clone)]
@@ -260,6 +323,10 @@ pub enum IntentError {
     /// `apply_text`: a file write failed; earlier files were restored.
     #[error("{0}")]
     Io(String),
+    /// A transport control refused: a seek outside the loop, a speed that
+    /// is not a positive finite number.
+    #[error("{0}")]
+    Transport(String),
     /// A `batch` element failed; the whole batch was rolled back.
     #[error("batch `{label}` failed at op {index} ({op}): {source}")]
     Batch {
@@ -294,6 +361,7 @@ impl IntentError {
             Self::ParseError { .. } => "parse_error",
             Self::PathNotAllowed(_) => "path_not_allowed",
             Self::Io(_) => "io_error",
+            Self::Transport(_) => "transport",
             Self::Batch { source, .. } => source.kind(),
         }
     }
@@ -657,6 +725,110 @@ struct Inner {
     /// Preview ticks withheld under compute-on-release, total (the
     /// measurement harness reads it from `/debug/state`).
     previews_deferred: u64,
+    /// The transport (docs/13 §Animation transport): the playhead and its
+    /// playing state. Protected by the `Inner` lock like the document it
+    /// is lowered with; the ticker thread reads `Core::transport_playing`
+    /// without the lock to know whether to tick at all.
+    transport: Transport,
+}
+
+/// The session's transport state ([`Inner::transport`]). The playhead is
+/// anchored: `t_ms(now) = anchor_t + (now − anchor_clock) × speed` while
+/// playing, `anchor_t` while paused — every control re-anchors at the
+/// current position, so a speed change or a pause never jumps.
+#[derive(Debug, Clone, PartialEq)]
+struct Transport {
+    playing: bool,
+    /// Playhead milliseconds per op-clock millisecond (> 0, finite).
+    speed: f64,
+    /// The playhead at the anchor, milliseconds.
+    anchor_t_ms: f64,
+    /// The op clock at the anchor, milliseconds.
+    anchor_clock_ms: f64,
+    /// The driven ports' values last handed to the solve loop (one `u64`
+    /// per driven port: the frame, or the seconds' bits) — a tick whose
+    /// position is unchanged submits nothing. `None` after any control or
+    /// rebuild, so the next tick always paints.
+    last_position: Option<Vec<u64>>,
+    /// The bindings the LAST tick's lowering excluded that the structural
+    /// lowering had not (name → reason) — a tick-time red is the playhead's
+    /// doing (beyond the exact frame range) or a held slider's, and the
+    /// canvas, built from the structural graph, does not show it; the tick
+    /// broadcasts a notice whenever this set changes to a non-empty one.
+    tick_exclusions: BTreeMap<String, String>,
+}
+
+impl Transport {
+    /// At rest: paused at 0, speed 1.
+    fn new() -> Self {
+        Self {
+            playing: false,
+            speed: 1.0,
+            anchor_t_ms: 0.0,
+            anchor_clock_ms: 0.0,
+            last_position: None,
+            tick_exclusions: BTreeMap::new(),
+        }
+    }
+
+    /// The playhead at op-clock `now_ms`.
+    fn t_ms(&self, now_ms: f64) -> f64 {
+        if self.playing {
+            self.anchor_t_ms + (now_ms - self.anchor_clock_ms).max(0.0) * self.speed
+        } else {
+            self.anchor_t_ms
+        }
+    }
+
+    /// Re-anchor at the current position (the step every control takes
+    /// first, so the position is continuous across it).
+    fn anchor(&mut self, now_ms: f64) {
+        self.anchor_t_ms = self.t_ms(now_ms);
+        self.anchor_clock_ms = now_ms;
+        self.last_position = None;
+    }
+
+    /// Move the playhead to `t_ms` (seek, reset).
+    fn seek_ms(&mut self, now_ms: f64, t_ms: f64) {
+        self.anchor_t_ms = t_ms;
+        self.anchor_clock_ms = now_ms;
+        self.last_position = None;
+    }
+}
+
+/// The primary loop of a lowered graph's driven ports — `(frames, period
+/// seconds)` of the frame-driven node with the longest period (ties: the
+/// first lowered, i.e. the first in the text), exactly as the lowering
+/// injected it (`DrivenPort::loop`), or [`DEFAULT_LOOP`] when none
+/// lowered. The loop a scrubber shows and `transport_seek` addresses;
+/// every other cycle loops inside it at its own rate.
+fn primary_loop(driven: &[DrivenPort]) -> (i64, f64) {
+    let mut best: Option<(i64, f64)> = None;
+    for port in driven {
+        if let Some((frames, period)) = port.r#loop
+            && best.is_none_or(|(_, best_period)| period > best_period)
+        {
+            best = Some((frames, period));
+        }
+    }
+    best.unwrap_or(DEFAULT_LOOP)
+}
+
+/// The driven ports' values at `playhead` — the tick position the
+/// transport dedupes on: a frame per frame-driven port, the seconds' bits
+/// per time-driven port, in lowering order. Derived from the same loop
+/// numbers the lowering injects (`DrivenPort::loop`), so "unchanged
+/// position" means "identical injected values".
+fn tick_position(driven: &[DrivenPort], playhead: Playhead) -> Vec<u64> {
+    driven
+        .iter()
+        .map(|port| match port.r#loop {
+            Some((frames, period)) => playhead
+                .frame(frames, period)
+                .map_or(u64::MAX, i64::unsigned_abs),
+            None => playhead.seconds().to_bits(),
+        })
+        .collect()
 }
 
 /// One drag's standing state ([`Inner::drag`]).
@@ -673,6 +845,12 @@ struct Drag {
     last_tick_ms: u64,
     /// Ticks withheld in this drag.
     deferred: u64,
+    /// The last tick's literal: a transport frame painted while a LIVE
+    /// drag stands carries it, so playback under a held slider shows the
+    /// thumb's value, not the committed one (an announced drag's value is
+    /// withheld there too — compute-on-release means the viewport shows
+    /// the committed state until the release).
+    last_value: String,
 }
 
 /// Does this intent end a drag at the dispatcher's door (docs/13 §Slider
@@ -717,6 +895,52 @@ fn announce_drag_ended(inner: &Inner, drag: &Drag) {
             },
         );
     }
+}
+
+/// A binding a transport frame's lowering (`lowered`) excluded that the
+/// structural graph — the canvas — does not show red (the playhead beyond
+/// the exact frame range, a held slider's literal refused) would otherwise
+/// drop its cone from the frames silently. Broadcast a warning naming the
+/// roots and counting what they feed, once per change of the set
+/// ([`Transport::tick_exclusions`]); an emptied set is silent — the frames
+/// themselves are the recovery.
+fn announce_tick_exclusions(inner: &mut Inner, lowered: &Lowered) {
+    let fresh: Vec<(&String, &Exclusion)> = lowered
+        .excluded
+        .iter()
+        .filter(|(name, reason)| inner.lowered.excluded.get(*name) != Some(*reason))
+        .collect();
+    let tick_exclusions: BTreeMap<String, String> = fresh
+        .iter()
+        .map(|(name, reason)| ((*name).clone(), reason.reason()))
+        .collect();
+    if tick_exclusions == inner.transport.tick_exclusions {
+        return;
+    }
+    if !tick_exclusions.is_empty() {
+        let roots: Vec<String> = fresh
+            .iter()
+            .filter(|(_, reason)| !matches!(reason, Exclusion::FedBy(_)))
+            .map(|(name, reason)| format!("`{name}` ({})", reason.reason()))
+            .collect();
+        let downstream = match fresh.len() - roots.len() {
+            0 => String::new(),
+            1 => " and the 1 binding they feed".to_owned(),
+            n => format!(" and the {n} bindings they feed"),
+        };
+        broadcast(
+            inner,
+            &ServerMessage::Notice {
+                level: "warning".to_owned(),
+                message: format!(
+                    "transport: this frame's graph excludes {}{downstream} — not solved in the \
+                     transport's frames until it lowers again",
+                    roots.join(", ")
+                ),
+            },
+        );
+    }
+    inner.transport.tick_exclusions = tick_exclusions;
 }
 
 /// The cost model's verdict on one param's dirty cone
@@ -780,6 +1004,24 @@ struct Core {
     /// The last generations' timings (docs/15 measurement protocol: the
     /// preview-latency currency, read from `/debug/state`).
     timings: Mutex<std::collections::VecDeque<GenerationTiming>>,
+    /// Mirror of `Inner::transport.playing` for the ticker thread, which
+    /// must not take the document lock just to learn it has nothing to do.
+    /// Stored ONLY under `transport_gate` ([`Self::set_ticker_playing`]).
+    transport_playing: AtomicBool,
+    /// The ticker's gate. The value is the grid anchor — the instant of
+    /// the last control that touched playback; every tick is due at
+    /// `anchor + N × TRANSPORT_TICK`, so the ticks keep a fixed phase to
+    /// the frame boundaries that control re-anchored the playhead at
+    /// (a seek on a 60 fps loop otherwise lands the grid at an arbitrary
+    /// phase to the boundaries and skips frames). The mutex is also what
+    /// the playing flag's stores and the wake notify happen under: the
+    /// paused wait's predicate reads the flag under it, so no Play can
+    /// land between the ticker deciding to sleep and sleeping (the lost
+    /// wake-up the review of 2026-08-21 found). Lock order: `inner` →
+    /// `transport_gate`; the ticker never holds the gate while it ticks.
+    transport_gate: Mutex<Instant>,
+    /// Woken by every control and by shutdown, under `transport_gate`.
+    transport_wake: Condvar,
 }
 
 /// One generation's timing record (docs/15 measurement protocol; read
@@ -858,6 +1100,8 @@ pub struct Session {
     solve: Arc<SolveLoop>,
     debouncer: Option<std::thread::JoinHandle<()>>,
     ticker: Option<std::thread::JoinHandle<()>>,
+    /// The transport's ticker ([`transport_loop`]).
+    transport_ticker: Option<std::thread::JoinHandle<()>>,
 }
 
 /// The session's writes held off ([`Session::hold_writes`]): the document
@@ -890,12 +1134,15 @@ impl Session {
         let scripts_cancel = ScriptCancel::new();
         let loaded = compile::load(&config.pipeline, &text, &scripts_cancel)?;
         let sidecar = Sidecar::load(&Sidecar::path_for(&config.pipeline))?;
-        let lowered = Arc::new(lower_partial(
+        // The transport opens at rest: the first generation paints frame
+        // 0 / t 0 — the same values a headless run evaluates.
+        let lowered = Arc::new(lower_partial_with_playhead(
             &loaded.document,
             &loaded.resolution,
             &loaded.specs,
             &config.project,
             &loaded.scripts,
+            Some(Playhead::ZERO),
         )?);
         let mut refs = NodeRefs::default();
         let graph = viewmodel::build(
@@ -989,6 +1236,7 @@ impl Session {
                 scripts_fingerprint,
                 drag: None,
                 previews_deferred: 0,
+                transport: Transport::new(),
             }),
             status: Mutex::new(StatusBoard {
                 nodes: BTreeMap::new(),
@@ -1011,6 +1259,9 @@ impl Session {
             op_clock,
             epoch: Instant::now(),
             timings: Mutex::new(std::collections::VecDeque::with_capacity(TIMINGS_KEPT)),
+            transport_playing: AtomicBool::new(false),
+            transport_gate: Mutex::new(Instant::now()),
+            transport_wake: Condvar::new(),
             config,
         });
         let sink: Arc<dyn SolveSink> = core.clone();
@@ -1038,11 +1289,19 @@ impl Session {
                 }
             })
             .ok();
+        // The transport ticker: ticks at the display rate while playing,
+        // sleeps otherwise.
+        let transport_core = Arc::clone(&core);
+        let transport_ticker = std::thread::Builder::new()
+            .name("cicada-transport".to_owned())
+            .spawn(move || transport_loop(&transport_core))
+            .ok();
         let session = Arc::new(Self {
             core,
             solve,
             debouncer,
             ticker,
+            transport_ticker,
         });
         session.submit_structural_now();
         Ok(session)
@@ -1114,6 +1373,12 @@ impl Session {
             // The drag was the writer's; its release will never come, and
             // the observers' pending badges must not stand for it.
             end_drag(&mut inner);
+        }
+        if inner.clients.is_empty() {
+            // Nobody is watching: playback pauses where it is (the memo is
+            // warm; the next viewer presses play). A session solving frames
+            // for no one would be the ambient clock the ledger forbids.
+            self.core.pause_transport(&mut inner);
         }
         broadcast_lease(&inner);
     }
@@ -1400,14 +1665,24 @@ impl Session {
                 let job = {
                     let mut inner = self.core.lock_inner();
                     let mut scratch = inner.loaded.document.clone();
-                    apply_param(&mut scratch, &node, port.as_deref(), &value)?;
+                    apply_param(
+                        &mut scratch,
+                        &inner.loaded.specs,
+                        &node,
+                        port.as_deref(),
+                        &value,
+                    )?;
                     let resolution = resolve(&scratch, &Catalog::new(&inner.loaded.specs));
-                    let lowered = lower_partial(
+                    // At the transport's current playhead: a slider moved
+                    // at frame 57 paints frame 57, not the file's frame 0.
+                    let playhead = self.core.playhead(&inner);
+                    let lowered = lower_partial_with_playhead(
                         &scratch,
                         &resolution,
                         &inner.loaded.specs,
                         &self.core.config.project,
                         &inner.loaded.scripts,
+                        Some(playhead),
                     )
                     .map_err(|e| IntentError::Protocol(e.to_string()))?;
                     if !self.core.preview_is_live(
@@ -1449,6 +1724,78 @@ impl Session {
                 if mine {
                     end_drag(&mut inner);
                 }
+                Ok(())
+            }
+            ClientMessage::TransportPlay {} => {
+                self.transport_control(|transport, now, _| {
+                    if !transport.playing {
+                        transport.anchor(now);
+                        transport.playing = true;
+                    }
+                    Ok(())
+                })?;
+                // The first frame paints now, not a tick later.
+                self.core.transport_tick(TickOrigin::Control);
+                Ok(())
+            }
+            ClientMessage::TransportPause {} => self.transport_control(|transport, now, _| {
+                transport.anchor(now);
+                transport.playing = false;
+                Ok(())
+            }),
+            ClientMessage::TransportSeek { frame } => {
+                self.transport_control(|transport, now, (frames, period)| {
+                    if frame >= frames.unsigned_abs() {
+                        return Err(IntentError::Transport(format!(
+                            "frame {frame} is outside the loop (frames 0..{frames})"
+                        )));
+                    }
+                    // The first playhead INSIDE the frame by the lowering's
+                    // own quantization — the nominal `frame × period_ms /
+                    // frames` rounds below the boundary for some frames
+                    // (31 of the default loop) and would paint one short.
+                    #[allow(clippy::cast_possible_wrap)] // frame < frames, an i64
+                    let playhead =
+                        Playhead::at_frame(frame as i64, frames, period).ok_or_else(|| {
+                            IntentError::Transport(format!(
+                                "frame {frame} of {frames} has no playhead inside it \
+                                 (period {period} s) — a quantization bug, not a refusal"
+                            ))
+                        })?;
+                    transport.seek_ms(now, playhead.t_ms);
+                    Ok(())
+                })?;
+                // A paused scrub paints the frame it landed on; a playing
+                // one continues from there.
+                self.core.transport_tick(TickOrigin::Control);
+                Ok(())
+            }
+            ClientMessage::TransportSpeed { factor } => {
+                self.transport_control(|transport, now, _| {
+                    if !(factor.is_finite() && factor > 0.0) {
+                        return Err(IntentError::Transport(format!(
+                            "speed must be a positive finite number, got {}",
+                            spell_speed(factor)
+                        )));
+                    }
+                    if factor > MAX_SPEED {
+                        return Err(IntentError::Transport(format!(
+                            "speed must be at most {MAX_SPEED}×, got {}",
+                            spell_speed(factor)
+                        )));
+                    }
+                    transport.anchor(now);
+                    transport.speed = factor;
+                    Ok(())
+                })
+            }
+            ClientMessage::TransportReset {} => {
+                self.transport_control(|transport, now, _| {
+                    transport.seek_ms(now, 0.0);
+                    transport.playing = false;
+                    Ok(())
+                })?;
+                self.core.transport_tick(TickOrigin::Control);
                 Ok(())
             }
             ClientMessage::Undo {} => {
@@ -1729,7 +2076,13 @@ impl Session {
                 })
             }
             ClientMessage::SetParam { node, port, value } => {
-                apply_param(&mut inner.loaded.document, &node, port.as_deref(), &value)?;
+                apply_param(
+                    &mut inner.loaded.document,
+                    &inner.loaded.specs,
+                    &node,
+                    port.as_deref(),
+                    &value,
+                )?;
                 let label = match &port {
                     Some(port) => format!("set {node}.{port} = {value}"),
                     None => format!("set {node} = {value}"),
@@ -2398,11 +2751,23 @@ impl Session {
     /// Cancel (Esc): the running generation stops and a queued edit's
     /// solve is dropped; the summary says so and the next edit resubmits.
     pub fn cancel(&self) {
-        let dropped_pending = self.solve.cancel();
         // Esc ends the drag too: the next tick starts a fresh one
         // (re-predicted, re-announced if withheld) — and the end of an
-        // announced one is broadcast, Esc being a deliberate stop.
-        end_drag(&mut self.core.lock_inner());
+        // announced one is broadcast, Esc being a deliberate stop. And it
+        // pauses the transport: "stop solving" includes the ticker — PAUSED
+        // FIRST, and the solve cancelled under the same document-lock
+        // hold: a ticker tick submits its job under `inner`
+        // ([`Core::transport_tick`]), so one that ran before this hold is
+        // in the loop for the cancel below to drop, and one that takes the
+        // lock after it sees the transport paused and submits nothing. No
+        // frame solves after Esc (the reverse order left one ticker period
+        // in which a frame could slip in behind the cancel).
+        let dropped_pending = {
+            let mut inner = self.core.lock_inner();
+            end_drag(&mut inner);
+            self.core.pause_transport(&mut inner);
+            self.solve.cancel()
+        };
         if dropped_pending {
             let inner = self.core.lock_inner();
             broadcast(
@@ -2414,6 +2779,47 @@ impl Session {
                 },
             );
         }
+    }
+
+    // ------------------------------------------------------- transport --
+
+    /// One transport control: `apply` edits the state under the lock
+    /// (given the op clock now and the primary loop), the playing mirror
+    /// and the ticker follow, and the new view is broadcast to every
+    /// client. A refused control (`Err`) changes nothing and broadcasts
+    /// nothing — the refusing client gets its `error`, and for everyone
+    /// else there is no news. Nothing is ever written. Controls are
+    /// writer-only (`is_write`): playback is shared state every client
+    /// sees, and the lease is the one arbiter of shared state.
+    fn transport_control(
+        &self,
+        apply: impl FnOnce(&mut Transport, f64, (i64, f64)) -> Result<(), IntentError>,
+    ) -> Result<(), IntentError> {
+        let mut inner = self.core.lock_inner();
+        let now = self.core.now_ms_f64();
+        let r#loop = primary_loop(&inner.lowered.driven);
+        apply(&mut inner.transport, now, r#loop)?;
+        self.core.set_ticker_playing(inner.transport.playing);
+        broadcast(
+            &inner,
+            &ServerMessage::Transport(self.core.transport_view(&inner)),
+        );
+        Ok(())
+    }
+
+    /// The transport as clients see it (tests, the debug oracle).
+    #[must_use]
+    pub fn transport(&self) -> TransportView {
+        self.core.transport_view(&self.core.lock_inner())
+    }
+
+    /// One ticker tick, on the caller's thread — exactly what the ticker
+    /// does every [`TRANSPORT_TICK`] while playing, nothing while paused.
+    /// Tests drive the transport with a virtual clock through this; the
+    /// ticker's own ticks are no-ops between the test's steps (the
+    /// position is unchanged).
+    pub fn transport_tick(&self) {
+        self.core.transport_tick(TickOrigin::Ticker);
     }
 
     // -------------------------------------------------- effectful runs --
@@ -2453,13 +2859,17 @@ impl Session {
                     serde_json::to_string(&gate.blocking).unwrap_or_default()
                 ));
             }
-            let lowered = lower(
+            // At the transport's playhead: an export writes the frame the
+            // viewport shows.
+            let playhead = self.core.playhead(&inner);
+            let lowered = lower_with_playhead(
                 &inner.loaded.document,
                 &inner.loaded.resolution,
                 &inner.loaded.specs,
                 &self.core.config.project,
                 &targets,
                 &inner.loaded.scripts,
+                Some(playhead),
             )
             .map_err(|e| e.to_string())?;
             (Arc::new(lowered), self.solve.next_generation())
@@ -2579,14 +2989,16 @@ impl Session {
         let (lowered, targets) = {
             let inner = self.core.lock_inner();
             let mut scratch = inner.loaded.document.clone();
-            apply_param(&mut scratch, node, port, value)?;
+            apply_param(&mut scratch, &inner.loaded.specs, node, port, value)?;
             let resolution = resolve(&scratch, &Catalog::new(&inner.loaded.specs));
-            let lowered = lower_partial(
+            let playhead = self.core.playhead(&inner);
+            let lowered = lower_partial_with_playhead(
                 &scratch,
                 &resolution,
                 &inner.loaded.specs,
                 &self.core.config.project,
                 &inner.loaded.scripts,
+                Some(playhead),
             )
             .map_err(|e| IntentError::Protocol(e.to_string()))?;
             let targets = all_targets(&lowered);
@@ -2771,6 +3183,7 @@ impl Session {
             "display": display,
             "picks": picks,
             "lease": lease_view(&inner),
+            "transport": self.core.transport_view(&inner),
             "values": values,
             "timings": *self.core.timings.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
         })
@@ -2780,11 +3193,32 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         self.core.shutdown.store(true, Ordering::SeqCst);
-        self.core.debounce_wake.notify_all();
+        // Each notify under the mutex its waiter's predicate reads the
+        // flag under: a waiter is then either blocked (and woken) or yet
+        // to read the flag (and sees it) — never between the two.
+        {
+            let _debounce = self
+                .core
+                .debounce
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.core.debounce_wake.notify_all();
+        }
+        {
+            let _gate = self
+                .core
+                .transport_gate
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.core.transport_wake.notify_all();
+        }
         if let Some(handle) = self.debouncer.take() {
             let _ = handle.join();
         }
         if let Some(handle) = self.ticker.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.transport_ticker.take() {
             let _ = handle.join();
         }
     }
@@ -2938,12 +3372,33 @@ fn spec_order(inner: &Inner, node: &str) -> Option<Vec<&'static str>> {
     Some(spec.inputs.iter().map(|port| port.name).collect())
 }
 
+/// Apply one param edit (`set_param`, a `param_preview` tick, a
+/// hypothetical's override) to `document`: ONE literal into `node.port`
+/// (or the bare literal binding `node`). Refused before it touches the
+/// text when the value is not a literal, and when the port is
+/// transport-driven — `cycle.frame`, `clock.t` ([`transport_driven_reason`];
+/// `specs` is what knows): the session fills that port from the playhead
+/// whatever the text says, so the kwarg such an edit wrote would be dead
+/// in the app and the app must not write it. `apply_text` (a whole file,
+/// by hand) may still carry the kwarg: that is the headless value, shown
+/// on the canvas and removable.
 fn apply_param(
     document: &mut Document,
+    specs: &[&'static NodeSpec],
     node: &str,
     port: Option<&str>,
     value: &str,
 ) -> Result<(), IntentError> {
+    if let Some(port) = port
+        && let Some(signal) = transport_driven_port(document, specs, node, port)
+    {
+        return Err(IntentError::Refused(transport_driven_reason(
+            node,
+            port,
+            signal,
+            "a param edit cannot set it",
+        )));
+    }
     // A param edit writes ONE literal (docs/10: slider drag = one numeric
     // token). Anything else — a reference, an `each()`, a stray
     // expression — is refused before it touches the text.
@@ -3156,6 +3611,27 @@ fn wire_verdict(
     port: &str,
     text: &str,
 ) -> (String, Option<String>) {
+    // A transport-driven port (`cycle.frame`, `clock.t`) is the session's,
+    // not a wire's: the lowering fills it from the playhead whatever the
+    // text says, so a wire into it would be dead in the app. The type
+    // lattice would accept an Integer there — this is the one rule the
+    // checker does not know, and it is decided HERE (the probe and the
+    // connect gesture both ask this function; `apply_param` applies the
+    // same rule to `set_param` / `param_preview`) so the canvas never
+    // computes it (docs/13; the protocol-change skill: the server owns
+    // wire compatibility). A wire the text already carries is shown and
+    // may be unwired; it is only never offered or created from the app.
+    if let Some(signal) = transport_driven_port(document, specs, node, port) {
+        return (
+            "blocked".to_owned(),
+            Some(transport_driven_reason(
+                node,
+                port,
+                signal,
+                "nothing can be wired into it",
+            )),
+        );
+    }
     let mut scratch = document.clone();
     let order = spec_order_doc(&scratch, specs, node);
     if let Err(error) = writer::set_kwarg(&mut scratch, node, port, text, order.as_deref()) {
@@ -3403,6 +3879,17 @@ fn spec_order_doc(
     specs: &[&'static NodeSpec],
     node: &str,
 ) -> Option<Vec<&'static str>> {
+    let spec = call_spec_doc(document, specs, node)?;
+    Some(spec.inputs.iter().map(|port| port.name).collect())
+}
+
+/// The spec of the node a binding calls (`None` for a literal, an
+/// expression, a broken line, an unknown func).
+fn call_spec_doc(
+    document: &Document,
+    specs: &[&'static NodeSpec],
+    node: &str,
+) -> Option<&'static NodeSpec> {
     let line = document.find_binding(node)?;
     let cicada_lang::Line::Statement { statement, .. } = &document.lines()[line] else {
         return None;
@@ -3410,8 +3897,48 @@ fn spec_order_doc(
     let Rhs::Call(call) = &statement.rhs else {
         return None;
     };
-    let spec = specs.iter().find(|spec| spec.name == call.func.name)?;
-    Some(spec.inputs.iter().map(|port| port.name).collect())
+    specs
+        .iter()
+        .find(|spec| spec.name == call.func.name)
+        .copied()
+}
+
+/// The transport signal of `node.port` when that input is transport-driven
+/// (`PortSpec::transport_driven` — `cycle.frame`, `clock.t`); `None` for
+/// every other port and for a binding that is not a call.
+fn transport_driven_port(
+    document: &Document,
+    specs: &[&'static NodeSpec],
+    node: &str,
+    port: &str,
+) -> Option<TransportSignal> {
+    call_spec_doc(document, specs, node)?
+        .inputs
+        .iter()
+        .find(|input| input.name == port)
+        .and_then(|input| input.transport_driven)
+}
+
+/// Why nothing from the app may target a transport-driven port — worded
+/// once for the wire probe, the connect gesture, `set_param` and
+/// `param_preview` ([`wire_verdict`], [`apply_param`]); `attempt` names
+/// what is being refused ("nothing can be wired into it", "a param edit
+/// cannot set it"). The web's e2e matches the opening.
+fn transport_driven_reason(
+    node: &str,
+    port: &str,
+    signal: TransportSignal,
+    attempt: &str,
+) -> String {
+    let what = match signal {
+        TransportSignal::Frame => "the loop frame",
+        TransportSignal::Time => "the playhead in seconds",
+    };
+    format!(
+        "`{node}`: `{port}` is driven by the transport — the session fills it with {what} \
+         whatever the text says, so {attempt} in the app (a headless run evaluates what the \
+         text says)"
+    )
 }
 
 fn debounce_loop(core: &Core) {
@@ -3454,6 +3981,86 @@ fn debounce_loop(core: &Core) {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
+}
+
+/// The transport ticker: while playing, one [`Core::transport_tick`] per
+/// [`TRANSPORT_TICK`] on the absolute grid from the gate's anchor; paused,
+/// it sleeps on the gate until a control or shutdown wakes it. The tick
+/// reads the session clock for the playhead, so the wall cadence only
+/// sets how often it LOOKS — a virtual clock in tests makes every
+/// unprompted tick a no-op.
+fn transport_loop(core: &Core) {
+    loop {
+        // Paused: wait on the gate. The predicate reads the playing flag
+        // under the gate's mutex, which every store of it holds too, so a
+        // Play cannot slip between the read and the block.
+        let mut anchor = {
+            let guard = core
+                .transport_gate
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let guard = core
+                .transport_wake
+                .wait_while(guard, |_anchor| {
+                    !core.transport_playing.load(Ordering::SeqCst)
+                        && !core.shutdown.load(Ordering::SeqCst)
+                })
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *guard
+        };
+        if core.shutdown.load(Ordering::SeqCst) {
+            return;
+        }
+        // Playing: walk the grid. The control that started (or
+        // re-anchored) playback painted the frame at the anchor itself, so
+        // the first tick is one period later.
+        let mut deadline = anchor;
+        loop {
+            deadline += TRANSPORT_TICK;
+            let now = Instant::now();
+            if deadline > now {
+                std::thread::sleep(deadline - now);
+            } else if now.duration_since(deadline) > TRANSPORT_TICK {
+                // More than a period behind (a slow lowering, a stalled
+                // machine): tick now and continue the grid from here rather
+                // than burst through the missed points — a missed frame
+                // fills in on the next pass, a burst would paint nothing
+                // new (latest-wins) and cost a lowering per point.
+                deadline = now;
+            }
+            if core.shutdown.load(Ordering::SeqCst) {
+                return;
+            }
+            if !core.transport_playing.load(Ordering::SeqCst) {
+                break;
+            }
+            // A control re-anchored the grid (a seek, a speed change): the
+            // frame boundaries moved with it, so the ticks follow — the
+            // first one a full period after it, as after Play.
+            let current = *core
+                .transport_gate
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if current != anchor {
+                anchor = current;
+                deadline = current;
+                continue;
+            }
+            core.transport_tick(TickOrigin::Ticker);
+        }
+    }
+}
+
+/// Who is ticking the transport ([`Core::transport_tick`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TickOrigin {
+    /// The ticker thread (or a test standing in for it): ticks only while
+    /// playing — a tick that finds the transport paused under the lock is
+    /// one that raced a pause or an Esc, and submits nothing.
+    Ticker,
+    /// A control that moved the playhead (play, seek, reset): paints the
+    /// frame it landed on, paused or not.
+    Control,
 }
 
 impl Core {
@@ -3505,20 +4112,30 @@ impl Core {
                 barrier,
                 reason: reason.to_owned(),
                 history: inner.oplog.view(),
+                transport: self.transport_view(inner),
             },
         )
     }
 
     /// Relower + rebuild the view-model from the current document,
-    /// resolution, and sidecar; clear frames of nodes that vanished.
+    /// resolution, and sidecar; clear frames of nodes that vanished. The
+    /// graph is lowered at the transport's playhead (the structural
+    /// generation paints the frame the viewport is at, not the file's
+    /// frame 0), and a loop or driven set that changed is broadcast.
     fn rebuild(&self, inner: &mut Inner) {
-        let lowered = lower_partial(
+        let playhead = self.playhead(inner);
+        let before = self.transport_view(inner);
+        let lowered = lower_partial_with_playhead(
             &inner.loaded.document,
             &inner.loaded.resolution,
             &inner.loaded.specs,
             &self.config.project,
             &inner.loaded.scripts,
+            Some(playhead),
         );
+        // The graph changed under the playhead: the next tick paints
+        // whatever its position is.
+        inner.transport.last_position = None;
         match lowered {
             Ok(lowered) => inner.lowered = Arc::new(lowered),
             Err(error) => {
@@ -3562,6 +4179,215 @@ impl Core {
                 &Bytes::from(display::clear_frame(generation, key.0, key.1)),
             );
         }
+        // A new or removed time param, a changed `period`/`frames`: the
+        // scrubber's loop and the driven list changed — say so (the delta
+        // that follows carries the graph, not the transport).
+        let after = self.transport_view(inner);
+        #[allow(clippy::float_cmp)] // the same literal's ms, or a different literal's
+        let loop_changed = after.frames != before.frames || after.period_ms != before.period_ms;
+        if after.driven != before.driven || loop_changed {
+            broadcast(inner, &ServerMessage::Transport(after));
+        }
+    }
+
+    // ------------------------------------------------------- transport --
+
+    /// The op clock in milliseconds, fractional (the transport's time
+    /// base; `now_ms` truncates for the op log).
+    #[allow(clippy::cast_precision_loss)] // nanos since the session opened: exact for 285 years
+    fn now_ms_f64(&self) -> f64 {
+        self.op_clock.now_nanos() as f64 / 1_000_000.0
+    }
+
+    /// The transport's playhead now — what every lowering the session
+    /// does injects into the time params.
+    fn playhead(&self, inner: &Inner) -> Playhead {
+        Playhead {
+            t_ms: inner.transport.t_ms(self.now_ms_f64()),
+        }
+    }
+
+    /// The transport as clients see it: the playhead's position now, the
+    /// primary loop and the driven ports of the current graph.
+    fn transport_view(&self, inner: &Inner) -> TransportView {
+        let playhead = self.playhead(inner);
+        let (frames, period) = primary_loop(&inner.lowered.driven);
+        // The same quantization the lowering injects (`Playhead::frame` on
+        // the loop's own seconds), so the view's frame IS the painted one.
+        let frame = playhead.frame(frames, period).map_or(0, i64::unsigned_abs);
+        TransportView {
+            playing: inner.transport.playing,
+            speed: inner.transport.speed,
+            t_ms: playhead.t_ms,
+            frame,
+            frames: frames.unsigned_abs(),
+            period_ms: period * 1000.0,
+            driven: inner
+                .lowered
+                .driven
+                .iter()
+                .map(|port| DrivenView {
+                    node: port.node.clone(),
+                    port: port.port.to_owned(),
+                    signal: match port.signal {
+                        TransportSignal::Frame => DrivenSignal::Frame,
+                        TransportSignal::Time => DrivenSignal::Time,
+                    },
+                    // The port's OWN loop — the numbers its frame was
+                    // quantized from — so a client never shows it the
+                    // primary loop's frame.
+                    r#loop: port.r#loop.map(|(frames, period)| LoopView {
+                        frames: frames.unsigned_abs(),
+                        period_ms: period * 1000.0,
+                    }),
+                })
+                .collect(),
+        }
+    }
+
+    /// Pause the transport where it is (Esc, the last client leaving) and
+    /// tell the clients — a no-op while paused.
+    fn pause_transport(&self, inner: &mut Inner) {
+        if !inner.transport.playing {
+            return;
+        }
+        let now = self.now_ms_f64();
+        inner.transport.anchor(now);
+        inner.transport.playing = false;
+        self.set_ticker_playing(false);
+        broadcast(inner, &ServerMessage::Transport(self.transport_view(inner)));
+    }
+
+    /// Hand the ticker the playing state after a control: under the gate,
+    /// the grid is re-anchored at this instant, the flag stored and the
+    /// ticker woken — one mutex hold, so the ticker's paused wait can
+    /// never miss it (see `transport_gate`). Called with `inner` held.
+    fn set_ticker_playing(&self, playing: bool) {
+        let mut anchor = self
+            .transport_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *anchor = Instant::now();
+        self.transport_playing.store(playing, Ordering::SeqCst);
+        self.transport_wake.notify_all();
+    }
+
+    /// One tick of the transport: read the playhead, and when the driven
+    /// ports' values moved since the last hand-over, lower the document at
+    /// it and submit a `Transport` job to the one-slot latest-wins loop —
+    /// the preview path exactly (the in-flight generation completes, the
+    /// newest frame replaces any queued one; nothing is written). Called
+    /// by the ticker while playing and by the controls that move the
+    /// playhead (play, seek, reset), paused or not. The job is submitted
+    /// UNDER the document lock, so [`Session::cancel`]'s pause-then-cancel
+    /// under the same lock leaves no frame behind.
+    fn transport_tick(&self, origin: TickOrigin) {
+        let accepted = Instant::now();
+        let mut inner = self.lock_inner();
+        if inner.lowered.driven.is_empty() {
+            // No time params: playback moves nothing.
+            return;
+        }
+        if origin == TickOrigin::Ticker && !inner.transport.playing {
+            // The ticker raced a pause (or Esc): the pause painted
+            // nothing new and neither does this.
+            return;
+        }
+        let now = self.now_ms_f64();
+        let playhead = Playhead {
+            t_ms: inner.transport.t_ms(now),
+        };
+        let position = tick_position(&inner.lowered.driven, playhead);
+        if inner.transport.last_position.as_ref() == Some(&position) {
+            return;
+        }
+        inner.transport.last_position = Some(position);
+        // A LIVE drag's thumb rides along (docs/13 §Slider drags: the
+        // drag's ticks and the transport's interleave on the one loop;
+        // without this the viewport would alternate between the
+        // committed and the dragged value). An announced drag is
+        // compute-on-release: the viewport shows the committed state.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // ms since open
+        let now_ms = now as u64;
+        let live_drag = inner.drag.as_ref().filter(|drag| {
+            !drag.announced && now_ms.saturating_sub(drag.last_tick_ms) <= DRAG_GAP_MS
+        });
+        let lowered = match live_drag {
+            Some(drag) => {
+                let mut scratch = inner.loaded.document.clone();
+                match apply_param(
+                    &mut scratch,
+                    &inner.loaded.specs,
+                    &drag.node,
+                    drag.port.as_deref(),
+                    &drag.last_value,
+                ) {
+                    Ok(()) => {
+                        let resolution = resolve(&scratch, &Catalog::new(&inner.loaded.specs));
+                        lower_partial_with_playhead(
+                            &scratch,
+                            &resolution,
+                            &inner.loaded.specs,
+                            &self.config.project,
+                            &inner.loaded.scripts,
+                            Some(playhead),
+                        )
+                    }
+                    // The tick applied this value a moment ago; a
+                    // refusal now is the committed text's turn.
+                    Err(_) => self.lower_committed(&inner, playhead),
+                }
+            }
+            None => self.lower_committed(&inner, playhead),
+        };
+        let job = match lowered {
+            Ok(lowered) => {
+                announce_tick_exclusions(&mut inner, &lowered);
+                let targets = all_targets(&lowered);
+                Job {
+                    lowered: Arc::new(lowered),
+                    targets,
+                    kind: JobKind::Transport,
+                    submitted: accepted,
+                }
+            }
+            Err(error) => {
+                // Graph assembly failing is a bug; shout, paint nothing.
+                self.notices
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(format!("transport lowering failed: {error}"));
+                return;
+            }
+        };
+        if let Some(solve) = self.solve_loop() {
+            solve.submit(job);
+        }
+    }
+
+    /// The committed document lowered at `playhead`.
+    fn lower_committed(
+        &self,
+        inner: &Inner,
+        playhead: Playhead,
+    ) -> Result<Lowered, crate::lower::LowerError> {
+        lower_partial_with_playhead(
+            &inner.loaded.document,
+            &inner.loaded.resolution,
+            &inner.loaded.specs,
+            &self.config.project,
+            &inner.loaded.scripts,
+            Some(playhead),
+        )
+    }
+
+    /// The solve loop, while it lives.
+    fn solve_loop(&self) -> Option<Arc<SolveLoop>> {
+        self.solve
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
     }
 
     /// The compute-on-release decision for one `param_preview` tick
@@ -3619,8 +4445,10 @@ impl Core {
             announced: false,
             last_tick_ms: now,
             deferred: 0,
+            last_value: value.to_owned(),
         });
         drag.last_tick_ms = now;
+        value.clone_into(&mut drag.last_value);
         let live = match cost {
             // At or over the bar: withheld, whatever the drag did so far.
             Some(cost) if cost.ms >= COMPUTE_ON_RELEASE_MS => false,
@@ -3800,13 +4628,7 @@ impl Core {
                 submitted: Instant::now(),
             }
         };
-        let solve = self
-            .solve
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .and_then(std::sync::Weak::upgrade);
-        if let Some(solve) = solve {
+        if let Some(solve) = self.solve_loop() {
             solve.submit(job);
         }
     }
@@ -4464,6 +5286,7 @@ impl Core {
             kind: match job.kind {
                 JobKind::Structural => "structural",
                 JobKind::Preview => "preview",
+                JobKind::Transport => "transport",
             },
             started_ms,
             queued_ms,
@@ -4508,6 +5331,10 @@ impl Core {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
+    use cicada_core::value::ValueData;
+
     use super::*;
     use crate::frames::{Frame, FrameKind, decode};
     use tokio::sync::mpsc::unbounded_channel;
@@ -4856,6 +5683,264 @@ mod tests {
             into_c["reason"].as_str().unwrap().contains("cycle"),
             "{into_c}"
         );
+    }
+
+    // A transport-driven port is never a wire target from the app: the
+    // lowering fills `cycle.frame` / `clock.t` from the playhead whatever
+    // the text says, so a wire there would be dead — and the type lattice
+    // alone would accept an Integer into `frame`. The rule is decided in
+    // the server (`wire_verdict`): the probe answers `blocked` with the
+    // reason for a canvas node and omits the port from the catalog's
+    // accepting ports, and `connect` refuses before the text moves. A wire
+    // the text already carries (`frame=n`) stays: it is the headless
+    // source, shown in the app and removable, never silently hidden.
+    #[test]
+    #[allow(clippy::too_many_lines)] // the probe, the connect and the kept wire, one story
+    fn a_transport_driven_port_is_never_a_wire_target_from_the_app() {
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             n = 7\n\
+             spin = cycle(period=4.0, frames=120)\n\
+             elapsed = clock(speed=1.0)\n\
+             size = spin + elapsed\n",
+        );
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let before = std::fs::read_to_string(&pipeline).unwrap();
+
+        session.handle(
+            id,
+            Some("q".into()),
+            ClientMessage::ProbeWire {
+                from: WireEnd {
+                    node: "n".into(),
+                    port: "out".into(),
+                },
+            },
+        );
+        let msgs = texts(&drain(&mut rx));
+        let probe = msgs.iter().find(|m| m["type"] == "wire_probe").unwrap();
+        let targets = probe["payload"]["targets"].as_array().unwrap();
+        let find = |node: &str, port: &str| {
+            targets
+                .iter()
+                .find(|t| t["node"] == node && t["port"] == port)
+                .unwrap_or_else(|| panic!("{node}.{port} in {targets:?}"))
+                .clone()
+        };
+        assert_eq!(
+            find("spin", "frames")["verdict"],
+            "ok",
+            "an Integer wire fits `frames`"
+        );
+        let frame = find("spin", "frame");
+        assert_eq!(frame["verdict"], "blocked");
+        assert_eq!(
+            frame["reason"],
+            "`spin`: `frame` is driven by the transport — the session fills it with the loop \
+             frame whatever the text says, so nothing can be wired into it in the app (a \
+             headless run evaluates what the text says)"
+        );
+        let t = find("elapsed", "t");
+        assert_eq!(t["verdict"], "blocked");
+        assert!(
+            t["reason"]
+                .as_str()
+                .unwrap()
+                .contains("the playhead in seconds"),
+            "{t}"
+        );
+        // The catalog's accepting ports: `cycle` offers `frames`, never
+        // `frame`; `clock` offers `speed`, never `t`.
+        let catalog = probe["payload"]["catalog"].as_array().unwrap();
+        let ports_of = |func: &str| -> Vec<String> {
+            catalog
+                .iter()
+                .find(|c| c["func"] == func)
+                .unwrap_or_else(|| panic!("{func} in {catalog:?}"))["ports"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|p| p[0].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let cycle_ports = ports_of("cycle");
+        assert!(
+            cycle_ports.contains(&"frames".to_owned()),
+            "{cycle_ports:?}"
+        );
+        assert!(
+            !cycle_ports.contains(&"frame".to_owned()),
+            "{cycle_ports:?}"
+        );
+        let clock_ports = ports_of("clock");
+        assert!(clock_ports.contains(&"speed".to_owned()), "{clock_ports:?}");
+        assert!(!clock_ports.contains(&"t".to_owned()), "{clock_ports:?}");
+
+        // `connect` is refused with the same reason, and the text never moved.
+        for (node, port) in [("spin", "frame"), ("elapsed", "t")] {
+            let error = session
+                .dispatch(
+                    id,
+                    Some("c".into()),
+                    ClientMessage::Connect {
+                        from: WireEnd {
+                            node: "n".into(),
+                            port: "out".into(),
+                        },
+                        to: WireEnd {
+                            node: node.into(),
+                            port: port.into(),
+                        },
+                        lift: false,
+                    },
+                )
+                .unwrap_err();
+            let why = error.to_string();
+            assert!(why.contains("is driven by the transport"), "{why}");
+            assert!(why.contains(&format!("`{node}`: `{port}`")), "{why}");
+        }
+        session.wait_idle();
+        assert_eq!(std::fs::read_to_string(&pipeline).unwrap(), before);
+        assert_eq!(history_of(&session)["depth"], 0, "nothing landed");
+
+        // A wire the text carries into the port is kept, shown in the
+        // graph, and removable — the app never hides it.
+        std::fs::write(
+            &pipeline,
+            "# cicada 1\n\
+             n = 7\n\
+             spin = cycle(period=4.0, frames=120, frame=n)\n\
+             size = spin + 1.0\n",
+        )
+        .unwrap();
+        assert!(session.reload_from_disk("external change", false).unwrap());
+        session.wait_idle();
+        {
+            let inner = session.core.lock_inner();
+            assert!(
+                inner
+                    .graph
+                    .wires
+                    .iter()
+                    .any(|w| w.from.node == "n" && w.to.node == "spin" && w.to.port == "frame"),
+                "{:?}",
+                inner.graph.wires
+            );
+            let spin = inner.graph.node("spin").unwrap();
+            assert!(spin.excluded.is_none(), "the transport still drives it");
+        }
+        assert_eq!(session.transport().driven.len(), 1);
+        session.handle(
+            id,
+            None,
+            ClientMessage::Disconnect {
+                to: WireEnd {
+                    node: "spin".into(),
+                    port: "frame".into(),
+                },
+            },
+        );
+        session.wait_idle();
+        let text = std::fs::read_to_string(&pipeline).unwrap();
+        assert!(
+            text.contains("spin = cycle(period=4.0, frames=120)"),
+            "{text}"
+        );
+    }
+
+    // Nor is it a param-edit target: `set_param` into `cycle.frame` /
+    // `clock.t` wrote a kwarg the app ignores (the transport overrides it)
+    // with no refusal — the "server owns the rule" fix covered wires only,
+    // and the web merely hid the editor (review 2026-08-21). `set_param`,
+    // `param_preview` and a hypothetical's override are refused with the
+    // wire's reason, kind `refused`, before the text moves; `apply_text`
+    // (a whole file by hand) still carries the kwarg as the headless value.
+    #[test]
+    fn a_transport_driven_port_is_never_a_param_edit_target_from_the_app() {
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             spin = cycle(period=4.0, frames=120)\n\
+             elapsed = clock(speed=1.0)\n\
+             size = spin + elapsed\n",
+        );
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(tx);
+        let before = std::fs::read_to_string(&pipeline).unwrap();
+        drain(&mut rx);
+
+        for (node, port, value, opening) in [
+            (
+                "spin",
+                "frame",
+                "5",
+                "`spin`: `frame` is driven by the transport",
+            ),
+            (
+                "elapsed",
+                "t",
+                "2.5",
+                "`elapsed`: `t` is driven by the transport",
+            ),
+        ] {
+            for intent in [
+                ClientMessage::SetParam {
+                    node: node.into(),
+                    port: Some(port.into()),
+                    value: value.into(),
+                },
+                ClientMessage::ParamPreview {
+                    node: node.into(),
+                    port: Some(port.into()),
+                    value: value.into(),
+                },
+            ] {
+                let error = session.dispatch(id, Some("p".into()), intent).unwrap_err();
+                assert_eq!(error.kind(), "refused");
+                let why = error.to_string();
+                assert!(why.starts_with(opening), "{why}");
+                assert!(
+                    why.contains("so a param edit cannot set it in the app"),
+                    "{why}"
+                );
+            }
+            let error = session
+                .solve_hypothetical(node, Some(port), value)
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("is driven by the transport"),
+                "{error}"
+            );
+        }
+        session.wait_idle();
+        assert_eq!(std::fs::read_to_string(&pipeline).unwrap(), before);
+        assert_eq!(history_of(&session)["depth"], 0, "nothing landed");
+        assert!(
+            transport_generations(&session).is_empty(),
+            "no preview solved either"
+        );
+        // The loop ports stay editable: they are the text's, not the
+        // transport's.
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetParam {
+                node: "spin".into(),
+                port: Some("frames".into()),
+                value: "60".into(),
+            },
+        );
+        session.wait_idle();
+        let text = std::fs::read_to_string(&pipeline).unwrap();
+        assert!(text.contains("frames=60"), "{text}");
+        assert!(!text.contains("frame=5"), "{text}");
+        assert_eq!(session.transport().frames, 60);
     }
 
     #[test]
@@ -6063,14 +7148,15 @@ size = slider(value=4.0, min=0.5, max=5.0)
     /// The tick's scratch graph, exactly as the preview path lowers it.
     fn scratch_lowered(inner: &Inner, node: &str, port: Option<&str>, value: &str) -> Lowered {
         let mut scratch = inner.loaded.document.clone();
-        apply_param(&mut scratch, node, port, value).unwrap();
+        apply_param(&mut scratch, &inner.loaded.specs, node, port, value).unwrap();
         let resolution = resolve(&scratch, &Catalog::new(&inner.loaded.specs));
-        lower_partial(
+        lower_partial_with_playhead(
             &scratch,
             &resolution,
             &inner.loaded.specs,
             &ProjectConfig::default(),
             &inner.loaded.scripts,
+            Some(Playhead::ZERO),
         )
         .unwrap()
     }
@@ -8767,5 +9853,957 @@ size = slider(value=4.0, min=0.5, max=5.0)
             error.to_string().contains("no binding named `nope`"),
             "{error}"
         );
+    }
+
+    // ----------------------------------------------------------- transport --
+    // (Exact float comparison throughout: the playhead is virtual-clock
+    // milliseconds, exact by construction.)
+
+    /// A 10-frame, 1 s loop driving a box's size: every frame is a distinct
+    /// value (`spin` is 0, 0.1, … 0.9), the cone is cheap, and 100 ms of
+    /// virtual time is exactly one frame.
+    const ORBIT: &str = "# cicada 1\n\
+                         spin = cycle(period=1.0, frames=10)\n\
+                         base = 1.0\n\
+                         size = spin + base\n\
+                         span = construct_domain(start=0.0, end=size)\n\
+                         block = box(x=span, y=span, z=span)\n";
+
+    /// One frame of ORBIT, in op-clock nanoseconds.
+    const FRAME_NS: u64 = 100_000_000;
+
+    fn transport_messages(messages: &[Outgoing]) -> Vec<serde_json::Value> {
+        texts(messages)
+            .into_iter()
+            .filter(|m| m["type"] == "transport")
+            .map(|m| m["payload"].clone())
+            .collect()
+    }
+
+    /// The frame `cycle` received in the last complete generation.
+    fn painted_frame(session: &Session) -> i64 {
+        let inner = session.core.lock_inner();
+        let kept = inner.last_complete.as_ref().expect("a complete generation");
+        let driven = kept
+            .lowered
+            .driven
+            .iter()
+            .find(|d| d.node == "spin")
+            .expect("spin is driven");
+        match driven.value.data() {
+            ValueData::Integer(frame) => *frame,
+            other => panic!("frame is {other:?}"),
+        }
+    }
+
+    /// The last complete generation's number, its `NodeKey` set (rebuilt
+    /// exactly as the executor keys nodes: op, version, body, tolerance,
+    /// input hashes in spec order, fan), and its computed / cached counts.
+    fn last_generation_keys(session: &Session) -> (u64, BTreeSet<String>, usize, usize) {
+        let inner = session.core.lock_inner();
+        let kept = inner.last_complete.as_ref().expect("a complete generation");
+        let graph = &kept.lowered.graph;
+        let mut keys = BTreeSet::new();
+        let mut computed = 0;
+        let mut cached = 0;
+        for &id in graph.topo_order() {
+            let decl = graph.node(id);
+            match kept.report.outcome(id) {
+                NodeOutcome::Computed { .. } => computed += 1,
+                NodeOutcome::CacheHit { .. } => cached += 1,
+                other => panic!("`{}`: {other:?}", decl.name),
+            }
+            let inputs: Vec<Option<ValueHash>> = decl
+                .inputs
+                .iter()
+                .map(|input| match input {
+                    Input::Value(value) => Some(value.hash()),
+                    Input::Absent => None,
+                    Input::Port { node, output } => {
+                        Some(kept.report.outcome(*node).output_hashes().unwrap()[*output])
+                    }
+                })
+                .collect();
+            let key = node_key(&KeyInputs {
+                op: &decl.op,
+                version: decl.version,
+                body_hash: decl.body_hash.as_ref(),
+                tolerance: decl.tolerance.as_ref(),
+                inputs: &inputs,
+                fan: &decl.fan,
+            });
+            keys.insert(key.as_hash().to_hex());
+        }
+        (kept.generation, keys, computed, cached)
+    }
+
+    fn transport_generations(session: &Session) -> Vec<serde_json::Value> {
+        session.debug_state(false)["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|t| t["kind"] == "transport")
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    #[allow(clippy::too_many_lines)] // one story: every control, both roles, every refusal
+    fn transport_controls_drive_the_playhead_and_are_writer_only() {
+        let (_dir, config, clock) = project_with_clock(ORBIT);
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (writer, _) = session.connect(tx);
+        let (otx, mut orx) = unbounded_channel();
+        let (observer, role) = session.connect(otx);
+        assert_eq!(role, Role::Observer);
+        drain(&mut rx);
+        drain(&mut orx);
+
+        // The snapshot carries the transport at rest, with the loop read
+        // off the pipeline and the driven port named.
+        let snapshot: serde_json::Value =
+            serde_json::from_str(&session.snapshot(false, "initial")).unwrap();
+        assert_eq!(
+            snapshot["payload"]["transport"],
+            serde_json::json!({
+                "playing": false, "speed": 1.0, "t_ms": 0.0, "frame": 0,
+                "frames": 10, "period_ms": 1000.0,
+                "driven": [{ "node": "spin", "port": "frame", "signal": "frame",
+                             "loop": { "frames": 10, "period_ms": 1000.0 } }]
+            })
+        );
+        assert_eq!(painted_frame(&session), 0, "the load paints frame 0");
+
+        // Observers follow; they do not drive.
+        session.handle(observer, Some("o1".into()), ClientMessage::TransportPlay {});
+        let refusal = texts(&drain(&mut orx));
+        assert_eq!(refusal.len(), 1);
+        assert_eq!(refusal[0]["type"], "error");
+        assert_eq!(refusal[0]["payload"]["kind"], "lease");
+        assert!(!session.transport().playing);
+
+        // Play: everyone hears it, the first frame paints at once.
+        session.handle(writer, None, ClientMessage::TransportPlay {});
+        session.wait_idle();
+        let heard = transport_messages(&drain(&mut rx));
+        assert_eq!(heard.len(), 1, "{heard:?}");
+        assert_eq!(heard[0]["playing"], true);
+        assert_eq!(heard[0]["t_ms"], 0.0);
+        assert_eq!(
+            transport_messages(&drain(&mut orx)),
+            heard,
+            "the observer sees the same transport"
+        );
+        assert_eq!(transport_generations(&session).len(), 1);
+        assert_eq!(painted_frame(&session), 0);
+
+        // 250 ms later the playhead is at frame 2; a tick paints it.
+        clock.advance(FRAME_NS * 5 / 2);
+        let view = session.transport();
+        assert_eq!((view.t_ms, view.frame), (250.0, 2));
+        session.transport_tick();
+        session.wait_idle();
+        assert_eq!(painted_frame(&session), 2);
+        assert_eq!(
+            transport_generations(&session).len(),
+            2,
+            "one generation per frame change"
+        );
+        // An unmoved playhead ticks nothing.
+        session.transport_tick();
+        session.wait_idle();
+        assert_eq!(transport_generations(&session).len(), 2);
+        // Nor does a playhead that moved INSIDE the frame: the dedupe is on
+        // the quantized frame, not on the time (a dedupe on the raw time
+        // would submit a cached generation per ticker tick — ~60/s — and
+        // every test that advanced by whole frames passed it; review
+        // 2026-08-21).
+        clock.advance(FRAME_NS / 4);
+        assert_eq!(session.transport().t_ms, 275.0);
+        let position_before = session.core.lock_inner().transport.last_position.clone();
+        session.transport_tick();
+        session.wait_idle();
+        assert_eq!(
+            transport_generations(&session).len(),
+            2,
+            "a sub-frame advance is not a frame change"
+        );
+        assert_eq!(
+            session.core.lock_inner().transport.last_position,
+            position_before
+        );
+        clock.advance(FRAME_NS * 3 / 4);
+        session.transport_tick();
+        session.wait_idle();
+        assert_eq!(
+            (session.transport().t_ms, painted_frame(&session)),
+            (350.0, 3)
+        );
+        assert_eq!(transport_generations(&session).len(), 3);
+        // Back to 250 ms of playhead for the rest of the story: a seek.
+        session.handle(writer, None, ClientMessage::TransportSeek { frame: 2 });
+        session.wait_idle();
+        assert_eq!(session.transport().t_ms, 200.0);
+        clock.advance(FRAME_NS / 2);
+        assert_eq!(session.transport().t_ms, 250.0);
+        drain(&mut rx);
+        drain(&mut orx);
+
+        // Speed: re-anchored where it stands, then twice as fast.
+        session.handle(writer, None, ClientMessage::TransportSpeed { factor: 2.0 });
+        let heard = transport_messages(&drain(&mut rx));
+        assert_eq!(
+            (heard[0]["speed"].as_f64(), heard[0]["t_ms"].as_f64()),
+            (Some(2.0), Some(250.0))
+        );
+        clock.advance(FRAME_NS * 5 / 2);
+        let view = session.transport();
+        assert_eq!((view.t_ms, view.frame, view.playing), (750.0, 7, true));
+
+        // Pause freezes the playhead.
+        session.handle(writer, None, ClientMessage::TransportPause {});
+        let heard = transport_messages(&drain(&mut rx));
+        assert_eq!(heard[0]["playing"], false);
+        assert_eq!(heard[0]["t_ms"].as_f64(), Some(750.0));
+        clock.advance(FRAME_NS * 10);
+        assert_eq!(session.transport().t_ms, 750.0);
+        assert!(!session.core.transport_playing.load(Ordering::SeqCst));
+
+        // A paused seek paints the frame it lands on.
+        session.handle(writer, None, ClientMessage::TransportSeek { frame: 3 });
+        session.wait_idle();
+        let view = session.transport();
+        assert_eq!((view.t_ms, view.frame, view.playing), (300.0, 3, false));
+        assert_eq!(painted_frame(&session), 3);
+
+        // A structural edit while paused at frame 3 paints frame 3 too —
+        // the file's frame 0 is the headless value, never the app's.
+        drain(&mut rx);
+        session.handle(
+            writer,
+            None,
+            ClientMessage::SetParam {
+                node: "base".into(),
+                port: None,
+                value: "2.0".into(),
+            },
+        );
+        session.wait_idle();
+        let messages = texts(&drain(&mut rx));
+        assert!(
+            messages.iter().any(|m| m["type"] == "delta"),
+            "the edit landed: {messages:?}"
+        );
+        assert_eq!(painted_frame(&session), 3);
+        let text = std::fs::read_to_string(session.pipeline()).unwrap();
+        assert!(text.contains("base = 2.0"), "{text}");
+        assert!(
+            !text.contains("frame="),
+            "the frame never reaches the text: {text}"
+        );
+
+        // Refusals: a frame outside the loop, a speed that is not positive.
+        drain(&mut rx);
+        drain(&mut orx);
+        for (intent, expected) in [
+            (
+                ClientMessage::TransportSeek { frame: 10 },
+                "frame 10 is outside the loop (frames 0..10)",
+            ),
+            (
+                ClientMessage::TransportSpeed { factor: 0.0 },
+                "speed must be a positive finite number, got 0",
+            ),
+            (
+                ClientMessage::TransportSpeed { factor: -1.5 },
+                "speed must be a positive finite number, got -1.5",
+            ),
+        ] {
+            let error = session.dispatch(writer, None, intent).unwrap_err();
+            assert_eq!(error.kind(), "transport");
+            assert_eq!(error.to_string(), expected);
+        }
+        assert_eq!(
+            session.transport().speed,
+            2.0,
+            "a refused control changes nothing"
+        );
+        // …and announces nothing: the refusing client gets its `error`
+        // (`handle` unicasts it), and nothing changed for anyone else
+        // (docs/13 §Animation transport: the broadcast follows every
+        // ACCEPTED control).
+        assert!(transport_messages(&drain(&mut rx)).is_empty());
+        assert!(transport_messages(&drain(&mut orx)).is_empty());
+
+        // Reset: paused at zero.
+        session.handle(writer, None, ClientMessage::TransportPlay {});
+        session.handle(writer, None, ClientMessage::TransportReset {});
+        session.wait_idle();
+        let view = session.transport();
+        assert_eq!((view.t_ms, view.frame, view.playing), (0.0, 0, false));
+        assert_eq!(painted_frame(&session), 0);
+
+        // Esc pauses playback and says so.
+        session.handle(writer, None, ClientMessage::TransportPlay {});
+        session.wait_idle();
+        drain(&mut rx);
+        session.cancel();
+        let heard = transport_messages(&drain(&mut rx));
+        assert_eq!(heard.len(), 1);
+        assert_eq!(heard[0]["playing"], false);
+        assert!(!session.transport().playing);
+        // A ticker tick that raced the Esc (it read "playing" before the
+        // pause and takes the lock after it) submits nothing: no frame
+        // solves after Esc.
+        let after_esc = transport_generations(&session).len();
+        clock.advance(FRAME_NS * 3);
+        session.transport_tick();
+        session.wait_idle();
+        assert_eq!(transport_generations(&session).len(), after_esc);
+        assert_eq!(painted_frame(&session), 0, "paused at 0 by the reset");
+
+        // Nothing above was an op: the transport is session state, not an edit.
+        assert_eq!(history_of(&session)["depth"], 1, "only the set_param");
+    }
+
+    // The REAL ticker thread, on a real `cicada-transport` thread with the
+    // session's (virtual) clock: after Play it wakes and ticks on its own —
+    // the test never calls `transport_tick()` — so a playhead the test
+    // advances by a frame is painted by the thread, through two play /
+    // pause rounds (each Play is a wake-up the gate must not lose: the
+    // flag's store and the notify happen under the gate's mutex, the same
+    // one the ticker's paused wait reads the flag under; review
+    // 2026-08-21). Bounded waits, like the http e2e's: the outcome is
+    // deterministic (exactly one generation per frame), only the duration
+    // is the machine's.
+    #[test]
+    fn the_ticker_thread_paints_frames_on_its_own() {
+        let (_dir, config, clock) = project_with_clock(ORBIT);
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, _rx) = unbounded_channel();
+        let (writer, _) = session.connect(tx);
+        let wait_until = |what: &str, condition: &dyn Fn() -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !condition() {
+                assert!(Instant::now() < deadline, "timed out waiting for {what}");
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        };
+
+        let mut expected_generations = 0;
+        let mut frame: i64 = 0;
+        for round in 0..2 {
+            session.handle(writer, None, ClientMessage::TransportPlay {});
+            expected_generations += 1; // Play paints the frame it stands on.
+            wait_until("the play's frame", &|| {
+                transport_generations(&session).len() == expected_generations
+            });
+            session.wait_idle();
+            assert_eq!(painted_frame(&session), frame, "round {round}");
+            assert!(session.core.transport_playing.load(Ordering::SeqCst));
+            for _ in 0..3 {
+                clock.advance(FRAME_NS);
+                frame += 1;
+                expected_generations += 1;
+                wait_until(&format!("the ticker to paint frame {frame}"), &|| {
+                    transport_generations(&session).len() == expected_generations
+                });
+                session.wait_idle();
+                assert_eq!(painted_frame(&session), frame, "round {round}");
+            }
+            session.handle(writer, None, ClientMessage::TransportPause {});
+            assert!(!session.core.transport_playing.load(Ordering::SeqCst));
+            // Paused, the playhead is frozen: a moved clock moves nothing.
+            clock.advance(FRAME_NS * 5);
+            assert_eq!(session.transport().frame, u64::try_from(frame).unwrap());
+        }
+        session.wait_idle();
+        assert_eq!(
+            transport_generations(&session).len(),
+            expected_generations,
+            "exactly one generation per frame change, none while paused"
+        );
+    }
+
+    // A seek paints the frame it names — every frame. On `cycle`'s default
+    // loop (120 frames / 4 s) the nominal playhead `frame × 4000 / 120`
+    // rounds below the quantization boundary for frames 31, 62 and 65, so
+    // a seek there landed (and painted) one frame short; the scrubber of
+    // the web's play bar found it (2026-08-20). `Playhead::at_frame` is
+    // the fix; this pins it at the session level, view and paint alike.
+    #[test]
+    fn a_seek_paints_the_frame_it_names() {
+        let (_dir, config, _clock) = project_with_clock(
+            "# cicada 1\n\
+             spin = cycle()\n\
+             base = 1.0\n\
+             size = spin + base\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (writer, _) = session.connect(tx);
+        drain(&mut rx);
+        assert_eq!(
+            (session.transport().frames, session.transport().period_ms),
+            (120, 4000.0)
+        );
+
+        for frame in [31_u64, 62, 65, 0, 119, 1] {
+            session.handle(writer, None, ClientMessage::TransportSeek { frame });
+            session.wait_idle();
+            let heard = transport_messages(&drain(&mut rx));
+            assert_eq!(heard.len(), 1, "one broadcast per seek");
+            assert_eq!(
+                heard[0]["frame"], frame,
+                "the view after seeking to {frame}"
+            );
+            let view = session.transport();
+            assert_eq!((view.frame, view.playing), (frame, false));
+            #[allow(clippy::cast_possible_wrap)]
+            let expected = frame as i64;
+            assert_eq!(
+                painted_frame(&session),
+                expected,
+                "the paint after seeking to {frame}"
+            );
+        }
+    }
+
+    // Every driven port carries its OWN loop in the view (`DrivenView::loop`):
+    // a second `cycle` loops inside the primary at its own rate, and a
+    // client that showed it the primary loop's frame would lie — the web's
+    // inspector did exactly that (review of the web half, 2026-08-20). The
+    // loop on the wire is the one the lowering quantized the port's frame
+    // from, so the client's `floor(t_ms × frames / period_ms) mod frames`
+    // on it IS the injected value; `clock.t` carries none.
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn each_driven_port_carries_its_own_loop_and_the_frame_it_is_fed_follows_it() {
+        let (_dir, config, _clock) = project_with_clock(
+            "# cicada 1\n\
+             slow = cycle(period=8.0, frames=40)\n\
+             fast = cycle(period=2.0, frames=60)\n\
+             tick = clock(speed=1.0)\n\
+             a = slow + fast\n\
+             b = a + tick\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (writer, _) = session.connect(tx);
+        drain(&mut rx);
+
+        // The primary loop is the longest period (`slow`); seek its frame 10
+        // = 2 s in.
+        session.handle(writer, None, ClientMessage::TransportSeek { frame: 10 });
+        session.wait_idle();
+        let view = session.transport();
+        assert_eq!(
+            (view.frame, view.frames, view.period_ms, view.t_ms),
+            (10, 40, 8000.0, 2000.0)
+        );
+        assert_eq!(
+            serde_json::to_value(&view.driven).unwrap(),
+            serde_json::json!([
+                { "node": "slow", "port": "frame", "signal": "frame",
+                  "loop": { "frames": 40, "period_ms": 8000.0 } },
+                { "node": "fast", "port": "frame", "signal": "frame",
+                  "loop": { "frames": 60, "period_ms": 2000.0 } },
+                { "node": "tick", "port": "t", "signal": "time" }
+            ])
+        );
+
+        // The client's arithmetic on each port's own loop reproduces the
+        // value the lowering injected: `fast` is at frame 0 of 60 (2 s is a
+        // whole turn of its 2 s loop), NOT at the primary's frame 10.
+        let inner = session.core.lock_inner();
+        let kept = inner.last_complete.as_ref().unwrap();
+        for driven in &view.driven {
+            let injected = kept
+                .lowered
+                .driven
+                .iter()
+                .find(|d| d.node == driven.node)
+                .unwrap();
+            match (&driven.r#loop, injected.value.data()) {
+                (Some(r#loop), ValueData::Integer(frame)) => {
+                    #[allow(clippy::cast_precision_loss)]
+                    let frames = r#loop.frames as f64;
+                    let client = (view.t_ms * frames / r#loop.period_ms).floor();
+                    #[allow(clippy::cast_precision_loss)]
+                    let injected = *frame as f64;
+                    assert_eq!(client.rem_euclid(frames), injected, "{}", driven.node);
+                }
+                (None, ValueData::Number(seconds)) => {
+                    assert_eq!(driven.signal, DrivenSignal::Time);
+                    assert_eq!(*seconds, view.t_ms / 1000.0, "{}", driven.node);
+                }
+                other => panic!("{}: {other:?}", driven.node),
+            }
+        }
+        let fast = kept
+            .lowered
+            .driven
+            .iter()
+            .find(|d| d.node == "fast")
+            .unwrap();
+        assert_eq!(fast.value.data(), &ValueData::Integer(0));
+    }
+
+    // The mirror of the cycle's dedupe: a `clock` has no frames, so EVERY
+    // tick that moved the playhead at all is a generation (its `t` is the
+    // seconds, a fresh value each time), and an unmoved one still is not.
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn every_sub_frame_tick_is_a_generation_for_a_clock() {
+        let (_dir, config, clock) = project_with_clock(
+            "# cicada 1\n\
+             elapsed = clock(speed=1.0)\n\
+             rise = elapsed * 0.5\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, _rx) = unbounded_channel();
+        let (writer, _) = session.connect(tx);
+        session.handle(writer, None, ClientMessage::TransportPlay {});
+        session.wait_idle();
+        assert_eq!(transport_generations(&session).len(), 1);
+
+        let injected_t = |session: &Session| -> f64 {
+            let inner = session.core.lock_inner();
+            let kept = inner.last_complete.as_ref().unwrap();
+            match kept.lowered.driven[0].value.data() {
+                ValueData::Number(seconds) => *seconds,
+                other => panic!("{other:?}"),
+            }
+        };
+        for step in 1..=3_u64 {
+            clock.advance(1_000_000); // one millisecond — a fraction of any frame
+            session.transport_tick();
+            session.wait_idle();
+            assert_eq!(
+                transport_generations(&session).len(),
+                1 + usize::try_from(step).unwrap()
+            );
+            #[allow(clippy::cast_precision_loss)]
+            let expected = step as f64 / 1000.0;
+            assert_eq!(injected_t(&session), expected);
+        }
+        session.transport_tick();
+        session.wait_idle();
+        assert_eq!(transport_generations(&session).len(), 4, "unmoved: nothing");
+        let generations = transport_generations(&session);
+        assert!(
+            generations
+                .iter()
+                .skip(1)
+                .all(|g| g["computed"].as_u64() >= Some(1)),
+            "a volatile clock computes every time: {generations:?}"
+        );
+    }
+
+    // docs/17 item 4 "done when": previews never write the file holds under
+    // playback — 200 frames of a loop, and the text's bytes and hash are
+    // exactly what they were; no op, no delta.
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn playback_never_writes_the_file() {
+        let (_dir, config, clock) = project_with_clock(ORBIT);
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (writer, _) = session.connect(tx);
+        let before_disk = file_hash(&pipeline);
+        let before_text = session.debug_state(false)["text_hash"].clone();
+        let modified = std::fs::metadata(&pipeline).unwrap().modified().unwrap();
+        drain(&mut rx);
+
+        session.handle(writer, None, ClientMessage::TransportPlay {});
+        for _ in 0..200 {
+            clock.advance(FRAME_NS);
+            session.transport_tick();
+            session.wait_idle();
+        }
+        assert_eq!(session.transport().t_ms, 20_000.0);
+
+        assert_eq!(file_hash(&pipeline), before_disk, "the bytes on disk");
+        assert_eq!(
+            std::fs::metadata(&pipeline).unwrap().modified().unwrap(),
+            modified,
+            "never even rewritten"
+        );
+        assert_eq!(session.debug_state(false)["text_hash"], before_text);
+        assert_eq!(history_of(&session)["depth"], 0, "no op");
+        let messages = texts(&drain(&mut rx));
+        assert!(
+            messages.iter().all(|m| m["type"] != "delta"),
+            "no delta under playback"
+        );
+        let generations = transport_generations(&session);
+        assert_eq!(
+            generations.len(),
+            201,
+            "frame 0 at play, then one per frame"
+        );
+        assert!(
+            generations.iter().all(|g| g["kind"] == "transport"),
+            "{generations:?}"
+        );
+    }
+
+    // docs/17 item 4 "done when": the second pass of a loop is 100 % cached
+    // with an identical NodeKey set — frame quantization makes the loop a
+    // finite set of keys, and one pass warms every one of them.
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn a_second_pass_of_the_loop_is_entirely_cached_with_identical_keys() {
+        let (_dir, config, clock) = project_with_clock(ORBIT);
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, _rx) = unbounded_channel();
+        let (writer, _) = session.connect(tx);
+        session.handle(writer, None, ClientMessage::TransportPlay {});
+        session.wait_idle();
+
+        let mut first_pass: Vec<(usize, BTreeSet<String>)> = Vec::new();
+        let mut last_generation = 0;
+        for frame in 0..10_usize {
+            if frame > 0 {
+                clock.advance(FRAME_NS);
+                session.transport_tick();
+                session.wait_idle();
+            }
+            assert_eq!(painted_frame(&session), i64::try_from(frame).unwrap());
+            let (generation, keys, computed, _) = last_generation_keys(&session);
+            assert!(generation > last_generation, "a fresh generation per frame");
+            last_generation = generation;
+            if frame > 0 {
+                // A new frame: the cycle and its cone compute (frame 0 was
+                // the load's, already warm).
+                assert!(computed >= 4, "frame {frame}: {computed} computed");
+            }
+            first_pass.push((frame, keys));
+        }
+
+        // The second pass: the same frames, every node a memo hit, the
+        // same keys frame for frame.
+        for (frame, first_keys) in &first_pass {
+            clock.advance(FRAME_NS);
+            session.transport_tick();
+            session.wait_idle();
+            assert_eq!(painted_frame(&session), i64::try_from(*frame).unwrap());
+            let (generation, keys, computed, cached) = last_generation_keys(&session);
+            assert!(generation > last_generation);
+            last_generation = generation;
+            assert_eq!(computed, 0, "frame {frame} of pass 2 computed {computed}");
+            assert_eq!(cached, keys.len(), "every node is a cache hit");
+            assert_eq!(&keys, first_keys, "frame {frame}'s keys");
+        }
+        let generations = transport_generations(&session);
+        let pass_two: Vec<&serde_json::Value> = generations.iter().rev().take(10).collect();
+        assert!(
+            pass_two
+                .iter()
+                .all(|g| g["computed"] == 0 && g["cached"].as_u64() > Some(0)),
+            "{pass_two:?}"
+        );
+    }
+
+    // A slider held while the loop plays: the transport's frames carry the
+    // thumb's value (not the committed one), and a drag that went quiet for
+    // longer than the gap is the committed value again.
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn a_live_drag_rides_along_in_the_transports_frames() {
+        let (_dir, config, clock) = project_with_clock(
+            "# cicada 1\n\
+             spin = cycle(period=1.0, frames=10)\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             lift = spin + size\n\
+             span = construct_domain(start=0.0, end=lift)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, _rx) = unbounded_channel();
+        let (writer, _) = session.connect(tx);
+        session.handle(writer, None, ClientMessage::TransportPlay {});
+        session.wait_idle();
+
+        let slider_value = |session: &Session| -> f64 {
+            let inner = session.core.lock_inner();
+            let kept = inner.last_complete.as_ref().unwrap();
+            let id = kept.lowered.graph.find("size").unwrap();
+            match &kept.lowered.graph.node(id).inputs[0] {
+                Input::Value(value) => match value.data() {
+                    ValueData::Number(x) => *x,
+                    other => panic!("{other:?}"),
+                },
+                _ => panic!("the slider's value is a literal"),
+            }
+        };
+
+        // A drag tick (cheap cone: live) paints at the current frame…
+        preview(&session, writer, "3.5");
+        session.wait_idle();
+        assert_eq!((slider_value(&session), painted_frame(&session)), (3.5, 0));
+        // …and the next transport frame keeps the thumb's value.
+        clock.advance(FRAME_NS);
+        session.transport_tick();
+        session.wait_idle();
+        assert_eq!((slider_value(&session), painted_frame(&session)), (3.5, 1));
+        // Quiet for longer than the drag gap: the committed value again.
+        clock.advance((DRAG_GAP_MS + 1) * 1_000_000);
+        session.transport_tick();
+        session.wait_idle();
+        assert_eq!(slider_value(&session), 2.0);
+        assert_eq!(painted_frame(&session), 4);
+    }
+
+    // The transport follows the graph: a pipeline without time params has
+    // nothing to drive (playback paints nothing), a reload that brings a
+    // cycle in announces the new loop, and a wired loop port is the one red
+    // the transport adds — with its reason on the node.
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn the_transport_follows_the_graph_and_names_its_one_refusal() {
+        let (_dir, config, clock) = project_with_clock(
+            "# cicada 1\n\
+             span = construct_domain(start=0.0, end=1.0)\n\
+             block = box(x=span, y=span, z=span)\n",
+        );
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (writer, _) = session.connect(tx);
+        let view = session.transport();
+        assert!(view.driven.is_empty());
+        assert_eq!((view.frames, view.period_ms), (120, 4000.0));
+
+        session.handle(writer, None, ClientMessage::TransportPlay {});
+        clock.advance(FRAME_NS * 10);
+        session.transport_tick();
+        session.wait_idle();
+        assert!(
+            transport_generations(&session).is_empty(),
+            "nothing to drive, nothing solved"
+        );
+        drain(&mut rx);
+
+        // An external edit brings a 2 s / 50-frame cycle in: the barrier
+        // snapshot carries it, and the loop change is announced.
+        std::fs::write(
+            &pipeline,
+            "# cicada 1\n\
+             spin = cycle(period=2.0, frames=50)\n\
+             span = construct_domain(start=0.0, end=1.0)\n\
+             block = box(x=span, y=span, z=span)\n",
+        )
+        .unwrap();
+        assert!(session.reload_from_disk("external change", false).unwrap());
+        session.wait_idle();
+        let messages = texts(&drain(&mut rx));
+        let snapshot = messages.iter().find(|m| m["type"] == "snapshot").unwrap();
+        assert_eq!(snapshot["payload"]["transport"]["frames"], 50);
+        assert_eq!(snapshot["payload"]["transport"]["period_ms"], 2000.0);
+        let announced: Vec<&serde_json::Value> = messages
+            .iter()
+            .filter(|m| m["type"] == "transport")
+            .collect();
+        assert_eq!(announced.len(), 1, "{messages:?}");
+        assert_eq!(
+            announced[0]["payload"]["driven"],
+            serde_json::json!([{ "node": "spin", "port": "frame", "signal": "frame",
+                                 "loop": { "frames": 50, "period_ms": 2000.0 } }])
+        );
+        // Still playing, 1 s in: frame 25 of the new loop.
+        let view = session.transport();
+        assert_eq!((view.playing, view.t_ms, view.frame), (true, 1000.0, 25));
+
+        // The one refusal: a wired `frames` under the transport.
+        std::fs::write(
+            &pipeline,
+            "# cicada 1\n\
+             n = 50\n\
+             spin = cycle(period=2.0, frames=n)\n\
+             size = spin + 1.0\n",
+        )
+        .unwrap();
+        assert!(session.reload_from_disk("external change", false).unwrap());
+        session.wait_idle();
+        let inner = session.core.lock_inner();
+        let spin = inner.graph.node("spin").unwrap();
+        let excluded = spin.excluded.as_ref().unwrap();
+        assert_eq!(excluded.status, "red");
+        assert_eq!(
+            excluded.reason,
+            "`spin`: `frames` must be a literal in the app — the transport quantizes the \
+             frame from the node's own frames and period"
+        );
+        assert_eq!(
+            inner
+                .graph
+                .node("size")
+                .unwrap()
+                .excluded
+                .as_ref()
+                .unwrap()
+                .reason,
+            "fed by red `spin`"
+        );
+        drop(inner);
+        assert!(session.transport().driven.is_empty());
+    }
+
+    // Hostile input stays loud (review 2026-08-21): a speed above
+    // `MAX_SPEED` is refused (unbounded, 1e300 put the playhead beyond the
+    // exact frame range within a frame), and the one way left to get there
+    // — a `frames` literal at the edge of the exact range — is announced:
+    // the tick's lowering excludes the cycle, the canvas (built from the
+    // structural graph) shows nothing, so the tick broadcasts a warning
+    // naming the binding and the reason, once per change of the set.
+    #[test]
+    #[allow(clippy::float_cmp)]
+    #[allow(clippy::too_many_lines)] // the bound, the excursion, the silence, the reset, the repeat
+    fn an_absurd_speed_is_refused_and_a_tick_time_red_is_announced() {
+        let (_dir, config, clock) = project_with_clock(
+            "# cicada 1\n\
+             spin = cycle(period=1.0, frames=9007199254740991)\n\
+             size = spin + 1.0\n\
+             twice = size * 2.0\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (writer, _) = session.connect(tx);
+
+        for (factor, spelled) in [(64.5, "64.5"), (1.0e300, "1e300"), (1.0e7, "1e7")] {
+            let error = session
+                .dispatch(writer, None, ClientMessage::TransportSpeed { factor })
+                .unwrap_err();
+            assert_eq!(error.kind(), "transport");
+            assert_eq!(
+                error.to_string(),
+                format!("speed must be at most 64×, got {spelled}")
+            );
+        }
+        session.handle(writer, None, ClientMessage::TransportSpeed { factor: 64.0 });
+        assert_eq!(session.transport().speed, 64.0, "the bound itself is fine");
+        session.handle(writer, None, ClientMessage::TransportSpeed { factor: 1.0 });
+
+        // At rest the cycle lowers (frame 0) and the canvas shows it green.
+        assert!(
+            session
+                .core
+                .lock_inner()
+                .graph
+                .node("spin")
+                .unwrap()
+                .excluded
+                .is_none()
+        );
+        session.handle(writer, None, ClientMessage::TransportPlay {});
+        session.wait_idle();
+        drain(&mut rx);
+
+        // 1,001 ms in, the frame index passes 2^53: the tick's lowering
+        // excludes `spin` (and what it feeds) — announced once.
+        clock.advance(1_001_000_000);
+        session.transport_tick();
+        session.wait_idle();
+        let messages = texts(&drain(&mut rx));
+        let notices: Vec<&serde_json::Value> =
+            messages.iter().filter(|m| m["type"] == "notice").collect();
+        assert_eq!(notices.len(), 1, "{messages:?}");
+        assert_eq!(notices[0]["payload"]["level"], "warning");
+        assert_eq!(
+            notices[0]["payload"]["message"],
+            "transport: this frame's graph excludes `spin` (`spin`: the playhead (1001 ms) is \
+             beyond the exact frame range — reset the transport) and the 2 bindings they feed \
+             — not solved in the transport's frames until it lowers again"
+        );
+        {
+            let inner = session.core.lock_inner();
+            let kept = inner.last_complete.as_ref().unwrap();
+            assert!(
+                kept.lowered.driven.is_empty(),
+                "the frame solved without the cycle"
+            );
+            assert_eq!(kept.lowered.excluded.len(), 3);
+            assert!(
+                inner.graph.node("spin").unwrap().excluded.is_none(),
+                "the canvas is the structural graph — which is why the notice exists"
+            );
+        }
+        // Further out, the same set: no repeat.
+        clock.advance(1_000_000_000);
+        session.transport_tick();
+        session.wait_idle();
+        assert!(
+            texts(&drain(&mut rx)).iter().all(|m| m["type"] != "notice"),
+            "announced once per change"
+        );
+        // Reset: frame 0 lowers again (silently — the recovery is the
+        // frames themselves), and a second excursion is announced again.
+        session.handle(writer, None, ClientMessage::TransportReset {});
+        session.wait_idle();
+        assert!(
+            texts(&drain(&mut rx)).iter().all(|m| m["type"] != "notice"),
+            "nothing to warn about at frame 0"
+        );
+        assert_eq!(
+            session
+                .core
+                .lock_inner()
+                .last_complete
+                .as_ref()
+                .unwrap()
+                .lowered
+                .driven
+                .len(),
+            1
+        );
+        session.handle(writer, None, ClientMessage::TransportPlay {});
+        clock.advance(1_001_000_000);
+        session.transport_tick();
+        session.wait_idle();
+        let messages = texts(&drain(&mut rx));
+        assert_eq!(
+            messages.iter().filter(|m| m["type"] == "notice").count(),
+            1,
+            "{messages:?}"
+        );
+    }
+
+    // The last client leaving pauses playback: a session animating for no
+    // one would be the ambient clock the ledger forbids.
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn the_last_client_leaving_pauses_playback() {
+        let (_dir, config, clock) = project_with_clock(ORBIT);
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, _rx) = unbounded_channel();
+        let (writer, _) = session.connect(tx);
+        let (otx, _orx) = unbounded_channel();
+        let (observer, _) = session.connect(otx);
+        session.handle(writer, None, ClientMessage::TransportPlay {});
+        clock.advance(FRAME_NS * 3);
+        session.disconnect(writer);
+        assert!(session.transport().playing, "an observer is still watching");
+        session.disconnect(observer);
+        let view = session.transport();
+        assert!(!view.playing);
+        assert_eq!(view.t_ms, 300.0, "paused where it was");
+        assert!(!session.core.transport_playing.load(Ordering::SeqCst));
     }
 }

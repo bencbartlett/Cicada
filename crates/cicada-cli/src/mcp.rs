@@ -12,11 +12,16 @@
 //! directory.
 //!
 //! `check` is the checker AND the dry lowering: after `compile::check_source`
-//! it runs the session's `lower_partial` (closures are built, nothing is
-//! solved) so the refusals only lowering sees — an integer literal at or
-//! beyond 2^53, a literal that refuses construction — reach the agent as
-//! `excluded` bindings with the very text the canvas would show, instead
-//! of an `ok: true` that `cicada run` then contradicts.
+//! it runs the session's `lower_partial_with_playhead` at the playhead at
+//! rest (closures are built, nothing is solved) so the refusals only
+//! lowering sees — an integer literal at or beyond 2^53, a literal that
+//! refuses construction, a `cycle` whose `frames` / `period` is wired
+//! rather than literal (the one red the transport adds; docs/13 §Animation
+//! transport) — reach the agent as `excluded` bindings with the very text
+//! the canvas would show, instead of an `ok: true` the app then
+//! contradicts. `check` is the APP's view: the wired-loop case is an
+//! ordinary node headless, and `cicada run` solves it — the exclusion's
+//! reason says so.
 //!
 //! Transport discipline: stdout carries JSON-RPC frames and nothing else;
 //! every note goes to stderr. The server is read-only by construction —
@@ -41,7 +46,7 @@ use cicada_lang::check::Resolution;
 use cicada_lang::diag::{Diagnostic, DiagnosticKind};
 use cicada_lang::document::Document;
 use cicada_server::compile;
-use cicada_server::lower::{Exclusion, lower_partial};
+use cicada_server::lower::{Exclusion, Playhead, lower_partial_with_playhead};
 use cicada_server::scripts::{ScriptCancel, ScriptNode};
 use rmcp::handler::server::common::schema_for_input;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -365,8 +370,10 @@ fn build_router() -> anyhow::Result<ToolRouter<McpServer>> {
                  and its parts `base` / `list_depth` / `optional` (`optional` = the type \
                  carries `?`, a value that may be absent — NOT whether the kwarg may be \
                  omitted), `default` (present = the kwarg may be omitted; absent = you \
-                 must pass it), `doc`, and `dimension` (`length` ports rescale with units, \
-                 `angle` ports are radians). A single output is the port `out`. Use it \
+                 must pass it), `doc`, `dimension` (`length` ports rescale with units, \
+                 `angle` ports are radians) and `transport_driven` (`frame` / `time`: the \
+                 app's transport fills the port from the playhead — write the kwarg only \
+                 for its headless value). A single output is the port `out`. Use it \
                  before wiring a node you have not used in this session. Unknown names \
                  return an error with a did-you-mean.",
             )?,
@@ -770,6 +777,12 @@ struct PortDoc {
     /// radians (absent for dimensionless ports).
     #[serde(skip_serializing_if = "Option::is_none")]
     dimension: Option<String>,
+    /// `frame` or `time` when the app's transport drives this port (v0.1
+    /// item 4): hidden on the canvas, filled from the playhead at lowering;
+    /// in the text — and headless — the kwarg is just a value (absent for
+    /// every other port).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transport_driven: Option<String>,
 }
 
 fn node_doc(
@@ -969,16 +982,19 @@ impl Checked {
         }
     }
 
-    /// The dry lowering: the session's `lower_partial` over the checked
-    /// document (closures are built, nothing runs, the graph is dropped),
-    /// reduced to the bindings it excluded and why — the canvas's view.
+    /// The dry lowering: the session's `lower_partial_with_playhead` over
+    /// the checked document at the playhead at rest — what the app lowers
+    /// when it opens the file (closures are built, nothing runs, the graph
+    /// is dropped), reduced to the bindings it excluded and why — the
+    /// canvas's view, the transport's one red included.
     fn excluded(&self) -> Result<Vec<(String, Exclusion)>, Refusal> {
-        let lowered = lower_partial(
+        let lowered = lower_partial_with_playhead(
             &self.document,
             &self.resolution,
             &self.catalog.specs,
             &ProjectConfig::default(),
             &self.catalog.scripts,
+            Some(Playhead::ZERO),
         )
         .map_err(|error| Refusal::GraphAssembly {
             message: error.to_string(),
@@ -1440,6 +1456,71 @@ mod tests {
         assert_eq!(result.excluded[0].status, "red");
         assert_eq!(result.excluded[0].reason, "disabled (`#off`)");
         assert_eq!(result.bindings, ["a", "d"], "a disabled line binds nothing");
+    }
+
+    /// The transport's one red (docs/13 §Animation transport): a `cycle`
+    /// whose loop port is wired lowers headless (`cicada run` solves it)
+    /// but not in the app, which quantizes the frame from the node's own
+    /// literals — `check` is the app's view, so it is `excluded` red with
+    /// the canvas's text and `ok` is false. The transport-driven port
+    /// itself (`frame`) is filled by the playhead at rest, never a refusal.
+    /// (Review 2026-08-21: `check` lowered without a playhead and said
+    /// `ok: true, excluded: []` here.)
+    #[test]
+    fn check_reports_a_wired_cycle_loop_as_the_apps_red() {
+        let server = stdlib_server();
+        let text = |source: &str| {
+            check_pipeline(
+                &server,
+                CheckArgs {
+                    text: Some(source.to_owned()),
+                    path: None,
+                },
+            )
+            .unwrap()
+        };
+        let result = text(
+            "# cicada 1
+n = 50
+spin = cycle(period=2.0, frames=n)
+size = spin + 1.0
+",
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(!result.ok, "the app would not solve `spin`");
+        let by_name: HashMap<&str, (&str, &str)> = result
+            .excluded
+            .iter()
+            .map(|e| (e.node.as_str(), (e.status.as_str(), e.reason.as_str())))
+            .collect();
+        assert_eq!(
+            by_name["spin"],
+            (
+                "red",
+                "`spin`: `frames` must be a literal in the app — the transport quantizes the \
+                 frame from the node's own frames and period"
+            )
+        );
+        assert_eq!(by_name["size"], ("blocked", "fed by red `spin`"));
+        assert_eq!(result.excluded.len(), 2, "{:?}", result.excluded);
+
+        // Literal loop ports, the driven port left to the transport (or
+        // written by hand as the headless value): nothing excluded.
+        for source in [
+            "# cicada 1
+spin = cycle(period=2.0, frames=50)
+size = spin + 1.0
+",
+            "# cicada 1
+spin = cycle(frame=7)
+t = clock(speed=2.0, t=1.5)
+size = spin + t
+",
+        ] {
+            let result = text(source);
+            assert!(result.ok, "{:?}", result.excluded);
+            assert!(result.excluded.is_empty(), "{:?}", result.excluded);
+        }
     }
 
     #[test]

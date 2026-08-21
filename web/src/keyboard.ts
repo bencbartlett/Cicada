@@ -12,11 +12,11 @@
 import { useEffect } from "react";
 import { asOneOp, type GestureMessage } from "./protocol/messages";
 import { canWrite, nodeByName, useCicada, writeBlockReason } from "./state/store";
+import { hasTimeParams } from "./state/transport";
 import { viewportApi } from "./viewport/api";
 
 const NOT_YET = {
   group: "groups arrive later",
-  transport: "transport arrives with time params",
 } as const;
 
 /**
@@ -122,8 +122,16 @@ export function handleHotkey(event: KeyboardEvent): boolean {
       state.closeCommitDialog();
       return true;
     }
-    if (state.summary.running) {
-      if (needsLease("cancel the solve")) return true;
+    // "Stop": a running solve, or a playing transport — the server's
+    // `cancel` does both (docs/13 §Animation transport: Esc pauses the
+    // transport along with cancelling the generation). The transport is
+    // checked on the LAST VIEW HEARD, not on `running`: on a warm loop every
+    // frame is a sub-millisecond cache read, so `running` is almost always
+    // false mid-playback and an Esc gated on it alone cleared the selection
+    // and let the loop run (review 2026-08-21).
+    const playing = state.transport?.view.playing ?? false;
+    if (state.summary.running || playing) {
+      if (needsLease(state.summary.running ? "cancel the solve" : "pause the transport")) return true;
       state.send({ type: "cancel", payload: {} });
       return true;
     }
@@ -256,10 +264,23 @@ export function handleHotkey(event: KeyboardEvent): boolean {
     state.send(asOneOp(ops, `${verb} ${ops.length} nodes`));
     return true;
   }
-  // Space reaches here only from `useKeyboard`'s keyup path (see below):
-  // React Flow's Space+drag pan owns the keydown.
+  // Space: play / pause the transport (docs/16 keyboard map; docs/13
+  // §Animation transport). Reaches here only from `useKeyboard`'s keyup
+  // path (see below): React Flow's Space+drag pan owns the keydown. The
+  // toggle is decided on the LAST VIEW HEARD — the server answers with the
+  // state it is actually in, and two quick taps are two intents either way.
   if (key === " " || event.code === "Space") {
-    notice("info", NOT_YET.transport);
+    const transport = state.transport;
+    if (transport === null) {
+      notice("info", "no pipeline loaded yet — nothing to play");
+      return true;
+    }
+    if (!hasTimeParams(transport)) {
+      notice("info", "no time params in this pipeline — place a `cycle` or `clock` to animate");
+      return true;
+    }
+    if (needsLease("drive the transport")) return true;
+    state.send({ type: transport.view.playing ? "transport_pause" : "transport_play", payload: {} });
     return true;
   }
 

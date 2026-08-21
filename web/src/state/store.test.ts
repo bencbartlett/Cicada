@@ -3,6 +3,7 @@ import type { ClientMessage, GraphView, HistoryView, NodeView, ServerEnvelope } 
 import {
   EMPTY_HISTORY,
   canWrite,
+  dragStandsAfter,
   errorNoticeLevel,
   lastErrorOf,
   pendingFor,
@@ -11,6 +12,7 @@ import {
   useCicada,
   writeBlockReason,
 } from "./store";
+import { TRANSPORT_AT_REST } from "./transport";
 
 describe("canWrite", () => {
   it("needs the lease AND an open socket", () => {
@@ -185,6 +187,7 @@ test("a delta prunes dead bindings from statuses and follows renames / my placem
       barrier: false,
       reason: "initial",
       history: EMPTY_HISTORY,
+      transport: TRANSPORT_AT_REST,
     },
   });
   useCicada.getState().selectNodes(["b"]);
@@ -275,6 +278,7 @@ describe("history (docs/13 §Undo/redo)", () => {
       barrier,
       reason: barrier ? "external change" : "initial",
       history,
+      transport: TRANSPORT_AT_REST,
     },
   });
   const delta = (label: string, history: HistoryView): ServerEnvelope => ({
@@ -535,6 +539,27 @@ describe("compute-on-release (docs/13 §Slider drags — the frozen client contr
     expect(useCicada.getState().pending, "undo mid-drag ends it, landed or refused").toBeNull();
   });
 
+  it("a refused transport control leaves it standing: a write for the lease, never a drag-ender", () => {
+    // `transport_seek` outside the loop / `transport_speed` out of bounds
+    // mid-drag (a script can; the play bar cannot) are refused with kind
+    // `transport`, and the server's drag stands (docs/13 §Animation
+    // transport) — so must the badge (review 2026-08-21).
+    const apply = useCicada.getState().applyServerMessage;
+    apply(policy(5, { node: "deboss", port: "value", estimate_ms: 3990.9, rough: false, pending_value: "0.875" }));
+    apply({
+      v: 1,
+      seq: 6,
+      type: "error",
+      payload: { intent_id: "12", kind: "transport", message: "frame 500 is outside the loop (frames 0..120)" },
+    });
+    expect(useCicada.getState().pending?.node, "transport: the drag stands").toBe("deboss");
+    expect(useCicada.getState().lastError?.kind).toBe("transport");
+    expect(dragStandsAfter("transport")).toBe(true);
+    expect(dragStandsAfter("lease")).toBe(true);
+    expect(dragStandsAfter("refused")).toBe(false);
+    expect(dragStandsAfter("nothing_to_undo")).toBe(false);
+  });
+
   it("the widget's release without a write clears it at once AND tells the server (`end_drag`) — when it can write", () => {
     const apply = useCicada.getState().applyServerMessage;
     const sent: ClientMessage[] = [];
@@ -618,6 +643,7 @@ describe("compute-on-release (docs/13 §Slider drags — the frozen client contr
         barrier: true,
         reason: "external change",
         history: EMPTY_HISTORY,
+        transport: TRANSPORT_AT_REST,
       },
     });
     expect(useCicada.getState().pending, "the watcher's reload ends the drag").toBeNull();

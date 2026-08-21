@@ -3,7 +3,11 @@
 //!
 //! - `#[derive(Ports)]` reflects a struct's named fields into typed ports —
 //!   a field with `#[port(default = …)]` is an optional port; a field's doc
-//!   comment (its first paragraph, source lines joined) becomes the port doc.
+//!   comment (its first paragraph, source lines joined) becomes the port doc;
+//!   `#[port(dimension = length | angle)]` tags unit-sensitive ports;
+//!   `#[port(transport_driven = frame | time)]` hands the port to the
+//!   session's transport (v0.1 item 4 — the canvas hides it, the playhead
+//!   fills it at lowering; it must carry a default, its headless value).
 //! - `#[node(category = "…", tier = "S", version = 1, gh = "…" | none)]`
 //!   assembles the `NodeSpec` from the function — name (trailing
 //!   keyword-dodging `_` stripped), title/description from the doc comment's
@@ -111,7 +115,24 @@ fn expand_ports(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 ),
             ));
         }
-        let PortAttrs { default, dimension } = parse_port_attrs(&field.attrs)?;
+        let PortAttrs {
+            default,
+            dimension,
+            transport_driven,
+        } = parse_port_attrs(&field.attrs)?;
+
+        // A transport-driven port evaluates as written headless (`cicada
+        // run` has no transport): it needs the default that makes "as
+        // written" well-defined when the text omits it — frame 0, t 0.
+        if transport_driven.is_some() && default.is_none() {
+            return Err(syn::Error::new(
+                field.span(),
+                format!(
+                    "transport-driven port `{name}` needs a default — headless runs evaluate \
+                     it as written (`#[port(default = 0, transport_driven = …)]`)"
+                ),
+            ));
+        }
 
         let (from_field, into_field) =
             marshal_field_tokens(ident, &name, ty, index, default.as_ref());
@@ -119,17 +140,8 @@ fn expand_ports(input: &DeriveInput) -> syn::Result<TokenStream2> {
         into_fields.push(into_field);
 
         let default_tokens = default.map_or_else(|| quote!(None), |(_, text)| quote!(Some(#text)));
-        let dimension_tokens = match dimension.as_deref() {
-            Some("length") => quote!(Some(cicada_core::spec::Dimension::Length)),
-            Some("angle") => quote!(Some(cicada_core::spec::Dimension::Angle)),
-            Some(other) => {
-                return Err(syn::Error::new(
-                    field.span(),
-                    format!("unknown port dimension `{other}` — expected `length` or `angle`"),
-                ));
-            }
-            None => quote!(None),
-        };
+        let dimension_tokens = dimension_tokens(field, dimension.as_deref())?;
+        let transport_tokens = transport_tokens(field, transport_driven.as_deref())?;
         port_specs.push(quote! {
             cicada_core::spec::PortSpec {
                 name: #name,
@@ -137,6 +149,7 @@ fn expand_ports(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 default: #default_tokens,
                 doc: #doc,
                 dimension: #dimension_tokens,
+                transport_driven: #transport_tokens,
             }
         });
     }
@@ -157,6 +170,40 @@ fn expand_ports(input: &DeriveInput) -> syn::Result<TokenStream2> {
     Ok(quote! {
         #ports
         #marshal
+    })
+}
+
+/// The `dimension:` tokens of a port spec from `#[port(dimension = …)]`.
+fn dimension_tokens(field: &syn::Field, dimension: Option<&str>) -> syn::Result<TokenStream2> {
+    Ok(match dimension {
+        Some("length") => quote!(Some(cicada_core::spec::Dimension::Length)),
+        Some("angle") => quote!(Some(cicada_core::spec::Dimension::Angle)),
+        Some(other) => {
+            return Err(syn::Error::new(
+                field.span(),
+                format!("unknown port dimension `{other}` — expected `length` or `angle`"),
+            ));
+        }
+        None => quote!(None),
+    })
+}
+
+/// The `transport_driven:` tokens of a port spec from
+/// `#[port(transport_driven = …)]`.
+fn transport_tokens(field: &syn::Field, signal: Option<&str>) -> syn::Result<TokenStream2> {
+    Ok(match signal {
+        Some("frame") => quote!(Some(cicada_core::spec::TransportSignal::Frame)),
+        Some("time") => quote!(Some(cicada_core::spec::TransportSignal::Time)),
+        Some(other) => {
+            return Err(syn::Error::new(
+                field.span(),
+                format!(
+                    "unknown transport signal `{other}` — expected `frame` (a cycle's \
+                     quantized loop frame) or `time` (the playhead in seconds)"
+                ),
+            ));
+        }
+        None => quote!(None),
     })
 }
 
@@ -243,12 +290,16 @@ struct PortAttrs {
     /// inlines it) and its rendered catalog text.
     default: Option<(Expr, String)>,
     dimension: Option<String>,
+    /// `transport_driven = frame | time` (v0.1 item 4): the transport owns
+    /// the port in the app; the canvas hides it.
+    transport_driven: Option<String>,
 }
 
 fn parse_port_attrs(attrs: &[Attribute]) -> syn::Result<PortAttrs> {
     let mut default_expr: Option<Expr> = None;
     let mut default_doc: Option<LitStr> = None;
     let mut dimension: Option<String> = None;
+    let mut transport_driven: Option<String> = None;
     for attr in attrs {
         if !attr.path().is_ident("port") {
             continue;
@@ -275,10 +326,19 @@ fn parse_port_attrs(attrs: &[Attribute]) -> syn::Result<PortAttrs> {
                 let ident: syn::Ident = meta.value()?.parse()?;
                 dimension = Some(ident.to_string());
                 Ok(())
+            } else if meta.path.is_ident("transport_driven") {
+                if transport_driven.is_some() {
+                    return Err(
+                        meta.error("duplicate `transport_driven` — the second would silently win")
+                    );
+                }
+                let ident: syn::Ident = meta.value()?.parse()?;
+                transport_driven = Some(ident.to_string());
+                Ok(())
             } else {
                 Err(meta.error(
                     "unknown #[port(...)] key — expected `default`, `default_doc`, \
-                     or `dimension`",
+                     `dimension`, or `transport_driven`",
                 ))
             }
         })?;
@@ -317,7 +377,11 @@ fn parse_port_attrs(attrs: &[Attribute]) -> syn::Result<PortAttrs> {
             Some((expr, rendered))
         }
     };
-    Ok(PortAttrs { default, dimension })
+    Ok(PortAttrs {
+        default,
+        dimension,
+        transport_driven,
+    })
 }
 
 /// The catalog rendering of a plain or negated literal, or `None` for

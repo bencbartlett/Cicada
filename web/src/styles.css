@@ -136,8 +136,8 @@ code,
 
 .app {
   display: grid;
-  /* connection banner slot (0 when hidden) · top bar · ribbon · work · status bar */
-  grid-template-rows: auto auto auto 1fr auto;
+  /* connection banner slot (0 when hidden) · top bar · ribbon · work · transport bar (absent without time params) · status bar */
+  grid-template-rows: auto auto auto 1fr auto auto;
   grid-template-columns: 1fr;
   height: 100%;
 }

@@ -17,6 +17,7 @@ import {
   snapToStep,
   statusBadge,
   stepDecimals,
+  transportDrivenSignal,
   wireStrokeWidth,
 } from "./grid";
 
@@ -128,6 +129,23 @@ const catalog: Catalog = {
     node("series", "Series", "Series"),
     node("ln", "Natural Logarithm", "Natural logarithm"),
     node("as_closed", "As Closed", null),
+    {
+      ...node("cycle", "Cycle", null, [port("out", "The loop position in `0..1`.")], "Params & input"),
+      inputs: [
+        { name: "period", type: "Number", base: "Number", list_depth: 0, optional: false, default: "4.0", doc: "Seconds per loop." },
+        { name: "frames", type: "Integer", base: "Integer", list_depth: 0, optional: false, default: "120", doc: "Frames per loop." },
+        {
+          name: "frame",
+          type: "Integer",
+          base: "Integer",
+          list_depth: 0,
+          optional: false,
+          default: "0",
+          doc: "The current frame.",
+          transport_driven: "frame",
+        },
+      ],
+    },
   ],
 };
 
@@ -193,6 +211,47 @@ describe("filterCatalog", () => {
   it("still matches gh under a probe filter", () => {
     const hits = filterCatalog(catalog, "merge", [{ func: "concat", ports: [["a", "ok"]] }]);
     expect(hits.map((h) => h.node.name)).toEqual(["concat"]);
+  });
+  it("carries the server's accepting ports WHOLE — the hidden-port rule is the server's, not re-decided here", () => {
+    // A transport-driven port (`cycle.frame`) is never a wire target: the
+    // server's `wire_verdict` blocks it, so the probe's catalog never lists
+    // it (session test `a_transport_driven_port_is_never_a_wire_target_from_the_app`).
+    // The client does not second-guess the answer (the protocol-change rule:
+    // never compute wire compatibility client-side) — what the server offers
+    // is what the search shows, and a func with no accepting port drops out.
+    const offered = filterCatalog(catalog, "", [{ func: "cycle", ports: [["frames", "ok"]] }]);
+    expect(offered.map((h) => [h.node.name, h.ports])).toEqual([["cycle", [["frames", "ok"]]]]);
+    expect(filterCatalog(catalog, "", [{ func: "cycle", ports: [] }])).toEqual([]);
+  });
+});
+
+describe("transportDrivenSignal — the hidden-port rule", () => {
+  it("names the signal of a transport-driven input and nothing else", () => {
+    expect(transportDrivenSignal(catalog, "cycle", "frame")).toBe("frame");
+    expect(transportDrivenSignal(catalog, "cycle", "frames")).toBeUndefined();
+    expect(transportDrivenSignal(catalog, "cycle", "period")).toBeUndefined();
+    expect(transportDrivenSignal(catalog, "cycle", "out")).toBeUndefined();
+    expect(transportDrivenSignal(catalog, "add", "frame")).toBeUndefined();
+    // Unknown func (a script node), no func (a literal / expression), no catalog yet.
+    expect(transportDrivenSignal(catalog, "my_script", "frame")).toBeUndefined();
+    expect(transportDrivenSignal(catalog, undefined, "frame")).toBeUndefined();
+    expect(transportDrivenSignal(null, "cycle", "frame")).toBeUndefined();
+  });
+  it("before the catalog arrives, the snapshot's driven entry for the port is the answer; once it is here the catalog decides alone", () => {
+    const frameEntry = { node: "spin", port: "frame", signal: "frame" as const, loop: { frames: 120, period_ms: 4000 } };
+    const timeEntry = { node: "tick", port: "t", signal: "time" as const };
+    // No catalog yet (the HTTP fetch races the socket's snapshot): the port
+    // the transport is feeding is driven — never an ordinary input, not
+    // even on the first paint (review 2026-08-21).
+    expect(transportDrivenSignal(null, "cycle", "frame", frameEntry)).toBe("frame");
+    expect(transportDrivenSignal(null, "clock", "t", timeEntry)).toBe("time");
+    expect(transportDrivenSignal(null, "cycle", "frames", undefined)).toBeUndefined();
+    // The catalog is the authority once here: a port of a red `cycle` is
+    // driven by nature (not in the driven set), and an entry cannot make an
+    // ordinary port driven.
+    expect(transportDrivenSignal(catalog, "cycle", "frame", undefined)).toBe("frame");
+    expect(transportDrivenSignal(catalog, "cycle", "frames", frameEntry)).toBeUndefined();
+    expect(transportDrivenSignal(catalog, "my_script", "frame", frameEntry)).toBeUndefined();
   });
 });
 

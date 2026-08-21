@@ -335,6 +335,25 @@ fn render_default(value: &HashedValue) -> String {
     }
 }
 
+/// A `'static` copy of `text` — script specs live for the process (the
+/// registry's shape is `&'static`, and a project's scripts are few).
+fn leak(text: &str) -> &'static str {
+    Box::leak(text.to_owned().into_boxed_str())
+}
+
+/// A script node's port: undocumented (scripts carry no rustdoc), no
+/// dimension tag, never transport-driven — the decorator has none of those.
+fn port_spec(name: &str, ty: PortType, default: Option<&'static str>) -> PortSpec {
+    PortSpec {
+        name: leak(name),
+        ty,
+        default,
+        doc: "",
+        dimension: None,
+        transport_driven: None,
+    }
+}
+
 fn build_node(
     desc: &cicada_script::ScriptNodeDesc,
     file: &Path,
@@ -343,7 +362,6 @@ fn build_node(
     pool: Arc<WorkerPool>,
     cancel: Arc<ScriptCancel>,
 ) -> Result<ScriptNode, ScriptsError> {
-    let leak = |text: &str| -> &'static str { Box::leak(text.to_owned().into_boxed_str()) };
     let bad_port = |port: &str, reason: String| ScriptsError::BadPortType {
         node: desc.name.clone(),
         path: file.to_owned(),
@@ -354,16 +372,12 @@ fn build_node(
         .inputs
         .iter()
         .map(|port: &PortDesc| {
-            Ok(PortSpec {
-                name: leak(&port.name),
-                ty: parse_notation(&port.ty).map_err(|reason| bad_port(&port.name, reason))?,
-                default: port
-                    .default
-                    .as_ref()
-                    .map(|value| leak(&render_default(value))),
-                doc: "",
-                dimension: None,
-            })
+            let ty = parse_notation(&port.ty).map_err(|reason| bad_port(&port.name, reason))?;
+            let default = port
+                .default
+                .as_ref()
+                .map(|value| leak(&render_default(value)));
+            Ok(port_spec(&port.name, ty, default))
         })
         .collect::<Result<_, ScriptsError>>()?;
     // One output port per declared output (`out` for a string return
@@ -372,14 +386,9 @@ fn build_node(
         .outputs
         .iter()
         .map(|port: &OutputDesc| {
-            Ok(PortSpec {
-                name: leak(&port.name),
-                ty: parse_notation(&port.ty)
-                    .map_err(|reason| bad_port(&format!("return/{}", port.name), reason))?,
-                default: None,
-                doc: "",
-                dimension: None,
-            })
+            let ty = parse_notation(&port.ty)
+                .map_err(|reason| bad_port(&format!("return/{}", port.name), reason))?;
+            Ok(port_spec(&port.name, ty, None))
         })
         .collect::<Result<_, ScriptsError>>()?;
     let spec: &'static NodeSpec = Box::leak(Box::new(NodeSpec {

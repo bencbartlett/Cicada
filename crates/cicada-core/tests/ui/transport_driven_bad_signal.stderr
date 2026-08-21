@@ -1,0 +1,5 @@
+error: unknown transport signal `seconds` — expected `frame` (a cycle's quantized loop frame) or `time` (the playhead in seconds)
+ --> tests/ui/transport_driven_bad_signal.rs:8:5
+  |
+8 |     /// The playhead.
+  |     ^^^^^^^^^^^^^^^^^

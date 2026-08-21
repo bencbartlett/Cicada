@@ -52,7 +52,10 @@ The edit flow is **intent → authoritative delta**:
    `toggle_disable` (the `#off` prefix; the delta says `disable x` /
    `enable x`), `move_node` (layout), `set_preview`, `undo`, `redo`,
    `batch` (several gestures as one op), `apply_text` (whole files,
-   agents) — see §Undo/redo for the last four.
+   agents) — see §Undo/redo for the last four. The transport controls
+   (`transport_play` … `transport_reset`, §Animation transport) are
+   intents too, but not edits: they change session state, write
+   nothing, and answer with the `transport` broadcast, not a delta.
 2. The engine validates against the checker, applies the edit to the
    text/sidecar (doc 10 writer discipline), assigns it a sequence
    number, and broadcasts the **delta**: graph view-model changes +
@@ -501,6 +504,135 @@ frames' display buffers (bounded), making warmed-loop playback 60 fps
 with near-zero server traffic. `clock` is the unbounded escape hatch
 — deterministic per value, uncached by design.
 
+*(Live, v0.1 item 4 — shipped whole 2026-08-20: the engine and the web's
+play bar, `wt/transport`.)* **What the transport is.** Session state beside the
+document, never in it: a playhead `t_ms` (milliseconds, unbounded,
+0 at reset) read off the session clock — `t = anchor_t + (now −
+anchor_clock) × speed` while playing, frozen while paused; every
+control re-anchors at the current position first, so nothing jumps.
+**How a frame reaches the graph.** The lowering is the injection
+point: every lowering the session does — the structural graph, a
+slider tick's scratch, a hypothetical, an explicit run — takes the
+playhead and fills each transport-driven port (`catalog.json`
+`transport_driven: "frame" | "time"`; the canvas hides them) with the
+value it dictates, as a literal input: `clock.t` gets the seconds,
+`cycle.frame` gets `floor(t × frames / period) mod frames` from the
+node's own literal `frames` / `period` (or the spec's defaults). The
+cone keys on the frame exactly as if the text said `frame=57`, and the
+text never says it — a slider moved at frame 57 paints frame 57, an
+edit while paused at frame 3 paints frame 3, an export writes the frame
+the viewport shows. Headless, `cicada run` passes no playhead and the
+ports evaluate as written (frame 0, t 0). A `cycle` whose `frames` or
+`period` is wired rather than literal is the ONE red the transport adds
+(`` `spin`: `frames` must be a literal in the app — the transport
+quantizes the frame from the node's own frames and period ``); headless
+it is an ordinary node. **Playback.** A ticker at the display rate (60 Hz) reads the
+playhead and, when the driven ports' values moved since the last
+hand-over, lowers the committed text at it and submits a transport job
+to the one-slot latest-wins loop — the preview's policy: the in-flight
+generation completes, the newest frame replaces a queued one, so the
+solve bounds the rate (a slow cone skips frames, never queues them;
+the skipped frames fill in on the next pass). The ticks lie on an
+absolute grid — tick N at `anchor + N / 60 s`, the anchor being the
+instant of the last control — walked with a high-resolution sleep, not
+a timed condition-variable wait (whose 15.6 ms quantum on Windows made
+the ticker run at ~33 Hz, so a 60 fps loop never warmed in one pass;
+review 2026-08-21), and re-anchored by every control so a seek on a
+60 fps loop keeps the ticks in phase with the frame boundaries.
+Measured with `tools/measure/transport_loop.mjs` (debug build,
+Windows): a 240-frame / 4 s loop plays at 60.0 generations/s, start
+gaps p50 16.66 ms / max 20 ms, every frame visited on the first pass
+(239 computed generations) and the second pass 240 generations with 0
+computed. A held slider's value
+rides along in the frames while its drag is live (an announced
+compute-on-release drag shows the committed state, as under its own
+ticks). **The primary loop** — the `cycle` with the longest `period`
+(ties: the first in the text), else cycle's defaults 120 frames / 4 s —
+is what `frame`, `frames`, `period_ms` and `transport_seek` mean; other
+cycles loop inside it at their own rate, each honouring its own
+literals. **Control is writer-only** (the five intents are writes for
+the lease's purposes and nothing else: not gestures, never batch
+elements, never drag-enders, never an op, never a delta): playback is
+shared session state every client sees, and the lease is the one
+arbiter of shared state — two clients fighting over play/pause/seek
+would make the shared viewport incoherent; observers follow, and take
+the lease to drive. Esc pauses the transport along with cancelling the
+generation — paused first, cancelled under the same document-lock hold
+the ticker submits under, so no frame slips in behind the Esc; the
+last client leaving pauses it too (a session animating
+for no one would be the ambient clock the ledger forbids); a reload
+keeps it (the loop is re-read from the new text).
+
+The wire shapes (additive; `PROTOCOL_VERSION` unchanged — an old
+client ignores the new message and the new snapshot field). The view:
+
+```json
+{"playing": true, "speed": 1.0, "t_ms": 1250.0, "frame": 37,
+ "frames": 120, "period_ms": 4000.0,
+ "driven": [{"node": "spin", "port": "frame", "signal": "frame",
+             "loop": {"frames": 120, "period_ms": 4000.0}},
+            {"node": "elapsed", "port": "t", "signal": "time"}]}
+```
+
+`frame` is the primary loop's frame at `t_ms`; `driven` lists every
+`cycle.frame` / `clock.t` that lowered (empty = no time params:
+playback moves nothing), each `frame` port carrying its OWN `loop` —
+the `frames` / `period_ms` the lowering quantized its frame from (the
+node's literals, or `cycle`'s defaults) — so a client showing what a
+non-primary `cycle` is fed computes `floor(t_ms × frames / period_ms)
+mod frames` on that loop, never on the primary's; a `time` port has no
+`loop`. It rides every `snapshot` as
+`payload.transport`, and it is the whole payload of
+
+```json
+{"v":1,"seq":N,"type":"transport","payload":{ …the view… }}
+```
+
+broadcast to every client after each ACCEPTED control (a refused one
+changes nothing and broadcasts nothing — the refusing client gets its
+`error`, and for everyone else there is no news), after Esc, when the
+last client's departure paused playback, and when an edit or reload
+changed the loop or the driven set. The view is a position at the moment of the
+message: while `playing`, the client extrapolates `t_ms + elapsed ×
+speed` for its own playhead display and trusts the next broadcast; the
+frames themselves arrive as ordinary display frames from the transport
+generations, which the statuses show like any other generation. The
+intents:
+
+| Intent | Payload | Effect |
+|---|---|---|
+| `transport_play` | `{}` | The playhead advances from where it stands at `speed`; the current frame paints at once. Idempotent while playing |
+| `transport_pause` | `{}` | Freezes the playhead. Idempotent while paused |
+| `transport_seek` | `{"frame": 57}` | Moves the playhead to the first representable playhead INSIDE the frame of the primary loop (nominally `frame × period_ms / frames`, nudged up until it quantizes back to `frame` — the nominal start rounds a few ulps short for some frames, so a bare seek would paint one frame low; `lower.rs` `Playhead::at_frame`), playing or paused — a paused seek paints the frame. `frame ≥ frames` is refused |
+| `transport_speed` | `{"factor": 0.5}` | Playback rate, playhead ms per wall ms, from the current position. Not finite, `≤ 0` or above `64` (`MAX_SPEED` — sixteen times the play bar's fastest; unbounded, `1e300` put the playhead beyond the exact frame range within a frame) is refused |
+| `transport_reset` | `{}` | Pause and rewind to `t_ms = 0` — frame 0, `clock` at 0, the values a headless run evaluates |
+
+A refusal is the ordinary `error` with kind `transport` and the
+intent's id (`"frame 500 is outside the loop (frames 0..120)"`,
+`"speed must be a positive finite number, got 0"`, `"speed must be at
+most 64×, got 1e300"`); an observer's control is kind `lease`. The
+transport-driven ports themselves are never written from the app:
+`set_param` and `param_preview` into `cycle.frame` / `clock.t` are
+refused (kind `refused`) with the same reason the wire probe and
+`connect` give — the session fills the port from the playhead whatever
+the text says, so the kwarg would be dead; `apply_text` may still carry
+it by hand as the headless value. A frame whose lowering excludes a
+binding the structural graph (the canvas) does not — the playhead
+beyond the exact frame range (a `frames` literal at the edge of 2^53),
+a held slider's literal refused — is announced with a `notice`
+(warning) naming the binding, its reason and how many bindings it
+feeds, once per change of that set: the cone is missing from the
+transport's frames and nothing else would say so. `/debug/state` carries `transport` (the same
+view) and the transport generations have their own timing kind,
+`transport`, beside `structural` / `preview` (`wait=true` is a quiet
+oracle only while paused: between frames the loop is idle for an
+instant, so it returns rather than hangs). Measured on the orbit
+example (`examples/08-orbit.cic`, debug build, 15 nodes): the first
+pass of the 120-frame loop is 120 generations, one per frame at 30 fps
+(1,190 computed / 610 cached, p50 1.5 ms); the second pass is 120
+generations, 0 computed / 1,800 cached, p50 0.43 ms — pure cache
+playback; 0 deltas, 0 ops, the file's bytes untouched.
+
 ## HTTP surface
 
 | Endpoint | Purpose |
@@ -554,7 +686,13 @@ compute-on-release degrade for expensive cones (§Slider drags above —
 the `preview_policy` message, and both sliders' `pending · N s`
 rendering of it). Shipped with v0.1 item 2 (2026-08-20, server half):
 the three `/api/git/*` routes above over the git binary (`git.rs`;
-`GET /api/project` gained `scripts` and `git`). Still not in: transport,
+`GET /api/project` gained `scripts` and `git`). Shipped with v0.1 item 4
+(shipped whole): the transport — `TransportView` in every snapshot (each
+driven port carrying its OWN loop for the inspector), the `transport`
+broadcast, the five `transport_*` intents, the playhead injected at
+lowering, playback over the preview loop, AND the web's play bar (Space,
+the scrubber, hidden ports on both surfaces with the server refusing a
+wire into them, the e2e — §Animation transport). Still not in:
 the other git refs / graph-diff overlay / per-node history, `/api/blob`
 beyond value summaries, reconnect replay (a reconnect is a fresh session
 join: one hydration path — the client retries with backoff and
@@ -688,7 +826,7 @@ initial load path; there is exactly one client-hydration code path.
 | Optimistic apply | immediate |
 | Param drag → dirty-cone solve → repaint (cheap cones) | 16 ms (60 fps) |
 | Expensive cones (≥ ~1 s predicted) | compute-on-release with honest estimate |
-| Warmed `cycle` loop playback | 60 fps sustained |
+| Warmed `cycle` loop playback | 60 fps sustained — MEASURED 2026-08-21 (`tools/measure/transport_loop.mjs --expect warm`, debug build, Windows): a 60 fps loop at 60.0 generations/s, gap p50 16.66 ms, second pass 0 computed |
 | Beyond budget | progress UI takes over, honestly (doc 12) |
 | Status coalescing | ≤ 10 Hz |
 

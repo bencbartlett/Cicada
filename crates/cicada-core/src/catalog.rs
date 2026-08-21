@@ -52,7 +52,9 @@ pub fn render_markdown(specs: &[&NodeSpec]) -> String {
          `E` = any element kind, optionality included (an `E` port takes absent slots;\n\
          the `?` rides through to `E` outputs — except through an `E?` port, which keeps\n\
          the `?` itself, so `compact` returns a present `[E]`), `Any` = display-sink\n\
-         catch-all.\n\
+         catch-all. `· volatile` = never memoized (recomputes every generation);\n\
+         `· transport-driven` names a port the app's transport fills from the playhead\n\
+         (hidden on the canvas; in the text, and headless, the kwarg is just a value).\n\
          Port docs (every input and output — the bare `out` carries the node's\n\
          `# Returns` line) and runnable examples live in `catalog.json` (`examples`:\n\
          one `.cic` snippet per node, solved by CI).\n",
@@ -81,6 +83,19 @@ pub fn render_markdown(specs: &[&NodeSpec]) -> String {
                 // wiring a heavy cone behind it.
                 out.push_str(" · volatile");
             }
+            for port in spec.inputs {
+                // The transport owns this port in the app (hidden on the
+                // canvas, filled from the playhead): an agent writing the
+                // text must know the kwarg is the headless value only.
+                if let Some(signal) = port.transport_driven {
+                    let _ = write!(
+                        out,
+                        " · transport-driven `{}` ({})",
+                        port.name,
+                        signal.as_str()
+                    );
+                }
+            }
             let _ = write!(out, " — {}", spec.description);
             if let Some(panics) = spec.panics {
                 let _ = write!(out, " Red when: {panics}");
@@ -102,6 +117,7 @@ mod tests {
         default: None,
         doc: "",
         dimension: None,
+        transport_driven: None,
     }];
 
     const fn spec(name: &'static str, title: &'static str, category: &'static str) -> NodeSpec {
@@ -175,8 +191,44 @@ mod tests {
             ),
             "{rendered}"
         );
-        // Nothing shipped is volatile yet: the tag never appears otherwise.
-        assert!(!render_markdown(&[&MATHS_NODE]).contains("volatile"));
+        // The tag never appears on an ordinary node's line (the header
+        // explains it, so look at the line).
+        assert!(!node_line(&render_markdown(&[&MATHS_NODE])).contains("volatile"));
+    }
+
+    /// The one node line of a single-node rendering.
+    fn node_line(rendered: &str) -> &str {
+        rendered
+            .lines()
+            .find(|line| line.starts_with("- `"))
+            .expect("a node line")
+    }
+
+    // A transport-driven port is named on the line with its signal: an
+    // agent writing the text learns the kwarg is the headless value only.
+    #[test]
+    fn node_line_names_transport_driven_ports() {
+        static FRAME_IN: &[PortSpec] = &[PortSpec {
+            name: "frame",
+            ty: PortType::named("Integer"),
+            default: Some("0"),
+            doc: "",
+            dimension: None,
+            transport_driven: Some(crate::spec::TransportSignal::Frame),
+        }];
+        static DRIVEN: NodeSpec = NodeSpec {
+            inputs: FRAME_IN,
+            ..spec("cycle", "Cycle", "Params & input")
+        };
+        let rendered = render_markdown(&[&DRIVEN]);
+        assert!(
+            rendered.contains(
+                "- `cycle(frame: Integer = 0) → Number` — Cycle · transport-driven `frame` \
+                 (frame) — Test node.\n"
+            ),
+            "{rendered}"
+        );
+        assert!(!node_line(&render_markdown(&[&MATHS_NODE])).contains("transport-driven"));
     }
 
     #[test]

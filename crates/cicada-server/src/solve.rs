@@ -47,6 +47,11 @@ pub enum JobKind {
     Structural,
     /// A `param_preview` stream value (ephemeral text state).
     Preview,
+    /// A transport frame (docs/13 §Animation transport): the playhead's
+    /// values injected into the time params at lowering. A preview for
+    /// this loop's purposes — the in-flight generation completes, the
+    /// newest frame replaces a queued one — with its own timing kind.
+    Transport,
 }
 
 /// One generation's work.
@@ -511,6 +516,7 @@ mod tests {
             bindings: HashMap::new(),
             output_names: vec![vec!["out".to_owned()]],
             excluded: BTreeMap::new(),
+            driven: Vec::new(),
         })
     }
 
@@ -663,6 +669,7 @@ mod tests {
                 bindings: HashMap::new(),
                 output_names: vec![vec!["out".to_owned()]],
                 excluded: BTreeMap::new(),
+                driven: Vec::new(),
             })
         };
         solve.submit(Job {
@@ -782,6 +789,7 @@ mod tests {
             bindings: HashMap::new(),
             output_names: vec![vec!["out".to_owned()]],
             excluded: BTreeMap::new(),
+            driven: Vec::new(),
         });
         solve.submit(Job {
             lowered,
@@ -868,6 +876,7 @@ mod tests {
             bindings: HashMap::new(),
             output_names: vec![vec!["out".to_owned()]],
             excluded: BTreeMap::new(),
+            driven: Vec::new(),
         });
         (lowered, started_rx, release_tx)
     }

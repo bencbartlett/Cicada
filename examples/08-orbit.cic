@@ -1,0 +1,39 @@
+# cicada 1
+# The time transport (docs/13 §Animation transport): a `cycle` drives an
+# orbit. Time is a transport-driven param, never an ambient clock — the
+# graph stays pure, the player feeds the frame.
+# Headless:   cargo run -p cicada-cli -- run examples/08-orbit.cic
+#             (no transport: `spin` evaluates at frame 0 — the rest pose;
+#             `--time` twice shows the second run fully cached)
+# In the app: cargo run -p cicada-cli -- serve examples/08-orbit.cic
+#             press play: the first pass of the 120-frame loop computes each
+#             frame once, the second pass is pure cache playback. Esc pauses.
+
+# One loop every 4 s, quantized into 120 frames (30 fps). `frame` is the
+# transport's port: hidden on the canvas, filled from the playhead at
+# lowering, never written to this file.
+spin = cycle(period=4.0, frames=120)
+turn = spin * 6.283185307179586
+
+# The sun sits at the origin.
+sun = sphere(radius=0.6, segments=24)
+
+# The planet's frame is parked two units out along x, then swung around the
+# sun by the cycle's angle — one revolution per loop. Frames (planes) are
+# not drawn, so only the bodies themselves appear in the viewport.
+world = xy_plane()
+out = unit_x(factor=2.0)
+parked = move(geometry=world, motion=out)
+orbit_frame = rotate(geometry=parked, angle=turn)
+half = construct_domain(start=-0.25, end=0.25)
+planet = box(plane=orbit_frame, x=half, y=half, z=half)
+
+# A moon circles the planet three times per loop: its frame is parked a
+# little further out, spun around the parked planet's frame, then swung
+# around the sun with it.
+moon_turn = turn * 3.0
+moon_out = unit_x(factor=2.6)
+moon_parked = move(geometry=world, motion=moon_out)
+moon_local = rotate(geometry=moon_parked, angle=moon_turn, plane=parked)
+moon_frame = rotate(geometry=moon_local, angle=turn)
+moon = sphere(plane=moon_frame, radius=0.12, segments=16)

@@ -601,6 +601,83 @@ pub struct ProjectGit {
     pub error: Option<String>,
 }
 
+/// The session's transport (docs/13 §Animation transport; DECISIONS.md
+/// time row) as every client sees it — in every `snapshot` and in the
+/// `transport` broadcast after every change (play / pause / seek / speed /
+/// reset, Esc, the loop changing under an edit). Server-authoritative:
+/// the clock is the session's, so observers see the writer's animation.
+/// The view is a position at the moment of the message: while `playing`
+/// the client extrapolates `t_ms + elapsed × speed` for its own playhead
+/// display; the frames themselves arrive as ordinary display frames from
+/// the transport's generations. Additive (v0.1 item 4).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TransportView {
+    /// The playhead is advancing.
+    pub playing: bool,
+    /// Playback rate: playhead milliseconds per wall millisecond (> 0).
+    pub speed: f64,
+    /// The playhead, milliseconds, unbounded (0 after `transport_reset`;
+    /// `clock`'s `t` is this over 1000).
+    pub t_ms: f64,
+    /// The loop's frame at `t_ms`: `floor(t × frames / period) mod frames`
+    /// of the primary loop — what a scrubber shows and `transport_seek`
+    /// addresses.
+    pub frame: u64,
+    /// The primary loop's length in frames — the `cycle` with the longest
+    /// `period` in the pipeline (ties: the first in the text), or `cycle`'s
+    /// defaults (120 frames, 4 s) when no frame-driven node is solvable.
+    pub frames: u64,
+    /// The primary loop's period in milliseconds.
+    pub period_ms: f64,
+    /// The ports the transport drives in the current graph (hidden on the
+    /// canvas): every `cycle.frame` and `clock.t` that lowered. Empty = the
+    /// pipeline has no time params; playback then moves nothing.
+    pub driven: Vec<DrivenView>,
+}
+
+/// One transport-driven port in [`TransportView::driven`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DrivenView {
+    /// The binding.
+    pub node: String,
+    /// The port (`frame`, `t`).
+    pub port: String,
+    /// Which signal fills it.
+    pub signal: DrivenSignal,
+    /// The loop a `frame` port quantizes — this node's OWN `frames` and
+    /// `period_ms` (its literals, or `cycle`'s defaults), the numbers the
+    /// lowering injected its frame from. A client showing "the frame this
+    /// port is fed" computes `floor(t_ms × frames / period_ms) mod frames`
+    /// on THIS loop, never on the primary loop's (`TransportView::frames`
+    /// / `period_ms`), which is only the scrubber's: a second `cycle` loops
+    /// inside the primary at its own rate. Absent for `time` ports.
+    /// Additive (v0.1 item 4, the web half).
+    #[serde(rename = "loop", default, skip_serializing_if = "Option::is_none")]
+    pub r#loop: Option<LoopView>,
+}
+
+/// A frame loop as a client sees it ([`DrivenView::loop`]): `frames` over
+/// `period_ms` — `period_ms` IS the lowering's `period × 1000`, so the
+/// client's quantization and the server's agree in the doubles.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoopView {
+    /// Frames per loop (> 0).
+    pub frames: u64,
+    /// The loop's period in milliseconds (> 0).
+    pub period_ms: f64,
+}
+
+/// The transport signal behind a driven port (`catalog.json`'s
+/// `transport_driven` spelling).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DrivenSignal {
+    /// A quantized loop frame (`cycle.frame`).
+    Frame,
+    /// The playhead in seconds (`clock.t`).
+    Time,
+}
+
 /// Server → client messages.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
@@ -643,6 +720,8 @@ pub enum ServerMessage {
         reason: String,
         /// Undo/redo state (additive, v0.1).
         history: HistoryView,
+        /// The transport's state (additive, v0.1 item 4).
+        transport: TransportView,
     },
     /// After an applied op: the new graph + text (the spike sends the whole
     /// view-model — hundreds of KB worst case at wall scale — plus the
@@ -682,7 +761,8 @@ pub enum ServerMessage {
         intent_id: Option<String>,
         /// Machine kind (`writer`, `lease`, `protocol`, `unknown`,
         /// `refused`, `persist`, `nothing_to_undo`, `nothing_to_redo`,
-        /// `stale_base`, `parse_error`, `path_not_allowed`, `io_error`).
+        /// `stale_base`, `parse_error`, `path_not_allowed`, `io_error`,
+        /// `transport`).
         kind: String,
         /// Human message.
         message: String,
@@ -803,6 +883,14 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         port: Option<String>,
     },
+    /// The transport changed (docs/13 §Animation transport; additive):
+    /// broadcast to every client after `transport_play` / `transport_pause`
+    /// / `transport_seek` / `transport_speed` / `transport_reset`, after an
+    /// Esc paused it, when the last client's departure paused it, and when
+    /// an edit changed the loop or the driven set. The payload IS the
+    /// [`TransportView`] — the same object every `snapshot` carries; the
+    /// client replaces its transport state with it.
+    Transport(TransportView),
 }
 
 /// How a drag's previews are handled (`preview_policy.mode`).
@@ -954,8 +1042,33 @@ pub enum ClientMessage {
         #[serde(default)]
         on: Option<bool>,
     },
-    /// Cancel the running generation (Esc).
+    /// Cancel the running generation (Esc). Also pauses the transport.
     Cancel {},
+    /// Start the transport (docs/13 §Animation transport): the playhead
+    /// advances from where it stands at `speed`; each frame goes through
+    /// the preview path (nothing is written). Writer-only, like every
+    /// transport intent — playback is shared session state every client
+    /// sees, and the lease is the one arbiter of shared state; observers
+    /// follow. Idempotent while playing.
+    TransportPlay {},
+    /// Stop the playhead where it is. Idempotent while paused.
+    TransportPause {},
+    /// Move the playhead to a frame of the primary loop (`0 ..
+    /// transport.frames`; beyond it is refused, kind `transport`) — playing
+    /// or paused; a paused seek paints the frame.
+    TransportSeek {
+        /// The frame.
+        frame: u64,
+    },
+    /// Set the playback rate (finite, > 0; else refused, kind `transport`).
+    /// Takes effect from the playhead's current position.
+    TransportSpeed {
+        /// Playhead milliseconds per wall millisecond.
+        factor: f64,
+    },
+    /// Pause and rewind to `t_ms = 0` (frame 0, `clock` at 0 — the values
+    /// a headless run evaluates).
+    TransportReset {},
     /// Undo the last op (restore its `before` snapshot; docs/13
     /// §Undo/redo). A write intent; the delta's label is `undo: <label>`.
     Undo {},
@@ -1045,6 +1158,26 @@ pub fn is_write(message: &ClientMessage) -> bool {
             | ClientMessage::Redo {}
             | ClientMessage::Batch { .. }
             | ClientMessage::ApplyText(_)
+            | ClientMessage::TransportPlay {}
+            | ClientMessage::TransportPause {}
+            | ClientMessage::TransportSeek { .. }
+            | ClientMessage::TransportSpeed { .. }
+            | ClientMessage::TransportReset {}
+    )
+}
+
+/// Is this intent a transport control (docs/13 §Animation transport)? A
+/// write for the lease's purposes — shared session state — that never
+/// touches the text and is neither a gesture nor a drag-ender.
+#[must_use]
+pub fn is_transport(message: &ClientMessage) -> bool {
+    matches!(
+        message,
+        ClientMessage::TransportPlay {}
+            | ClientMessage::TransportPause {}
+            | ClientMessage::TransportSeek { .. }
+            | ClientMessage::TransportSpeed { .. }
+            | ClientMessage::TransportReset {}
     )
 }
 
@@ -1200,6 +1333,95 @@ mod tests {
                 port: None,
             }
         );
+    }
+
+    // The frozen wire shapes of the transport (docs/13 §Animation
+    // transport; v0.1 item 4) — the `transport` broadcast, whose payload is
+    // the same `TransportView` every snapshot carries, and the five
+    // intents. The web client mirrors exactly these in messages.ts.
+    #[test]
+    fn transport_messages_have_the_documented_shapes() {
+        let view = TransportView {
+            playing: true,
+            speed: 1.5,
+            t_ms: 1250.0,
+            frame: 37,
+            frames: 120,
+            period_ms: 4000.0,
+            driven: vec![
+                DrivenView {
+                    node: "spin".into(),
+                    port: "frame".into(),
+                    signal: DrivenSignal::Frame,
+                    r#loop: Some(LoopView {
+                        frames: 120,
+                        period_ms: 4000.0,
+                    }),
+                },
+                DrivenView {
+                    node: "elapsed".into(),
+                    port: "t".into(),
+                    signal: DrivenSignal::Time,
+                    r#loop: None,
+                },
+            ],
+        };
+        let text = encode(13, &ServerMessage::Transport(view.clone()));
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "v": PROTOCOL_VERSION, "seq": 13, "type": "transport",
+                "payload": {
+                    "playing": true, "speed": 1.5, "t_ms": 1250.0, "frame": 37,
+                    "frames": 120, "period_ms": 4000.0,
+                    "driven": [
+                        { "node": "spin", "port": "frame", "signal": "frame",
+                          "loop": { "frames": 120, "period_ms": 4000.0 } },
+                        { "node": "elapsed", "port": "t", "signal": "time" }
+                    ]
+                }
+            })
+        );
+        let back: TransportView = serde_json::from_value(value["payload"].clone()).unwrap();
+        assert_eq!(back, view);
+
+        let intents: Vec<(&str, ClientMessage)> = vec![
+            (
+                r#"{"v":1,"type":"transport_play","payload":{}}"#,
+                ClientMessage::TransportPlay {},
+            ),
+            (
+                r#"{"v":1,"type":"transport_pause","payload":{}}"#,
+                ClientMessage::TransportPause {},
+            ),
+            (
+                r#"{"v":1,"type":"transport_seek","payload":{"frame":57}}"#,
+                ClientMessage::TransportSeek { frame: 57 },
+            ),
+            (
+                r#"{"v":1,"type":"transport_speed","payload":{"factor":0.5}}"#,
+                ClientMessage::TransportSpeed { factor: 0.5 },
+            ),
+            (
+                r#"{"v":1,"type":"transport_reset","payload":{}}"#,
+                ClientMessage::TransportReset {},
+            ),
+        ];
+        for (text, expected) in intents {
+            let envelope: IntentEnvelope = serde_json::from_str(text).unwrap();
+            assert_eq!(envelope.message, expected, "{text}");
+            assert!(
+                is_write(&envelope.message),
+                "transport control is writer-only: {text}"
+            );
+            assert!(is_transport(&envelope.message), "{text}");
+            assert!(
+                !is_gesture(&envelope.message),
+                "never a batch element: {text}"
+            );
+        }
+        assert!(!is_transport(&ClientMessage::Cancel {}));
     }
 
     #[test]

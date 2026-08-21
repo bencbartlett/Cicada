@@ -46,6 +46,14 @@ touching the committed examples — the app writes what you do.
   `floor`), and the strict-zip adapters made visible (`repeat`,
   `pad_last`) feeding `cull` and a sphere per kept column. Pure
   throughout — the second `--time` run is fully cached.
+- **08-orbit.cic** — the time transport (docs/13 §Animation transport):
+  a `cycle` (one 4 s loop in 120 frames) drives a planet around a sun
+  and a moon around the planet through `rotate`. Headless there is no
+  transport — `spin` evaluates at frame 0, the rest pose — and the
+  second `--time` run is fully cached; in the app, press play on the
+  play bar (or `Space`) and watch the first pass compute each frame once
+  and the second pass play from cache; the scrubber seeks, Esc pauses.
+  (07 is the B-rep bracket of the solid track.)
 
 **The rule: every example must solve.** CI runs each `examples/**/*.cic`
 headlessly with a fresh cache through the same compile → lower → solve

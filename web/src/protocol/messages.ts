@@ -122,6 +122,12 @@ export type ErrorKind =
   | "path_not_allowed"
   | "io_error"
   | "encode"
+  /**
+   * A refused transport control: a seek outside the loop, a speed that is
+   * not positive and finite or is above 64× (the server's `MAX_SPEED`). No
+   * `transport` broadcast follows a refusal — this error is the whole answer.
+   */
+  | "transport"
   | (string & {});
 
 /**
@@ -250,6 +256,92 @@ export interface GraphView {
   dialect?: number;
 }
 
+// ------------------------------------------------------------- transport --
+//
+// The session's transport (docs/13 §Animation transport; DECISIONS.md time
+// row; `protocol.rs` `TransportView` & co. — the test
+// `transport_messages_have_the_documented_shapes` is the byte-level spec).
+// Additive (v0.1 item 4): `PROTOCOL_VERSION` stays 1.
+
+/**
+ * The transport signal behind a driven port (`protocol::DrivenSignal`; the
+ * same spelling as `catalog.json`'s `transport_driven`): a quantized loop
+ * frame (`cycle.frame`) or the playhead in seconds (`clock.t`).
+ */
+export type DrivenSignal = "frame" | "time";
+
+/**
+ * A frame loop as the server states it (`protocol::LoopView`): `frames`
+ * over `period_ms` — `period_ms` IS the lowering's `period × 1000`, so
+ * `frameAt` (`state/transport.ts`) and the server's quantization agree in
+ * the doubles.
+ */
+export interface LoopView {
+  /** Frames per loop (> 0). */
+  frames: number;
+  /** The loop's period in milliseconds (> 0). */
+  period_ms: number;
+}
+
+/**
+ * One port the transport drives in the current graph (`protocol::DrivenView`).
+ * A `frame` port carries its OWN `loop` — this node's `frames` / `period_ms`
+ * (its literals, or `cycle`'s defaults), the numbers the lowering quantized
+ * its frame from: "the frame this port is fed" is `frameAt(t_ms, loop.frames,
+ * loop.period_ms)` on THIS loop, never on the primary loop's
+ * (`TransportView.frames` / `period_ms` are only the scrubber's — a second
+ * `cycle` loops inside the primary at its own rate). A `time` port carries
+ * none: it is fed the playhead in seconds.
+ */
+export type DrivenView =
+  | {
+      /** The binding. */
+      node: string;
+      /** The port (`frame`). */
+      port: string;
+      signal: "frame";
+      loop: LoopView;
+    }
+  | {
+      node: string;
+      /** The port (`t`). */
+      port: string;
+      signal: "time";
+      loop?: undefined;
+    };
+
+/**
+ * The transport as every client sees it (`protocol::TransportView`): in
+ * every `snapshot` as `payload.transport` and the whole payload of the
+ * `transport` broadcast after every ACCEPTED control (a refused one changes
+ * nothing and broadcasts nothing — the refusing client gets its `error`,
+ * kind `transport` or `lease`, and that is the whole answer), after Esc,
+ * when the last client's departure paused playback, and when an edit or
+ * reload changed the loop or the driven set. REPLACE the client's state
+ * with it, never stack. Server-authoritative: the clock is the session's,
+ * so observers see the writer's animation. The view is a position at the
+ * moment of the message — while `playing` the client extrapolates
+ * `t_ms + elapsed × speed` for its own playhead display (`state/transport.ts`)
+ * and trusts the next broadcast; the geometry frames themselves arrive as
+ * ordinary display frames from the transport's generations. Deltas carry
+ * no transport.
+ */
+export interface TransportView {
+  playing: boolean;
+  /** Playhead milliseconds per wall millisecond (> 0). */
+  speed: number;
+  /** The playhead, milliseconds, unbounded (0 after `transport_reset`; `clock`'s `t` is this over 1000). */
+  t_ms: number;
+  /** The primary loop's frame at `t_ms`: `floor(t × frames / period) mod frames` — what the scrubber shows and `transport_seek` addresses. */
+  frame: number;
+  /** The primary loop's length — the `cycle` with the longest `period` (ties: first in the text), else cycle's defaults (120). */
+  frames: number;
+  /** The primary loop's period in milliseconds (default 4000). */
+  period_ms: number;
+  /** Every `cycle.frame` / `clock.t` that lowered. Empty = the pipeline has no time params: playback moves nothing, the bar is not shown. */
+  driven: DrivenView[];
+}
+
 // --------------------------------------------------------------- catalog --
 
 /**
@@ -267,6 +359,16 @@ export interface CatalogPort {
   default?: string;
   doc?: string;
   dimension?: string;
+  /**
+   * The session's transport owns this INPUT port (`cycle.frame` = `frame`,
+   * `clock.t` = `time`; `PortSpec::transport_driven`): the lowering fills
+   * it from the playhead, whatever the text says. The app hides it — no
+   * handle, no wire target, no literal editor, on the canvas and in the
+   * inspector (`transportDrivenSignal`); it never reaches the text unless
+   * a human wrote the kwarg by hand, and then that is the headless value.
+   * Absent on every other port.
+   */
+  transport_driven?: DrivenSignal;
 }
 
 /**
@@ -585,6 +687,8 @@ export type ServerMessage =
         barrier: boolean;
         reason: string;
         history: HistoryView;
+        /** The transport's state at the moment of the snapshot (additive, v0.1 item 4). */
+        transport: TransportView;
       };
     }
   | {
@@ -626,7 +730,9 @@ export type ServerMessage =
   | { type: "display_reset"; payload: { generation: number } }
   | { type: "run_finished"; payload: { node: string; ok: boolean; message: string } }
   | { type: "preview_policy"; payload: PreviewPolicyPayload }
-  | { type: "drag_ended"; payload: DragEndedPayload };
+  | { type: "drag_ended"; payload: DragEndedPayload }
+  /** The transport changed (docs/13 §Animation transport): the same view every snapshot carries — replace, never stack. */
+  | { type: "transport"; payload: TransportView };
 
 export type ServerEnvelope = { v: number; seq: number } & ServerMessage;
 
@@ -680,7 +786,9 @@ export type ClientMessage =
    * A write like the ticks (the lease).
    */
   | { type: "end_drag"; payload: { node: string; port: string | null } }
+  /** Cancel the running generation (Esc). Also pauses the transport — a `transport` broadcast with `playing: false` follows. */
   | { type: "cancel"; payload: Record<string, never> }
+  | TransportMessage
   /** Restore the last op's `before` snapshot (a write; the delta is labelled `undo: <label>`). */
   | { type: "undo"; payload: Record<string, never> }
   /** Re-apply the last undone op's `after` snapshot. */
@@ -704,11 +812,39 @@ export type ClientMessage =
       payload: { id: number; png_base64?: string | null; error?: string | null };
     };
 
+/**
+ * The five transport controls (docs/13 §Animation transport, the intents
+ * table; mirrors `protocol::is_transport`). Writer-only — playback is
+ * shared session state every client sees, and the lease is the one arbiter
+ * of shared state (an observer's control is refused kind `lease`) — and
+ * nothing else: not a gesture (never a `batch` element), never an op
+ * (nothing to undo), never a delta, never the file, never a drag-ender
+ * (`dragStandsAfter`). An ACCEPTED control is answered by a `transport`
+ * broadcast to every client; a refused one by the `error` to this client
+ * alone — nothing is broadcast, the view stands. Play, seek and reset
+ * paint the frame at once (a generation, a paused seek included).
+ */
+export type TransportMessage =
+  /** The playhead advances from where it stands at `speed`. Idempotent while playing. */
+  | { type: "transport_play"; payload: Record<string, never> }
+  /** Freeze the playhead. Idempotent while paused. */
+  | { type: "transport_pause"; payload: Record<string, never> }
+  /** Move the playhead to a frame of the primary loop, `0 ≤ frame < frames` (beyond: refused, kind `transport`). */
+  | { type: "transport_seek"; payload: { frame: number } }
+  /**
+   * The playback rate, playhead ms per wall ms — finite, > 0 and at most 64
+   * (the server's `MAX_SPEED`; else refused, kind `transport`). The play
+   * bar's menu stops at 4×.
+   */
+  | { type: "transport_speed"; payload: { factor: number } }
+  /** Pause and rewind to `t_ms = 0`: frame 0, `clock` at 0 — the values a headless run evaluates. */
+  | { type: "transport_reset"; payload: Record<string, never> };
+
 export type ClientEnvelope = { v: number; id?: string } & ClientMessage;
 
 /** Intents that need the write lease (mirrors `protocol::is_write`). */
 export function isWrite(message: ClientMessage): boolean {
-  if (isGesture(message)) return true;
+  if (isGesture(message) || isTransport(message)) return true;
   switch (message.type) {
     case "param_preview":
     case "end_drag":
@@ -717,6 +853,20 @@ export function isWrite(message: ClientMessage): boolean {
     case "redo":
     case "batch":
     case "apply_text":
+      return true;
+    default:
+      return false;
+  }
+}
+
+/** Is this intent a transport control? (Mirrors `protocol::is_transport`: a write, never a gesture.) */
+export function isTransport(message: ClientMessage): message is TransportMessage {
+  switch (message.type) {
+    case "transport_play":
+    case "transport_pause":
+    case "transport_seek":
+    case "transport_speed":
+    case "transport_reset":
       return true;
     default:
       return false;

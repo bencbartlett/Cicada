@@ -20,7 +20,7 @@ runs in parallel from day 1:
 | P | OCCT probe — prebuilt 7.8.x build/link on win/mac/linux, determinism, timings, license, CI shape | parallel worktree | hours, cap 1 day | **done** 2026-08-20 — GREEN on win-64 with one rename patch, byte-deterministic, ~3 ms/boolean; Linux/macOS measured by item 3 WP-A's CI job; memo `docs/probes/occt-2026-08.md` |
 | 3 | OCCT-backed Solid — the `Solid` kind, primitives/extrude/loft/revolve/sweep, booleans, `tessellate`, STEP; `mesh_*` renames in the same commit | main geometry track from week 3 | weeks | **WP-A done** 2026-08-20, review fixes applied the same day (fork `bencbartlett/opencascade-rs@960a8bc`, `occt` feature + seam in `cicada-geom`, `tools/fetch_occt.py`, CI jobs `occt (ubuntu)` per PR and `occt (<os>)` nightly — the non-Windows jobs await their first run); WP-B next |
 | 3b | Scheduler foundations — per-solve cancel handle, `volatile`, idle-class hypothetical solve — plus compute-on-release | parallel (sched/server) | ~1 week | **done** 2026-08-20 (`wt/sched`, eighteen commits after three review rounds: the engine half, then the web half — both sliders show the pending value + estimate from `preview_policy`, the release that writes nothing is `end_drag` and every announced drag's end is `drag_ended` — with a Playwright drag of the wall's `deboss`, an observer page watching, as its evidence) |
-| 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | pending |
+| 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | **DONE** 2026-08-20 (`wt/transport`): engine — `cycle` / `clock` with the `transport_driven` port attribute, the playhead injected at lowering, per-session transport state + the five `transport_*` intents + `TransportView` in every snapshot and the `transport` broadcast, playback over the preview loop, `examples/08-orbit.cic` (orbit second pass 120 generations, 0 computed / 1,800 cached, p50 0.43 ms); web — the play bar (play/pause, the frame scrubber, speed, reset), `Space`, the transport-driven ports hidden on the canvas and in the inspector (each driven port carrying its own loop; the server owns the wire-target rule — `probe_wire`/`connect` refuse), observers read-only, `web/e2e/transport.spec.ts` |
 | 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | pending |
 | 6 | WASM script host — load precompiled guests, epoch cancellation, `cicada-guest` SDK | last | weeks | pending |
 | C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); **C1 done** (2026-08-20: 48 nodes — lists, maths tail, sequences; the diagnostics name real nodes and a test keeps it so; `compact` satisfiable at check time; `examples/06-lists.cic`); **`cicada mcp` done** (2026-08-20: the four doc-11 read tools over stdio on `rmcp`); C2+ pending |
@@ -372,10 +372,83 @@ port hidden on the canvas; per-session transport state with an
 injectable clock; play/pause/seek/speed intents + `TransportView` in
 Snapshot (additive — PROTOCOL_VERSION stays); the frame injected through
 the preview path (never the file); Esc pauses; Space toggles;
-`examples/06-orbit.cic` in the same slice. Clock follows via `volatile`.
+`examples/08-orbit.cic` in the same slice (06 went to the lists
+example, 07 to item 3's bracket). Clock follows via `volatile`.
 **Done when**: the second pass of a loop is 100 % `cached` with an
 identical NodeKey set; "previews never write the file" holds under
 playback (test); a headless run yields frame 0.
+- **Shipped (engine half, 2026-08-20, `wt/transport`, three commits)**:
+  (1) the nodes — `cycle(period = 4, frames = 120, frame = 0)` =
+  `(frame mod frames) / frames`, `clock(speed = 1, t = 0)` = `t × speed`
+  and volatile; `#[port(transport_driven = frame | time)]` →
+  `PortSpec::transport_driven`, `catalog.json` `"transport_driven"`,
+  the CATALOG.md tag, `cicada mcp`'s `PortDoc`; the macro refuses a
+  transport-driven port without a default (its headless value).
+  (2) the transport — the lowering is the injection point
+  (`lower_with_playhead` / `lower_partial_with_playhead`; every session
+  lowering passes the playhead, `cicada run` passes none); anchored
+  playhead state on the session's injectable op clock; the five
+  intents, writer-only by decision (shared state, the lease arbitrates —
+  docs/13 §Animation transport says why), never an op or a delta; Esc
+  and the last client leaving pause it; the ticker at 60 Hz submits
+  `JobKind::Transport` jobs to the one-slot loop only when the driven
+  values moved; a live drag's thumb rides along; a wired `frames` /
+  `period` is the one red the transport adds; `TransportView` in every
+  snapshot + the `transport` broadcast + `/debug/state.transport` +
+  the `transport` timing kind. (3) `examples/08-orbit.cic` and the docs.
+  The three "done when"s are session tests
+  (`a_second_pass_of_the_loop_is_entirely_cached_with_identical_keys`
+  rebuilds the NodeKeys exactly as the executor does and compares them
+  frame for frame; `playback_never_writes_the_file` — 200 frames, bytes,
+  hash and mtime unchanged, no op, no delta; the lowering test solves
+  the headless graph to frame 0 / t 0) plus the http e2e driving
+  play/pause over the real socket. Measured on the orbit example
+  (debug build, 15 nodes, 30 fps loop): first pass 120 generations,
+  1,190 computed / 610 cached, p50 1.5 ms; second pass 120 generations,
+  0 computed / 1,800 cached, p50 0.43 ms. Browser evidence with the
+  EXISTING SPA (it knows nothing of the transport and renders the
+  transport generations' frames like any other): `transport_play` sent
+  through `window.__cicada.send`, viewport screenshots at rest, at
+  frame 30 and at frame 63 all differ, the planet and moon where the
+  angle says; the page received 131 frames over the two seconds.
+- **Shipped (the web half, 2026-08-20, `wt/transport`)**: the play bar
+  (play/pause, the frame scrubber over the primary loop, speed, reset),
+  Space toggles when no text field has focus, the `transport_driven`
+  ports hidden on the canvas and in the inspector (the catalog says
+  which; each driven port carries its OWN loop so the inspector shows the
+  frame IT is fed, never the primary loop's — a second `cycle` loops
+  inside at its own rate — additive `DrivenView.loop`), the wire-target
+  rule moved to the SERVER (`wire_verdict` — `probe_wire` answers
+  `blocked`, `connect` refuses; a wire the text carries is kept, drawn
+  and removable, never hidden), `driven` rendered on the time nodes, the
+  playhead extrapolated between `transport` broadcasts, observers
+  read-only, and `web/e2e/transport.spec.ts` on the orbit and a
+  two-cycle + clock pipeline (the `/debug/state` oracle: the transport
+  kind, per-port loops, the seek exactness, the refused wire). Engine
+  touched under the same package: `transport_seek` now lands the first
+  representable playhead INSIDE the frame (`Playhead::at_frame`; a bare
+  nominal seek painted frames 31/62/65 one short), and each `DrivenPort`
+  carries its loop into the view. Candidates beyond the slice (not done):
+  the `transport` view on the status bar's generation line; a `transport`
+  field in `GET /api/project`.
+- **Review fixes (2026-08-21, `wt/transport`)**: the ticker ran at ~33 Hz
+  on Windows (`Condvar::wait_timeout`'s 15.6 ms quantum), so a 60 fps
+  loop warmed 133 of 240 frames on its first pass and the "second pass
+  100 % cached" DoD held only for loops ≤ ~30 fps — the ticks now lie on
+  an absolute grid (`anchor + N / 60 s`) walked with the high-resolution
+  `thread::sleep`, re-anchored by every control; measured with the new
+  `tools/measure/transport_loop.mjs --expect warm`: a 240-frame / 4 s loop
+  at 60.0 generations/s, gap p50 16.66 ms, first pass every frame (239
+  computed), second pass 0 computed (docs/13 §Latency targets carries the
+  number). A real-ticker session test (`the_ticker_thread_paints_frames_on
+  _its_own`) drives the thread itself; the lost wake-up at Play is closed
+  (the playing flag is stored and notified under the gate the paused wait
+  reads it under); Esc pauses BEFORE cancelling, under the lock the ticker
+  submits under, and a ticker tick that finds the transport paused
+  submits nothing; the frame dedupe has a sub-frame test (a dedupe on the
+  raw time passed every test before) and its `clock` mirror. A refused
+  control broadcasts nothing (docs/13 said "refused or not"; the test
+  pins the truth).
 
 ## Item 5 — scrub caching (1–2 weeks)
 
@@ -833,8 +906,7 @@ same commit (skill `add-stdlib-node`).
   spawn its workers with the pipeline's directory as their cwd so scripts
   see one rule under `run`, `serve` and this test alike — a
   `cicada-script`/`cicada-server` change, out of this package.
-- **Renumber item 4's orbit example**: `examples/06-lists.cic` took the
-  number; the transport slice uses the next free one.
+- ~~**Renumber item 4's orbit example**~~: done — `examples/08-orbit.cic`
 - **Stale catalog on the client after a scripts-change reload** — **done
   2026-08-20** (`wt/hardening`; `web/src/state/catalog.ts`,
   `web/src/protocol/catalog.ts`; nothing on the wire changed,

@@ -481,6 +481,35 @@
   white-space: nowrap;
 }
 
+/* A transport-driven input: no handle, the transport in its place (docs/13). */
+.cn-port.cn-driven .cn-port-label {
+  color: var(--fg-dim);
+}
+
+.cn-transport-chip {
+  font-size: 9px;
+  line-height: 13px;
+  padding: 0 4px;
+  border-radius: 3px;
+  border: 1px dashed var(--border-strong);
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+
+.cn-port.cn-driven.on .cn-transport-chip {
+  border-style: solid;
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-bg);
+}
+
+/* The handle a hand-wired transport-driven port keeps so the text's wire is
+   drawn: an anchor for the edge, never a drop target (the server refuses). */
+.cicada-canvas .react-flow__handle.cn-handle.driven {
+  opacity: 0.65;
+  cursor: default;
+}
+
 .cn-lift-offer {
   border: 1px dashed var(--accent);
   animation: cn-pulse 900ms ease-in-out infinite alternate;

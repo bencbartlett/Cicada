@@ -734,6 +734,7 @@ fn intent_status(error: &IntentError) -> StatusCode {
         IntentError::ParseError { .. }
         | IntentError::PathNotAllowed(_)
         | IntentError::Refused(_)
+        | IntentError::Transport(_)
         | IntentError::Writer(_)
         | IntentError::Unknown(_)
         | IntentError::NothingToUndo(_)
