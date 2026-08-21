@@ -59,9 +59,11 @@ notify = "8"
 # `cicada`, pinned by rev: upstream d114250 + exactly the reviewed patches
 # (MSVC handle aliases = PR #230's source part; the honest BinTools/BRepTools
 # writers with explicit flags + pinned format versions; in-memory
-# serialization; the exception boundary that turns Standard_Failure into
-# Err; the `cicada` glue the seam calls). Links a PREBUILT OCCT 7.8.1 found
-# through DEP_OCCT_ROOT (tools/fetch_occt.py); never the source build. Only
+# serialization; the TOTAL exception boundary — Standard_Failure,
+# std::exception and catch (...) → Err; the `cicada` glue the seam calls; no
+# OCCT source submodule, so the clone every build pays is 6 MB, not 580 MB;
+# LGPL-2.1-only manifests). Links a PREBUILT OCCT 7.8.1 found through
+# DEP_OCCT_ROOT (tools/fetch_occt.py); never the source build. Only
 # cicada-geom's `occt` feature activates it — default builds compile no C++.
 opencascade-sys = { git = "https://github.com/bencbartlett/opencascade-rs", rev = "960a8bcb9e3dbf1916778dabb8288c1bda4c6d91", default-features = false }
 # default-features = false drops `heapless-cas` (heapless 0.7 → the

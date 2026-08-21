@@ -265,7 +265,11 @@ review` / `--bless`), never by hand.
   >10% regression); `cargo deny` + `cargo audit`.
 - **The `occt` feature rule**: default builds compile no C++ and link
   no OCCT. Only the `occt` jobs pass `--features occt`; nothing in CI
-  runs `--all-features`. Locally: `python tools/fetch_occt.py
+  runs `--all-features`. What default builds DO pay is the git clone of
+  the fork (cargo must load every locked manifest, optional or not):
+  6 MB in `~/.cargo/git` since the fork dropped the OCCT source
+  submodule — keep it that way (no submodules on branch `cicada`).
+  Locally: `python tools/fetch_occt.py
   --print-env bash` (or `powershell`) gives the three lines a shell
   needs (`DEP_OCCT_ROOT`, the loader path, `CMAKE_POLICY_VERSION_MINIMUM`);
   cmake and a C++ toolchain must be on PATH.

@@ -62,11 +62,18 @@ OCCT) in `crates/cicada-geom/src/occt/`.
   `BinTools`/`BRepTools` writers (the binary writer used to be the text
   writer through a cxx symbol collision; the path-only overloads
   defaulted to `theWithTriangles = TRUE`) with explicit flags and pinned
-  format versions, in-memory serialization, the exception boundary, and
-  the `cicada` glue the seam calls. Cicada depends on `opencascade-sys`
-  only (not the high-level crate, so `kicad-parser` and a second `glam`
-  stay out of the graph). Patches are read line by line and carry their
-  provenance in the commit message; blind merges of upstream PRs never.
+  format versions, in-memory serialization, the exception boundary, the
+  `cicada` glue the seam calls, the removal of the OCCT source submodule
+  and the dead in-tree `occt-sys` crate (cargo checks out a git
+  dependency's submodules unconditionally, features or not: a fresh
+  machine cloned OpenCASCADE's full history — 161 MB db + a 421 MB,
+  36,012-file checkout — for a directory nothing read; the fork now costs
+  6 MB in `~/.cargo/git`), and `LGPL-2.1-only` manifests (the current
+  SPDX id for what upstream's deprecated bare `LGPL-2.1` meant). Cicada
+  depends on `opencascade-sys` only (not the high-level crate, so
+  `kicad-parser` and a second `glam` stay out of the graph). Patches are
+  read line by line and carry their provenance in the commit message;
+  blind merges of upstream PRs never.
 - **What is wrapped (WP-A's set).** `occt::Solid` — a `TopoDS_Shape` that
   IS one solid; single-solid compounds (what `BRepAlgoAPI_Cut` returns)
   are unwrapped at construction and anything else refused — with
@@ -86,11 +93,16 @@ OCCT) in `crates/cicada-geom/src/occt/`.
   the process dies (`0xC0000409`, probe `throw`). The fork's
   `bindings_common.hxx` defines the `rust::behavior::trycatch` hook that
   catches it, so every bridge function declared `Result` returns
-  `Err(cxx::Exception)` with `<DynamicType>: <message>`; failures OCCT
-  reports by status (boolean error reports, an unfinished mesher, a face
-  without triangulation) are thrown on the C++ side. The seam calls only
-  `Result`-declared functions. Tested: a real `Standard_DomainError`
-  (0×0×0 box) arrives as an error in this build.
+  `Err(cxx::Exception)` with `<DynamicType>: <message>`; `std::exception`
+  gets its `what()`, and a final `catch (...)` makes the boundary total
+  ("unknown C++ exception") rather than an inventory of known types.
+  Failures OCCT reports by status (boolean error reports, an unfinished
+  mesher, a face without triangulation) are thrown on the C++ side. The
+  seam calls only `Result`-declared functions. Tested per build, not per
+  header: a real `Standard_DomainError` (0×0×0 box) arrives as an error,
+  and the fork's `cicada_selftest_throw(kind)` drives one exception of
+  each kind (OCCT, std, a thrown `int`) through the boundary — with the
+  catch-all removed the last one kills the test process (`0xC0000409`).
 - **Canonical bytes.** `BinTools` at the PINNED format version 4 (never
   `_CURRENT`), `theWithTriangles = false`, `theWithNormals = false`, and
   the per-shape `Free` / `Modified` / `Checked` flags normalized (they
@@ -101,9 +113,26 @@ OCCT) in `crates/cicada-geom/src/occt/`.
   under read → write, unaffected by tessellation; golden blake3 hashes
   for the transcendental-free box and prism are in the seam's tests.
   Cross-OS identity is measured by the nightly `occt (<os>)` jobs; until
-  the three agree the goldens are per-OS (DECISIONS.md).
-- **Threads.** `occt::Solid` is `Send`, not `Sync`: OCCT attaches
-  tessellation to shared `TShape`s. WP-B decides the sharing model.
+  the three agree the goldens are per-OS — the policy the probe memo
+  drafted (`docs/probes/occt-2026-08.md` §4d, together with the row-16
+  and row-42 appends that record the fork, the pinned format version,
+  the single-solid unwrapping and the flag normalization); those ledger
+  rows land with the merge of WP-A, not in the package itself.
+- **Threads.** `occt::Solid` is `Send`, not `Sync`, and the hazard is
+  wider than one solid: OCCT results SHARE `TShape`s with their inputs (a
+  boolean reuses the faces it did not touch), `tessellate` attaches
+  triangulation and flips `Modified`/`Checked` on them, `canonical_bytes`
+  rewrites and restores `Free`/`Modified`/`Checked` — so `box` serialized
+  on one thread while `box − prism` is tessellated on another (the rayon
+  wavefront's sibling-node shape) is a C++ data race with no `Sync` in
+  sight; measured: the INPUT's canonical bytes come back wrong. Every
+  kernel call in the seam therefore runs under one process-wide kernel
+  lock (`from_shape` takes the guard as proof; welding runs outside it),
+  which is what makes `Send` sound. It serializes all OCCT work in the
+  process — acceptable while only the seam's tests call it. WP-B's
+  sharing model replaces it on purpose: deep copies at the seam
+  (`BRepBuilderAPI_Copy`, so no two `Solid`s share `TShape`s) or doc 12's
+  kernel worker that owns all OCCT state.
 
 ## Build (Cicada's actual code)
 
