@@ -3,7 +3,8 @@
  * function dim · state badge · eye · effectful hint), one port row per unit
  * (inputs left, outputs right, handles colored by kind family; required
  * filled, optional hollow, refinement double-ringed; lift badges; inline
- * literals), an optional param widget row, comment note above, excluded
+ * literals — a transport-driven port shows the transport in its row
+ * instead: no handle, no literal), an optional param widget row, comment note above, excluded
  * outline, a git change badge when the binding differs from HEAD (docs/16
  * canvas badges; doc 10's status strip markers — added / modified /
  * renamed; removed nodes live only in the Git tab), and — at the closest
@@ -16,11 +17,11 @@ import { Handle, Position, useConnection, type NodeProps } from "@xyflow/react";
 import { memo, useEffect, useState } from "react";
 import { kindColor } from "../kinds";
 import { markerBadge } from "../panels/gitFormat";
-import type { InputView, NodeView, OutputView, ProbeVerdict, ValueSummary } from "../protocol/messages";
+import type { DrivenSignal, InputView, NodeView, OutputView, ProbeVerdict, ValueSummary } from "../protocol/messages";
 import { literalKindOf } from "../state/literals";
 import { canWrite, useCicada } from "../state/store";
 import { sendWrite, type CanvasNode } from "./flow";
-import { firstLine, isRefinement, outputDoc, portTitle, statusBadge } from "./grid";
+import { firstLine, isRefinement, outputDoc, portTitle, statusBadge, transportDrivenSignal } from "./grid";
 import { LiteralWidget } from "./LiteralWidgets";
 import { useLodTier } from "./lod";
 import { ParamWidget } from "./ParamWidget";
@@ -136,6 +137,40 @@ function InputRow({
           </span>
         )
       )}
+    </div>
+  );
+}
+
+/**
+ * The row of a transport-driven input (docs/13 §Animation transport; the
+ * catalog's `transport_driven`): the port is the session's, so it is HIDDEN
+ * as a port — no handle (nothing to wire into, nothing to drop on), no
+ * literal editor — and the row shows the transport driving it instead,
+ * lit while this port is in the current graph's driven set. A kwarg a
+ * human wrote by hand (`frame=5`) is the headless value; the tooltip says
+ * so rather than offering to edit it.
+ */
+function DrivenRow({ node, input, signal }: { node: NodeView; input: InputView; signal: DrivenSignal }) {
+  const driven = useCicada((s) =>
+    s.transport?.view.driven.some((d) => d.node === node.name && d.port === input.name) ?? false,
+  );
+  const what = signal === "frame" ? "the loop frame" : "the playhead in seconds";
+  const written = input.literal !== undefined ? ` The text's \`${input.name}=${input.literal}\` is the headless value (cicada run).` : "";
+  const title = driven
+    ? `${input.name}: ${input.type} — driven by the transport (${what}); not wired or edited here.${written}`
+    : `${input.name}: ${input.type} — the transport's port (${what}); not driving while this node is not solvable.${written}`;
+  return (
+    <div
+      className={`cn-port cn-in cn-driven${driven ? " on" : ""}`}
+      title={title}
+      data-testid={`driven-${node.name}-${input.name}`}
+      data-signal={signal}
+      data-driven={driven}
+    >
+      <span className="cn-port-label">{input.name}</span>
+      <span className="cn-transport-chip mono" aria-label={`${input.name} is driven by the transport`}>
+        {driven ? "▶" : "▷"} transport
+      </span>
     </div>
   );
 }
@@ -365,9 +400,12 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
         {Array.from({ length: rows }, (_, i) => {
           const input = view.inputs[i];
           const output = view.outputs[i];
+          const signal = input ? transportDrivenSignal(catalog, view.func, input.name) : undefined;
           return (
             <div className="cn-row" key={i}>
-              {input ? (
+              {input && signal !== undefined ? (
+                <DrivenRow node={view} input={input} signal={signal} />
+              ) : input ? (
                 <InputRow
                   node={view}
                   input={input}

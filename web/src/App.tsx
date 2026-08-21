@@ -1,6 +1,7 @@
 /**
  * The docked window (docs/16 §Application layout): top bar · ribbon ·
- * canvas/viewport split (resizable, presets, swap) · inspector · status bar.
+ * canvas/viewport split (resizable, presets, swap) · inspector · transport
+ * bar (only with time params) · status bar.
  * Regions are components owned by their folders; this file only arranges
  * them and applies per-user settings (theme, split).
  */
@@ -14,6 +15,7 @@ import { Notices } from "./panels/Notices";
 import { Ribbon } from "./panels/Ribbon";
 import { StatusBar } from "./panels/StatusBar";
 import { TopBar } from "./panels/TopBar";
+import { TransportBar } from "./panels/TransportBar";
 import { useCicada } from "./state/store";
 import { Viewport } from "./viewport/Viewport";
 
@@ -92,6 +94,7 @@ export function App() {
         </div>
         <Inspector />
       </div>
+      <TransportBar />
       <StatusBar />
       <Notices />
       <CommitDialog />

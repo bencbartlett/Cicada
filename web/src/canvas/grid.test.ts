@@ -17,6 +17,7 @@ import {
   snapToStep,
   statusBadge,
   stepDecimals,
+  transportDrivenSignal,
   wireStrokeWidth,
 } from "./grid";
 
@@ -128,6 +129,23 @@ const catalog: Catalog = {
     node("series", "Series", "Series"),
     node("ln", "Natural Logarithm", "Natural logarithm"),
     node("as_closed", "As Closed", null),
+    {
+      ...node("cycle", "Cycle", null, [port("out", "The loop position in `0..1`.")], "Params & input"),
+      inputs: [
+        { name: "period", type: "Number", base: "Number", list_depth: 0, optional: false, default: "4.0", doc: "Seconds per loop." },
+        { name: "frames", type: "Integer", base: "Integer", list_depth: 0, optional: false, default: "120", doc: "Frames per loop." },
+        {
+          name: "frame",
+          type: "Integer",
+          base: "Integer",
+          list_depth: 0,
+          optional: false,
+          default: "0",
+          doc: "The current frame.",
+          transport_driven: "frame",
+        },
+      ],
+    },
   ],
 };
 
@@ -193,6 +211,28 @@ describe("filterCatalog", () => {
   it("still matches gh under a probe filter", () => {
     const hits = filterCatalog(catalog, "merge", [{ func: "concat", ports: [["a", "ok"]] }]);
     expect(hits.map((h) => h.node.name)).toEqual(["concat"]);
+  });
+  it("never offers a transport-driven port as a wire target — a func with nothing else accepting drops out", () => {
+    // The probe answers by type: an Integer wire fits `cycle.frames` AND
+    // `cycle.frame`; only the first may be offered.
+    const both = filterCatalog(catalog, "", [{ func: "cycle", ports: [["frames", "ok"], ["frame", "ok"]] }]);
+    expect(both.map((h) => [h.node.name, h.ports])).toEqual([["cycle", [["frames", "ok"]]]]);
+    const only = filterCatalog(catalog, "", [{ func: "cycle", ports: [["frame", "ok"]] }]);
+    expect(only).toEqual([]);
+  });
+});
+
+describe("transportDrivenSignal — the hidden-port rule", () => {
+  it("names the signal of a transport-driven input and nothing else", () => {
+    expect(transportDrivenSignal(catalog, "cycle", "frame")).toBe("frame");
+    expect(transportDrivenSignal(catalog, "cycle", "frames")).toBeUndefined();
+    expect(transportDrivenSignal(catalog, "cycle", "period")).toBeUndefined();
+    expect(transportDrivenSignal(catalog, "cycle", "out")).toBeUndefined();
+    expect(transportDrivenSignal(catalog, "add", "frame")).toBeUndefined();
+    // Unknown func (a script node), no func (a literal / expression), no catalog yet.
+    expect(transportDrivenSignal(catalog, "my_script", "frame")).toBeUndefined();
+    expect(transportDrivenSignal(catalog, undefined, "frame")).toBeUndefined();
+    expect(transportDrivenSignal(null, "cycle", "frame")).toBeUndefined();
   });
 });
 

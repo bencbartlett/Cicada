@@ -5,7 +5,7 @@
  * lives in `state/literals.ts` — ONE rule for canvas and panels — and is
  * re-exported here for the canvas modules.
  */
-import type { Catalog, CatalogNode, NodeStatus, ProbeCatalogEntry } from "../protocol/messages";
+import type { Catalog, CatalogNode, DrivenSignal, NodeStatus, ProbeCatalogEntry } from "../protocol/messages";
 
 export { paramValueText } from "../state/literals";
 
@@ -114,7 +114,9 @@ export function filterCatalog(
   const accepting = probe === null ? null : new Map(probe.map((e) => [e.func, e.ports]));
   const hits: { hit: SearchHit; rank: number }[] = [];
   for (const node of catalog.nodes) {
-    const ports = accepting?.get(node.name);
+    // A transport-driven port is never a wire target (the hidden-port
+    // rule): the probe answers by type alone, so it is dropped here.
+    const ports = accepting?.get(node.name)?.filter(([port]) => drivenSignalOf(node, port) === undefined);
     if (accepting !== null && (ports === undefined || ports.length === 0)) continue;
     const rank = searchRank(node, q);
     if (rank === null) continue;
@@ -163,6 +165,29 @@ export function catalogEntry(catalog: Catalog | null, func: string | undefined):
 export function outputDoc(catalog: Catalog | null, func: string | undefined, port: string): string | undefined {
   const doc = catalogEntry(catalog, func)?.outputs.find((o) => o.name === port)?.doc;
   return doc === undefined || doc === "" ? undefined : doc;
+}
+
+/**
+ * The transport signal an INPUT port of `func` is driven by (`cycle.frame`
+ * → `frame`, `clock.t` → `time`; the catalog's `transport_driven` flag),
+ * `undefined` for every other port and for a func the catalog does not
+ * know (the project's script nodes — none are driven). Such a port is the
+ * session's, not the user's (docs/13 §Animation transport): the canvas
+ * and the inspector HIDE it — no handle, no wire target, no literal editor
+ * — and show the transport in its place; a kwarg a human wrote for it by
+ * hand stays in the text as the headless value, never edited here.
+ */
+export function transportDrivenSignal(
+  catalog: Catalog | null,
+  func: string | undefined,
+  port: string,
+): DrivenSignal | undefined {
+  const entry = catalogEntry(catalog, func);
+  return entry === undefined ? undefined : drivenSignalOf(entry, port);
+}
+
+function drivenSignalOf(node: CatalogNode, port: string): DrivenSignal | undefined {
+  return node.inputs.find((input) => input.name === port)?.transport_driven;
 }
 
 /** The hover text of a port row: `name: type — doc` (docs/16: one line, the type, the doc). */
