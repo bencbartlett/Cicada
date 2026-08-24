@@ -228,8 +228,12 @@ pub fn wrap_each(document: &mut Document, binding: &str, port: &str) -> Result<(
 }
 
 /// Drag a slider / edit a param on a call binding (docs/10: rewrite one
-/// numeric literal). `literal_text` is the new literal (shortest
-/// round-trip repr).
+/// numeric literal), or — wave 4 B3, typing a value into an unconnected
+/// port of a placed node — ADD the kwarg the call lacks
+/// (`construct_domain()` → `construct_domain(end=40.0)`), inserted at its
+/// spec-order position when `spec_order` (the port names in catalog
+/// order) is given, else appended, exactly as [`set_kwarg`] inserts a
+/// wire. `literal_text` is the new literal (shortest round-trip repr).
 ///
 /// # Errors
 ///
@@ -239,8 +243,9 @@ pub fn set_param(
     binding: &str,
     port: &str,
     literal_text: &str,
+    spec_order: Option<&[&str]>,
 ) -> Result<(), WriterError> {
-    set_kwarg(document, binding, port, literal_text, None)
+    set_kwarg(document, binding, port, literal_text, spec_order)
 }
 
 /// Edit a bare-literal constant binding (`count = 40` → `count = 56`).

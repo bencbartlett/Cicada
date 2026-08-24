@@ -3406,7 +3406,9 @@ fn spec_order(inner: &Inner, node: &str) -> Option<Vec<&'static str>> {
 
 /// Apply one param edit (`set_param`, a `param_preview` tick, a
 /// hypothetical's override) to `document`: ONE literal into `node.port`
-/// (or the bare literal binding `node`). Refused before it touches the
+/// (or the bare literal binding `node`) — the kwarg rewritten in place, or
+/// added in spec order when the call lacks it (a placed node's unconnected
+/// port, wave 4 B3 / finding U9). Refused before it touches the
 /// text when the value is not a literal, and when the port is
 /// transport-driven — `cycle.frame`, `clock.t` ([`transport_driven_reason`];
 /// `specs` is what knows): the session fills that port from the playhead
@@ -3447,7 +3449,12 @@ fn apply_param(
         )));
     }
     match port {
-        Some(port) => writer::set_param(document, node, port, value)?,
+        Some(port) => {
+            // A kwarg the call lacks (a placed node's unconnected port, wave
+            // 4 B3) is inserted at its spec-order position, as a wire is.
+            let order = spec_order_doc(document, specs, node);
+            writer::set_param(document, node, port, value, order.as_deref())?;
+        }
         None => writer::set_literal(document, node, value)?,
     }
     Ok(())
@@ -6029,6 +6036,189 @@ mod tests {
             text.contains("spin = cycle(period=4.0, frames=120)"),
             "{text}"
         );
+    }
+
+    /// Wave 4 B3 / finding U9: a session over a slider with `funcs` placed
+    /// bare (`place` writes `name = fn()` — every port untyped), the
+    /// placements drained. Returns the tempdir (kept alive), the session,
+    /// the writer's client id, its receiver and the pipeline path.
+    fn with_placed(
+        funcs: &[&str],
+    ) -> (
+        tempfile::TempDir,
+        Arc<Session>,
+        u32,
+        tokio::sync::mpsc::UnboundedReceiver<Outgoing>,
+        std::path::PathBuf,
+    ) {
+        let (dir, config) = project("# cicada 1\nsize = slider(value=2.0, min=0.5, max=5.0)\n");
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, role) = session.connect(ClientLanes::merged(tx));
+        assert_eq!(role, Role::Writer);
+        for func in funcs {
+            session.handle(
+                id,
+                Some(format!("place-{func}")),
+                ClientMessage::PlaceNode {
+                    func: (*func).into(),
+                    cell: None,
+                    connect: None,
+                },
+            );
+        }
+        session.wait_idle();
+        drain(&mut rx);
+        (dir, session, id, rx, pipeline)
+    }
+
+    /// One input of one node as `/debug/state` (and every snapshot) shows it.
+    fn input_view(session: &Session, node: &str, port: &str) -> serde_json::Value {
+        let state = session.debug_state(false);
+        let nodes = state["graph"]["nodes"].as_array().unwrap();
+        let node = nodes.iter().find(|n| n["name"] == node).unwrap();
+        node["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["name"] == port)
+            .unwrap()
+            .clone()
+    }
+
+    fn set_param(session: &Session, id: u32, node: &str, port: &str, value: &str) {
+        session.handle(
+            id,
+            Some(format!("{node}.{port}")),
+            ClientMessage::SetParam {
+                node: node.into(),
+                port: Some(port.into()),
+                value: value.into(),
+            },
+        );
+        session.wait_idle();
+    }
+
+    // Wave 4 B3 / finding U9 ("no way to type `construct_domain`'s
+    // `end = 40.0` on a placed node"): `place` writes `construct_domain()`,
+    // so the first `set_param` into a port ADDS the kwarg the call lacks,
+    // the next lands at its spec-order position, and a re-edit rewrites the
+    // one token — the same `set_param` intent the sliders send, on any
+    // node's port. The node solves once both required ports are typed.
+    #[test]
+    fn set_param_adds_the_kwarg_a_placed_call_lacks_in_spec_order() {
+        let (_dir, session, id, mut rx, pipeline) = with_placed(&["construct_domain"]);
+        let text = || std::fs::read_to_string(&pipeline).unwrap();
+        assert!(
+            text().contains("construct_domain_1 = construct_domain()\n"),
+            "{}",
+            text()
+        );
+        // Before anything is typed: the required port carries nothing.
+        let end = input_view(&session, "construct_domain_1", "end");
+        assert_eq!(end["required"], true);
+        assert!(
+            end.get("literal").is_none() && end.get("default").is_none(),
+            "{end}"
+        );
+
+        // Type `40` into `end` — the chip spells it `40.0` for a Number port.
+        set_param(&session, id, "construct_domain_1", "end", "40.0");
+        assert!(
+            text().contains("construct_domain_1 = construct_domain(end=40.0)\n"),
+            "{}",
+            text()
+        );
+        let msgs = texts(&drain(&mut rx));
+        let delta = msgs.iter().find(|m| m["type"] == "delta").unwrap();
+        assert_eq!(
+            delta["payload"]["source"]["intent_id"],
+            "construct_domain_1.end"
+        );
+        assert_eq!(
+            delta["payload"]["source"]["label"],
+            "set construct_domain_1.end = 40.0"
+        );
+        let end = input_view(&session, "construct_domain_1", "end");
+        assert_eq!(end["literal"], "40.0");
+        assert_eq!(end["literal_value"], 40.0);
+        // Still red: `start` is required and untyped.
+        let state = session.debug_state(false);
+        assert_eq!(
+            state["statuses"]["construct_domain_1"]["state"], "red",
+            "{state}"
+        );
+
+        // `start` lands BEFORE `end` — spec order, not typing order — and
+        // the node is green.
+        set_param(&session, id, "construct_domain_1", "start", "0.0");
+        assert!(
+            text().contains("construct_domain_1 = construct_domain(start=0.0, end=40.0)\n"),
+            "{}",
+            text()
+        );
+        let state = session.debug_state(false);
+        assert_eq!(
+            state["statuses"]["construct_domain_1"]["state"], "done",
+            "{state}"
+        );
+
+        // A re-edit rewrites the one token in place; every edit was one op.
+        set_param(&session, id, "construct_domain_1", "end", "41.5");
+        assert!(
+            text().contains("construct_domain_1 = construct_domain(start=0.0, end=41.5)\n"),
+            "{}",
+            text()
+        );
+        assert_eq!(history_of(&session)["depth"], 4, "one place + three edits");
+    }
+
+    // The same path for a Boolean and an Integer port, and what the chip
+    // reads BEFORE anything is typed: the catalog default as text AND as a
+    // value in the port's kind (the macro spells a Boolean default `true`;
+    // the view-model says `true` the Boolean) — see `viewmodel::default_json`.
+    #[test]
+    fn set_param_types_a_boolean_and_an_integer_into_a_placed_call() {
+        let (_dir, session, id, _rx, pipeline) = with_placed(&["shift_list"]);
+        let text = || std::fs::read_to_string(&pipeline).unwrap();
+        assert!(
+            text().contains("shift_list_1 = shift_list()\n"),
+            "{}",
+            text()
+        );
+        let wrap = input_view(&session, "shift_list_1", "wrap");
+        assert_eq!(wrap["default"], "true");
+        assert_eq!(wrap["default_value"], true);
+        assert!(wrap.get("literal").is_none(), "{wrap}");
+        let offset = input_view(&session, "shift_list_1", "offset");
+        assert_eq!(offset["required"], true);
+        assert!(offset.get("default_value").is_none(), "{offset}");
+
+        // The dialect's `False`, then a bare integer — each at its spec
+        // position, `offset` before the earlier-typed `wrap`.
+        set_param(&session, id, "shift_list_1", "wrap", "False");
+        assert!(
+            text().contains("shift_list_1 = shift_list(wrap=False)\n"),
+            "{}",
+            text()
+        );
+        set_param(&session, id, "shift_list_1", "offset", "3");
+        assert!(
+            text().contains("shift_list_1 = shift_list(offset=3, wrap=False)\n"),
+            "{}",
+            text()
+        );
+        assert_eq!(
+            input_view(&session, "shift_list_1", "wrap")["literal_value"],
+            false
+        );
+        assert_eq!(
+            input_view(&session, "shift_list_1", "offset")["literal_value"],
+            3
+        );
+        assert_eq!(history_of(&session)["depth"], 3, "one place + two edits");
     }
 
     // Nor is it a param-edit target: `set_param` into `cycle.frame` /

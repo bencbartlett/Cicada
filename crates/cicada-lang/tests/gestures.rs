@@ -150,10 +150,54 @@ fn set_param_rewrites_one_numeric_literal() {
     let before = include_str!("fixtures/gestures/set_param/before.cic");
     let after = include_str!("fixtures/gestures/set_param/after.cic");
     let emitted = apply(before, |doc| {
-        writer::set_param(doc, "amps", "value", "14.5").unwrap();
+        writer::set_param(doc, "amps", "value", "14.5", None).unwrap();
         writer::set_literal(doc, "count", "56").unwrap();
     });
     assert_eq!(emitted, after);
+}
+
+/// Wave 4 B3 (docs/17 finding U9): typing a value into an unconnected port
+/// of a placed node. `place` writes `name = func()`, so the kwarg is one
+/// the call LACKS — `set_param` inserts it (at its spec-order position when
+/// the order is known, as a wire does; appended otherwise) and rewrites it
+/// in place from then on.
+#[test]
+fn set_param_adds_the_kwarg_a_call_lacks_in_spec_order() {
+    let before = include_str!("fixtures/gestures/set_param_insert/before.cic");
+    let after = include_str!("fixtures/gestures/set_param_insert/after.cic");
+    let domain = ["start", "end"];
+    let outlines = ["text", "size", "plane", "font", "segments", "line_gap"];
+    let emitted = apply(before, |doc| {
+        // Into empty parens.
+        writer::set_param(doc, "d", "end", "40.0", Some(&domain)).unwrap();
+        // BEFORE a later port that is present.
+        writer::set_param(doc, "e", "start", "0.0", Some(&domain)).unwrap();
+        // Between two present ports, a Text literal.
+        writer::set_param(doc, "t", "font", "\"Foo\"", Some(&outlines)).unwrap();
+        // After the last present port, a Boolean; the trailing comment survives.
+        writer::set_param(doc, "w", "wrap", "False", Some(&["list", "offset", "wrap"])).unwrap();
+    });
+    assert_eq!(emitted, after);
+
+    // Without the order the kwarg is appended — the text is still exact.
+    let appended = apply(before, |doc| {
+        writer::set_param(doc, "e", "start", "0.0", None).unwrap();
+    });
+    assert!(
+        appended.contains("e = construct_domain(end=1.0, start=0.0)\n"),
+        "{appended}"
+    );
+
+    // A second edit of the same port rewrites the one token it inserted.
+    let twice = apply(before, |doc| {
+        writer::set_param(doc, "d", "end", "40.0", Some(&domain)).unwrap();
+        writer::set_param(doc, "d", "start", "0.0", Some(&domain)).unwrap();
+        writer::set_param(doc, "d", "end", "41.5", Some(&domain)).unwrap();
+    });
+    assert!(
+        twice.contains("d = construct_domain(start=0.0, end=41.5)\n"),
+        "{twice}"
+    );
 }
 
 #[test]
@@ -398,7 +442,7 @@ fn disabled_bindings_refuse_in_place_edits_by_name_but_delete_and_rename_see_the
         WriterError::Disabled("cells".to_owned())
     );
     assert_eq!(
-        writer::set_param(&mut document, "cells", "seeds", "1").unwrap_err(),
+        writer::set_param(&mut document, "cells", "seeds", "1", None).unwrap_err(),
         WriterError::Disabled("cells".to_owned())
     );
     assert_eq!(

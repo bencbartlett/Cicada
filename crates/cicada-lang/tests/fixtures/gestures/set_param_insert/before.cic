@@ -1,0 +1,5 @@
+# cicada 1
+d = construct_domain()
+e = construct_domain(end=1.0)
+t = text_outlines(text="hi", size=2.0, segments=8)
+w = shift_list(list=xs)  # wrap stays the default until typed

@@ -64,6 +64,21 @@ The edit flow is **intent → authoritative delta**:
    and reconcile on the authoritative delta — the server always wins;
    with a single writer, rollbacks are rare to nonexistent.
 
+`set_param` is the one intent for every literal edit — a slider's
+release, the param widgets, and (wave 4 B3, 2026-08-24) the
+typed-literal chips on any node's unconnected literal-typed ports
+(docs/16 §Canvas conventions): it names `{node, port, value}` with the
+value already spelled as a dialect literal, the server refuses anything
+that is not one literal token, rewrites the kwarg in place, or **adds
+it at its spec-order position when the call lacks it** (a placed node's
+port — docs/10 round-trip table). The view-model's `InputView` carries
+what such an editor needs: `literal` / `literal_value` (the kwarg as
+written and parsed), `default` (the catalog rendering) and, since B3,
+`default_value` — that rendering parsed in the port's kind by the
+server (`viewmodel.rs::default_json`; the macro spells a Boolean
+default `true`, the chip says `True`), so no client re-derives the
+catalog's spelling. Additive; the protocol version is unchanged.
+
 **Slider drags get a dedicated ephemeral path**: during the drag, the
 client streams `param_preview` messages (not ops, not undoable); the
 scheduler runs **latest-wins supersession with no debounce** — each

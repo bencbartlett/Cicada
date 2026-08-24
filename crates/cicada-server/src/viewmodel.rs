@@ -109,6 +109,13 @@ pub struct InputView {
     /// The catalog default literal, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
+    /// The catalog default parsed to JSON when it is a scalar literal of
+    /// the port's kind (numbers, booleans, text) — what a typed-literal
+    /// chip starts from when the text carries no kwarg (wave 4 B3, finding
+    /// U9). Absent when the port has no default, and for a default that is
+    /// not a scalar literal (`plane = xy_plane`) — see [`default_json`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<serde_json::Value>,
     /// Port doc line.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub doc: String,
@@ -533,6 +540,43 @@ fn literal_json(lit: &Lit) -> Option<serde_json::Value> {
     }
 }
 
+/// The catalog default of a scalar port as JSON (wave 4 B3: the value a
+/// typed-literal chip starts from when the text carries no kwarg). The
+/// `#[node]` macro renders a literal default as Rust spells it — numbers
+/// and quoted text as the dialect does, booleans as `true` / `false` — so
+/// the text is read as a dialect literal, the Rust booleans accepted for a
+/// `Boolean` port. Anything else is `None`: a `default_doc` rendering
+/// (`xy_plane`, `origin`), a list port, a value of another kind than the
+/// port's — the chip then shows the rendering and starts empty.
+fn default_json(base: &str, list_depth: u8, text: &str) -> Option<serde_json::Value> {
+    if list_depth != 0 {
+        return None;
+    }
+    let value = match (base, text) {
+        ("Boolean", "true" | "True") => serde_json::Value::Bool(true),
+        ("Boolean", "false" | "False") => serde_json::Value::Bool(false),
+        _ => {
+            let trial = Document::parse(&format!("# cicada 1\n_default = f(x={text})\n"));
+            let (_, statement, _) = trial.statements().next()?;
+            let Rhs::Call(call) = &statement.rhs else {
+                return None;
+            };
+            let ValueExpr::Literal(literal) = &call.kwargs.first()?.value else {
+                return None;
+            };
+            literal_json(&literal.lit)?
+        }
+    };
+    let fits = match base {
+        "Integer" => value.is_i64(),
+        "Number" => value.is_number(),
+        "Boolean" => value.is_boolean(),
+        "Text" => value.is_string(),
+        _ => false,
+    };
+    fits.then_some(value)
+}
+
 fn number_kwarg(call: &cicada_lang::ast::Call, name: &str) -> Option<f64> {
     call.kwargs
         .iter()
@@ -684,6 +728,7 @@ fn statement_node(
                     optional: false,
                     required: true,
                     default: None,
+                    default_value: None,
                     doc: String::new(),
                     dimension: None,
                     wired,
@@ -768,6 +813,9 @@ fn statement_node(
                             optional: port.ty.optional,
                             required: port.default.is_none(),
                             default: port.default.map(str::to_owned),
+                            default_value: port.default.and_then(|text| {
+                                default_json(port.ty.base, port.ty.list_depth, text)
+                            }),
                             doc: port.doc.to_owned(),
                             dimension: port.dimension.map(|d| match d {
                                 cicada_core::spec::Dimension::Length => "length",
@@ -797,6 +845,7 @@ fn statement_node(
                             optional: false,
                             required: false,
                             default: None,
+                            default_value: None,
                             doc: String::new(),
                             dimension: None,
                             wired,
@@ -898,6 +947,7 @@ fn statement_node(
                             optional: false,
                             required: false,
                             default: None,
+                            default_value: None,
                             doc: String::new(),
                             dimension: None,
                             wired,
@@ -1076,6 +1126,103 @@ mod tests {
         assert_eq!(size.cell[0], 0);
         assert!(block.cell[0] > g.node("span").unwrap().cell[0]);
         assert!(g.nodes.iter().all(|node| node.node_ref > 0));
+    }
+
+    // Wave 4 B3 (finding U9): an unconnected literal-typed port's chip
+    // starts from the catalog default when the text carries no kwarg, so
+    // the view-model parses the default it already renders — in the
+    // port's kind, the macro's Rust booleans included — and says nothing
+    // for a default that is no scalar literal.
+    #[test]
+    fn catalog_defaults_ride_the_inputs_as_values() {
+        let g = view(
+            "# cicada 1\n\
+             t = text_outlines(text=\"hi\", size=2.0)\n\
+             l = loft(profiles=t)\n\
+             c = cycle()\n\
+             d = construct_domain()\n",
+        );
+        let input = |node: &str, port: &str| -> InputView {
+            g.node(node)
+                .unwrap()
+                .inputs
+                .iter()
+                .find(|i| i.name == port)
+                .cloned()
+                .unwrap()
+        };
+        let font = input("t", "font");
+        assert_eq!(font.default.as_deref(), Some("\"DejaVu Sans Bold\""));
+        assert_eq!(
+            font.default_value,
+            Some(serde_json::json!("DejaVu Sans Bold"))
+        );
+        assert_eq!(
+            input("t", "segments").default_value,
+            Some(serde_json::json!(8))
+        );
+        assert_eq!(
+            input("t", "line_gap").default_value,
+            Some(serde_json::json!(1.35))
+        );
+        let plane = input("t", "plane");
+        assert_eq!(plane.default.as_deref(), Some("xy_plane"));
+        assert_eq!(
+            plane.default_value, None,
+            "a default_doc rendering is no value"
+        );
+        let ruled = input("l", "ruled");
+        assert_eq!(
+            ruled.default.as_deref(),
+            Some("true"),
+            "the macro's Rust spelling"
+        );
+        assert_eq!(ruled.default_value, Some(serde_json::Value::Bool(true)));
+        assert_eq!(
+            input("c", "period").default_value,
+            Some(serde_json::json!(4.0))
+        );
+        let end = input("d", "end");
+        assert!(end.required && end.default.is_none() && end.default_value.is_none());
+        assert!(
+            end.literal.is_none() && end.wired.is_none(),
+            "placed bare: nothing yet"
+        );
+    }
+
+    #[test]
+    fn default_json_reads_the_catalog_spelling_in_the_ports_kind() {
+        use serde_json::json;
+        assert_eq!(default_json("Boolean", 0, "true"), Some(json!(true)));
+        assert_eq!(default_json("Boolean", 0, "False"), Some(json!(false)));
+        assert_eq!(default_json("Integer", 0, "8"), Some(json!(8)));
+        assert_eq!(default_json("Integer", 0, "-3"), Some(json!(-3)));
+        assert_eq!(default_json("Number", 0, "4.0"), Some(json!(4.0)));
+        assert_eq!(
+            default_json("Number", 0, "1"),
+            Some(json!(1)),
+            "an integer spelling fits a Number"
+        );
+        assert_eq!(default_json("Text", 0, "\"a b\""), Some(json!("a b")));
+        assert_eq!(
+            default_json("Text", 0, "\"q\\\"uote\""),
+            Some(json!("q\"uote"))
+        );
+        // Not a scalar literal of the kind: the chip shows the rendering, starts empty.
+        assert_eq!(default_json("Plane", 0, "xy_plane"), None);
+        assert_eq!(default_json("Integer", 0, "2.5"), None);
+        assert_eq!(
+            default_json("Text", 0, "hi"),
+            None,
+            "an unquoted name is a reference"
+        );
+        assert_eq!(default_json("Boolean", 0, "1"), None);
+        assert_eq!(
+            default_json("Number", 1, "1.0"),
+            None,
+            "a list port has no chip"
+        );
+        assert_eq!(default_json("Number", 0, "[1.0]"), None);
     }
 
     #[test]
