@@ -100,6 +100,13 @@ jobs:
       - name: Prime the kernel builds (retry once — belt; see AGENTS.md)
         run: cargo build --locked -p cicada-geom || cargo build --locked -p cicada-geom
       - run: cargo test --locked --workspace
+      - name: Bundle the built engine and check the bundle (docs/17 L3 — the kernel's run-time closure beside the binary; `--help` from inside the bundle under a minimal env; macOS logs the rpaths before and after the rewrite)
+        shell: bash
+        run: |
+          binary=target/debug/cicada
+          if [ "$RUNNER_OS" = Windows ]; then binary=$binary.exe; fi
+          python tools/launch/bundle.py --out "$RUNNER_TEMP/cicada-bundle" --binary "$binary" --cache-root "$RUNNER_TEMP/cicada-occt"
+          python tools/launch/bundle.py --check "$RUNNER_TEMP/cicada-bundle"
 
   web:
     name: web tsc · eslint · vitest

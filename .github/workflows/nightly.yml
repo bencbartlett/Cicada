@@ -59,6 +59,14 @@ jobs:
         run: cargo build --locked -p cicada-geom || cargo build --locked -p cicada-geom
       - run: cargo test --locked --workspace
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Bundle the built engine and check the bundle (docs/17 L3; Windows + macOS — the bundle refuses Linux, whose rpath is set at link time)
+        if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          binary=target/debug/cicada
+          if [ "$RUNNER_OS" = Windows ]; then binary=$binary.exe; fi
+          python tools/launch/bundle.py --out "$RUNNER_TEMP/cicada-bundle" --binary "$binary" --cache-root "$RUNNER_TEMP/cicada-occt"
+          python tools/launch/bundle.py --check "$RUNNER_TEMP/cicada-bundle"
 
   deny:
     name: cargo deny

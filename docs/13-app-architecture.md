@@ -851,6 +851,22 @@ initial load path; there is exactly one client-hydration code path.
   binary's rpath rewritten to `@executable_path/lib` (macOS), so the binary
   starts from any shell, launcher or double-click without the env the build
   needs (AGENTS.md palette).
+- **Launchers and the bundle** (L3): `tools/launch/Cicada.cmd` /
+  `Cicada.command` open a terminal (the server console) that runs
+  `tools/launch/launch.py` — builds the release binary with the SPA embedded
+  when it is missing or stale, bundles the runtime beside it and runs
+  `cicada app` under an environment from which the loader path has been
+  REMOVED, so the bundle is what makes it start. `tools/launch/bundle.py
+  --out DIR` makes the redistributable folder from an existing release
+  build — on macOS everything inside `Cicada.app/Contents/MacOS`, because
+  Gatekeeper's app translocation runs a downloaded app from a random
+  read-only copy and anything outside the bundle would be gone; the
+  launcher script there is `Cicada.command`, never `Cicada`, the binary's
+  name on a case-insensitive disk. `--check` verifies a bundle from a
+  minimal environment (Windows: PATH = System32 alone) and `--smoke` runs
+  its `cicada app --no-browser` to `/health` and `/`. The bundle removes the
+  loader path, not the engine's Python: `cicada app` starts the script host
+  at launch, and the bundle's README says so.
 
 ## Latency targets (measured, not vibed — spike criteria feed here)
 

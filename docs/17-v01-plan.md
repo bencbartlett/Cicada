@@ -1161,6 +1161,86 @@ canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
   bundle with no env). README "Run it" section; AGENTS.md palette row.
   The process-level smoke: the bundle's `cicada app --no-browser`
   answers `/health`.
+  **Done 2026-08-24 (`wt/launch`)**: `tools/launch/launch.py` is the ONE
+  launcher core for both OSes (OS differences are data: the cmake
+  directories, the binary's name, the build env per OS from
+  `fetch_occt.github_env_entries`); `Cicada.cmd` / `Cicada.command` are
+  thin wrappers that open the terminal, find Python 3.9+ (`python`, then
+  `py -3`; `python3`, then `python`), run the core and keep the window
+  open on a non-zero exit. The core: tools named with install hints when
+  missing (npm, cargo, cmake — PATH, then the VS Build Tools / Homebrew
+  dirs; `%ProgramFiles(x86)%` derived when absent, Git Bash cannot export
+  a name with parentheses); `fetch_occt.fetch` for the prefix; the
+  staleness rule `decide` (the SPA when `web/dist` is missing or older
+  than a web source; the engine when the release binary is missing,
+  carries no matching launcher stamp — `cicada.launch-stamp.json` beside
+  it pins size + mtime + the feature set, so a binary anyone else built,
+  maybe without the SPA, is rebuilt rather than trusted — or is older
+  than an engine source or than `web/dist`); `npm ci` when
+  `web/node_modules` is missing; `npm run build`; `cargo build --release
+  -p cicada-cli --features embed`; `fetch_occt.bundle` INTO
+  `target/release/` (in place — "beside it"); then `cicada app` with the
+  launcher's own arguments under an env from which the loader path and
+  the build variables are REMOVED (the bundle is what makes it start;
+  the dev shell's PATH would hide a broken one) and `CICADA_PYTHON` set to
+  the launcher's interpreter (`--plan`, `--no-run`, `--launcher-help`
+  are the launcher's own flags). `bundle.py --out DIR` copies the release
+  binary (again only when the SOURCE changed — recorded in
+  `.cicada-bundle.json`, a pure function of the inputs), runs L2's
+  `bundle()`, reads `cicada --version` from the bundled copy under a
+  minimal env, writes `Cicada.cmd` (CRLF; `.gitattributes` now keeps
+  `*.cmd` CRLF against the repo's LF rule) or
+  `Cicada.app/Contents/{Info.plist, MacOS/Cicada.command}` and
+  `README.txt` (the version, the commit, what the machine still needs:
+  Python 3, the VC++ runtime, a first right-click → Open); `--check` =
+  launcher files present, the L2 stamp's libraries at their sizes, the
+  binary's imports resolved statically, the macOS rpath
+  `@executable_path/lib` with no prefix rpath left, `--help` answered from
+  inside the bundle under a minimal env (Windows PATH = System32 alone);
+  `--smoke` = the process-level proof (`cicada app --no-browser` over a
+  scratch pipeline, the URL line, `/health` → `ok`, `/` the SPA, never
+  the API-only page). CI: `ci.yml` `test-cross` and `nightly.yml`
+  `test-matrix` (Windows + macOS; Linux skipped — the bundle refuses it)
+  bundle their debug `cicada` and run `--check`; the macOS log carries
+  the rpath list before and after the rewrite (the L2 review asked for
+  `otool -l`; `macho_rpaths` reads the same load commands). Tests:
+  `tools/test_launch.py` (36: the rule, the stamp, the tables, the envs
+  per OS, make/check over synthetic PE/Mach-O binaries with injected
+  runners, the minimal env, the URL parser; the offline suite is 155).
+  Proved on Windows 2026-08-24, release + embed: `--plan`, `--no-run`
+  (built, stamped, 88 DLLs bundled) and the warm path (fresh, 0 copied);
+  `cmd /c Cicada.cmd --help` through the whole chain (exit 0) and a flag
+  `cicada app` rejects (the message, the pause, exit 2); the run step to
+  `/health` 200 ok and `/` the SPA from a dev shell whose PATH carried
+  the loader path; `bundle.py --out` then `--check --smoke` (88
+  libraries; `--help` under PATH=System32; URL, `/health` ok, `/` the
+  SPA). Recorded deviations: the launchers pass their own arguments
+  through to `cicada app` (none when double-clicked = the contract's
+  run; on this branch no path means the current directory and the home
+  root arrives with O1's merge — the pass-through is what made the run
+  step testable here); the core is Python rather than two shell scripts
+  (one tested rule, not two copies); `npm ci` when `node_modules` is
+  missing (the contract named `npm run build` alone, which cannot run
+  without it); on macOS the build env is CI's shape (an rpath in
+  `RUSTFLAGS`, never a job-wide `DYLD_LIBRARY_PATH` — the trap of
+  2026-08-21), so the bundle's rpath edit on a launcher-built Mac binary
+  is the `-rpath <prefix> @executable_path/lib` path CI exercises, and a
+  launcher build shares no artifacts with a plain dev-shell build there;
+  on macOS the whole bundle lives INSIDE `Cicada.app/Contents/MacOS` (the
+  contract listed the binary, its libraries and `Cicada.app` as siblings)
+  because Gatekeeper's app translocation runs a downloaded app from a
+  random read-only copy and anything outside the bundle would be gone,
+  and the launcher inside is `Cicada.command`, not `Cicada`, because the
+  binary is `cicada` and APFS is case-insensitive; the `.app`'s script
+  re-opens itself in Terminal when it has no tty, so the bundle has a
+  console like the `.command` does; `--smoke` is a separate flag because
+  CI's Windows and macOS binaries are debug builds without the SPA, where
+  `app` refuses by L1's rule — CI runs `--check`, the release bundle's
+  smoke ran here. UNTESTED (no Mac here): `Cicada.command`, the `.app`'s
+  Terminal re-open (`open -a Terminal "$0"`), Finder's and Gatekeeper's
+  handling of the ad-hoc-signed app, and the real `install_name_tool`
+  path — the first macOS CI `--check` (rpaths logged) is the gate, then
+  one double-click on a Mac.
 
 **Track B — `wt/canvas` (web canvas + viewport + docs/16).** Four
 packages in sequence, each reviewed.

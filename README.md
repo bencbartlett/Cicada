@@ -76,6 +76,37 @@ measurement harness in [`tools/`](tools/). Next is v0.1 (OCCT-backed Solid, the
 full catalog, WASM script host, undo, git panel — [docs/15](docs/15-spike-plan.md)
 §After the spike); the working status lives in [AGENTS.md](AGENTS.md).
 
+## Run it
+
+Cicada is source-only for now: you build it, and a launcher does the
+building for you. You need Rust stable ([rustup](https://rustup.rs)),
+Node.js 20+, Python 3.9+ (the engine's script host uses it at launch —
+`CICADA_PYTHON`, else `python` / `python3` on PATH), cmake and a C++
+toolchain (Windows: the Visual Studio Build Tools; macOS: the Xcode command
+line tools). Then:
+
+- **Windows**: double-click `tools\launch\Cicada.cmd`.
+- **macOS**: double-click `tools/launch/Cicada.command` (the first time,
+  right-click → Open).
+
+A terminal window opens and stays — it is the server console. The launcher
+fetches the pinned OpenCASCADE prebuilt on first use (`tools/fetch_occt.py`,
+into your user cache dir), builds the engine in release with the app
+embedded when it is missing or stale (the first build compiles the
+geometry kernel and takes about ten minutes; later launches are seconds),
+puts the kernel's run-time libraries beside the binary so no environment
+variable is ever needed, and runs `cicada app`: the server on `127.0.0.1`
+with a session token, and the app window in Edge or Chrome (app mode) or in
+your default browser. Ctrl-C in the console stops it. Arguments go to
+`cicada app` — `Cicada.cmd examples\02-solids.cic` opens that pipeline.
+
+The same steps by hand, and everything else the binary does, are in
+[AGENTS.md](AGENTS.md)'s command palette. `python tools/launch/bundle.py
+--out dist/` turns an existing release build into a redistributable folder
+— the engine with its libraries, a double-clickable `Cicada.cmd` /
+`Cicada.app` and a `README.txt` that states what the machine still needs
+(Python 3) — and `bundle.py --check dist/` verifies it.
+
 ### Agents: the catalog and the checker over MCP
 
 `cicada mcp` serves the node catalog and the `.cic` checker to any Model
