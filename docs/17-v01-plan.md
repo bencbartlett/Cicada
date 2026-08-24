@@ -14,7 +14,7 @@ runs in parallel from day 1:
 
 | # | Item | Track | Size | Status |
 |---|---|---|---|---|
-| 0 | Fold `corpus/` into `examples/wall/` + `tools/`; this plan | foreground | hours | **done** 2026-08-20 (every nightly step passes locally from the new paths; the first Nightly run itself is pending the push) |
+| 0 | Fold `corpus/` into `examples/wall/` + `tools/`; this plan | foreground | hours | **done** 2026-08-20 (every nightly step passes locally from the new paths); the first Nightly runs from the new layout (2026-08-22..24, run 32562121114 first) carve the wall on the runner and compare it to production — `overall NOISE` all three nights — and the 3-OS matrix's tests pass; two jobs were red all three nights for reasons outside the engine, fixed 2026-08-24 (§Follow-ups, "The first Nightlies") |
 | 1 | Undo/redo — snapshot op log + atomic `batch`/`apply_text` path; riders `#off`, Backspace-no-delete | foreground (server/web) | days | **done** 2026-08-20 (merged) |
 | 2 | Git panel slice 1 — status strip, per-node change markers, commit, revert-to-HEAD | foreground (server/web) | ~1 week | **done** 2026-08-20 (wt/git-panel): `GET /api/git/status` + writer-gated `POST /api/git/commit` / `POST /api/git/revert` (docs/13), the web chip / Git tab / canvas badges / `Ctrl+S` commit dialog (docs/16); measured, debug builds: revert POST → barrier snapshot ≤ 35 ms (route test), Revert click → reloaded text in the store 69–81 ms across runs (Playwright) |
 | P | OCCT probe — prebuilt 7.8.x build/link on win/mac/linux, determinism, timings, license, CI shape | parallel worktree | hours, cap 1 day | **done** 2026-08-20 — GREEN on win-64 with one rename patch, byte-deterministic, ~3 ms/boolean; Linux/macOS measured by item 3 WP-A's CI job; memo `docs/probes/occt-2026-08.md` |
@@ -67,7 +67,9 @@ repo, and that the frozen inputs are present and are the 1,200-part
 production wall. The nightly job's every step passes locally from the new
 paths (offline tests with and without the wall repo, the exporters,
 `normalize.py all` → NOISE); the first Nightly run from the new layout
-happens after the push — record its URL in `examples/wall/README.md`.
+(2026-08-22, run 32562121114) carved the wall on the runner's release
+engine and compared it to production — `overall NOISE`, as did the next
+two nights; its URL is in `examples/wall/README.md`.
 
 ## Item 1 — undo/redo (days)
 
@@ -976,6 +978,39 @@ same commit (skill `add-stdlib-node`).
 
 ## Follow-ups (found by the v0.1 reviews and measurements; scheduled, not yet placed)
 
+- **The first Nightlies (2026-08-22..24)** — **read and fixed
+  2026-08-24**. Three nights red on two jobs with the engine unchanged;
+  the `wall corpus end-to-end` job passed `overall NOISE` every night
+  and the 3-OS matrix's tests were green. (1) *macOS clippy*:
+  `platform_golden`'s first per-OS arm (5a46e84) was a one-armed `match`
+  under `cfg(target_os = "macos")` — `clippy::single_match` — and the
+  per-PR clippy runs on Linux, where that body does not exist; the arms
+  are now a `cfg`-selected table read by one shared lookup (AGENTS.md
+  rule: OS-specific behaviour is data, never `cfg`-gated code). (2)
+  *Playwright heavy (wall)*: the job drove the wall on the DEBUG engine —
+  98–114 s per cold carve on the runner — and the spec's 15 s waits
+  became coin flips (08-22/23 the pending chip clearing on release,
+  08-24 the writer's hint with an observer streaming); the job now
+  builds and runs release, the profile every docs/15 and docs/17 number
+  was taken at. Two spec fixes ride along: `retries: 0` (the release
+  writes `deboss` and `previews_deferred` is a cold-start precondition,
+  and Playwright restarts no server between attempts — CI's one retry
+  could never pass and only masked attempt 1 behind "Expected: 0,
+  Received: 17"), and the observer page in its own browser context (its
+  368 MB software-GL decode cannot stall the writer's main thread; a
+  real observer is another browser). Measured locally on the release
+  engine (`--threads 2`, 24-core dev machine): open 13.8 s, estimate
+  12.8 s, 9 ticks withheld, the release solved once in 14.2 s, writer
+  hint 1.5 s / observer hint 7.5 s after the grab (23 of 26 frames in),
+  28 more ticks withheld across the no-write releases — 1.4 min, green.
+  Named, not scheduled: where the writer's 1.5 s goes is unmeasured (the
+  policy is decided per tick on the session task — a lowering of the
+  tick's graph plus the hash-only dry run — while the observer's
+  restream encodes; on the debug runner it passed 15 s) — measure
+  before fixing; coalescing a burst of ticks before prediction
+  (latest-wins, as the preview loop already does) is the likely shape.
+  Also seen: the account's artifact storage quota is full again, so the
+  jobs' failure reports do not upload (non-blocking by design).
 - **Control-plane priority over the display restream** — **done on the
   server and the socket, 2026-08-20** (`wt/hardening`; docs/13 §Two
   lanes, one socket); **the status cadence at wall scale is NOT reached

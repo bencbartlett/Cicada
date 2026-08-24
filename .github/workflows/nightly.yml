@@ -137,9 +137,15 @@ jobs:
           path: ${{ runner.temp }}/corpus-report.md
           retention-days: 14
 
-  # The wall-scale Playwright spec(s): minutes of solve and a ~350 MB display
-  # restream per page on a 2-vCPU runner — nightly, not per PR (the per-PR
-  # smoke skips them: CICADA_E2E_HEAVY gates them in the spec files).
+  # The wall-scale Playwright spec(s): seconds of solve and a ~350 MB display
+  # restream per page — nightly, not per PR (the per-PR smoke skips them:
+  # CICADA_E2E_HEAVY gates them in the spec files). On the RELEASE engine —
+  # the spec is a timing spec (compute-on-release's 1 s bar, the hint while
+  # held, one solve on release), and on the debug engine the wall's cold
+  # carve took 98–114 s on the runner and every 15 s wait in the spec became
+  # a coin flip: red 2026-08-22..24 with no engine change (the first three
+  # runs of this job). Release is the profile the docs/15 and docs/17 numbers
+  # were taken at; the kernel builds once more for it (rust-cache keeps it).
   playwright-heavy:
     name: Playwright heavy (wall)
     runs-on: ubuntu-latest
@@ -165,13 +171,13 @@ jobs:
         run: |
           python -m pip install --quiet zstandard
           python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --github-env
-      - name: Prime the kernel builds (retry once — belt; see AGENTS.md)
-        run: cargo build --locked -p cicada-geom || cargo build --locked -p cicada-geom
+      - name: Prime the kernel builds (release; retry once — belt; see AGENTS.md)
+        run: cargo build --locked --release -p cicada-geom || cargo build --locked --release -p cicada-geom
       - name: Build the SPA
         working-directory: web
         run: npm ci && npm run build
-      - name: Build cicada with the SPA embedded (the release shape)
-        run: cargo build --locked -p cicada-cli --features embed
+      - name: Build cicada in release with the SPA embedded (the shipped shape)
+        run: cargo build --locked --release -p cicada-cli --features embed
       - name: Install the Playwright browser
         working-directory: web
         run: npx playwright install --with-deps chromium
@@ -180,7 +186,7 @@ jobs:
         env:
           CICADA_EMBEDDED: "1"
           CICADA_E2E_HEAVY: "1"
-          CICADA_BIN: ${{ github.workspace }}/target/debug/cicada
+          CICADA_BIN: ${{ github.workspace }}/target/release/cicada
         run: npx playwright test e2e/compute_on_release.spec.ts
       - uses: actions/upload-artifact@v4
         if: failure()

@@ -11,8 +11,12 @@
  * wall is opened cold here (`examples/wall/wall.cic` inside the scratch
  * project), so the initial solve IS the cost evidence the prediction reads
  * (every node in the cone computed once). This is the slow spec of the
- * suite by design — a debug engine carves the wall in tens of seconds, and
- * the release pays a second carve — hence its own timeout. The drag goes
+ * suite by design — the wall carves in seconds on a release engine, in
+ * tens of seconds to minutes on a debug one, and the release pays a second
+ * carve — hence its own timeout. The nightly job runs it on the RELEASE
+ * engine: this is a timing spec, and on a debug engine the 2026-08-22..24
+ * nightlies (98–114 s per carve on the runner) turned its 15 s waits into
+ * coin flips — red three nights with no engine change. The drag goes
  * through the params panel's range input (a real pointer drag; the canvas
  * twin of the slider is in the DOM — hidden by LOD at the wall's zoom, its
  * text is still the oracle) and the oracles are the DOM,
@@ -36,8 +40,9 @@ import config from "../playwright.config";
 const meta = config.metadata as { token: string };
 const TOKEN = meta.token;
 const PIPELINE = "wall/wall.cic";
-// The initial wall solve plus the release's carve, on a debug engine with
-// two threads, on a loaded CI runner.
+// The initial wall solve plus the release's carve, with two threads, on a
+// loaded CI runner — sized for a debug engine (98–114 s per carve on the
+// 2026-08-22..24 runners) so a local debug run still fits.
 const SPEC_TIMEOUT_MS = 10 * 60_000;
 const SOLVE_TIMEOUT_MS = 5 * 60_000;
 // The observer's `preview_policy` while its display set is still streaming
@@ -145,12 +150,20 @@ async function dragTo(page: Page, slider: ReturnType<Page["getByTestId"]>, x: nu
   expect(await slider.inputValue(), `the thumb must sit on ${target}`).toBe(target);
 }
 
-test.describe.configure({ mode: "serial" });
+// Never retried, on CI either (the suite's default there is one retry): the
+// spec WRITES the served project (the release commits `deboss`) and reads
+// the server's cold-start counters as preconditions (`previews_deferred` is
+// 0 only before the first drag), and Playwright restarts no server between
+// attempts — a retry on the same session cannot pass and only hides the
+// first attempt's failure behind "Expected: 0, Received: 17" (the
+// 2026-08-22..24 nightlies).
+test.describe.configure({ mode: "serial", retries: 0 });
 
-// Wall-scale: the 1,200-part carve solves for minutes on a 2-vCPU runner and
-// its display set (~350 MB of frames) streams to every page over the one
-// socket — the per-PR smoke is not the place for it. The nightly
-// `Playwright heavy (wall)` job sets CICADA_E2E_HEAVY=1.
+// Wall-scale: the 1,200-part carve solves for seconds (release) to minutes
+// (debug) on a CI runner and its display set (~350 MB of frames) streams to
+// every page over the one socket — the per-PR smoke is not the place for
+// it. The nightly `Playwright heavy (wall)` job sets CICADA_E2E_HEAVY=1 and
+// runs the release engine.
 test.skip(
   !process.env.CICADA_E2E_HEAVY,
   "wall-scale spec — run with CICADA_E2E_HEAVY=1 (the nightly heavy job, or locally)",
@@ -194,6 +207,7 @@ async function waitForFramesToSettle(page: Page, quietMs: number, timeoutMs: num
 
 test("a deboss drag shows `pending · N s` while held, paints no computing preview, and solves once on release", async ({
   page,
+  browser,
 }, testInfo) => {
   test.setTimeout(SPEC_TIMEOUT_MS);
   const errors: string[] = [];
@@ -316,7 +330,17 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
   // The release that writes nothing (review findings 2026-08-20): a drag
   // away and back to the committed value, with an observer watching.
   // ================================================================
-  const observer = await page.context().newPage();
+  // The observer gets its OWN browser context: a second page in the
+  // writer's context can share its renderer process, and the observer's
+  // frame handling (368 MB decoded in software GL, seconds per large frame)
+  // would then stall the writer's main thread — the writer's hint below is
+  // the product's contract, so its clock must not be the observer's. A real
+  // observer is another browser anyway.
+  const observerContext = await browser.newContext({
+    baseURL: config.use?.baseURL,
+    viewport: config.use?.viewport,
+  });
+  const observer = await observerContext.newPage();
   const observerErrors: string[] = [];
   observer.on("pageerror", (error) => observerErrors.push(`pageerror: ${error.message}`));
   await observer.goto(`/?token=${TOKEN}&pipeline=${PIPELINE}`);
@@ -467,7 +491,7 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
   await waitForFramesToSettle(observer, 2_000, 180_000);
   const observerFinal = await observerFrames(observer);
   expect(observerFinal.bytes, "the observer received its whole display set").toBeGreaterThanOrEqual(observerRestreamBytes);
-  await observer.close();
+  await observerContext.close();
 
   expect(errors, errors.join("\n")).toEqual([]);
   expect(observerErrors, observerErrors.join("\n")).toEqual([]);

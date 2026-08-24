@@ -67,9 +67,10 @@ the run's job summary (plus a best-effort artifact). First real run,
 **overall NOISE** — every difference the normalizer found on the Linux
 build was declared noise, the same verdict the Windows dev machine gives;
 that is the cross-platform evidence the golden-hash discipline rests on.
-The first run from THIS layout (`examples/wall/` + `tools/`) is pending
-the push that carries the move; every step of the job passes locally
-from the new paths (add the run URL here when it lands).
+The first run from THIS layout (`examples/wall/` + `tools/`), 2026-08-22:
+<https://github.com/bencbartlett/Cicada/actions/runs/32562121114> —
+**overall NOISE** again (the `wall corpus end-to-end` job), and the same
+verdict on the two nights after it (runs 32628110812 and 32707587367).
 
 ## What the pipeline does, honestly
 

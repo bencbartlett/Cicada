@@ -57,9 +57,9 @@ pub(crate) fn plane_at(x: f64, y: f64, z: f64) -> Plane {
 /// The committed golden for THIS platform. Every Solid golden in the
 /// stdlib was blessed on win-64 (2026-08-20, OCCT 7.8.1 conda-forge build
 /// 103); when the CI matrix shows another OS disagreeing on a
-/// transcendental-free solid, add a `#[cfg(target_os = "…")]` arm here
-/// with that OS's hash (a documented per-OS golden, DECISIONS.md row 42)
-/// rather than loosening any comparison.
+/// transcendental-free solid, add that OS's row to [`PLATFORM_ARMS`]
+/// (a documented per-OS golden, DECISIONS.md row 42) rather than
+/// loosening any comparison.
 ///
 /// The first matrix run with the kernel in every job (CI 32508005776,
 /// 2026-08-21, macos-latest = arm64): linux-64 agrees with win-64 on all
@@ -72,20 +72,33 @@ pub(crate) fn plane_at(x: f64, y: f64, z: f64) -> Plane {
 /// own output, never typed from a guess; a golden without an arm for the
 /// running OS falls back to the win-64 value and, if it differs, fails
 /// loudly with both hashes, which is how the next arm gets added.
+///
+/// The arms are a TABLE, not `cfg`-gated code: the per-PR CI lints on
+/// Linux only, so a body that only macOS compiles is linted only by the
+/// nightly matrix — the first arm, written as a one-armed `match`, was
+/// `clippy::single_match` there for three nights (2026-08-22..24) while
+/// every per-PR job stayed green. The lookup below is the same code on
+/// every OS; only the data differs.
 pub(crate) fn platform_golden(win64: &'static str) -> &'static str {
-    #[cfg(target_os = "macos")]
-    {
-        match win64 {
-            // loft_determinism_golden_hash — the ruled frustum between two
-            // pentagonal rings 12 units apart.
-            "bf5a61c9a03e5e9add5fb41899d27618cc3205df556f611cb2cc229bf4a6a617" => {
-                return "958dddb63ef5d6411f98ddc7b67f8695c0b298dc7e188d9a2367a6c80458c463";
-            }
-            _ => {}
-        }
-    }
-    win64
+    PLATFORM_ARMS
+        .iter()
+        .find(|(blessed_on_win64, _)| *blessed_on_win64 == win64)
+        .map_or(win64, |(_, this_os)| *this_os)
 }
+
+/// `(the win-64 hash, this OS's hash)` for every golden this OS disagrees
+/// on. Empty where the OS agrees with win-64 on all of them (linux-64 does).
+#[cfg(target_os = "macos")]
+const PLATFORM_ARMS: &[(&str, &str)] = &[
+    // loft_determinism_golden_hash — the ruled frustum between two
+    // pentagonal rings 12 units apart.
+    (
+        "bf5a61c9a03e5e9add5fb41899d27618cc3205df556f611cb2cc229bf4a6a617",
+        "958dddb63ef5d6411f98ddc7b67f8695c0b298dc7e188d9a2367a6c80458c463",
+    ),
+];
+#[cfg(not(target_os = "macos"))]
+const PLATFORM_ARMS: &[(&str, &str)] = &[];
 
 /// The `HashedValue` hash of a Solid — what the scheduler, store and
 /// display key on.

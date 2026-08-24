@@ -239,6 +239,14 @@ Python 3 on PATH (or `CICADA_PYTHON`); worker protocol is dependency-free
 - **`unsafe` only inside FFI seam modules**, each block with a
   `// SAFETY:` comment.
 - **Never leave fmt/clippy red.** CI runs `-D warnings`; so should you.
+  The per-PR clippy runs on Linux only; the 3-OS matrix that lints
+  everything is the Nightly. So OS-specific behaviour is **data, not
+  `cfg`-gated code** — a `#[cfg(target_os)]` table the one shared code
+  path reads (`solids/support.rs::platform_golden`), never a body only
+  one OS compiles: the first per-OS golden, written as a one-armed
+  `match` under `cfg(target_os = "macos")`, was `clippy::single_match`
+  on the Nightly for three nights (2026-08-22..24) while every per-PR
+  job stayed green.
 - **Determinism is a unit test.** Golden hashes update only through the
   blessed path, never by hand, and the diff gets explained in the commit.
 - **Tolerance is explicit state** — the sanctioned comparison API is the
