@@ -40,11 +40,24 @@ const PIPELINE_CHANGED: &str = "# cicada 1\n\
                                 span = construct_domain(start=0.0, end=size)\n\
                                 block = box(x=span, y=span, z=span)\n";
 
+const PIPELINE_CHANGED_AGAIN: &str = "# cicada 1\n\
+                                      size = slider(value=4.0, min=0.5, max=5.0)\n\
+                                      span = construct_domain(start=0.0, end=size)\n\
+                                      block = box(x=span, y=span, z=span)\n";
+
 /// A script node (discovery refuses a `.py` with none) — nothing in the
 /// pipeline uses it; its ARRIVAL beside the pipeline is what must be seen.
 const SCRIPT: &str = "import cicada\n\n\
                       @cicada.node(title=\"Triple\", description=\"x times three.\")\n\
                       def triple(x: \"Number\") -> \"Number\":\n    return x * 3.0\n";
+
+/// The same node edited in place — the SAME file name, so the pipeline's
+/// directory watch sees no entry change; only a watch ON `scripts/` can
+/// see this rewrite — with a title the catalog shows once a rescan has
+/// read it.
+const SCRIPT_EDITED: &str = "import cicada\n\n\
+                             @cicada.node(title=\"Quadruple\", description=\"x times four.\")\n\
+                             def triple(x: \"Number\") -> \"Number\":\n    return x * 4.0\n";
 
 /// Minimal HTTP/1.1 GET (loopback only): `(status, body)`.
 fn http_get(addr: SocketAddr, path: &str, token: Option<&str>) -> (u16, String) {
@@ -131,6 +144,7 @@ fn fixture() -> Fixture {
         ("README.md", "not a pipeline\n"),
         ("sub/p.cic", PIPELINE),
         ("sub/inner/q.cic", PIPELINE),
+        (".hidden/h.cic", PIPELINE),
     ] {
         std::fs::write(root.join(file), text).unwrap();
     }
@@ -304,6 +318,105 @@ async fn join(addr: SocketAddr, pipeline: &str) -> Socket {
     socket
 }
 
+/// The server's watched set as `/debug/state` reports it: root-relative,
+/// sorted (docs/13 §External changes).
+async fn watched(addr: SocketAddr, pipeline: &str) -> Vec<String> {
+    let (status, state) = get(addr, &format!("/debug/state?pipeline={pipeline}")).await;
+    assert_eq!(status, 200, "{state}");
+    state["watched"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no `watched` in /debug/state: {state}"))
+        .iter()
+        .map(|dir| dir.as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// The title the session's catalog gives script node `name` — `None`
+/// until a (re)scan has discovered it.
+async fn script_title(addr: SocketAddr, pipeline: &str, name: &str) -> Option<String> {
+    let (status, catalog) = get(addr, &format!("/api/catalog?pipeline={pipeline}")).await;
+    assert_eq!(status, 200, "{catalog}");
+    catalog["nodes"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no nodes in {catalog}"))
+        .iter()
+        .find(|node| node["name"] == name)
+        .map(|node| node["title"].as_str().unwrap().to_owned())
+}
+
+/// Wait until the session's text contains `needle`: read `/debug/state`;
+/// while it does not, take the next barrier snapshot (its reason must be
+/// "external file change") and read again. See [`wait_for_script_title`]
+/// for why the waits here read STATE instead of counting snapshots.
+async fn wait_for_text(socket: &mut Socket, addr: SocketAddr, pipeline: &str, needle: &str) {
+    let mut snapshots = 0;
+    loop {
+        let (status, state) =
+            get(addr, &format!("/debug/state?pipeline={pipeline}&wait=true")).await;
+        assert_eq!(status, 200, "{state}");
+        let text = state["text"].as_str().unwrap().to_owned();
+        if text.contains(needle) {
+            return;
+        }
+        assert!(
+            snapshots < 20,
+            "{snapshots} snapshots later the text still lacks {needle:?}: {text}"
+        );
+        let barrier = next_of(socket, "snapshot").await;
+        snapshots += 1;
+        assert_eq!(
+            barrier["payload"]["reason"], "external file change",
+            "{barrier}"
+        );
+    }
+}
+
+/// Wait until the session's catalog gives script node `name` the title
+/// `expected`: read the catalog; while it does not, take the next barrier
+/// snapshot (its reason must be "external file change") and read again.
+///
+/// STATE-based on purpose. How many snapshots one burst of file events
+/// yields is timing-dependent — a directory created and a file written
+/// into it have landed in one 80 ms coalescing window and in two — so a
+/// test that consumed "the next snapshot" per step could take a burst's
+/// second snapshot for the next step's and pass without that step's change
+/// ever being seen (the false PASS the review of 2026-08-24 found: with
+/// the late re-watch made a no-op the old step 3 still passed). The title
+/// changes only when a rescan has READ the edited file. One thing can still
+/// fake it: a rescan owed to an EARLIER event, still in the coalescer when
+/// the edit lands, reads the edited file (seen, 2026-08-24: the same
+/// mutation passed this wait in 0.5 s once the watched-set assertion was
+/// removed) — so a step whose proof is this wait first quiesces the watcher
+/// with an ordered barrier ([`PIPELINE_CHANGED_AGAIN`] in the late-scripts
+/// test: an event on the same directory handle is delivered after every
+/// earlier one of that handle, and once its effect shows, nothing earlier
+/// is pending).
+async fn wait_for_script_title(
+    socket: &mut Socket,
+    addr: SocketAddr,
+    pipeline: &str,
+    name: &str,
+    expected: &str,
+) {
+    let mut snapshots = 0;
+    loop {
+        let title = script_title(addr, pipeline, name).await;
+        if title.as_deref() == Some(expected) {
+            return;
+        }
+        assert!(
+            snapshots < 20,
+            "{snapshots} snapshots later `{name}` is still {title:?}, not {expected:?}"
+        );
+        let barrier = next_of(socket, "snapshot").await;
+        snapshots += 1;
+        assert_eq!(
+            barrier["payload"]["reason"], "external file change",
+            "{barrier}"
+        );
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_root_without_a_pipeline_opens_nothing_and_lists_one_directory_at_a_time() {
     let fx = fixture();
@@ -389,6 +502,31 @@ async fn a_root_without_a_pipeline_opens_nothing_and_lists_one_directory_at_a_ti
         assert_eq!(entries(&inner), pairs(&[("q.cic", "pipeline")]));
     }
 
+    // ---- Unlisted is not unenterable: a dot-directory or a build tree
+    // named in `dir` lists like any other directory under the root (the
+    // root is the boundary; the skip list is about what the picker shows).
+    let (status, hidden) = get(addr, "/api/files?dir=.hidden").await;
+    assert_eq!(status, 200, "{hidden}");
+    assert_eq!(
+        (hidden["dir"].as_str(), hidden["parent"].as_str()),
+        (Some(".hidden"), Some(""))
+    );
+    assert_eq!(entries(&hidden), pairs(&[("h.cic", "pipeline")]));
+    let (status, skipped) = get(addr, "/api/files?dir=node_modules").await;
+    assert_eq!(status, 200, "{skipped}");
+    assert_eq!(entries(&skipped), pairs(&[]));
+
+    // ---- `/api/project`'s walk skips the same directories the listing
+    // leaves out (one predicate): the hidden pipeline is in neither.
+    let pipelines = project["pipelines"].as_array().unwrap();
+    assert!(
+        pipelines.iter().any(|p| p == "sub/inner/q.cic")
+            && pipelines
+                .iter()
+                .all(|p| !p.as_str().unwrap().starts_with(".hidden")),
+        "{pipelines:?}"
+    );
+
     // ---- Listing opened nothing; the subdirectory pipeline opens by its
     // root-relative name and is keyed by it.
     assert_eq!(
@@ -467,10 +605,21 @@ async fn the_file_list_refuses_every_escape_and_names_nothing_above_the_root() {
         }
     }
 
-    // ---- Not found: a missing directory, and a file.
+    // ---- Not found: a missing directory, a file, a path THROUGH a file,
+    // and names Windows' file systems cannot hold (`a?b`: on Windows the
+    // OS refuses the name, os error 123; on Unix nothing by that name is
+    // here) — nothing exists at any of them, and 403 `io_error` means
+    // "exists but unreadable", so every one is 404 on every OS.
     for (dir, words) in [
         ("nowhere", "no directory"),
         ("sub/p.cic", "not a directory"),
+        ("sub/p.cic/deeper", "no directory"),
+        ("a?b", "no directory"),
+        ("a*b", "no directory"),
+        ("a<b", "no directory"),
+        ("a>b", "no directory"),
+        ("a|b", "no directory"),
+        ("a\"b", "no directory"),
     ] {
         let (status, body) = get(addr, &format!("/api/files?dir={}", urlencode(dir))).await;
         assert_eq!(status, 404, "{dir:?}: {body}");
@@ -584,6 +733,13 @@ async fn an_unreadable_directory_is_io_error_and_still_a_directory_of_its_parent
     drop(denied);
 }
 
+/// The watcher follows the session into a subdirectory of the root, and a
+/// `scripts/` that appears AFTER the session opened is watched from its
+/// arrival. Two independent proofs of the late watch, neither counting
+/// snapshots (see [`wait_for_script_title`]): the watched set `/debug/state`
+/// reports — which a re-watch that never ran cannot contain — and a
+/// content-only rewrite inside the directory, which only a watch ON it can
+/// see, shown by the state it changes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_pipeline_in_a_subdirectory_reloads_on_external_changes_including_a_late_scripts_dir() {
     let fx = fixture();
@@ -592,6 +748,12 @@ async fn a_pipeline_in_a_subdirectory_reloads_on_external_changes_including_a_la
     let mut socket = join(addr, "sub/p.cic").await;
     let (_, before) = get(addr, "/debug/state?pipeline=sub/p.cic&wait=true").await;
     assert!(before["text"].as_str().unwrap().contains("value=2.0"));
+    assert_eq!(
+        watched(addr, "sub/p.cic").await,
+        ["sub"],
+        "the pipeline's own directory is watched, no scripts/ exists yet, the root is not watched"
+    );
+    assert_eq!(script_title(addr, "sub/p.cic", "triple").await, None);
 
     // ---- 1. The `.cic` changes under the session (git checkout, an
     // editor): the watch on the pipeline's OWN directory sees it — the
@@ -612,22 +774,79 @@ async fn a_pipeline_in_a_subdirectory_reloads_on_external_changes_including_a_la
     // ---- 2. A `scripts/` directory appears beside it AFTER the session
     // opened, with a script inside: no watch existed for either event when
     // the session opened — the directory's arrival is seen on the parent's
-    // watch, rescans, and puts the new directory under watch.
+    // watch, rescans (the script is discovered), and puts the new directory
+    // under watch. The re-watch precedes the rescan in the watcher thread's
+    // one batch, so once the catalog shows the script the set is settled.
     let scripts = fx.root.join("sub").join("scripts");
     std::fs::create_dir(&scripts).unwrap();
     std::fs::write(scripts.join("helper.py"), SCRIPT).unwrap();
-    let barrier = next_of(&mut socket, "snapshot").await;
+    wait_for_script_title(&mut socket, addr, "sub/p.cic", "triple", "Triple").await;
     assert_eq!(
-        barrier["payload"]["reason"], "external file change",
-        "{barrier}"
+        watched(addr, "sub/p.cic").await,
+        ["sub", "sub/scripts"],
+        "the late scripts/ is under watch"
     );
 
-    // ---- 3. A later change INSIDE it is seen through that late watch.
-    std::fs::write(scripts.join("helper.py"), format!("{SCRIPT}\n# edited\n")).unwrap();
-    let barrier = next_of(&mut socket, "snapshot").await;
+    // ---- 2b. Quiesce the watcher before step 3, without a sleep: step 2's
+    // burst may still owe a batch (its directory-modified event landing in
+    // a later coalescing window), and that batch's rescan would read
+    // whatever step 3 has written by then — a rescan that needs no watch on
+    // `scripts/` at all, which is exactly what step 3 must prove. So an
+    // ORDERED barrier: a `.cic` rewrite is an event on the same directory
+    // handle (`sub`) as every event step 2 raised there, delivered after
+    // them; once its text shows, no earlier event of that handle is pending,
+    // and the only watch that can see step 3 is the one on `scripts/`.
+    std::fs::write(fx.root.join("sub").join("p.cic"), PIPELINE_CHANGED_AGAIN).unwrap();
+    wait_for_text(&mut socket, addr, "sub/p.cic", "value=4.0").await;
     assert_eq!(
-        barrier["payload"]["reason"], "external file change",
-        "{barrier}"
+        script_title(addr, "sub/p.cic", "triple").await.as_deref(),
+        Some("Triple"),
+        "the barrier changed the text, not the script"
     );
+
+    // ---- 3. A content-only rewrite INSIDE it: no directory entry changes,
+    // so the parent's watch cannot see this — only the watch on `scripts/`
+    // can; the catalog shows the new title only once a rescan has read it.
+    std::fs::write(scripts.join("helper.py"), SCRIPT_EDITED).unwrap();
+    wait_for_script_title(&mut socket, addr, "sub/p.cic", "triple", "Quadruple").await;
+    handle.shutdown().await;
+}
+
+/// The watcher's primary path — the shape of `examples/wall` and
+/// `05-script-geometry`: a `scripts/` directory that EXISTS when the session
+/// opens is watched from the start (before the session exists), and a
+/// content-only edit of a script — which the pipeline's directory watch
+/// cannot see — reloads with a rescan.
+///
+/// The watched-set assertion right after the join is the proof of the
+/// at-open path; the edit alone is not. Observed 2026-08-24 with the at-open
+/// watch removed: on Windows the PARENT's watch reported `scripts/` modified
+/// during the open although no entry of it changed (NTFS flushes a file's
+/// directory-entry info when the file is next opened and closed — the
+/// session's read of `helper.py`), the re-watch path put `scripts/` under
+/// watch, and the edit was seen through that healed watch. The healing is
+/// the product working as designed (an idempotent re-watch and one
+/// fingerprint); what it cannot fake is the set at the moment of the join.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_scripts_dir_present_at_open_is_watched_from_the_start() {
+    let fx = fixture();
+    let scripts = fx.root.join("sub").join("scripts");
+    std::fs::create_dir(&scripts).unwrap();
+    std::fs::write(scripts.join("helper.py"), SCRIPT).unwrap();
+    let handle = start(&fx).await;
+    let addr = handle.addr;
+    let mut socket = join(addr, "sub/p.cic").await;
+    assert_eq!(
+        watched(addr, "sub/p.cic").await,
+        ["sub", "sub/scripts"],
+        "both directories are watched as the session opens"
+    );
+    assert_eq!(
+        script_title(addr, "sub/p.cic", "triple").await.as_deref(),
+        Some("Triple"),
+        "discovered at open"
+    );
+    std::fs::write(scripts.join("helper.py"), SCRIPT_EDITED).unwrap();
+    wait_for_script_title(&mut socket, addr, "sub/p.cic", "triple", "Quadruple").await;
     handle.shutdown().await;
 }

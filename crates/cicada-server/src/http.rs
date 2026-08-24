@@ -530,10 +530,18 @@ fn start_watcher(state: &Arc<AppState>) -> Result<(), ServeError> {
                         && scripts_dir.is_dir()
                         && let Err(error) = rewatch(&state, &scripts_dir)
                     {
-                        eprintln!(
-                            "watching {} failed: {error} — later script changes there go unseen",
+                        // The session stays open (its `.cic` is still
+                        // watched) but script edits there will go unseen:
+                        // say so where the user is — the status bar — not
+                        // only on the server's console; `/debug/state`'s
+                        // `watched` leaves the directory out too.
+                        let message = format!(
+                            "watching {} failed: {error} — later script changes there go unseen \
+                             until the pipeline is reopened",
                             scripts_dir.display()
                         );
+                        eprintln!("{message}");
+                        session.notify_warning(message);
                     }
                     if reaction.reload {
                         match session.reload_from_disk("external file change", reaction.rescan) {
@@ -766,8 +774,13 @@ fn files_status(error: &FilesError) -> StatusCode {
 }
 
 /// Walk the project for `*.cic` pipelines and the `scripts/*.py` beside
-/// them (project-relative, `/`-separated); shallow, skipping the usual
-/// non-project directories.
+/// them (project-relative, `/`-separated); shallow (depth 4), and skipping
+/// exactly the directories `GET /api/files` leaves unlisted
+/// ([`files::skipped_directory`]: dot-names, `node_modules` / `target`, the
+/// OS-hidden ones — under a home root that is `AppData` and its scratch
+/// trees, which the picker never shows and this walk must not spend
+/// seconds in). A pipeline is what the listing calls one
+/// ([`files::is_pipeline_name`], extension case-insensitive).
 fn collect_pipelines(
     root: &Path,
     dir: &Path,
@@ -786,19 +799,46 @@ fn collect_pipelines(
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
         if path.is_dir() {
-            if name.starts_with('.') || name == "node_modules" || name == "target" {
+            // The entry's OWN metadata carries the hidden flag (a link's,
+            // not its target's); an entry gone since the read is skipped.
+            let Ok(own) = entry.metadata() else {
+                continue;
+            };
+            if files::skipped_directory(&name, &own) {
                 continue;
             }
             collect_pipelines(root, &path, pipelines, scripts, depth + 1);
         } else if let Ok(relative) = path.strip_prefix(root) {
             let relative = relative.to_string_lossy().replace('\\', "/");
-            if path.extension().is_some_and(|e| e == "cic") {
+            if files::is_pipeline_name(&name) {
                 pipelines.push(relative);
             } else if in_scripts_dir && path.extension().is_some_and(|e| e == "py") {
                 scripts.push(relative);
             }
         }
     }
+}
+
+/// The watched set (docs/13 §External changes) as root-relative,
+/// `/`-separated paths, sorted — `""` is the root itself (a pipeline that
+/// sits at the root watches its own directory). `/debug/state` carries it
+/// so an agent — or a test — can tell whether an external edit in a
+/// directory will be seen before making it.
+fn watched_relative(state: &AppState) -> Vec<String> {
+    let mut watched: Vec<String> = state
+        .watched
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .map(|dir| {
+            dir.strip_prefix(&state.config.project_dir)
+                .unwrap_or(dir)
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect();
+    watched.sort();
+    watched
 }
 
 async fn api_blob(
@@ -1145,7 +1185,16 @@ async fn debug_state(
         if wait {
             session.wait_idle();
         }
-        session.debug_state(with_values)
+        let mut value = session.debug_state(with_values);
+        // Server-wide, not the session's: which directories the watcher
+        // has under watch (this session's own, and every other open one's).
+        if let Some(object) = value.as_object_mut() {
+            object.insert(
+                "watched".to_owned(),
+                serde_json::json!(watched_relative(&state)),
+            );
+        }
+        value
     })
     .await
     {
@@ -1647,6 +1696,67 @@ mod tests {
         // when it exists again).
         std::fs::remove_dir_all(&scripts_dir).unwrap();
         assert_eq!(classify(&[&scripts_dir]), rewatch);
+    }
+
+    /// `/api/project`'s walk skips exactly what `GET /api/files` leaves
+    /// unlisted — ONE predicate, `files::skipped_directory` — and collects
+    /// what the listing calls a pipeline (`.CIC` included). Under a home
+    /// root the two disagreeing was a 3 s walk through `AppData`'s scratch
+    /// trees that listed two dozen pipelines the picker never shows. The
+    /// OS-hidden arm needs Windows' attribute and SKIPS LOUDLY elsewhere
+    /// (the dot-name and build-tree arms are asserted everywhere).
+    #[test]
+    fn the_project_walk_skips_what_the_file_list_skips() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for sub in [".git", "node_modules", "target", "sub/scripts", "Hidden"] {
+            std::fs::create_dir_all(root.join(sub)).unwrap();
+        }
+        for file in [
+            ".git/g.cic",
+            "node_modules/n.cic",
+            "target/t.cic",
+            "Hidden/h.cic",
+            "sub/p.cic",
+            "sub/scripts/a.py",
+            "sub/stray.py",
+            "top.cic",
+            "Upper.CIC",
+            "notes.txt",
+        ] {
+            std::fs::write(root.join(file), "").unwrap();
+        }
+        let os_hidden = cfg!(windows)
+            && std::process::Command::new("attrib")
+                .arg("+H")
+                .arg(root.join("Hidden"))
+                .status()
+                .is_ok_and(|status| status.success());
+        if !os_hidden {
+            eprintln!(
+                "SKIPPING the OS-hidden arm: no hidden attribute here — `Hidden/h.cic` is expected \
+                 in the walk"
+            );
+        }
+        let mut pipelines = Vec::new();
+        let mut scripts = Vec::new();
+        collect_pipelines(root, root, &mut pipelines, &mut scripts, 0);
+        pipelines.sort();
+        scripts.sort();
+        let mut expected = vec!["Upper.CIC", "sub/p.cic", "top.cic"];
+        if !os_hidden {
+            expected.push("Hidden/h.cic");
+        }
+        expected.sort_unstable();
+        assert_eq!(
+            pipelines, expected,
+            ".git, node_modules, target (and the OS-hidden directory) are not walked; .CIC is a pipeline"
+        );
+        assert_eq!(
+            scripts,
+            ["sub/scripts/a.py"],
+            "a .py outside scripts/ is not a script"
+        );
     }
 
     /// What the mock client saw, in wire order.

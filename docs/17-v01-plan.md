@@ -1053,6 +1053,35 @@ canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
   to depth 4, which over a home root is slow and lists every `.cic`
   within reach — O2's picker must use `/api/files`, and the landing page
   should stop calling `/api/project` for the list.
+  *Review closure (2026-08-24).* The adversarial review's mutation runs
+  found the listing and the root resolution tight and the watcher
+  rewrite under-proved: the route test's third step passed with the
+  late re-watch made a no-op (its snapshot came from step 2's burst —
+  how many snapshots one burst yields is timing-dependent, one or two
+  80 ms coalescing windows) and a `scripts/` present at open — the
+  wall's shape — had no test at all. Fixed: `/debug/state` carries
+  `watched` (the server's watched directories, root-relative), the
+  watcher tests are state-based (a content-only script rewrite changes a
+  node's title, which the catalog shows only once a rescan has read it —
+  no snapshot counting, no drain, no sleep), the late watch is asserted
+  on the watched set AND on the rewrite, and a scripts-at-open test
+  exists; both fail under their mutations now. Minors closed: a name the
+  file system cannot hold (`a?b` on Windows) or a path through a file is
+  404 `not_found` on every OS, not 403 (`ErrorKind::InvalidFilename` /
+  `NotADirectory` → not found); `/api/project`'s walk and the listing
+  share ONE skip predicate (`files::skipped_directory` — dot-names,
+  `node_modules` / `target`, OS-hidden), so the walk over a home root no
+  longer spends seconds under `AppData` listing scratch pipelines;
+  unlisted is documented as not unenterable (the root is the boundary;
+  route-tested); `cicada serve Upper.CIC` resolves like the list and
+  `?pipeline=` accept it; a `scripts/` the watcher cannot re-watch is a
+  `warning` notice to the session (`Session::notify_warning`) besides
+  the console line. Declined: a duplicate `?dir=` is axum's plain-text
+  400 like every route's query rejection (one typed body for one route's
+  malformed query is not worth the surface); the landing page still
+  walks `/api/project` — O2 replaces it in this worktree before the
+  track merges; d6fc6cb's recursive root watch stays in history
+  (0541033 removes it; squash on merge if a bisectable history matters).
 - **O2 — File → Open / Recent / Close.** The top bar gains a File menu:
   Open… (a dialog over `/api/files` with breadcrumbs, directories and
   pipelines, keyboard navigation; Enter / double-click opens), Recent

@@ -144,13 +144,18 @@ pub(crate) fn plain(path: &Path) -> PathBuf {
     }
 }
 
-/// A directory → `(dir, None)`; a `.cic` file → `(its dir, Some(relative))`.
+/// A directory → `(dir, None)`; a `.cic` file → `(its dir, Some(relative))`
+/// — the extension case-insensitive, as `GET /api/files` lists pipelines
+/// and `?pipeline=` opens them (one rule for what a pipeline file is).
 /// Shared with `cicada mcp --project`, which takes the same argument.
 pub(crate) fn split_target(path: &Path) -> anyhow::Result<(PathBuf, Option<String>)> {
     if path.is_dir() {
         return Ok((path.to_owned(), None));
     }
-    if path.extension().is_some_and(|e| e == "cic") {
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("cic"))
+    {
         let dir = path
             .parent()
             .map(Path::to_owned)
@@ -198,6 +203,22 @@ mod tests {
             Root {
                 dir: canonical_plain(&sub),
                 pipeline: Some("p.cic".to_owned()),
+            }
+        );
+    }
+
+    /// `Upper.CIC` is a pipeline to the file list and to `?pipeline=`; the
+    /// command line must not be the one place that refuses it.
+    #[test]
+    fn an_upper_case_extension_is_a_pipeline_too() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Upper.CIC"), "# cicada 1\n").unwrap();
+        let root = resolve_root(Some(&dir.path().join("Upper.CIC"))).unwrap();
+        assert_eq!(
+            root,
+            Root {
+                dir: canonical_plain(dir.path()),
+                pipeline: Some("Upper.CIC".to_owned()),
             }
         );
     }

@@ -2637,6 +2637,21 @@ impl Session {
         self.reload_from_disk_held(hold, reason, rescan_scripts)
     }
 
+    /// A `warning` notice to every client of this session, from outside it
+    /// — the watcher telling the user that a directory it should be
+    /// watching on the session's behalf could not be watched (docs/13
+    /// §External changes). Nothing else changes: no op, no seq, no delta.
+    pub fn notify_warning(&self, message: String) {
+        let inner = self.core.lock_inner();
+        broadcast(
+            &inner,
+            &ServerMessage::Notice {
+                level: "warning".to_owned(),
+                message,
+            },
+        );
+    }
+
     /// Exclude the session's own writes while a caller changes the files
     /// on disk (git revert: `checkout HEAD -- <paths>`), then hand the
     /// hold to [`Self::reload_from_disk_held`]. While the hold lives, no
@@ -5539,6 +5554,47 @@ mod tests {
                 Outgoing::Text(_) => None,
             })
             .collect()
+    }
+
+    /// The watcher's voice inside a session (docs/13 §External changes): a
+    /// directory it could not (re)watch on the session's behalf is told to
+    /// every client as a `warning` notice — and nothing else moves (no op,
+    /// no seq, no delta).
+    #[test]
+    fn a_warning_from_outside_reaches_every_client_as_a_notice() {
+        let (_dir, config) = project("# cicada 1\nsize = slider(value=2.0, min=0.5, max=5.0)\n");
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx_a, mut rx_a) = unbounded_channel();
+        let _ = session.connect(ClientLanes::merged(tx_a));
+        let (tx_b, mut rx_b) = unbounded_channel();
+        let _ = session.connect(ClientLanes::merged(tx_b));
+        drain(&mut rx_a);
+        drain(&mut rx_b);
+        let seq_before = session.core.lock_inner().seq;
+        session.notify_warning("watching scripts failed: gone".to_owned());
+        for rx in [&mut rx_a, &mut rx_b] {
+            let messages = texts(&drain(rx));
+            let notices: Vec<&serde_json::Value> =
+                messages.iter().filter(|m| m["type"] == "notice").collect();
+            assert_eq!(notices.len(), 1, "{messages:?}");
+            assert_eq!(notices[0]["payload"]["level"], "warning");
+            assert_eq!(
+                notices[0]["payload"]["message"],
+                "watching scripts failed: gone"
+            );
+            assert!(
+                messages
+                    .iter()
+                    .all(|m| m["type"] != "delta" && m["type"] != "snapshot"),
+                "a notice is not an edit: {messages:?}"
+            );
+        }
+        assert_eq!(
+            session.core.lock_inner().seq,
+            seq_before,
+            "a notice is not an op"
+        );
     }
 
     #[test]

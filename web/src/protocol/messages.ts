@@ -629,9 +629,10 @@ export interface FilesResponse {
 /**
  * The `kind` of a refused `GET /api/files` (`protocol::FilesErrorKind`):
  * `path_not_allowed` 400 (`..`, an absolute path, a drive or UNC prefix, a
- * backslash, a NUL byte, a symlink leaving the root), `not_found` 404 (no
- * such directory, or a file), `io_error` 403 (the directory exists but could
- * not be read).
+ * backslash, a NUL byte, a symlink leaving the root), `not_found` 404 (nothing
+ * is there: no such directory, a file, a path through a file, a name the file
+ * system cannot hold), `io_error` 403 (the directory exists but could not be
+ * read).
  */
 export type FilesErrorKind = "path_not_allowed" | "not_found" | "io_error" | (string & {});
 

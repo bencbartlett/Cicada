@@ -14,9 +14,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::protocol::{FileEntry, FileKind, FilesErrorKind, FilesResponse};
 
 /// Directories never listed besides dot-directories and the ones the OS
-/// hides: the build trees no pipeline lives in (the same set
-/// `/api/project`'s walk skips).
+/// hides: the build trees no pipeline lives in. [`skipped_directory`] is
+/// the whole rule, and `/api/project`'s walk reads the same predicate — the
+/// two must never disagree about what a root contains.
 pub const SKIPPED_DIRECTORIES: [&str; 2] = ["node_modules", "target"];
+
+/// Whether a directory entry is left out of listings and walks: a
+/// dot-name, a name in [`SKIPPED_DIRECTORIES`], or the OS's own hidden flag
+/// (read off the entry's OWN metadata — a link's, not its target's). A
+/// convention about what the picker shows, not a boundary: an unlisted
+/// directory under the root is still enterable by name — the root is the
+/// boundary (docs/13 §HTTP surface).
+pub(crate) fn skipped_directory(name: &str, own: &std::fs::Metadata) -> bool {
+    is_hidden(name, own) || SKIPPED_DIRECTORIES.contains(&name)
+}
 
 /// Why a listing was refused. [`FilesError::kind`] is the wire tag, the
 /// `Display` text the reason in words, and the body carries the `dir` as
@@ -136,15 +147,16 @@ pub fn normalize_dir(dir: &str) -> Result<Vec<String>, FilesError> {
     Ok(segments)
 }
 
-/// List `dir` under `root`: the directories (minus dot-directories, the
-/// OS-hidden ones and [`SKIPPED_DIRECTORIES`]) and the `*.cic` files,
-/// directories first, each group in case-insensitive name order. `dir` is
-/// normalised by [`normalize_dir`], joined under the canonical root, and
-/// its canonical path must still start with the root — a symlink out is
-/// refused. Not an entry: a name that is not valid Unicode, a link the
-/// server cannot follow to a place under the root ([`resolve_link`]), and
-/// what is neither a directory nor a `.cic` file; a failure to read the
-/// directory itself, or an entry of it, is the listing's failure.
+/// List `dir` under `root`: the directories (minus what
+/// [`skipped_directory`] leaves out) and the `*.cic` files, directories
+/// first, each group in case-insensitive name order. `dir` is normalised by
+/// [`normalize_dir`], joined under the canonical root, and its canonical
+/// path must still start with the root — a symlink out is refused. Not an
+/// entry: a name that is not valid Unicode, a link the server cannot follow
+/// to a place under the root ([`resolve_link`]), and what is neither a
+/// directory nor a `.cic` file; a failure to read the directory itself, or
+/// an entry of it, is the listing's failure. A skipped directory is
+/// unlisted, not unenterable: named directly it lists like any other.
 ///
 /// # Errors
 ///
@@ -161,12 +173,20 @@ pub fn list(root: &Path, dir: &str) -> Result<FilesResponse, FilesError> {
     let mut target = root.clone();
     target.extend(&segments);
     let canonical = std::fs::canonicalize(&target).map_err(|source| {
-        if source.kind() == std::io::ErrorKind::NotFound {
-            FilesError::NotFound {
-                dir: dir.to_owned(),
+        // Nothing is there: the path names no directory (`NotFound`), runs
+        // THROUGH a file (`sub/p.cic/x` — Unix says `NotADirectory`,
+        // Windows says not found), or is a name this file system cannot
+        // hold at all (Windows: `a?b`, `a*b` — `InvalidFilename`, os error
+        // 123). None of these is "exists but unreadable", which is what
+        // 403 `io_error` means.
+        use std::io::ErrorKind;
+        match source.kind() {
+            ErrorKind::NotFound | ErrorKind::NotADirectory | ErrorKind::InvalidFilename => {
+                FilesError::NotFound {
+                    dir: dir.to_owned(),
+                }
             }
-        } else {
-            io(source)
+            _ => io(source),
         }
     })?;
     if !canonical.starts_with(&root) {
@@ -220,10 +240,12 @@ fn read_entries(root: &Path, canonical: &Path, dir: &str) -> Result<Vec<FileEntr
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(io(error)),
         };
-        // A hidden directory — or a hidden link, whatever it points at —
+        // A skipped directory — or a hidden link, whatever it points at —
         // is dropped BEFORE anything follows it: a home directory's hidden
         // junctions lead to places this process need not be able to stat.
-        if is_hidden(&name, &own) && !own.is_file() {
+        // (A hidden `.cic` FILE is still a pipeline: the rule is about
+        // directories nobody can enter.)
+        if !own.is_file() && skipped_directory(&name, &own) {
             continue;
         }
         // A plain entry is its own target; a link is followed, and is an
@@ -269,12 +291,12 @@ fn resolve_link(root: &Path, link: &Path) -> Option<std::fs::Metadata> {
     std::fs::metadata(&resolved).ok()
 }
 
-/// What a (non-hidden) entry is from its name and its target's metadata:
-/// a directory — unless one of [`SKIPPED_DIRECTORIES`] — or a `.cic`
-/// file; `None` for everything else (other files, sockets, devices).
+/// What an entry (not skipped by [`skipped_directory`]) is from its name
+/// and its target's metadata: a directory or a `.cic` file; `None` for
+/// everything else (other files, sockets, devices).
 fn entry_kind(name: &str, target: &std::fs::Metadata) -> Option<FileKind> {
     if target.is_dir() {
-        (!SKIPPED_DIRECTORIES.contains(&name)).then_some(FileKind::Dir)
+        Some(FileKind::Dir)
     } else if target.is_file() && is_pipeline_name(name) {
         Some(FileKind::Pipeline)
     } else {
@@ -283,8 +305,9 @@ fn entry_kind(name: &str, target: &std::fs::Metadata) -> Option<FileKind> {
 }
 
 /// `*.cic`, the extension compared case-insensitively like
-/// [`crate::http::validate_pipeline_ref`] accepts it.
-fn is_pipeline_name(name: &str) -> bool {
+/// [`crate::http::validate_pipeline_ref`] accepts it (and `/api/project`'s
+/// walk collects it).
+pub(crate) fn is_pipeline_name(name: &str) -> bool {
     Path::new(name)
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("cic"))
@@ -511,6 +534,53 @@ mod tests {
                 .unwrap()
                 .contains("not a directory")
         );
+    }
+
+    /// Nothing exists at these paths, and 403 `io_error` means "exists but
+    /// unreadable" — so they are `not_found` on every OS: a path running
+    /// THROUGH a file (Unix reports `NotADirectory`, Windows not found),
+    /// and names Windows' file systems cannot hold (`a?b`: os error 123,
+    /// `InvalidFilename` — on Unix they are legal names that simply do not
+    /// exist here; either way the answer is the same).
+    #[test]
+    fn a_path_through_a_file_and_a_name_the_file_system_cannot_hold_are_not_found() {
+        let dir = fixture();
+        for path in [
+            "sub/p.cic/deeper",
+            "a?b",
+            "a*b",
+            "a<b",
+            "a>b",
+            "a|b",
+            "a\"b",
+            "sub/a?b/c",
+        ] {
+            let error = list(dir.path(), path).expect_err(path);
+            assert_eq!(error.kind(), FilesErrorKind::NotFound, "{path:?}: {error}");
+            assert!(
+                matches!(error, FilesError::NotFound { .. }),
+                "{path:?}: {error}"
+            );
+            assert_eq!(error.dir(), path);
+        }
+    }
+
+    /// Skipping is a listing convention, not a boundary: a dot-directory
+    /// or a build tree named directly lists like any other directory under
+    /// the root (the root is the boundary — see the escape tests).
+    #[test]
+    fn an_unlisted_directory_is_still_enterable_by_name() {
+        let dir = fixture();
+        std::fs::write(dir.path().join(".git").join("h.cic"), "# cicada 1\n").unwrap();
+        let hidden = list(dir.path(), ".git").unwrap();
+        assert_eq!(
+            (hidden.dir.as_str(), hidden.parent.as_deref()),
+            (".git", Some(""))
+        );
+        assert_eq!(names(&hidden.entries), vec![("h.cic", FileKind::Pipeline)]);
+        let skipped = list(dir.path(), "node_modules").unwrap();
+        assert_eq!(skipped.dir, "node_modules");
+        assert!(skipped.entries.is_empty());
     }
 
     #[test]
