@@ -597,6 +597,51 @@ export interface ProjectGit {
   error?: string;
 }
 
+// ------------------------------------------------- the root's file list --
+
+/** An entry of `GET /api/files` (`protocol::FileKind`): a directory to descend into, or a `.cic` to open. */
+export type FileKind = "dir" | "pipeline";
+
+/** One entry of `GET /api/files` (`protocol::FileEntry`). */
+export interface FileEntry {
+  /** The entry's own name (no path). */
+  name: string;
+  kind: FileKind;
+  /** Last modification, milliseconds since the Unix epoch (negative before it). */
+  modified_ms: number;
+}
+
+/**
+ * `GET /api/files?dir=<root-relative>` (`protocol::FilesResponse`; docs/13
+ * §HTTP surface): ONE directory under the served root — directories first,
+ * then pipelines, each group in case-insensitive name order. `root` is the
+ * root directory's own name, never its path; `dir` and `parent` are
+ * root-relative, `/`-separated, `""` for the root itself (`parent` is
+ * `null` there). A pipeline opens as `?pipeline=<dir>/<name>`.
+ */
+export interface FilesResponse {
+  root: string;
+  dir: string;
+  parent: string | null;
+  entries: FileEntry[];
+}
+
+/**
+ * The `kind` of a refused `GET /api/files` (`protocol::FilesErrorKind`):
+ * `path_not_allowed` 400 (`..`, an absolute path, a drive or UNC prefix, a
+ * backslash, a NUL byte, a symlink leaving the root), `not_found` 404 (no
+ * such directory, or a file), `io_error` 403 (the directory exists but could
+ * not be read).
+ */
+export type FilesErrorKind = "path_not_allowed" | "not_found" | "io_error" | (string & {});
+
+/** A refused file listing's body: `{kind, message, path}` — `path` is the `dir` as sent. */
+export interface FilesErrorBody {
+  kind: FilesErrorKind;
+  message: string;
+  path: string;
+}
+
 // ------------------------------------------------------- server messages --
 
 export interface ProbeVerdict {

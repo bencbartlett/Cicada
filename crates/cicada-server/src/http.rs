@@ -28,10 +28,11 @@ use cicada_core::config::ProjectConfig;
 use futures_util::{SinkExt as _, StreamExt as _};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
+use crate::files::{self, FilesError};
 use crate::git::{Git, GitRefusal, Scope};
 use crate::protocol::{
-    ApplyTextRequest, CommitRequest, DeltaSource, GitErrorKind, IntentEnvelope, PROTOCOL_VERSION,
-    RevertRequest, Role, ServerMessage, encode,
+    ApplyTextRequest, CommitRequest, DeltaSource, FilesErrorKind, GitErrorKind, IntentEnvelope,
+    PROTOCOL_VERSION, RevertRequest, Role, ServerMessage, encode,
 };
 use crate::session::{ClientLanes, IntentError, Outgoing, Session, SessionConfig};
 
@@ -43,9 +44,15 @@ pub const DEFAULT_PORT: u16 = 8420;
 /// `cicada serve` options.
 #[derive(Debug, Clone)]
 pub struct ServeConfig {
-    /// The project directory.
+    /// The served ROOT (docs/13 §Projects, pipelines, sessions): the
+    /// directory every pipeline reference is relative to and nothing is
+    /// ever opened above — a project directory, a pipeline's directory,
+    /// or (since v0.1 wave 4: `cicada serve` without a path) the user's
+    /// home directory, which `GET /api/files` lists one directory at a
+    /// time. The field keeps its stage-5 name: the session, the git handle
+    /// and `apply_text` know it as the project.
     pub project_dir: PathBuf,
-    /// The pipeline to open by default (relative to the project), if any.
+    /// The pipeline to open by default (relative to the root), if any.
     pub pipeline: Option<String>,
     /// Bind address (default 127.0.0.1).
     pub host: IpAddr,
@@ -446,6 +453,7 @@ fn router(state: Arc<AppState>) -> Router {
     let api = Router::new()
         .route("/api/catalog", get(api_catalog))
         .route("/api/project", get(api_project))
+        .route("/api/files", get(api_files))
         .route("/api/blob/{hash}", get(api_blob))
         .route("/api/run/{node}", post(api_run))
         .route("/api/edit/text", get(api_edit_text))
@@ -612,6 +620,37 @@ async fn api_project(State(state): State<Arc<AppState>>) -> Response {
         "protocol": PROTOCOL_VERSION,
     }))
     .into_response()
+}
+
+#[derive(serde::Deserialize, Default)]
+struct FilesQuery {
+    dir: Option<String>,
+}
+
+/// `GET /api/files?dir=<root-relative>` (docs/13 §HTTP surface): one
+/// directory of the served root — [`files::list`] off the async runtime
+/// (a directory read is blocking I/O). Refusals are `{kind, message,
+/// path}` with [`files_status`]'s code.
+async fn api_files(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<FilesQuery>,
+) -> Response {
+    let root = state.config.project_dir.clone();
+    let dir = query.dir.unwrap_or_default();
+    match tokio::task::spawn_blocking(move || files::list(&root, &dir)).await {
+        Ok(Ok(listing)) => axum::Json(listing).into_response(),
+        Ok(Err(error)) => (files_status(&error), axum::Json(error.body())).into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+/// The HTTP status of a refused file listing — one per [`FilesErrorKind`].
+fn files_status(error: &FilesError) -> StatusCode {
+    match error.kind() {
+        FilesErrorKind::PathNotAllowed => StatusCode::BAD_REQUEST,
+        FilesErrorKind::NotFound => StatusCode::NOT_FOUND,
+        FilesErrorKind::IoError => StatusCode::FORBIDDEN,
+    }
 }
 
 /// Walk the project for `*.cic` pipelines and the `scripts/*.py` beside

@@ -19,12 +19,15 @@
 //! the git panel's server half (doc 17 item 2: [`git`] over the git
 //! binary — `GET /api/git/status`, `POST /api/git/commit`, `POST
 //! /api/git/revert`); no transport yet; the byte-exact frame format is
-//! documented in [`frames`] and docs/13.
+//! documented in [`frames`] and docs/13. v0.1 wave 4 (O1): the served
+//! directory is a ROOT that may be the user's whole home directory, and
+//! [`files`] lists it one directory at a time (`GET /api/files`).
 
 mod atomic;
 pub mod catalog;
 pub mod compile;
 pub mod display;
+pub mod files;
 pub mod frames;
 pub mod git;
 pub mod http;

@@ -601,6 +601,65 @@ pub struct ProjectGit {
     pub error: Option<String>,
 }
 
+/// What an entry of `GET /api/files` is (docs/13 §HTTP surface; v0.1
+/// wave 4 O1): a directory to descend into, or a `.cic` pipeline to open.
+/// Declared in listing order — directories sort before pipelines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileKind {
+    /// A directory under the root (never a dot-directory, `node_modules`
+    /// or `target`; never one the OS hides).
+    Dir,
+    /// A `*.cic` file — openable as `?pipeline=<dir>/<name>`.
+    Pipeline,
+}
+
+/// One entry of `GET /api/files`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileEntry {
+    /// The entry's own name (no path).
+    pub name: String,
+    /// Directory or pipeline.
+    pub kind: FileKind,
+    /// Last modification, milliseconds since the Unix epoch (negative
+    /// before it — the file system's clock, not ours).
+    pub modified_ms: i64,
+}
+
+/// The reply of `GET /api/files?dir=<root-relative>`: ONE directory under
+/// the served root — directories first, then pipelines, each group in
+/// case-insensitive name order. Nothing above the root is ever named:
+/// `root` is the root directory's own name (not its path), `dir` and
+/// `parent` are root-relative.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FilesResponse {
+    /// The root's display name — its last path component (the full path
+    /// only for a file-system root, which has none).
+    pub root: String,
+    /// The listed directory, normalised and root-relative, `/`-separated;
+    /// `""` is the root itself.
+    pub dir: String,
+    /// `dir`'s parent in the same form; `None` for the root.
+    pub parent: Option<String>,
+    /// The entries, sorted as described.
+    pub entries: Vec<FileEntry>,
+}
+
+/// The `kind` of a refused `GET /api/files` — the body is `{kind, message,
+/// path}` like every git-route refusal; the status codes are docs/13's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FilesErrorKind {
+    /// `dir` is not a plain root-relative path, or resolves outside the
+    /// root (`..`, an absolute path, a drive or UNC prefix, a backslash, a
+    /// NUL byte, a symlink whose canonical path leaves the root) (400).
+    PathNotAllowed,
+    /// No such directory under the root — missing, or a file (404).
+    NotFound,
+    /// The directory exists inside the root but could not be read (403).
+    IoError,
+}
+
 /// The session's transport (docs/13 §Animation transport; DECISIONS.md
 /// time row) as every client sees it — in every `snapshot` and in the
 /// `transport` broadcast after every change (play / pause / seek / speed /

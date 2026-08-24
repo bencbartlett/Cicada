@@ -16,13 +16,21 @@ with a proxy for HMR.
 
 ## Projects, pipelines, sessions
 
-- A **project** is a directory (normally a git repo root): `*.cic`
-  pipelines, `scripts/`, sidecars. `cicada serve [dir]` serves exactly
-  one project (`cicada serve file.cic` serves the file's directory and
-  opens that pipeline by default). Clients name pipelines by plain
-  project-relative paths only — absolute, rooted, or `..` forms are
-  refused, and a session can never open or write a file outside the
-  project.
+- `cicada serve [path]` serves exactly one **root** directory (v0.1 wave
+  4 O1, docs/17): a **project** directory — normally a git repo root with
+  `*.cic` pipelines, `scripts/`, sidecars — when one is named; a
+  pipeline's directory when a `.cic` file is named (that pipeline opens
+  by default); the user's **home directory** when nothing is named, and
+  then nothing opens — the app's picker lists the root through `GET
+  /api/files`, one directory at a time, and a pipeline opens on the
+  first `?pipeline=`. Clients name pipelines by plain root-relative paths
+  only — absolute, rooted, or `..` forms are refused, a path whose
+  canonical form leaves the root (a symlink out) is refused, and a
+  session can never open or write a file outside the root. Inside the
+  server the root keeps its stage-5 name, the project
+  (`ServeConfig::project_dir`): `apply_text`'s paths, the git handle's
+  cwd and `/api/project`'s bounded walk are relative to it; scripts are
+  discovered beside each pipeline, whatever the root.
 - Each browser tab opens one pipeline = one **session**.
 - **Single-writer lease** per pipeline: the first client takes the
   write lease; further clients are live read-only observers (which
@@ -645,6 +653,7 @@ playback; 0 deltas, 0 ops, the file's bytes untouched.
 | `GET /` | The embedded SPA |
 | `GET /api/catalog` | Node-spec JSON catalog (docs/08) |
 | `GET /api/project` | `{project, pipelines, scripts, default, open, git: {kind, branch, dirty_count}, engine, protocol}` — the pipeline list, the `scripts/*.py` beside them, and the git summary (`kind` = the git state's tag; `dirty_count` = `git status` entries under the project dir; an unexpected git failure is `kind: error` + `error`, never a failed route) |
+| `GET /api/files` | `?dir=<root-relative>` → `{root, dir, parent, entries: [{name, kind, modified_ms}]}` — ONE directory of the served root (v0.1 wave 4 O1: the root may be the user's home directory, so nothing walks it whole and no listing ever names anything above it). `root` is the root directory's own NAME (its path only for a file-system root, which has none); `dir` is the request normalised (`a//b/`, `./a/b` → `a/b`; `""` = the root); `parent` is `dir`'s parent in the same form (`null` at the root). `entries` = the directories — minus dot-directories, `node_modules`, `target`, and the ones the OS marks hidden (Windows' profile junctions `Application Data`, `Cookies`, …, which Explorer hides and nobody can enter) — and the `*.cic` files (extension case-insensitive, like `?pipeline=` accepts it), directories first, each group in case-insensitive name order; `kind` ∈ `dir` / `pipeline`, `modified_ms` = signed milliseconds since the Unix epoch. A symlink or junction is an entry only when the server can follow it to a place under the root (what the list shows must be enterable): one that leaves the root, dangles, or cannot be resolved is no entry, nor is a name that is not valid Unicode (it could never be named in a request); a hidden directory or hidden link is dropped before anything follows it. Refusals are `{kind, message, path}` (`path` = the `dir` as sent; `FilesErrorKind` in `protocol.rs`, mirrored by the client): 400 `path_not_allowed` — `..`, a leading `/` (absolute, or `//host/share`), a `:` (a drive or a stream), a backslash, a NUL byte — all refused lexically BEFORE the file system is touched — and a `dir` whose canonical path leaves the root; 404 `not_found` — no such directory, or a file; 403 `io_error` — the directory exists under the root but could not be read (or the root itself could not be resolved). The route opens no session |
 | `GET /api/blob/{hash}` | Large payloads on demand (full inspector data, export previews) |
 | `POST /api/run/{node}` | Effectful nodes — requires the explicit-run confirmation, streams progress over the session socket |
 | `GET /api/edit/text` | `{path, text, text_hash}` — the base an agent reads before editing (§Undo/redo) |
