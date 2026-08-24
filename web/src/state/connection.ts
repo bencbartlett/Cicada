@@ -9,16 +9,18 @@
  * URL names — opening another pipeline closes this socket, clears the
  * store's pipeline-bound state and joins the other session afresh; closing
  * the pipeline (the picker) leaves no socket. The pop-out viewport's route
- * joins as a declared observer (docs/13 — the join hint).
+ * joins as a declared observer (docs/13 — the join hint). The one time the
+ * connection writes the route instead: a join the server refuses for its
+ * pipeline (`joinRefused`) sends the tab back to the picker.
  */
 import { CicadaClient, wsUrl } from "../protocol/client";
-import type { ClientMessage, Role, ServerEnvelope } from "../protocol/messages";
+import type { ClientMessage, ErrorPayload, Role, ServerEnvelope } from "../protocol/messages";
 import { catalogPolicy, feedCatalogPolicy, startCatalogRefresh, stopCatalogRefresh } from "./catalog";
 import { frameBus } from "./frameBus";
 import { gitPolicy, startGitStatus, stopGitStatus } from "./git";
 import type { GitRefreshPolicy } from "./gitRefresh";
-import { browserStorage, rememberRecent, type StorageLike } from "./recent";
-import type { Route } from "./route";
+import { browserStorage, forgetRecent, readRecent, rememberRecent, type StorageLike } from "./recent";
+import { leaveRefusedPipeline, type Route } from "./route";
 import { useCicada } from "./store";
 
 /**
@@ -61,6 +63,28 @@ function writeLanded(policy: Pick<GitRefreshPolicy, "onWrite">): void {
  */
 export function feedRecent(storage: StorageLike | null, envelope: ServerEnvelope): void {
   if (envelope.type === "hello") rememberRecent(storage, envelope.payload.pipeline);
+}
+
+/**
+ * The handshake refused the pipeline this socket named (kind `pipeline` —
+ * docs/13 §Projects, pipelines, sessions): the file is gone, the reference
+ * is refused, or its session could not open. Terminal — a retry changes
+ * nothing until the file or the URL does, so no reconnect is scheduled:
+ * the server's reason becomes the notice the picker shows, a `not_found`
+ * file leaves Recent (a second notice says so — the menu must not lose an
+ * entry silently), and the tab returns to the picker with the dead URL
+ * REPLACED, not pushed (Back must not ask for it again). Leaving the route
+ * closes this socket through `syncConnection` and resets the store; the
+ * notices survive the reset (`resetSession`).
+ */
+export function joinRefused(options: StartOptions, payload: ErrorPayload, storage: StorageLike | null): void {
+  const state = useCicada.getState();
+  state.addNotice("error", payload.message);
+  if (payload.reason === "not_found" && readRecent(storage).includes(options.pipeline)) {
+    forgetRecent(storage, options.pipeline);
+    state.addNotice("info", `${options.pipeline} is no longer under the served root — removed from Recent`);
+  }
+  leaveRefusedPipeline();
 }
 
 export interface StartOptions {
@@ -192,6 +216,13 @@ export function startConnection(options: StartOptions): CicadaClient {
     url,
     {
       onMessage: (envelope: ServerEnvelope) => {
+        if (envelope.type === "error" && envelope.payload.kind === "pipeline") {
+          // The handshake's verdict on the pipeline: terminal, never a
+          // drop to retry (the server's Close follows; `client` is null by
+          // then, so `onClose` schedules nothing).
+          if (client === socket) joinRefused(options, envelope.payload, recent);
+          return;
+        }
         useCicada.getState().applyServerMessage(envelope);
         feedCatalogPolicy(catalog, envelope);
         feedGitPolicy(git, envelope);

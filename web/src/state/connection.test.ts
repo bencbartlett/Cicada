@@ -12,10 +12,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerEnvelope } from "../protocol/messages";
 import { catalogPolicy, stopCatalogRefresh } from "./catalog";
-import { getClient, optionsForRoute, startConnection, stopConnection, syncConnection } from "./connection";
+import { RECONNECT_CAP_MS, getClient, optionsForRoute, startConnection, stopConnection, syncConnection } from "./connection";
 import { stopGitStatus } from "./git";
-import { readRecent } from "./recent";
-import type { Route } from "./route";
+import { RECENT_KEY, readRecent } from "./recent";
+import { NO_ROUTE, installRouting, useRoute, type Route, type RoutingWindow } from "./route";
 import { useCicada } from "./store";
 
 const HISTORY = { can_undo: false, can_redo: false, undo_label: null, redo_label: null, depth: 0 };
@@ -319,5 +319,126 @@ describe("syncConnection follows the route", () => {
     expect(useCicada.getState().connection).toBe("connecting");
     expect(useCicada.getState().pipeline).toBe("b.cic");
     expect(FakeSocket.instances).toHaveLength(2);
+    // Nor may anything it delivers late land in the next pipeline's store:
+    // `close()` detaches the message handler (the browser sends none after
+    // CLOSING, but the client does not rely on that).
+    first.deliver(hello("a.cic"));
+    expect(useCicada.getState().hello, "a closed socket's hello is nobody's").toBeNull();
+    expect(useCicada.getState().pipeline).toBe("b.cic");
+  });
+
+  /**
+   * The handshake's `pipeline` refusal (docs/13 §Projects, pipelines,
+   * sessions): the server has no such file, so the join is refused and the
+   * socket closed. A network drop would be retried with backoff; this is
+   * not one — the reason is shown, a `not_found` file leaves Recent (saying
+   * so), the tab returns to the picker with the dead URL REPLACED (Back must
+   * not ask for it again), and nothing is scheduled. Routing is installed
+   * here because leaving the route IS the fix: `installRouting(win,
+   * syncConnection)` is `main.tsx`'s wiring.
+   */
+  describe("a join the server refuses for its pipeline", () => {
+    const history: { pushed: string[]; replaced: string[] } = { pushed: [], replaced: [] };
+    let uninstall: (() => void) | null = null;
+
+    function routingWindow(search: string): RoutingWindow {
+      const win: RoutingWindow = {
+        location: { pathname: "/", search },
+        history: {
+          pushState: (_data: unknown, _unused: string, url?: string | URL | null) => {
+            history.pushed.push(String(url));
+          },
+          replaceState: (_data: unknown, _unused: string, url?: string | URL | null) => {
+            const text = String(url);
+            history.replaced.push(text);
+            win.location.search = text.includes("?") ? text.slice(text.indexOf("?")) : "";
+          },
+        },
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      };
+      return win;
+    }
+
+    const refusal = (pipeline: string, reason: "not_found" | "open_failed", message: string): ServerEnvelope => ({
+      v: 1,
+      seq: 0,
+      type: "error",
+      payload: { kind: "pipeline", message, pipeline, reason },
+    });
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      history.pushed.length = 0;
+      history.replaced.length = 0;
+      useCicada.setState({ notices: [] });
+      storage.set(RECENT_KEY, JSON.stringify(["gone.cic", "a.cic"]));
+    });
+
+    afterEach(() => {
+      uninstall?.();
+      uninstall = null;
+      useRoute.setState({ route: NO_ROUTE });
+      vi.useRealTimers();
+    });
+
+    it("is terminal: the reason, Recent pruned, back to the picker by replace, no reconnect ever", () => {
+      const win = routingWindow("?token=tok&pipeline=gone.cic");
+      uninstall = installRouting(win, syncConnection);
+      expect(FakeSocket.instances).toHaveLength(1);
+      const socket = FakeSocket.instances[0]!;
+      socket.open();
+      expect(useCicada.getState().connection).toBe("open");
+
+      socket.deliver(refusal("gone.cic", "not_found", "opening gone.cic: no pipeline `gone.cic` in the project"));
+      expect(history.replaced, "the dead URL is replaced by the picker's").toEqual(["/?token=tok"]);
+      expect(history.pushed, "never pushed — Back must not return to it").toEqual([]);
+      expect(useRoute.getState().route).toEqual({ token: "tok", pipeline: undefined, view: "app" });
+      expect(getClient(), "no socket").toBeNull();
+      expect(debug()).toBeNull();
+      expect(socket.readyState).toBe(FakeSocket.CLOSED);
+      const s = useCicada.getState();
+      expect([s.pipeline, s.connection, s.reconnect, s.hello]).toEqual(["", "idle", null, null]);
+      expect(s.notices.map((n) => `${n.level}: ${n.message}`), "the reason, and the pruning, survive the reset").toEqual([
+        "error: opening gone.cic: no pipeline `gone.cic` in the project",
+        "info: gone.cic is no longer under the served root — removed from Recent",
+      ]);
+      expect(readRecent(fakeStorage)).toEqual(["a.cic"]);
+
+      // The server's Close follows the error; the module has nothing to retry.
+      socket.onclose?.({ code: 1005, reason: "" });
+      vi.advanceTimersByTime(RECONNECT_CAP_MS * 4);
+      expect(FakeSocket.instances, "no reconnect for a refused pipeline").toHaveLength(1);
+      expect(useCicada.getState().connection).toBe("idle");
+      expect(useCicada.getState().reconnect).toBeNull();
+    });
+
+    it("keeps a Recent entry whose file exists but could not open (`open_failed`), and still leaves the route", () => {
+      const win = routingWindow("?token=tok&pipeline=a.cic");
+      uninstall = installRouting(win, syncConnection);
+      const socket = FakeSocket.instances[0]!;
+      socket.open();
+      socket.deliver(refusal("a.cic", "open_failed", "opening a.cic: could not read"));
+      expect(history.replaced).toEqual(["/?token=tok"]);
+      expect(readRecent(fakeStorage), "the file is there — it stays recent").toEqual(["gone.cic", "a.cic"]);
+      expect(useCicada.getState().notices.map((n) => n.message)).toEqual(["opening a.cic: could not read"]);
+      expect(getClient()).toBeNull();
+    });
+
+    it("a refusal delivered by an abandoned socket changes nothing", () => {
+      const win = routingWindow("?token=tok&pipeline=a.cic");
+      uninstall = installRouting(win, syncConnection);
+      const first = FakeSocket.instances[0]!;
+      first.open();
+      // The first socket's message handler is already detached by the switch;
+      // drive the client's handler directly, as a late delivery would have.
+      const onmessage = first.onmessage;
+      syncConnection(route("b.cic"));
+      onmessage?.({ data: JSON.stringify(refusal("a.cic", "not_found", "late")) });
+      expect(history.replaced, "nothing left the route").toEqual([]);
+      expect(useCicada.getState().pipeline).toBe("b.cic");
+      expect(useCicada.getState().notices).toEqual([]);
+      expect(readRecent(fakeStorage)).toEqual(["gone.cic", "a.cic"]);
+    });
   });
 });

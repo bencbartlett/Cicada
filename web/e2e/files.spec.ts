@@ -49,6 +49,7 @@ interface StoreView {
   pipeline: string;
   role: string;
   connection: string;
+  reconnect: unknown;
   text: string;
   hello: { clientId: number; pipeline: string } | null;
 }
@@ -58,8 +59,20 @@ async function store(page: Page): Promise<StoreView | null> {
     const w = window as unknown as { __cicada?: { state: () => StoreView } };
     if (w.__cicada === undefined) return null;
     const s = w.__cicada.state();
-    return { pipeline: s.pipeline, role: s.role, connection: s.connection, text: s.text, hello: s.hello };
+    return { pipeline: s.pipeline, role: s.role, connection: s.connection, reconnect: s.reconnect, text: s.text, hello: s.hello };
   });
+}
+
+/** How many canvas nodes lie (even partly) outside the canvas pane, and how many there are. */
+async function nodesOffPane(page: Page): Promise<{ total: number; outside: number }> {
+  const box = await page.getByTestId("canvas-pane").boundingBox();
+  expect(box, "the canvas pane is laid out").not.toBeNull();
+  return page.locator(".react-flow__node").evaluateAll((nodes, pane) => {
+    const inside = (r: DOMRect) =>
+      r.left >= pane.x - 1 && r.top >= pane.y - 1 && r.right <= pane.x + pane.width + 1 && r.bottom <= pane.y + pane.height + 1;
+    const rects = nodes.map((node) => node.getBoundingClientRect());
+    return { total: rects.length, outside: rects.filter((r) => !inside(r)).length };
+  }, box!);
 }
 
 async function triangles(page: Page): Promise<number> {
@@ -129,6 +142,15 @@ test("the picker lists the root; Open, Recent, Close and Back switch the pipelin
   expect(solidsClient).toBeDefined();
   expect((await debugState(page, SOLIDS)).lease.writer).toBe(solidsClient);
 
+  // ---- Zoom the canvas in until 02-solids runs off the pane: the NEXT file
+  // must be framed afresh, not shown at this file's zoom and offset (a new
+  // file is a new canvas — docs/16 §Application layout; the 2026-08-24
+  // review opened the wall from here and saw 14 of its 26 nodes).
+  await expect.poll(async () => (await nodesOffPane(page)).outside, { message: "02-solids fits after its own fit" }).toBe(0);
+  await page.getByTestId("canvas-pane").hover();
+  for (let step = 0; step < 8; step += 1) await page.mouse.wheel(0, -400);
+  await expect.poll(async () => (await nodesOffPane(page)).outside, { message: "the precondition: zoomed in, 02-solids overflows the pane" }).toBeGreaterThan(0);
+
   // ---- File → Open… → keyboard to 06-lists.cic → Enter.
   await page.getByTestId("tb-file").click();
   await expect(page.getByTestId("file-menu")).toBeVisible();
@@ -149,6 +171,11 @@ test("the picker lists the root; Open, Recent, Close and Back switch the pipelin
   await expect(page.getByTestId("tb-pipeline")).toHaveText(LISTS);
   const lists = await debugState(page, LISTS);
   await expect(page.locator(".react-flow__node")).toHaveCount(lists.graph.nodes.length);
+  // The new file is framed: every one of its nodes inside the pane.
+  await expect.poll(async () => nodesOffPane(page), { message: "06-lists is fitted to the pane, not left at 02-solids' zoom" }).toEqual({
+    total: lists.graph.nodes.length,
+    outside: 0,
+  });
   const listsSource = readFileSync(join(meta.scratch, "examples", LISTS), "utf8");
   const firstBinding = listsSource.split("\n").find((line) => /^[a-z_][a-z0-9_]* = /u.test(line));
   expect(firstBinding, "06-lists.cic has a binding").toBeDefined();
@@ -200,5 +227,60 @@ test("the picker lists the root; Open, Recent, Close and Back switch the pipelin
   await expect.poll(async () => (await store(page))?.hello?.pipeline).toBe(SOLIDS);
 
   expect(projectReads, "the picker never reads /api/project").toEqual([]);
+  expect(errors, errors.join("\n")).toEqual([]);
+});
+
+/**
+ * A Recent entry for a file the server no longer has (renamed or deleted
+ * since) — the first thing a user hits after tidying a folder. The join is
+ * refused INSIDE the socket's handshake (docs/13: kind `pipeline`, reason
+ * `not_found`), and the app treats it as the verdict it is, not as a network
+ * drop: the tab is back on the picker with the reason as a notice, the entry
+ * is gone from Recent (a second notice says so), nothing retries, and the
+ * dead URL was replaced in the history — Back does not ask for it again.
+ */
+test("a Recent entry for a file the server no longer has: the reason, the picker, the entry pruned, no retry", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`);
+  });
+  const GONE = "gone.cic";
+
+  await page.goto(`/?token=${TOKEN}`);
+  await expect(page.getByTestId("landing")).toBeVisible();
+  await page.evaluate(
+    ([gone, solids]) => localStorage.setItem("cicada.recent.v1", JSON.stringify([gone, solids])),
+    [GONE, SOLIDS],
+  );
+  await page.reload();
+  await expect(page.getByTestId(`landing-recent-${GONE}`)).toBeVisible();
+  const entriesBefore = await page.evaluate(() => history.length);
+
+  await page.getByTestId(`landing-recent-${GONE}`).click();
+  // Back on the picker, with the server's reason and the pruning notice.
+  await expect(page.getByTestId("landing")).toBeVisible();
+  await expect(page.getByTestId("app")).toHaveCount(0);
+  const notices = page.getByTestId("notices");
+  await expect(notices).toContainText(`opening ${GONE}: no pipeline \`${GONE}\``);
+  await expect(notices).toContainText(`${GONE} is no longer under the served root — removed from Recent`);
+  expect(new URL(page.url()).searchParams.has("pipeline"), "the dead URL is gone").toBe(false);
+  expect(new URL(page.url()).searchParams.get("token")).toBe(TOKEN);
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("cicada.recent.v1") ?? "null"))).toEqual([SOLIDS]);
+  await expect(page.getByTestId(`landing-recent-${GONE}`)).toHaveCount(0);
+  await expect(page.getByTestId(`landing-recent-${SOLIDS}`)).toBeVisible();
+
+  // No socket and nothing scheduled: the verdict is terminal, not a drop to retry.
+  const view = await store(page);
+  expect(view?.connection).toBe("idle");
+  expect(view?.reconnect).toBeNull();
+  expect(await page.evaluate(() => (window as unknown as { __cicada: { connection: () => unknown } }).__cicada.connection())).toBeNull();
+
+  // The click pushed one entry and the refusal REPLACED it with the picker's:
+  // Back lands on the picker again, never on the dead file.
+  expect(await page.evaluate(() => history.length)).toBe(entriesBefore + 1);
+  await page.goBack();
+  await expect(page.getByTestId("landing")).toBeVisible();
+  expect(new URL(page.url()).searchParams.has("pipeline")).toBe(false);
   expect(errors, errors.join("\n")).toEqual([]);
 });

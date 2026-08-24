@@ -81,10 +81,10 @@ export const useRoute = create<RouteState>((set) => ({
   setRoute: (route) => set({ route }),
 }));
 
-/** What the routing needs of a window: the search to read, the history to push, `popstate` to hear. */
+/** What the routing needs of a window: the search to read, the history to push or replace, `popstate` to hear. */
 export interface RoutingWindow {
   location: Pick<Location, "pathname" | "search">;
-  history: Pick<History, "pushState">;
+  history: Pick<History, "pushState" | "replaceState">;
   addEventListener(type: "popstate", listener: () => void): void;
   removeEventListener(type: "popstate", listener: () => void): void;
 }
@@ -112,11 +112,13 @@ export function installRouting(win: RoutingWindow, onRoute: (route: Route) => vo
 }
 
 /**
- * Go to a route that differs from the current one in `pipeline`: one
- * history entry (so Back returns here), the store, the connection. The same
- * pipeline again is a no-op — no entry is pushed for a file already open.
+ * Go to a route that differs from the current one in `pipeline`: the URL
+ * (`push` = one history entry, so Back returns here; `replace` = the current
+ * entry rewritten, for a URL nobody should be returned to), the store, the
+ * connection. The same pipeline again is a no-op — no entry is pushed for a
+ * file already open.
  */
-function navigate(pipeline: string | undefined): void {
+function navigate(pipeline: string | undefined, how: "push" | "replace" = "push"): void {
   if (installed === null) {
     throw new Error("routing not installed — installRouting(window) must run before a pipeline can be opened");
   }
@@ -124,7 +126,9 @@ function navigate(pipeline: string | undefined): void {
   if (current.pipeline === pipeline) return;
   const next: Route = { ...current, pipeline };
   const { win, onRoute } = installed;
-  win.history.pushState(null, "", `${win.location.pathname}${routeSearch(next)}`);
+  const url = `${win.location.pathname}${routeSearch(next)}`;
+  if (how === "push") win.history.pushState(null, "", url);
+  else win.history.replaceState(null, "", url);
   useRoute.getState().setRoute(next);
   onRoute(next);
 }
@@ -137,4 +141,15 @@ export function openPipeline(pipeline: string): void {
 /** Close the open pipeline: back to the picker (the socket closes; the server's session lives on for whoever else has it). */
 export function closePipeline(): void {
   navigate(undefined);
+}
+
+/**
+ * Leave a pipeline the server refused to open (the handshake's `pipeline`
+ * error — docs/13 §Projects, pipelines, sessions): back to the picker with
+ * the dead URL REPLACED in the history, so Back skips it instead of asking
+ * for it again. The one case in which the connection writes the route
+ * instead of following it (`connection.ts`).
+ */
+export function leaveRefusedPipeline(): void {
+  navigate(undefined, "replace");
 }

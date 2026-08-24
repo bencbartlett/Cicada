@@ -69,6 +69,29 @@ describe("CicadaClient's hello", () => {
     });
     client.close();
   });
+
+  it("close() detaches the socket's message and error handlers — a closed socket reports nothing but its close", () => {
+    vi.stubGlobal("WebSocket", FakeSocket);
+    const onMessage = vi.fn();
+    const onError = vi.fn();
+    const onClose = vi.fn();
+    const client = new CicadaClient("ws://x/ws", { onMessage, onFrame: () => {}, onError, onClose });
+    client.connect();
+    const socket = FakeSocket.last!;
+    socket.open();
+    expect(socket.onmessage).not.toBeNull();
+    client.close();
+    expect(socket.readyState).toBe(FakeSocket.CLOSED);
+    expect(client.isOpen).toBe(false);
+    expect(socket.onmessage, "no message handler after close").toBeNull();
+    expect(socket.onerror, "no error handler after close").toBeNull();
+    // The close event still reports `closedByUs` — the connection module's
+    // guard reads it for the socket it closed itself.
+    (socket.onclose as (event: { code: number; reason: string }) => void)({ code: 1000, reason: "" });
+    expect(onClose).toHaveBeenCalledWith("closed", true);
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
 });
 
 describe("wsUrl", () => {

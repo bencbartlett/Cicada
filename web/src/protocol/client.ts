@@ -101,8 +101,16 @@ export class CicadaClient {
 
   close(): void {
     this.closedByUs = true;
-    this.socket?.close();
+    const socket = this.socket;
     this.socket = null;
+    if (socket === null) return;
+    // A closed socket must not keep reporting: the browser delivers no
+    // `message` once `readyState` is CLOSING, but nothing else guarantees it
+    // — and the connection module's next socket owns the store by then.
+    // `onclose` stays attached so the module hears `closedByUs` for THIS one.
+    socket.onmessage = null;
+    socket.onerror = null;
+    socket.close();
   }
 
   get isOpen(): boolean {

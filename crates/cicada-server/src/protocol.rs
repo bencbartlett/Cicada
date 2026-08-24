@@ -660,6 +660,55 @@ pub enum FilesErrorKind {
     IoError,
 }
 
+/// Why a request's pipeline could not be opened — ONE classification for
+/// every route that names one (docs/13 §Projects, pipelines, sessions). An
+/// HTTP route answers with the status in parentheses; the socket answers
+/// its handshake with the `error` of kind `pipeline` carrying this as
+/// `reason` beside `pipeline` (the reference as the client sent it) — the
+/// upgrade itself is never refused for the pipeline, because a refused
+/// upgrade reaches a browser as a bare close code the app could only read
+/// as a network drop (wave 4 O2 review). Terminal for the client: a retry
+/// changes nothing until the file or the URL does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JoinRefusal {
+    /// The request named no pipeline and the server has no default (400).
+    Unnamed,
+    /// The reference is not a plain root-relative `.cic` path, or resolves
+    /// outside the root (400).
+    PathNotAllowed,
+    /// No such file under the root — moved, renamed or deleted (404). The
+    /// client drops it from Recent.
+    NotFound,
+    /// The file is there but its session could not open; the message says
+    /// why (422).
+    OpenFailed,
+}
+
+impl ServerMessage {
+    /// The handshake's refusal for the pipeline a socket named: kind
+    /// `pipeline`, the reason as `reason`, the reference as `pipeline`
+    /// (absent when none was named), and the text the routes would have
+    /// answered with.
+    #[must_use]
+    pub fn join_refused(pipeline: Option<&str>, reason: JoinRefusal, message: String) -> Self {
+        let mut details = serde_json::Map::new();
+        if let Some(pipeline) = pipeline {
+            details.insert("pipeline".to_owned(), pipeline.into());
+        }
+        details.insert(
+            "reason".to_owned(),
+            serde_json::to_value(reason).unwrap_or(serde_json::Value::Null),
+        );
+        Self::Error {
+            intent_id: None,
+            kind: "pipeline".to_owned(),
+            message,
+            details,
+        }
+    }
+}
+
 /// The session's transport (docs/13 §Animation transport; DECISIONS.md
 /// time row) as every client sees it — in every `snapshot` and in the
 /// `transport` broadcast after every change (play / pause / seek / speed /
@@ -821,13 +870,14 @@ pub enum ServerMessage {
         /// Machine kind (`writer`, `lease`, `protocol`, `unknown`,
         /// `refused`, `persist`, `nothing_to_undo`, `nothing_to_redo`,
         /// `stale_base`, `parse_error`, `path_not_allowed`, `io_error`,
-        /// `transport`).
+        /// `transport`, `pipeline`).
         kind: String,
         /// Human message.
         message: String,
         /// Kind-specific facts, flattened into the payload (additive):
         /// `current_text_hash` (`stale_base`), `diagnostics` (`parse_error`),
-        /// `index` (the failing op of a batch).
+        /// `index` (the failing op of a batch), `pipeline` + `reason` (the
+        /// handshake's `pipeline` refusal — [`ServerMessage::join_refused`]).
         #[serde(flatten)]
         details: serde_json::Map<String, serde_json::Value>,
     },
@@ -1663,6 +1713,58 @@ mod tests {
             value["payload"].as_object().unwrap().len(),
             2,
             "no details → just kind + message: {value}"
+        );
+    }
+
+    /// The handshake's `pipeline` refusal is the client's cue to stop
+    /// retrying, show the reason and (for `not_found`) drop the Recent
+    /// entry — so its shape is a contract: kind `pipeline`, `reason` in
+    /// `snake_case`, `pipeline` as sent, no `intent_id`.
+    #[test]
+    fn a_join_refusal_carries_the_pipeline_and_the_reason() {
+        let text = encode(
+            0,
+            &ServerMessage::join_refused(
+                Some("gone.cic"),
+                JoinRefusal::NotFound,
+                "opening gone.cic: no pipeline `gone.cic` in the project".into(),
+            ),
+        );
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["seq"], 0);
+        assert_eq!(
+            value["payload"],
+            serde_json::json!({
+                "kind": "pipeline",
+                "message": "opening gone.cic: no pipeline `gone.cic` in the project",
+                "pipeline": "gone.cic",
+                "reason": "not_found",
+            }),
+            "{value}"
+        );
+        // Every reason has a snake_case wire name the client mirrors.
+        for (reason, wire) in [
+            (JoinRefusal::Unnamed, "unnamed"),
+            (JoinRefusal::PathNotAllowed, "path_not_allowed"),
+            (JoinRefusal::NotFound, "not_found"),
+            (JoinRefusal::OpenFailed, "open_failed"),
+        ] {
+            assert_eq!(serde_json::to_value(reason).unwrap(), wire);
+            assert_eq!(
+                serde_json::from_value::<JoinRefusal>(wire.into()).unwrap(),
+                reason
+            );
+        }
+        // No pipeline named → no `pipeline` key at all.
+        let text = encode(
+            0,
+            &ServerMessage::join_refused(None, JoinRefusal::Unnamed, "no pipeline".into()),
+        );
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            value["payload"],
+            serde_json::json!({"kind": "pipeline", "message": "no pipeline", "reason": "unnamed"}),
+            "{value}"
         );
     }
 

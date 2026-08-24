@@ -40,7 +40,20 @@ with a proxy for HMR.
   nothing pipeline-specific survives on the client. The sessions are the
   server's and outlive the visit (the one left behind keeps solving for
   whoever else has it open; with nobody left it pauses its transport and
-  stays warm).
+  stays warm). **A pipeline the server cannot open is refused INSIDE the
+  socket's handshake, never at the upgrade** (wave 4 O2 review,
+  2026-08-24): the token middleware gates the upgrade, and after the
+  version verdict the server answers the `hello` with one `error` of
+  kind `pipeline` — `reason` ∈ `unnamed` / `path_not_allowed` /
+  `not_found` / `open_failed` (`protocol::JoinRefusal`, the ONE
+  classification the HTTP routes map to 400 / 400 / 404 / 422) and
+  `pipeline` as the client sent it — then Close; no lease, no hydration,
+  no session opened for a reference a route would refuse. A refused
+  upgrade reaches a browser as a bare close code (1006) with no body,
+  which the app could only read as a network drop and retry forever; the
+  typed refusal is terminal for the client: no reconnect, the reason as
+  a notice, a `not_found` file dropped from Recent, the tab back on the
+  picker with the dead URL replaced (docs/16 §Application layout).
 - **Single-writer lease** per pipeline: the first client takes the
   write lease; further clients are live read-only observers (which
   also gives presentation/tablet views for free). The lease transfers

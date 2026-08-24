@@ -12,6 +12,7 @@ import { useState } from "react";
 import { browserStorage, readRecent } from "../state/recent";
 import { openPipeline, routeSearch } from "../state/route";
 import { FileBrowser } from "./FileBrowser";
+import { Notices } from "./Notices";
 
 export function Landing({ token }: { token?: string }) {
   const [recent] = useState(() => readRecent(browserStorage()));
@@ -63,6 +64,9 @@ export function Landing({ token }: { token?: string }) {
         <h2>Files</h2>
         <FileBrowser token={token} onOpen={openPipeline} autoFocus />
       </section>
+      {/* The notices are the app's: a join the server refused (a Recent
+          entry for a file that is gone) returns here WITH its reason. */}
+      <Notices />
     </main>
   );
 }

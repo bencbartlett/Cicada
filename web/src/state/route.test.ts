@@ -10,6 +10,7 @@ import {
   NO_ROUTE,
   closePipeline,
   installRouting,
+  leaveRefusedPipeline,
   openPipeline,
   parseRoute,
   popoutUrl,
@@ -67,19 +68,30 @@ describe("parseRoute / routeSearch", () => {
   });
 });
 
-/** A window with a history the test can read: `pushState` rewrites `location.search`, `back()` pops it and fires `popstate`. */
+/**
+ * A window with a history the test can read: `pushState` adds an entry and
+ * rewrites `location.search`, `replaceState` rewrites the current entry,
+ * `back()` pops and fires `popstate`.
+ */
 function fakeWindow(search: string) {
   const entries = [search];
   const listeners = new Set<() => void>();
-  const win: RoutingWindow & { back(): void; pushed: string[]; listeners: Set<() => void> } = {
+  const searchOf = (url: string | URL | null | undefined) => {
+    const text = String(url);
+    return text.includes("?") ? text.slice(text.indexOf("?")) : "";
+  };
+  const win: RoutingWindow & { back(): void; pushed: string[]; replaced: string[]; listeners: Set<() => void> } = {
     location: { pathname: "/", search },
     history: {
       pushState: (_data: unknown, _unused: string, url?: string | URL | null) => {
-        const text = String(url);
-        const next = text.includes("?") ? text.slice(text.indexOf("?")) : "";
-        win.pushed.push(text);
-        entries.push(next);
-        win.location.search = next;
+        win.pushed.push(String(url));
+        entries.push(searchOf(url));
+        win.location.search = searchOf(url);
+      },
+      replaceState: (_data: unknown, _unused: string, url?: string | URL | null) => {
+        win.replaced.push(String(url));
+        entries[entries.length - 1] = searchOf(url);
+        win.location.search = searchOf(url);
       },
     },
     addEventListener: (_type, listener) => listeners.add(listener),
@@ -90,6 +102,7 @@ function fakeWindow(search: string) {
       for (const listener of listeners) listener();
     },
     pushed: [],
+    replaced: [],
     listeners,
   };
   return win;
@@ -134,6 +147,25 @@ describe("installRouting / openPipeline / closePipeline", () => {
 
     win.back();
     expect(useRoute.getState().route.pipeline, "Back from the picker reopens the file").toBe("02-solids.cic");
+  });
+
+  it("leaveRefusedPipeline replaces the dead entry with the picker's, so Back skips the file that was refused", () => {
+    const win = fakeWindow("?token=t&pipeline=02-solids.cic");
+    const onRoute = vi.fn<(route: Route) => void>();
+    uninstall = installRouting(win, onRoute);
+    openPipeline("gone.cic");
+    expect(win.pushed).toEqual(["/?token=t&pipeline=gone.cic"]);
+
+    leaveRefusedPipeline();
+    expect(win.replaced).toEqual(["/?token=t"]);
+    expect(win.pushed, "no second entry").toHaveLength(1);
+    expect(win.location.search).toBe("?token=t");
+    expect(useRoute.getState().route).toEqual({ token: "t", pipeline: undefined, view: "app" });
+    expect(onRoute, "the connection is told, like any route change").toHaveBeenLastCalledWith({ token: "t", pipeline: undefined, view: "app" });
+
+    win.back();
+    expect(useRoute.getState().route.pipeline, "Back returns to the file before the dead one").toBe("02-solids.cic");
+    expect(onRoute).toHaveBeenLastCalledWith({ token: "t", pipeline: "02-solids.cic", view: "app" });
   });
 
   it("keeps the view: opening from a pop-out stays a pop-out route", () => {

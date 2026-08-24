@@ -433,6 +433,48 @@ async fn a_root_without_a_pipeline_opens_nothing_and_lists_one_directory_at_a_ti
     assert_eq!(project["open"], serde_json::json!([]), "nothing opened");
     let (status, body) = get(addr, "/debug/state").await;
     assert_eq!(status, 400, "a pipeline-less read says so: {body}");
+    // A socket naming no pipeline is refused inside its handshake with the
+    // same words — kind `pipeline`, reason `unnamed`, no `pipeline` key —
+    // then closed (docs/13 §Projects, pipelines, sessions).
+    {
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws?token=t"))
+            .await
+            .expect("the upgrade is accepted; the refusal rides the socket");
+        socket
+            .send(Message::Text(
+                format!(
+                    r#"{{"v":{PROTOCOL_VERSION},"type":"hello","payload":{{"v":{PROTOCOL_VERSION}}}}}"#
+                )
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let mut refusal: Option<serde_json::Value> = None;
+        let mut closed = false;
+        while let Ok(Some(Ok(message))) =
+            tokio::time::timeout(Duration::from_secs(5), socket.next()).await
+        {
+            match message {
+                Message::Text(text) => refusal = Some(serde_json::from_str(&text).unwrap()),
+                Message::Close(_) => {
+                    closed = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let refusal = refusal.expect("an error before the close");
+        assert!(closed);
+        assert_eq!(
+            refusal["payload"],
+            serde_json::json!({
+                "kind": "pipeline",
+                "reason": "unnamed",
+                "message": "no pipeline: pass ?pipeline=<relative .cic path> (see /api/project)",
+            }),
+            "{refusal}"
+        );
+    }
 
     // Token-gated like every /api route.
     let (status, _) = tokio::task::spawn_blocking(move || http_get(addr, "/api/files", None))

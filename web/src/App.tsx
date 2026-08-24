@@ -29,6 +29,7 @@ const SPLITS: Record<string, [string, string]> = {
 export function App() {
   const settings = useCicada((s) => s.settings);
   const updateSettings = useCicada((s) => s.updateSettings);
+  const pipeline = useCicada((s) => s.pipeline);
   const workRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   useKeyboard();
@@ -54,8 +55,14 @@ export function App() {
     dragging.current = false;
   };
 
-  const first = settings.swap ? <Viewport /> : <Canvas />;
-  const second = settings.swap ? <Canvas /> : <Viewport />;
+  // A new file is a new canvas: keyed by the pipeline, the canvas remounts
+  // on a switch (File → Open / Recent, Back) and frames the new graph
+  // itself — `fitView` runs once per canvas — instead of showing it at the
+  // previous file's zoom and offset (docs/16 §Application layout). The
+  // viewport stays mounted: its camera is the user's.
+  const canvas = <Canvas key={pipeline} />;
+  const first = settings.swap ? <Viewport /> : canvas;
+  const second = settings.swap ? canvas : <Viewport />;
 
   return (
     <div className="app" data-testid="app">

@@ -1135,6 +1135,44 @@ canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
   not `fileBrowser.ts`: on a case-insensitive file system TypeScript
   conflates `./fileBrowser` with `./FileBrowser.tsx` (TS1149) — names
   differing only in case are a Windows hazard in this tree.
+  *Review closure (2026-08-24).* The adversarial review found the
+  contract implemented and 18 of 21 mutations killed at the right layer,
+  and two real gaps. (1) A Recent entry (or any URL) naming a pipeline
+  the server no longer has left the app on an empty canvas in a silent
+  forever-reconnect: `session_for` refused the ws UPGRADE with a 404,
+  which a browser sees as a bare 1006 and the client read as a network
+  drop. Fixed on both sides: the pipeline is now resolved INSIDE the
+  handshake (after the version verdict) and refused as one typed `error`
+  of kind `pipeline` — `reason` (`protocol::JoinRefusal`: `unnamed` /
+  `path_not_allowed` / `not_found` / `open_failed`, the one
+  classification the HTTP routes map to 400 / 400 / 404 / 422) +
+  `pipeline` as sent — then Close (docs/13 §Projects, pipelines,
+  sessions; `http_e2e.rs` and `root_and_files.rs` drive every reason
+  over a real socket); the client treats it as terminal (`joinRefused`:
+  no reconnect, the reason as a notice, a `not_found` file dropped from
+  Recent with a notice saying so — `forgetRecent` now has its caller —
+  and the tab back on the picker by `history.replaceState`, so Back
+  skips the dead URL; `connection.test.ts`, `route.test.ts`; the picker
+  renders the notices; `files.spec.ts`'s second test drives it through
+  a seeded Recent entry). (2) The FileBrowser "stale answer" test was a
+  false PASS — it remounted the component, so the late answer reached
+  an unmounted instance whatever the guard did; it now races two
+  requests inside ONE mounted browser (a slow `wall`, the root crumb
+  clicked before it lands, the late answer released) and goes red when
+  the request guard is removed. Minors: a pipeline switch re-frames the
+  canvas (`<Canvas key={pipeline}>` in `App.tsx` — a new file is a new
+  canvas; `files.spec.ts` zooms 02-solids off the pane first, then
+  asserts every node of 06-lists inside it); Recent's stored list is
+  asserted at ten, not only the read. Notes taken: `CicadaClient.close()`
+  detaches `onmessage`/`onerror` (a closed socket's late hello is
+  nobody's — `client.test.ts`, `connection.test.ts`); the FileBrowser
+  test reads names from `.files-name` (locale-proof); docs/16 and this
+  paragraph's O3 note say that a second pop-out click re-targets the
+  existing window to the main window's current pipeline. Declined:
+  surfacing a refusing `localStorage` as a notice (a private window's
+  choice; "nothing yet" is not a wrong answer about the pipeline, and a
+  notice per visit would nag) and dropping the redundant `serde(default)`
+  on `hello.role` (documentation).
 - **O3 — the pop-out viewport.** A viewport header button opens
   `window.open(<same URL> + "&view=viewport", "cicada-viewport")`; with
   `view=viewport` the SPA renders the viewport alone (no canvas, panels
@@ -1183,8 +1221,11 @@ canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
   additive `hello.declared` from the server is the one-line answer.
   Not in this slice, as the contract says: camera sync between the
   windows; also not done: the pop-out following the main window's
-  pipeline switches (it stays on the pipeline it was opened for), and
-  hotkeys in the pop-out (the toolbar's buttons are its controls).
+  pipeline switches (it stays on the pipeline it was opened for — though
+  a second click of the button, `window.open` re-targeting the named
+  window, navigates the existing pop-out to the main window's current
+  pipeline; review note 2026-08-24), and hotkeys in the pop-out (the
+  toolbar's buttons are its controls).
 
 **Track L — `wt/launch` (cli + tools + docs).**
 - **L1 — `cicada app [path]`.** = `serve` + opens the app window: a

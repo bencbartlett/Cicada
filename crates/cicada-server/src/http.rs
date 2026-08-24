@@ -32,7 +32,7 @@ use crate::files::{self, FilesError};
 use crate::git::{Git, GitRefusal, Scope};
 use crate::protocol::{
     ApplyTextRequest, CommitRequest, DeltaSource, FilesErrorKind, GitErrorKind, IntentEnvelope,
-    PROTOCOL_VERSION, RevertRequest, Role, ServerMessage, encode,
+    JoinRefusal, PROTOCOL_VERSION, RevertRequest, Role, ServerMessage, encode,
 };
 use crate::session::{ClientLanes, IntentError, Outgoing, Session, SessionConfig};
 
@@ -649,32 +649,61 @@ struct PipelineQuery {
     target: Option<String>,
 }
 
+/// A request's pipeline could not be opened: the one classification every
+/// route maps to its own refusal — `session_for` to an HTTP status and the
+/// text, `client_loop` to the socket's `pipeline` error (docs/13 §Projects,
+/// pipelines, sessions).
+struct PipelineRefusal {
+    reason: JoinRefusal,
+    /// The reference as the request sent it; `None` when it sent none.
+    pipeline: Option<String>,
+    /// What the user reads — the same text whichever route answers.
+    message: String,
+}
+
+fn resolve_session(
+    state: &Arc<AppState>,
+    query: &PipelineQuery,
+) -> Result<Arc<Session>, PipelineRefusal> {
+    let Some(relative) = query
+        .pipeline
+        .clone()
+        .or_else(|| state.config.pipeline.clone())
+    else {
+        return Err(PipelineRefusal {
+            reason: JoinRefusal::Unnamed,
+            pipeline: None,
+            message: "no pipeline: pass ?pipeline=<relative .cic path> (see /api/project)"
+                .to_owned(),
+        });
+    };
+    open_session(state, &relative).map_err(|error| {
+        let reason = match error {
+            ServeError::BadPipelineRef(_) | ServeError::OutsideProject { .. } => {
+                JoinRefusal::PathNotAllowed
+            }
+            ServeError::NoSuchPipeline(_) => JoinRefusal::NotFound,
+            _ => JoinRefusal::OpenFailed,
+        };
+        PipelineRefusal {
+            reason,
+            message: format!("opening {relative}: {error}"),
+            pipeline: Some(relative),
+        }
+    })
+}
+
 fn session_for(
     state: &Arc<AppState>,
     query: &PipelineQuery,
 ) -> Result<Arc<Session>, Box<Response>> {
-    let relative = query
-        .pipeline
-        .clone()
-        .or_else(|| state.config.pipeline.clone())
-        .ok_or_else(|| {
-            Box::new(
-                (
-                    StatusCode::BAD_REQUEST,
-                    "no pipeline: pass ?pipeline=<relative .cic path> (see /api/project)",
-                )
-                    .into_response(),
-            )
-        })?;
-    open_session(state, &relative).map_err(|error| {
-        let status = match error {
-            ServeError::BadPipelineRef(_) | ServeError::OutsideProject { .. } => {
-                StatusCode::BAD_REQUEST
-            }
-            ServeError::NoSuchPipeline(_) => StatusCode::NOT_FOUND,
-            _ => StatusCode::UNPROCESSABLE_ENTITY,
+    resolve_session(state, query).map_err(|refusal| {
+        let status = match refusal.reason {
+            JoinRefusal::Unnamed | JoinRefusal::PathNotAllowed => StatusCode::BAD_REQUEST,
+            JoinRefusal::NotFound => StatusCode::NOT_FOUND,
+            JoinRefusal::OpenFailed => StatusCode::UNPROCESSABLE_ENTITY,
         };
-        Box::new((status, format!("opening {relative}: {error}")).into_response())
+        Box::new((status, refusal.message).into_response())
     })
 }
 
@@ -1378,20 +1407,24 @@ where
     }
 }
 
+/// The socket route. The token middleware has passed the request; the
+/// pipeline it names is resolved INSIDE the handshake (`client_loop`), not
+/// before the upgrade: a refused upgrade reaches a browser as a bare close
+/// code (1006) with no body, which the app could only read as a network
+/// drop and retry forever — so the reason rides the socket as the typed
+/// `pipeline` error + Close instead (docs/13 §Projects, pipelines, sessions;
+/// wave 4 O2 review). The gate is the same `resolve_session` every route
+/// uses; nothing is opened or touched for a reference a route would refuse.
 async fn ws_upgrade(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PipelineQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let session = match session_for(&state, &query) {
-        Ok(session) => session,
-        Err(response) => return *response,
-    };
-    ws.on_upgrade(move |socket| client_loop(socket, session))
+    ws.on_upgrade(move |socket| client_loop(socket, state, query))
 }
 
 #[allow(clippy::too_many_lines)] // handshake, then the one receive loop
-async fn client_loop(socket: WebSocket, session: Arc<Session>) {
+async fn client_loop(socket: WebSocket, state: Arc<AppState>, query: PipelineQuery) {
     let (mut sink, mut stream) = socket.split();
 
     // Handshake FIRST (docs/13): the client's `hello` carries its protocol
@@ -1446,6 +1479,27 @@ async fn client_loop(socket: WebSocket, session: Arc<Session>) {
                 },
             );
             let _ = sink.send(Message::Text(refusal.into())).await;
+            let _ = sink.send(Message::Close(None)).await;
+            return;
+        }
+    };
+
+    // The handshake's second verdict: the pipeline this socket named — after
+    // the version check, so an older client still hears "reload the app"
+    // first. Refused the same way the version is: one typed error the client
+    // acts on (kind `pipeline`; `reason`, `pipeline` — `protocol::
+    // JoinRefusal`) and Close; no lease, no hydration, no session opened for
+    // a reference the HTTP routes would refuse. The same blocking open
+    // `session_for` makes for every route (a first open lowers the file).
+    let session = match resolve_session(&state, &query) {
+        Ok(session) => session,
+        Err(refusal) => {
+            let message = ServerMessage::join_refused(
+                refusal.pipeline.as_deref(),
+                refusal.reason,
+                refusal.message,
+            );
+            let _ = sink.send(Message::Text(encode(0, &message).into())).await;
             let _ = sink.send(Message::Close(None)).await;
             return;
         }

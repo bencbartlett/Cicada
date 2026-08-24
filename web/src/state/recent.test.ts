@@ -35,6 +35,10 @@ describe("recent pipelines", () => {
     expect(list).toHaveLength(RECENT_LIMIT);
     expect(list[0]).toBe(`p${RECENT_LIMIT + 2}.cic`);
     expect(list).not.toContain("p0.cic");
+    expect(
+      JSON.parse(storage.data.get(RECENT_KEY)!),
+      "the STORED list is ten — the cap is on the write, not only on the read",
+    ).toHaveLength(RECENT_LIMIT);
   });
 
   it("forgets an entry", () => {

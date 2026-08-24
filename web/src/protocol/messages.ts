@@ -128,12 +128,24 @@ export type ErrorKind =
    * `transport` broadcast follows a refusal — this error is the whole answer.
    */
   | "transport"
+  /**
+   * The handshake's verdict on the pipeline the socket named (docs/13
+   * §Projects, pipelines, sessions): the server cannot open it — `reason`
+   * says why, `pipeline` is the reference as sent — and closes. Terminal:
+   * the connection module schedules no reconnect, shows the reason, drops
+   * a `not_found` file from Recent and returns the tab to the picker.
+   */
+  | "pipeline"
   | (string & {});
+
+/** Why the server refused a socket's pipeline (`protocol::JoinRefusal`, snake_case; the HTTP routes' 400 / 400 / 404 / 422). */
+export type JoinRefusal = "unnamed" | "path_not_allowed" | "not_found" | "open_failed";
 
 /**
  * The `error` payload: `kind` + `message`, plus the kind-specific facts the
  * server flattens in (`current_text_hash` on `stale_base`, `diagnostics` on
- * `parse_error`, `index` = the failing op of a `batch`).
+ * `parse_error`, `index` = the failing op of a `batch`, `pipeline` +
+ * `reason` on the handshake's `pipeline` refusal).
  */
 export interface ErrorPayload {
   intent_id?: string;
@@ -142,6 +154,8 @@ export interface ErrorPayload {
   current_text_hash?: string;
   diagnostics?: Diagnostic[];
   index?: number;
+  pipeline?: string;
+  reason?: JoinRefusal;
 }
 
 /** doc-11 diagnostic (cicada-lang `Diagnostic`). `span.line` is 1-based. */
