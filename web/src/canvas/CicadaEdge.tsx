@@ -1,22 +1,21 @@
 /**
  * Wires (docs/16 + docs/09): kind-colored, depth-styled (depth 0 single ·
  * depth 1 heavier · depth ≥ 2 double/hatched), red with the reason on hover,
- * spline (bezier) or trace (orthogonal, snapped to the grid — a step-edge
- * approximation of the 45° PCB look) per the user's wire-mode setting, and
- * a `map` chip near the target when the kwarg is lifted.
+ * spline (bezier) or trace (the PCB-style router of `trace.ts`: orthogonal
+ * runs, 45° corner cuts of one unit, laned so parallel runs never coincide
+ * — the lanes assigned once per canvas render and read here from the
+ * `TraceLanesContext`) per the user's wire-mode setting, and a `map` chip
+ * on the wire's middle run when the kwarg is lifted. Stroke width and colour
+ * are the same in both modes.
  */
-import {
-  BaseEdge,
-  EdgeLabelRenderer,
-  getBezierPath,
-  getSmoothStepPath,
-  type EdgeProps,
-} from "@xyflow/react";
+import { BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps } from "@xyflow/react";
 import { memo } from "react";
 import { baseOfType, kindColor } from "../kinds";
 import { useCicada } from "../state/store";
 import type { CanvasEdge } from "./flow";
 import { wireStrokeWidth } from "./grid";
+import { tracePath } from "./trace";
+import { useTraceRoute } from "./traceLanes";
 
 function CicadaEdgeImpl({
   id,
@@ -37,11 +36,14 @@ function CicadaEdgeImpl({
   const color = red ? "var(--error)" : kindColor(baseOfType(wire?.type ?? "?"));
   const width = wireStrokeWidth(depth);
 
-  const params = { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition };
+  // The lane this wire was assigned with every other wire in view (the
+  // canvas's per-render memo); the endpoints are React Flow's measured
+  // handles, so the trace meets them exactly.
+  const route = useTraceRoute(id);
   const [path, labelX, labelY] =
     wireMode === "trace"
-      ? getSmoothStepPath({ ...params, borderRadius: unit / 2, offset: unit })
-      : getBezierPath(params);
+      ? tracePath({ sx: sourceX, sy: sourceY, tx: targetX, ty: targetY }, unit, route)
+      : getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
 
   const title = red
     ? `${wire?.id ?? id}: ${wire?.reason ?? "red"}`

@@ -1107,6 +1107,23 @@ packages in sequence, each reviewed.
   then the edge id) so the layout never flickers across re-renders;
   stroke widths and colours unchanged; the connection line
   (`ConnectionLine.tsx`) uses the same path. docs/16 §Canvas conventions.
+  *Implemented 2026-08-24; what the contract did not foresee, settled the
+  small way and recorded in docs/16: a "45° corner of radius ≥ 1 unit" is
+  the PCB mitre — a 90° turn cut at 45° with legs of one unit, the bends
+  sharp (`stroke-linejoin: round`); a wire's stubs are pinned to their
+  port's row (it must reach its handle), so the no-overlap rule governs
+  the free runs — wires out of ONE port share their stub as a trunk —
+  and a long forward wire (> 6 units) is a stair whose long run is a
+  free, laned channel rather than a stub along a row of nodes; the
+  auto-layout puts adjacent layers two units apart, where full legs and
+  lanes cannot both fit, so there the legs shrink toward ½ unit before
+  runs are let coincide (U6 ranks them: radius "~1 unit", overlap
+  "never"); a U-turn needs runs of three legs, not two, or its two
+  same-sense cuts meet at 90°; and the lanes are assigned on the row
+  model of the graph plus the canvas's live node positions, corrected by
+  React Flow's measured handle geometry, while each edge draws from its
+  measured handles — the router clamps an assigned channel into what its
+  own endpoints allow.*
 - **B3 — typed literals on unconnected inputs.** Every input port that is
   not wired and whose type takes a literal (`Number`, `Integer`, `Text`,
   `Boolean` and their `?` forms; never a transport-driven port) shows

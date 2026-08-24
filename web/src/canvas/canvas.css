@@ -859,20 +859,25 @@
 
 /* ----------------------------------------------------------------- wires */
 
+/* Round joins: a trace's 45° bends (trace.ts) would otherwise spike at the
+   mitre on the wider depth strokes. */
 .cicada-canvas .react-flow__edge-path {
   fill: none;
   stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .cicada-edge-glow {
   fill: none;
   opacity: 0.28;
   stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .cicada-edge-hatch {
   fill: none;
   stroke: var(--bg);
+  stroke-linejoin: round;
   pointer-events: none;
 }
 

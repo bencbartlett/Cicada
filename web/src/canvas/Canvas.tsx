@@ -56,6 +56,7 @@ import {
 import { pxToCell, showsPortValues } from "./grid";
 import { useLodTier } from "./lod";
 import { SearchBox } from "./SearchBox";
+import { TraceLanesContext, useTraceLanes } from "./traceLanes";
 
 const NODE_TYPES = { cicada: CicadaNode };
 const EDGE_TYPES = { cicada: CicadaEdge };
@@ -128,12 +129,17 @@ function CanvasInner() {
   const summaryGeneration = useCicada((s) => s.summary.generation);
   const summaryRunning = useCicada((s) => s.summary.running);
   const snapshots = useCicada((s) => s.snapshots);
+  const wireMode = useCicada((s) => s.settings.wireMode);
   const rf = useReactFlow<CanvasNode, CanvasEdge>();
   const tier = useLodTier();
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
   const [edges, setEdges] = useState<CanvasEdge[]>([]);
+  // Trace mode's lanes (docs/16 §Canvas conventions): assigned over EVERY
+  // wire at once from the graph and the live node positions, once per
+  // render; the edges read theirs from the context.
+  const traceLanes = useTraceLanes(graph, nodes, unit, wireMode === "trace");
   const [menu, setMenu] = useState<Menu | null>(null);
   const [moveTick, setMoveTick] = useState(0);
   const rightDrag = useRef<{ x: number; y: number } | null>(null);
@@ -617,56 +623,58 @@ function CanvasInner() {
       onContextMenu={onContextMenu}
       onDoubleClick={onDoubleClick}
     >
-      <ReactFlow<CanvasNode, CanvasEdge>
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={NODE_TYPES}
-        edgeTypes={EDGE_TYPES}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onSelectionChange={onSelectionChange}
-        onNodeDragStop={onNodeDragStop}
-        onConnectStart={onConnectStart}
-        onConnect={onConnect}
-        onConnectEnd={onConnectEnd}
-        onReconnectStart={onReconnectStart}
-        onReconnect={onReconnect}
-        onReconnectEnd={onReconnectEnd}
-        onEdgesDelete={onEdgesDelete}
-        isValidConnection={isValidConnection}
-        connectionLineComponent={ConnectionLine}
-        connectionRadius={14}
-        onPaneClick={onPaneClick}
-        onNodeClick={onNodeClick}
-        onEdgeClick={onEdgeClick}
-        onNodeContextMenu={onNodeContextMenu}
-        onEdgeContextMenu={onEdgeContextMenu}
-        onMoveEnd={() => setMoveTick((t) => t + 1)}
-        onMoveStart={() => setMenu(null)}
-        nodesDraggable={writer}
-        nodesConnectable={writer}
-        edgesReconnectable={writer}
-        elementsSelectable
-        selectionOnDrag
-        panOnDrag={[1, 2]}
-        panOnScroll={false}
-        zoomOnScroll
-        zoomOnDoubleClick={false}
-        zoomOnPinch
-        snapToGrid
-        snapGrid={[unit, unit]}
-        minZoom={0.1}
-        maxZoom={2.5}
-        // Del belongs to the keyboard map (docs/16), and React Flow's own
-        // arrow-key nudge would move nodes with no `move_node` behind it.
-        deleteKeyCode={null}
-        disableKeyboardA11y
-        multiSelectionKeyCode={["Shift", "Control", "Meta"]}
-        nodeDragThreshold={2}
-      >
-        <Background variant={BackgroundVariant.Lines} gap={unit} lineWidth={1} />
-        <Controls showInteractive={false} position="bottom-left" />
-      </ReactFlow>
+      <TraceLanesContext.Provider value={traceLanes}>
+        <ReactFlow<CanvasNode, CanvasEdge>
+          nodes={nodes}
+          edges={edges}
+          nodeTypes={NODE_TYPES}
+          edgeTypes={EDGE_TYPES}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          onSelectionChange={onSelectionChange}
+          onNodeDragStop={onNodeDragStop}
+          onConnectStart={onConnectStart}
+          onConnect={onConnect}
+          onConnectEnd={onConnectEnd}
+          onReconnectStart={onReconnectStart}
+          onReconnect={onReconnect}
+          onReconnectEnd={onReconnectEnd}
+          onEdgesDelete={onEdgesDelete}
+          isValidConnection={isValidConnection}
+          connectionLineComponent={ConnectionLine}
+          connectionRadius={14}
+          onPaneClick={onPaneClick}
+          onNodeClick={onNodeClick}
+          onEdgeClick={onEdgeClick}
+          onNodeContextMenu={onNodeContextMenu}
+          onEdgeContextMenu={onEdgeContextMenu}
+          onMoveEnd={() => setMoveTick((t) => t + 1)}
+          onMoveStart={() => setMenu(null)}
+          nodesDraggable={writer}
+          nodesConnectable={writer}
+          edgesReconnectable={writer}
+          elementsSelectable
+          selectionOnDrag
+          panOnDrag={[1, 2]}
+          panOnScroll={false}
+          zoomOnScroll
+          zoomOnDoubleClick={false}
+          zoomOnPinch
+          snapToGrid
+          snapGrid={[unit, unit]}
+          minZoom={0.1}
+          maxZoom={2.5}
+          // Del belongs to the keyboard map (docs/16), and React Flow's own
+          // arrow-key nudge would move nodes with no `move_node` behind it.
+          deleteKeyCode={null}
+          disableKeyboardA11y
+          multiSelectionKeyCode={["Shift", "Control", "Meta"]}
+          nodeDragThreshold={2}
+        >
+          <Background variant={BackgroundVariant.Lines} gap={unit} lineWidth={1} />
+          <Controls showInteractive={false} position="bottom-left" />
+        </ReactFlow>
+      </TraceLanesContext.Provider>
       {!writer && (
         <div
           className="cv-readonly badge"
