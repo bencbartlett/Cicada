@@ -31,12 +31,36 @@ with a proxy for HMR.
   (`ServeConfig::project_dir`): `apply_text`'s paths, the git handle's
   cwd and `/api/project`'s bounded walk are relative to it; scripts are
   discovered beside each pipeline, whatever the root.
-- Each browser tab opens one pipeline = one **session**.
+- Each browser tab opens one pipeline = one **session**. A tab that
+  switches pipelines (File → Open / Recent, the Back button — v0.1 wave
+  4 O2, docs/16 §Application layout) closes its socket and joins the
+  other pipeline's session afresh: the `?pipeline=` parameter changes
+  (`history.pushState`), the client's mirror is cleared, and the join's
+  `hello` + `snapshot` + restream hydrate it — the one hydration path,
+  nothing pipeline-specific survives on the client. The sessions are the
+  server's and outlive the visit (the one left behind keeps solving for
+  whoever else has it open; with nobody left it pauses its transport and
+  stays warm).
 - **Single-writer lease** per pipeline: the first client takes the
   write lease; further clients are live read-only observers (which
   also gives presentation/tablet views for free). The lease transfers
   by explicit UI action, or automatically when the writer disconnects
   (5 s grace). No merge machinery exists in v1 — by design.
+  **The join hint** (v0.1 wave 4 O3, additive — `PROTOCOL_VERSION`
+  unchanged): the client's `hello` may carry `role: "observer"` —
+  `{"type":"hello","payload":{"v":1,"role":"observer"}}` — and the
+  socket then joins as a **declared observer** that never holds the
+  lease: it is not made the writer at its join even when the lease is
+  free, it is never promoted after the writer's departure (the grace
+  period's transfer skips it; with only declared observers connected
+  the lease stays free and the writer's reconnect takes it back at its
+  join), and its `take_lease` is refused with kind `lease` and the
+  reason. It reads everything an observer reads — the same snapshot,
+  deltas, statuses and display set. The pop-out viewport
+  (`?view=viewport`, docs/16 §Viewport conventions) joins this way, so a
+  second window of the same person can never steal the first one's
+  lease, a reconnect included. No `role` (an older client) or `role:
+  "writer"` is the rule above.
 - AI agents are server-side actors (doc 11): their edits enter the
   same op pipeline as a client's, as one atomic batch op, and
   broadcast to clients the same way.

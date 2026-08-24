@@ -934,7 +934,7 @@ fn intent_status(error: &IntentError) -> StatusCode {
         | IntentError::NothingToRedo(_) => StatusCode::UNPROCESSABLE_ENTITY,
         IntentError::Io(_) | IntentError::Persist(_) => StatusCode::INTERNAL_SERVER_ERROR,
         IntentError::Protocol(_) => StatusCode::BAD_REQUEST,
-        IntentError::Lease => StatusCode::FORBIDDEN,
+        IntentError::Lease | IntentError::DeclaredObserver => StatusCode::FORBIDDEN,
         IntentError::Batch { source, .. } => intent_status(source),
     }
 }
@@ -1343,16 +1343,23 @@ pub(crate) struct Attached {
 /// channels, the lane each goes to, the pump-before-restream — so the
 /// wiring under test is the wiring served (review 2026-08-21: tests that
 /// built their own lanes passed with both merged into one channel here).
-pub(crate) fn attach_client<S>(session: &Arc<Session>, mut sink: S) -> Attached
+pub(crate) fn attach_client<S>(
+    session: &Arc<Session>,
+    mut sink: S,
+    requested: Option<Role>,
+) -> Attached
 where
     S: WireSink + Send + 'static,
 {
     let (control_tx, control_rx) = unbounded_channel::<Outgoing>();
     let (display_tx, display_rx) = unbounded_channel::<Outgoing>();
-    let (id, role) = session.join(ClientLanes {
-        control: control_tx.clone(),
-        display: display_tx.clone(),
-    });
+    let (id, role) = session.join(
+        ClientLanes {
+            control: control_tx.clone(),
+            display: display_tx.clone(),
+        },
+        requested,
+    );
     let pump = tokio::spawn(async move {
         pump_lanes(control_rx, display_rx, &mut sink).await;
     });
@@ -1392,15 +1399,18 @@ async fn client_loop(socket: WebSocket, session: Arc<Session>) {
     // hydration — never guessed around. Anything but a hello first is a
     // protocol error too.
     let first = tokio::time::timeout(Duration::from_secs(10), stream.next()).await;
+    // The handshake's verdict, and on success the join hint the hello
+    // carried (`role: observer` = a declared observer — docs/13 §Projects,
+    // pipelines, sessions; `None` for an older client).
     let handshake = match first {
         Ok(Some(Ok(Message::Text(text)))) => match serde_json::from_str::<IntentEnvelope>(&text) {
             Ok(envelope) => match envelope.message {
-                crate::protocol::ClientMessage::Hello { v }
+                crate::protocol::ClientMessage::Hello { v, role }
                     if v == PROTOCOL_VERSION && envelope.v == PROTOCOL_VERSION =>
                 {
-                    Ok(())
+                    Ok(role)
                 }
-                crate::protocol::ClientMessage::Hello { v } => Err(format!(
+                crate::protocol::ClientMessage::Hello { v, .. } => Err(format!(
                     "protocol version {} — this server speaks {PROTOCOL_VERSION}; reload the app",
                     if envelope.v == PROTOCOL_VERSION {
                         v
@@ -1423,20 +1433,23 @@ async fn client_loop(socket: WebSocket, session: Arc<Session>) {
         Ok(None) => Err("socket closed before hello".to_owned()),
         Err(_) => Err("no hello within 10 s".to_owned()),
     };
-    if let Err(message) = handshake {
-        let refusal = encode(
-            0,
-            &ServerMessage::Error {
-                intent_id: None,
-                kind: "protocol".to_owned(),
-                message,
-                details: serde_json::Map::new(),
-            },
-        );
-        let _ = sink.send(Message::Text(refusal.into())).await;
-        let _ = sink.send(Message::Close(None)).await;
-        return;
-    }
+    let requested = match handshake {
+        Ok(requested) => requested,
+        Err(message) => {
+            let refusal = encode(
+                0,
+                &ServerMessage::Error {
+                    intent_id: None,
+                    kind: "protocol".to_owned(),
+                    message,
+                    details: serde_json::Map::new(),
+                },
+            );
+            let _ = sink.send(Message::Text(refusal.into())).await;
+            let _ = sink.send(Message::Close(None)).await;
+            return;
+        }
+    };
 
     // Two lanes to one socket (docs/13 §Two lanes, one socket): the
     // control plane and the display plane each get a channel, and the write
@@ -1452,7 +1465,7 @@ async fn client_loop(socket: WebSocket, session: Arc<Session>) {
         pump: send_task,
         restream: _restream,
         ..
-    } = attach_client(&session, sink);
+    } = attach_client(&session, sink, requested);
 
     // Intents are handled IN ORDER on one blocking thread per client.
     let (intent_tx, intent_rx) =
@@ -2085,7 +2098,7 @@ mod tests {
         // frame first, then 319 distinct 1 MiB frames (distinct lengths:
         // the FIFO is asserted by them).
         let (mut wire, recorder) = Wire::new();
-        let attached = attach_client(&session, recorder);
+        let attached = attach_client(&session, recorder, None);
         assert_eq!(attached.role, Role::Writer);
         let id = attached.id;
         attached.restream.await.unwrap();
@@ -2253,7 +2266,7 @@ mod tests {
         assert_eq!(before["display"]["ball.out"]["generation"], shown);
 
         let (mut wire, recorder) = Wire::new();
-        let attached = attach_client(&session, recorder);
+        let attached = attach_client(&session, recorder, None);
         assert_eq!(attached.role, Role::Writer);
         let id = attached.id;
         assert_eq!(hold.held().await, id, "the join's restream is parked");
@@ -2380,7 +2393,7 @@ mod tests {
         let (mut hold, restream_hold) = Hold::new();
         let (_dir, session) = session(BOX_AND_BALL_PIPELINE, Some(restream_hold));
         let (mut wire, recorder) = Wire::new();
-        let attached = attach_client(&session, recorder);
+        let attached = attach_client(&session, recorder, None);
         let id = attached.id;
         assert_eq!(hold.held().await, id, "the join's restream is parked");
         assert_eq!(wire.release_one().await, Seen::Text("hello".into()));

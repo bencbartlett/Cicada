@@ -819,7 +819,17 @@ export type GestureMessage =
   | { type: "set_preview"; payload: { node: string; on?: boolean | null } };
 
 export type ClientMessage =
-  | { type: "hello"; payload: { v: number } }
+  /**
+   * The handshake. `role: "observer"` is the join hint (docs/13 §Projects,
+   * pipelines, sessions; wave 4 O3): this socket joins as a DECLARED
+   * observer that never holds the write lease — not at the join even on a
+   * free lease, not by promotion when the writer leaves, and its
+   * `take_lease` is refused (kind `lease`). The pop-out viewport
+   * (`?view=viewport`) sends it; the main window sends no `role` and joins
+   * by the first-client-writes rule. Additive: the field is absent unless
+   * asked for.
+   */
+  | { type: "hello"; payload: { v: number; role?: Role } }
   | GestureMessage
   | { type: "param_preview"; payload: { node: string; port?: string | null; value: string } }
   /**

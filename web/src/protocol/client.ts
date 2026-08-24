@@ -5,7 +5,7 @@
  */
 import { decodeFrame, type Frame } from "./frames";
 import { PROTOCOL_VERSION, } from "./version";
-import type { ClientEnvelope, ClientMessage, ServerEnvelope } from "./messages";
+import type { ClientEnvelope, ClientMessage, Role, ServerEnvelope } from "./messages";
 
 export interface ClientHandlers {
   onMessage: (message: ServerEnvelope) => void;
@@ -23,16 +23,31 @@ export function wsUrl(token: string, pipeline: string, base: Location = window.l
   return `${scheme}://${base.host}/ws?${params.toString()}`;
 }
 
+/** How this socket joins (the `hello`'s join hint, docs/13): `role: "observer"` = a declared observer that never holds the lease. */
+export interface ClientOptions {
+  role?: Role;
+}
+
 export class CicadaClient {
   private socket: WebSocket | null = null;
   private nextId = 1;
   private readonly url: string;
   private readonly handlers: ClientHandlers;
+  private readonly options: ClientOptions;
   private closedByUs = false;
 
-  constructor(url: string, handlers: ClientHandlers) {
+  constructor(url: string, handlers: ClientHandlers, options: ClientOptions = {}) {
     this.url = url;
     this.handlers = handlers;
+    this.options = options;
+  }
+
+  /** The `hello` this socket opens with: the protocol version, plus the join hint when one was asked for. */
+  hello(): ClientMessage {
+    const role = this.options.role;
+    return role === undefined
+      ? { type: "hello", payload: { v: PROTOCOL_VERSION } }
+      : { type: "hello", payload: { v: PROTOCOL_VERSION, role } };
   }
 
   /** Open a (new) socket; safe to call again after a close to reconnect. */
@@ -49,7 +64,7 @@ export class CicadaClient {
     const socket = new WebSocket(this.url);
     socket.binaryType = "arraybuffer";
     socket.onopen = () => {
-      this.send({ type: "hello", payload: { v: PROTOCOL_VERSION } });
+      this.send(this.hello());
       this.handlers.onOpen?.();
     };
     socket.onmessage = (event: MessageEvent<string | ArrayBuffer>) => {

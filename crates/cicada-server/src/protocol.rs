@@ -992,6 +992,16 @@ pub enum ClientMessage {
     Hello {
         /// Protocol version the client speaks.
         v: u32,
+        /// The join hint (additive, v0.1 wave 4 O3 — the pop-out
+        /// viewport): `observer` asks to join as a DECLARED observer, one
+        /// that never holds the write lease — not at the join even when
+        /// the lease is free, not by promotion when the writer leaves, and
+        /// its `take_lease` is refused (kind `lease`) — so a second window
+        /// of the same person can never steal the first one's lease, a
+        /// reconnect included. Absent (an older client) or `writer`: the
+        /// stage-5 rule, the first client takes the lease.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role: Option<Role>,
     },
     /// Place a node (search-to-place / ribbon / drag-to-empty-canvas).
     PlaceNode {
@@ -1509,6 +1519,57 @@ mod tests {
         let read: IntentEnvelope =
             serde_json::from_str(r#"{"v":1,"type":"inspect","payload":{"node":"a"}}"#).unwrap();
         assert!(!is_write(&read.message));
+    }
+
+    // The join hint (v0.1 wave 4 O3): an old client's hello has no `role`
+    // and reads as `None`; `"role":"observer"` is the declared observer;
+    // the field is omitted on the wire when absent (additive — the version
+    // stays).
+    #[test]
+    fn hello_carries_the_optional_join_role() {
+        let old: IntentEnvelope =
+            serde_json::from_str(r#"{"v":1,"type":"hello","payload":{"v":1}}"#).unwrap();
+        assert_eq!(old.message, ClientMessage::Hello { v: 1, role: None });
+        assert!(!is_write(&old.message));
+        let observer: IntentEnvelope =
+            serde_json::from_str(r#"{"v":1,"type":"hello","payload":{"v":1,"role":"observer"}}"#)
+                .unwrap();
+        assert_eq!(
+            observer.message,
+            ClientMessage::Hello {
+                v: 1,
+                role: Some(Role::Observer)
+            }
+        );
+        let writer: IntentEnvelope =
+            serde_json::from_str(r#"{"v":1,"type":"hello","payload":{"v":1,"role":"writer"}}"#)
+                .unwrap();
+        assert_eq!(
+            writer.message,
+            ClientMessage::Hello {
+                v: 1,
+                role: Some(Role::Writer)
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(ClientMessage::Hello { v: 1, role: None }).unwrap(),
+            serde_json::json!({"type": "hello", "payload": {"v": 1}})
+        );
+        assert_eq!(
+            serde_json::to_value(ClientMessage::Hello {
+                v: 1,
+                role: Some(Role::Observer)
+            })
+            .unwrap(),
+            serde_json::json!({"type": "hello", "payload": {"v": 1, "role": "observer"}})
+        );
+        assert!(
+            serde_json::from_str::<IntentEnvelope>(
+                r#"{"v":1,"type":"hello","payload":{"v":1,"role":"admin"}}"#
+            )
+            .is_err(),
+            "an unknown role is a protocol error, never a silent default"
+        );
     }
 
     #[test]
