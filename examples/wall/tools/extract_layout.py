@@ -73,8 +73,9 @@ ZONE_COLS = 3
 ZONE_ROWS = 3
 ZONE_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
-DEFAULT_WALL = (r"C:\Users\benja\Dropbox\Random Projects\3D Print Stuff"
-                r"\Lorenz LED wall")
+# The production wall repo lives OUTSIDE this repository; there is no default
+# path to it (the repository is public): CICADA_WALL_REPO or --wall-repo.
+DEFAULT_WALL = None
 EXPORT_141 = os.path.join("export", "solenoid_art_export_1.4.1")
 EXPORT_14 = os.path.join("export", "solenoid_art_export_1.4")
 PLATE_FILES_141 = [
@@ -562,11 +563,14 @@ class Loud(Exception):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--wall-repo", default=os.environ.get("CICADA_WALL_REPO", DEFAULT_WALL),
-                    help="the wall project repo (read only); env CICADA_WALL_REPO overrides the default")
+                    help="the wall project repo (read only); required — or set CICADA_WALL_REPO")
     ap.add_argument("--wall-dir", default=os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")),
                     help="the examples/wall/ directory to write inputs/ and golden/production/ into")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args(argv)
+    if not args.wall_repo:
+        ap.error("--wall-repo DIR (or CICADA_WALL_REPO) is required: the production wall repo "
+                 "lives outside this repository")
 
     def log(msg):
         if not args.quiet:

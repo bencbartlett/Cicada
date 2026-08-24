@@ -1,5 +1,14 @@
 # Cicada
 
+> ## ⚠️ Work in progress
+>
+> Cicada is pre-release software under active, daily development. Nothing
+> here is stable yet: the `.cic` dialect, the node catalog, the protocol,
+> the file formats and the UI all change without notice, and there are no
+> releases, no installers and no support. The repository is public so the
+> work can be followed, not because it is ready to use. If you build it
+> anyway, expect rough edges and read `AGENTS.md` for how it is run.
+
 **A code-first parametric design tool: the pipeline is a typed program, the
 node graph is a generated view, and an AI collaborator works on the whole
 program — not islands of nodes.**

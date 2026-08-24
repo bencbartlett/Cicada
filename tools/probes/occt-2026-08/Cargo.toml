@@ -47,6 +47,7 @@ debug = false
 # (0004 is for the `builtin` source path only and is routed through
 # [patch.crates-io] when that path is taken — see the memo.)
 # Cargo has no env expansion in paths, so the path below is the one this
-# machine used (the probe's download cache dir, allowed by the work order).
+# machine used, with its local app-data dir replaced by a placeholder (the
+# repository is public): substitute your own before building the probe.
 [patch."https://github.com/bschwind/opencascade-rs"]
-opencascade = { path = "C:/Users/benja/AppData/Local/cicada-occt/opencascade-rs-patched/crates/opencascade" }
+opencascade = { path = "<LOCALAPPDATA>/cicada-occt/opencascade-rs-patched/crates/opencascade" }

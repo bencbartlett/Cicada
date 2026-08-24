@@ -238,6 +238,20 @@ Python 3 on PATH (or `CICADA_PYTHON`); worker protocol is dependency-free
   user-facing problems are typed diagnostics, never bare strings.
 - **`unsafe` only inside FFI seam modules**, each block with a
   `// SAFETY:` comment.
+- **The repository is PUBLIC (since 2026-08-24). Nothing that identifies
+  this machine or its owner, and nothing secret, goes into a commit.** No
+  absolute paths from a home directory — write `%LOCALAPPDATA%`,
+  `%USERPROFILE%`, `$HOME`, `<repo>`, never the real value; no usernames,
+  hostnames, e-mail addresses, IP addresses, tokens, API keys, cookies,
+  `.mcp.json`, shell histories, screenshots of other windows, file
+  listings or contents from outside the repo, and no paths into other
+  projects on the machine (the wall repo's location is an environment
+  variable, not a default). Probe memos, measurement logs and commit
+  messages are scrubbed before they are committed (`git grep -n -i -E
+  "C:\\Users|/Users/[a-z]+|@gmail|ghp_|sk-"` over the tracked files must
+  stay empty); the `.gitignore`d files stay ignored. Ask Ben before
+  committing anything you are unsure about — a leaked value lives in the
+  history for good.
 - **Never leave fmt/clippy red.** CI runs `-D warnings`; so should you.
   The per-PR clippy runs on Linux only; the 3-OS matrix that lints
   everything is the Nightly. So OS-specific behaviour is **data, not

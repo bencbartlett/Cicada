@@ -976,6 +976,161 @@ format, doc 08.
 Every node: the three tests, the doc format, catalog regenerated in the
 same commit (skill `add-stdlib-node`).
 
+## Usage findings 2026-08-24 (Ben's first user test) and wave 4
+
+Ben user-tested the app on 2026-08-24 and pasted the findings below; each
+carries a verdict and the wave-4 package that owns it. The order Ben set:
+these first, then the rest of wave 4 (item 5 scrub caching, catalog C2,
+the follow-ups).
+
+| # | Finding (Ben's words, condensed) | Verdict | Package |
+|---|---|---|---|
+| U1 | Which launch commands run every time? `fetch_occt.py` takes long. | Measured: `fetch_occt.py --print-env` is 0.2 s (the warm path verifies 88 libraries by size); what takes minutes is the first fetch and any `cargo run` that rebuilds. Per launch the ONLY need is the kernel's loader path, and the launcher below removes even that (the run-time libraries beside the binary on Windows, the rpath on macOS). | L1–L2 |
+| U2 | A bundled Windows/macOS executable: a dedicated app window (a browser wrapper is fine) plus a terminal that builds and runs the server. | Build. `cicada app` (serve + the system browser in `--app` window mode), `tools/launch/` (the dev launcher: a terminal that builds if needed and runs; the bundle: a folder with the binary, its run-time libraries and a double-clickable `Cicada.cmd` / `Cicada.app`). Tauri stays out of v0.1 (DECISIONS). | L1–L3 |
+| U3 | Run the server without a file; File → Open picks the `.cic`; close and open another in the same session. | Build. `cicada serve` / `app` without a path serves the user's home directory as the root and opens nothing; `GET /api/files` lists directories and pipelines under the root (never outside it); the app gets File → Open… / Recent / Close and a landing picker; switching pipelines reuses the server's per-pipeline sessions. | O1–O2 |
+| U4 | Grid lines ~50 % less visible, closer to the background. | Build (one token pair per theme). | B1 |
+| U5 | A small XYZ gimbal indicator in the viewport's upper-left. | Build. | B1 |
+| U6 | PCB traces: minimum corner radius ~1 unit; parallel segments never overlap — lanes with ~¼ unit clearance. | Build: a trace router of our own replacing React Flow's smooth-step path. | B2 |
+| U7 | Port value previews need too much zoom. | Build: one LOD tier earlier (docs/16 table revised). | B1 |
+| U8 | A preview pop-out button: a second synced window for a second monitor. | Build: `?view=viewport` (the SPA as a viewport-only observer) opened by a viewport button. | O3 |
+| U9 | No way to type a primitive input (e.g. `construct_domain`'s `end = 40.0`) on a placed node; any keyboard-typeable unconnected input should be directly editable. | Build: the server already accepts `set_param` on ANY node's port (`apply_param`) and the view-model already carries each input's literal (`InputView.literal`) — the gap is the UI: inline editors on unconnected literal-typed ports, on the canvas and in the inspector. | B3 |
+| U10 | Slider shortcuts like Grasshopper's `1<20` and `0.0<0.5<1.0`. | Build: search-to-place parses them; the decimals typed set the step. | B4 |
+| U11 | Sliders collapse to a single-unit-tall node (GH-like); refuse when min/max/step are wired. | Build: the sidecar's existing `collapsed` override, a `set_collapsed` intent (an op), the collapsed slider view. | B4 |
+| U12 | Repo is public now → a big WIP disclaimer on the README. | **Done 2026-08-24.** | — |
+| U13 | Public → never leak machine contents, passwords, anything identifiable; say so where agents read. | **Done 2026-08-24**: the AGENTS.md working rule, and a scrub of the four tracked files that carried the owner's home path (the OCCT probe memo, the probe crate's patch path, a conda helper's default cache dir, the wall layout tool's default wall path — now `CICADA_WALL_REPO`, required). The git HISTORY still holds that username inside those paths (no secrets anywhere); rewriting it is Ben's call and not recommended. | — |
+| U14 | Why does the wall's carve take so much longer now — solids instead of meshes? | **Measured 2026-08-24**, release engine, fresh cache: cold 3.93 s (3.7–3.9 s on 08-20/21), warm 0.15 ms; the debug engine 6.5 s. The wall is still entirely mesh-tier (`mesh_loft`, `mesh_difference`, `text_solids`, …); no kernel change touched it. What reads as slower: `cargo run` builds DEBUG (6.5 s, after a rebuild); every engine whose node versions moved (14 bumps in the count-guard work, the `mesh_*` renames) recomputes the wall once, cold; and the app's first paint adds the 368 MB display encode and the browser's decode on top of the carve (13.8 s to open at 2 threads in the heavy spec). The launcher always runs release. | — |
+
+### Wave 4 — work packages (contracts frozen 2026-08-24)
+
+Three worktrees (`%LOCALAPPDATA%\cicada-wt\<name>`, private target dirs,
+`CARGO_INCREMENTAL=0`), each package implement → adversarial review →
+fix, committed on the branch, never pushed; merge order open → launch →
+canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
+
+**Track O — `wt/open` (server http + cli + web shell).**
+- **O1 — the root and the file list.** `cicada serve [path]` / `cicada
+  app [path]`: no path → root = the user's home directory, nothing
+  opened; a directory → root = it; a `.cic` → root = its parent, that
+  file opened (`?pipeline=` as today — pipelines are root-relative).
+  `GET /api/files?dir=<root-relative>` (token-gated) → `{root: <display
+  name>, dir, parent: string|null, entries: [{name, kind: "dir" |
+  "pipeline", modified_ms}]}`: directories (no dot-directories, no
+  `node_modules` / `target`) and `*.cic` files, directories first,
+  case-insensitive name order; `dir` is normalised and every escape —
+  `..`, an absolute path, a symlink whose canonical path leaves the root
+  — is `400 path_not_allowed`; an unreadable directory is `403 io_error`;
+  documented in docs/13 §HTTP surface; route tests for the shape and for
+  every escape. The server still binds 127.0.0.1 only, and the list
+  reveals nothing above the root.
+- **O2 — File → Open / Recent / Close.** The top bar gains a File menu:
+  Open… (a dialog over `/api/files` with breadcrumbs, directories and
+  pipelines, keyboard navigation; Enter / double-click opens), Recent
+  (the last 10 root-relative pipelines this origin opened,
+  `localStorage`), Close (back to the landing picker). Landing: a page
+  with `?token=` but no `?pipeline=` IS the picker. Opening switches the
+  `pipeline` URL parameter and (re)connects the socket to that
+  pipeline's session — the server's sessions are per pipeline already;
+  the store is reset by the join's snapshot; `history.pushState`, so Back
+  returns to the previous file. docs/16 §Application layout;
+  `web/e2e/files.spec.ts` (the scratch `examples/` tree lists; opening
+  `02-solids.cic` then `06-lists.cic` shows each graph; Recent holds
+  both; Close shows the picker).
+- **O3 — the pop-out viewport.** A viewport header button opens
+  `window.open(<same URL> + "&view=viewport", "cicada-viewport")`; with
+  `view=viewport` the SPA renders the viewport alone (no canvas, panels
+  or ribbon), connected as an observer that never takes the writer lease
+  (an additive `role=observer` request honoured by the server's join — a
+  second window must not steal the first's lease, even across a
+  reconnect). Same pipeline, same display set, its own camera (camera
+  sync is explicitly not in this slice). docs/13 (the join hint),
+  docs/16 §Viewport conventions; a Playwright spec: the pop-out shows
+  the geometry and stays read-only while the main window keeps writing.
+
+**Track L — `wt/launch` (cli + tools + docs).**
+- **L1 — `cicada app [path]`.** = `serve` + opens the app window: a
+  Chromium-based browser in `--app=<url>` mode when one is found
+  (Windows: Edge then Chrome via the registry's App Paths or the usual
+  Program Files dirs; macOS: `open -na "Google Chrome" --args
+  --app=<url>`, then Edge; Linux: `xdg-open`), else the default browser
+  on the plain URL; `--no-browser`; the URL is printed either way;
+  Ctrl-C stops the server. The terminal it runs in is the server
+  console. Browser discovery is a pure function over a probed
+  environment, unit-tested.
+- **L2 — no loader path at launch.** `tools/fetch_occt.py --bundle
+  <dir>` copies the kernel's run-time library closure (the set
+  `--check-closure` verifies) beside a `cicada` binary so Windows finds
+  them without `PATH` (the exe's directory is searched first); a macOS
+  binary already carries the rpath its build env set, and the bundle
+  rewrites it to `@executable_path/lib` with `install_name_tool`;
+  idempotent and verified by size like the prefix. AGENTS.md's palette
+  states the rule: the env is for BUILDING and for dev shells; a bundled
+  binary needs none.
+- **L3 — launchers and the bundle.** `tools/launch/Cicada.cmd` (Windows)
+  and `tools/launch/Cicada.command` (macOS): a visible terminal that (1)
+  builds `cicada` in release with the SPA embedded when it is missing or
+  stale (`npm run build` + `cargo build --release -p cicada-cli
+  --features embed`, the OCCT env and cmake found the way AGENTS.md
+  says, every failure printed and the window kept open), (2) bundles the
+  runtime beside it (L2), (3) runs `cicada app` with no arguments — the
+  home-root picker (O1). `python tools/launch/bundle.py --out dist/`
+  produces the redistributable folder — the binary, its libraries,
+  `Cicada.cmd` / `Cicada.app` (a minimal `Contents/Info.plist` plus a
+  launcher script) and a README — from an existing release build; CI's
+  macOS and Windows jobs run `bundle.py --check` on their built binary
+  (the closure is present; the binary answers `--help` from inside the
+  bundle with no env). README "Run it" section; AGENTS.md palette row.
+  The process-level smoke: the bundle's `cicada app --no-browser`
+  answers `/health`.
+
+**Track B — `wt/canvas` (web canvas + viewport + docs/16).** Four
+packages in sequence, each reviewed.
+- **B1 — visuals + LOD.** The grid tokens move halfway toward the
+  background (both themes; docs/16 §Theme records the values); a gimbal
+  — the X/Y/Z triad in the viewport's upper-left, following the camera
+  each frame, axis colours per docs/16 §Viewport conventions,
+  non-interactive in this slice; output value summaries appear one tier
+  earlier (`near`, zoom ≥ 0.65, instead of `closest`), the docs/16 LOD
+  table revised, `grid.test.ts` pinned.
+- **B2 — traces.** A router of our own (`web/src/canvas/trace.ts`, pure,
+  unit-tested) replaces `getSmoothStepPath` in trace mode: orthogonal
+  runs with 45° corners whose radius is ≥ 1 grid unit (`hello.unitPx`),
+  and lanes — edges whose horizontal or vertical runs share a channel are
+  offset from each other by ¼ unit so no two parallel segments overlap,
+  assigned deterministically (by the sorted source/target positions,
+  then the edge id) so the layout never flickers across re-renders;
+  stroke widths and colours unchanged; the connection line
+  (`ConnectionLine.tsx`) uses the same path. docs/16 §Canvas conventions.
+- **B3 — typed literals on unconnected inputs.** Every input port that is
+  not wired and whose type takes a literal (`Number`, `Integer`, `Text`,
+  `Boolean` and their `?` forms; never a transport-driven port) shows
+  its value as an editable chip on the canvas node row and in the
+  inspector's Node tab — the kwarg's literal from `InputView.literal`,
+  or the catalog default greyed when the text carries none; double-click
+  (canvas) / click (inspector) → an input; Enter commits `set_param
+  {node, port, value}` spelled by `paramValueText`; Esc cancels; a wired
+  port shows no editor. If the writer's `set_param` cannot ADD a kwarg
+  the call lacks, that is a `cicada-lang` change first (skill
+  `dialect-change`, fixtures both ways). `web/e2e`: place
+  `construct_domain`, type `40` into `end`, the text reads `end=40.0`
+  and the node is green.
+- **B4 — sliders.** (a) Search-to-place parses `A<B` and `A<B<C` (GH's
+  grammar; negatives allowed): min A, max B (or C), value A (or B); step
+  = 10^-(the most decimals typed), integers → step 1 and an `Integer`
+  slider; `min < max` and `min ≤ value ≤ max` or a notice; the row
+  previews the slider it will make; placed as ONE op (undo removes it
+  whole). (b) Collapsed sliders: the sidecar's `collapsed` override
+  reaches the view-model (`NodeView.collapsed`) and a `set_collapsed
+  {node, collapsed}` intent writes it as an op (moves are ops; so is
+  this); a collapsed slider is one grid unit tall — name, track and
+  value on one row, GH-like — refused with a notice while any of `min`
+  / `max` / `step` is wired; toggled from the node's context menu and
+  the inspector. docs/16; `search.spec.ts` and a slider spec.
+
+Merge: open → launch → canvas (the two CLI tracks both touch `main.rs`
+and AGENTS.md; canvas and open both touch `Viewport.tsx`'s header —
+small, by hand). Then the verify-change loop on main, the wall hash
+unchanged, and the push.
+
 ## Follow-ups (found by the v0.1 reviews and measurements; scheduled, not yet placed)
 
 - **The first Nightlies (2026-08-22..24)** — **read and fixed

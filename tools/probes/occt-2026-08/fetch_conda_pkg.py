@@ -23,6 +23,7 @@ import argparse
 import hashlib
 import io
 import json
+import os
 import sys
 import tarfile
 import urllib.request
@@ -103,7 +104,11 @@ def fetch_one(name: str, cache: Path, subdir: str, version: str | None, build: s
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--cache", default=r"C:\Users\benja\AppData\Local\cicada-occt\deps")
+    ap.add_argument(
+        "--cache",
+        default=os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "cicada-occt", "deps"),
+        help="download cache dir (default: %%LOCALAPPDATA%%/cicada-occt/deps)",
+    )
     ap.add_argument("--subdir", default="win-64")
     ap.add_argument("--version")
     ap.add_argument("--build")
