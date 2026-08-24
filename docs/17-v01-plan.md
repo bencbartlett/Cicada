@@ -1093,9 +1093,16 @@ canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
   --sign -`) because `install_name_tool` invalidates the linker's
   signature and Apple silicon kills an invalidly signed binary at exec;
   beyond the size check the bundle refuses, BEFORE copying, a prefix
-  whose import closure is open and a binary whose own imports it cannot
+  whose import closure is open, a binary whose own imports it cannot
   satisfy (the first real run found `combase.dll` missing from the
-  script's Windows system-DLL set — added); Linux is refused loudly (no
+  script's Windows system-DLL set — added) and, on macOS, a machine
+  without `install_name_tool` / `codesign` (moved ahead of the copy in
+  the 2026-08-24 verify pass, so that refusal too leaves the directory as
+  it was; the test asserts it); the re-proof of 2026-08-24 also showed
+  that the bundled binary still needs Python 3 (`CICADA_PYTHON` or PATH)
+  — `run` / `serve` start the script host at launch whether or not the
+  pipeline has script nodes — a requirement L3's launcher must state and
+  not the bundle's to remove; Linux is refused loudly (no
   rpath comes from the build env there; `$ORIGIN/lib` is set at link
   time, L3's or later); a stamp `<dir>/.cicada-occt-bundle.json` records
   names + sizes for L3's `--check`; the macOS branch has run only against

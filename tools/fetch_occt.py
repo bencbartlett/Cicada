@@ -1178,24 +1178,35 @@ def run_tool(argv: list[str]) -> None:
         raise FetchError(f"{' '.join(argv)} failed ({error.returncode}): {error.stderr.strip()}") from error
 
 
-def rewrite_macos_rpath(plan: BundlePlan, log, run, which) -> bool:
-    """Point the binary's rpath at the bundle's `lib/` and re-sign it. `run`
-    and `which` are injectable so the branch is testable where the tools are
-    not (this suite runs on Windows and Linux too). Returns True when the
-    binary was edited."""
+def plan_macos_rpath(plan: BundlePlan, which) -> list[list[str]]:
+    """The `install_name_tool` edits that point the binary's rpath at the
+    bundle's `lib/` (empty when it already does), with the tools they need
+    checked for — run BEFORE anything is copied, so a machine without the
+    Xcode command line tools is refused while the directory is still as it
+    was. `which` is injectable so the branch is testable where the tools are
+    not (this suite runs on Windows and Linux too)."""
     data = plan.binary.read_bytes()
     if data[:4] not in MACHO_MAGICS:
         raise FetchError(f"{plan.binary} is not a Mach-O binary")
     edits = rpath_edits(macho_rpaths(data), plan.layout)
+    if edits:
+        for tool in ("install_name_tool", "codesign"):
+            if which(tool) is None:
+                raise FetchError(
+                    f"{tool} is not on PATH; rewriting the binary's rpath needs the Xcode command line tools "
+                    "(xcode-select --install)"
+                )
+    return edits
+
+
+def apply_macos_rpath(plan: BundlePlan, edits: list[list[str]], log, run) -> bool:
+    """Run the edits [`plan_macos_rpath`] planned and re-sign the binary —
+    after the libraries are in place, so the binary never points at an empty
+    `lib/`. `run` is injectable like `which`. Returns True when the binary
+    was edited."""
     if not edits:
         log(f"{plan.binary.name}: rpath is already {BUNDLE_RPATH}")
         return False
-    for tool in ("install_name_tool", "codesign"):
-        if which(tool) is None:
-            raise FetchError(
-                f"{tool} is not on PATH; rewriting the binary's rpath needs the Xcode command line tools "
-                "(xcode-select --install)"
-            )
     for edit in edits:
         log(f"install_name_tool {' '.join(edit)} {plan.binary.name}")
         run(["install_name_tool", *edit, str(plan.binary)])
@@ -1239,8 +1250,9 @@ def bundle(manifest: dict, layout: Layout, directory: Path, log, run=run_tool, w
     resized is copied again, and a library a previous bundle put there that
     the prefix no longer carries is removed (only what the stamp recorded —
     nothing else in the directory is touched). Refuses BEFORE copying a
-    prefix whose import closure is open and a binary whose own imports the
-    bundle cannot satisfy — a refusal leaves the directory as it was.
+    prefix whose import closure is open, a binary whose own imports the
+    bundle cannot satisfy and, on macOS, a machine without the tools the
+    rpath rewrite needs — a refusal leaves the directory as it was.
     Returns True when anything changed."""
     plan = BundlePlan(layout, directory)
     if not plan.binary.is_file():
@@ -1257,6 +1269,7 @@ def bundle(manifest: dict, layout: Layout, directory: Path, log, run=run_tool, w
         raise FetchError(
             f"{plan.binary.name} imports {', '.join(missing)}, which neither the bundle nor the OS provides"
         )
+    rpath_plan = plan_macos_rpath(plan, which) if layout.is_macos else []
     previous = read_bundle_stamp(plan)
     plan.library_dir.mkdir(parents=True, exist_ok=True)
     copied: list[str] = []
@@ -1277,7 +1290,7 @@ def bundle(manifest: dict, layout: Layout, directory: Path, log, run=run_tool, w
             if name not in current and stale.is_file():
                 stale.unlink()
                 removed.append(name)
-    relinked = layout.is_macos and rewrite_macos_rpath(plan, log, run, which)
+    relinked = layout.is_macos and apply_macos_rpath(plan, rpath_plan, log, run)
     stamp = {
         "subdir": layout.subdir,
         "occt_version": manifest["occt_version"],

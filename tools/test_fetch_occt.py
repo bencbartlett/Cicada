@@ -739,6 +739,19 @@ class BundleTest(unittest.TestCase):
         self.write_macos_binary(directory, [str(layout.library_dir)])
         with self.assertRaisesRegex(fo.FetchError, "install_name_tool is not on PATH.*xcode-select"):
             fo.bundle(self.manifest, layout, directory, self.log, run=lambda argv: None, which=lambda tool: None)
+        # Refused BEFORE the copy: the directory is as it was (no lib/, no stamp).
+        self.assertEqual(sorted(p.name for p in directory.iterdir()), ["cicada"])
+        # codesign missing is refused the same way, install_name_tool present or not.
+        with self.assertRaisesRegex(fo.FetchError, "codesign is not on PATH.*xcode-select"):
+            fo.bundle(
+                self.manifest,
+                layout,
+                directory,
+                self.log,
+                run=lambda argv: None,
+                which=lambda tool: "/usr/bin/install_name_tool" if tool == "install_name_tool" else None,
+            )
+        self.assertEqual(sorted(p.name for p in directory.iterdir()), ["cicada"])
 
         def failing(argv):
             raise fo.FetchError(f"{argv[0]} failed (1): boom")
