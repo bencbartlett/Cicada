@@ -103,13 +103,16 @@ test("a Grasshopper name finds the node that replaces it first, the row says whi
     "title",
     "count: Integer — Number of values.",
   );
-  // Anchored at the start: from the near tier up the row's hover also
-  // carries the value line below the doc (docs/16 LOD table, B1), and the
-  // default zoom is near.
-  await expect(seriesNode.locator(".cn-port.cn-out:not(.cn-empty)")).toHaveAttribute(
-    "title",
-    /^out: \[Number\] — `count` numbers, `start` first, each `step` after the previous\.(\n|$)/,
-  );
+  // From the near tier up (the default zoom) the row's hover also carries
+  // the value line under the doc — exactly the text the row's
+  // `.cn-port-value` shows (docs/16 LOD table, B1); below near it is the
+  // doc alone. Both read in ONE evaluate, so the pair is from one render.
+  const SERIES_OUT_DOC = "out: [Number] — `count` numbers, `start` first, each `step` after the previous.";
+  const hover = await seriesNode.locator(".cn-port.cn-out:not(.cn-empty)").evaluate((el) => ({
+    title: el.getAttribute("title"),
+    value: el.querySelector(".cn-port-value")?.textContent ?? null,
+  }));
+  expect(hover.title).toBe(hover.value === null ? SERIES_OUT_DOC : `${SERIES_OUT_DOC}\n${hover.value}`);
   await expect(page.locator(".react-flow__node[data-id='size'] .cn-port.cn-out:not(.cn-empty)")).toHaveAttribute(
     "title",
     /^out: Number — The current value, within `min\.\.=max`\./,

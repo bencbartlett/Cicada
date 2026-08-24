@@ -1,6 +1,7 @@
+// @vitest-environment jsdom
 import * as THREE from "three";
-import { describe, expect, it } from "vitest";
-import { GIMBAL_MARGIN_PX, GIMBAL_SIZE_PX, axisDirections, gimbalRect } from "./gimbal";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GIMBAL_MARGIN_PX, GIMBAL_SIZE_PX, Gimbal, axisDirections, gimbalRect } from "./gimbal";
 
 const close = (actual: readonly number[], expected: readonly number[]) => {
   expect(actual).toHaveLength(expected.length);
@@ -65,5 +66,83 @@ describe("axisDirections — what the gimbal draws, as the camera sees the world
     // The camera rolled +90° about its view axis; the world's X now reads as screen-down.
     close(d.x, [0, -1, 0]);
     close(d.y, [1, 0, 0]);
+  });
+});
+
+/** The viewport's default pose (`scene.ts`): Z up, looking at the origin from +x/-y/+z. */
+function defaultCamera(): THREE.PerspectiveCamera {
+  const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000);
+  camera.up.set(0, 0, 1);
+  camera.position.set(7, -9, 6);
+  camera.lookAt(0, 0, 0);
+  return camera;
+}
+
+describe("Gimbal — directions() reports the pose follow() put on the gimbal's OWN camera", () => {
+  // jsdom has no 2D canvas (the `canvas` package is not installed): the
+  // label textures only need a context that accepts the drawing calls.
+  beforeEach(() => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
+      () =>
+        ({
+          beginPath() {},
+          arc() {},
+          fill() {},
+          fillText() {},
+          fillStyle: "",
+          font: "",
+          textAlign: "",
+          textBaseline: "",
+        }) as unknown as CanvasRenderingContext2D,
+    );
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const colors = { x: new THREE.Color("#ff0000"), y: new THREE.Color("#00ff00"), z: new THREE.Color("#0000ff") };
+  const ink = new THREE.Color("#000000");
+
+  it("at rest it draws the identity pose", () => {
+    const gimbal = new Gimbal(colors, ink);
+    const d = gimbal.directions();
+    close(d.x, [1, 0, 0]);
+    close(d.y, [0, 1, 0]);
+    close(d.z, [0, 0, 1]);
+    gimbal.dispose();
+  });
+
+  it("after follow(camera) it draws the main camera's view of the axes, from 3 units out looking at its origin", () => {
+    const camera = defaultCamera();
+    const gimbal = new Gimbal(colors, ink);
+    gimbal.follow(camera);
+    const drawn = gimbal.directions();
+    const expected = axisDirections(camera.quaternion);
+    close(drawn.x, expected.x);
+    close(drawn.y, expected.y);
+    close(drawn.z, expected.z);
+    expect(drawn.z[1]).toBeGreaterThan(0.7); // and it is not the identity: Z reads up
+    // The gimbal's camera stands 3 units from the triad's origin on the main
+    // camera's bearing, looking back at it.
+    expect(gimbal.camera.position.length()).toBeCloseTo(3, 9);
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(gimbal.camera.quaternion);
+    close(forward.toArray(), gimbal.camera.position.clone().negate().normalize().toArray());
+    gimbal.dispose();
+  });
+
+  it("follows every call, not only the first: an orbit about Z turns X and Y and keeps Z where it was", () => {
+    // The review's mutation (2026-08-24): a `follow()` that never moves the
+    // gimbal's camera. `stats().gimbal` used to read the MAIN camera, so the
+    // app-level test could not see it; `directions()` reads what is drawn.
+    const camera = defaultCamera();
+    const gimbal = new Gimbal(colors, ink);
+    gimbal.follow(camera);
+    const before = gimbal.directions();
+    camera.position.applyAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
+    camera.lookAt(0, 0, 0);
+    gimbal.follow(camera);
+    const after = gimbal.directions();
+    expect(Math.hypot(after.x[0]! - before.x[0]!, after.x[1]! - before.x[1]!)).toBeGreaterThan(0.5);
+    expect(Math.hypot(after.y[0]! - before.y[0]!, after.y[1]! - before.y[1]!)).toBeGreaterThan(0.5);
+    close(after.z, before.z);
+    gimbal.dispose();
   });
 });

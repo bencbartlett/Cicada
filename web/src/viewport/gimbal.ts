@@ -173,6 +173,17 @@ export class Gimbal {
   }
 
   /**
+   * What the gimbal DRAWS: each world axis as the gimbal's OWN camera sees
+   * it. This — never the main camera's pose — is what `stats().gimbal`
+   * reports, so a gimbal that stopped following the view (a `follow()`
+   * that does nothing) reads as frozen to a test while the main camera
+   * turns (review finding, 2026-08-24).
+   */
+  directions(): AxisDirections {
+    return axisDirections(this.camera.quaternion);
+  }
+
+  /**
    * Draw over the finished main render, into the corner rectangle of a
    * `width` × `height` CSS-px canvas. The color buffer is kept and the
    * depth buffer cleared, so the triad sits on top of the geometry; the

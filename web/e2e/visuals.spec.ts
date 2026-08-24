@@ -6,7 +6,8 @@
  *   - the gimbal is drawn in the viewport's upper-left — its three hues
  *     are in that corner of the WebGL canvas's own pixels, and nowhere
  *     else along the top edge — and it follows the camera: an orbit turns
- *     the axis directions `scene().gimbal` reports, and the pixels move;
+ *     the axis directions `scene().gimbal` reports (the GIMBAL camera's
+ *     pose, `Gimbal.directions()`) AND moves the red pixels' centroid;
  *   - the output value summaries show at the `near` zoom tier, not only
  *     at `closest`, and not at `mid`.
  *
@@ -72,12 +73,14 @@ interface HueCounts {
  * Render the viewport to PNG (`__cicada.screenshot()`, the `/debug/screenshot`
  * path) and count strongly red / green / blue pixels inside a CSS-px
  * rectangle of it — the axis hues. The PNG is at the drawing buffer's
- * resolution (CSS px × devicePixelRatio). Returns the counts and the PNG.
+ * resolution (CSS px × devicePixelRatio). Returns the counts, the centroid
+ * of the strongly-red pixels (the X bar and its disc; CSS px from the
+ * rectangle's top-left, `null` when there are none) and the PNG.
  */
 async function axisHuesIn(
   page: Page,
   rect: { left: number; top: number; width: number; height: number },
-): Promise<{ counts: HueCounts; png: Buffer }> {
+): Promise<{ counts: HueCounts; redCentroid: [number, number] | null; png: Buffer }> {
   const result = await page.evaluate(async (r) => {
     const w = window as unknown as { __cicada: { screenshot: () => Promise<Blob> } };
     const blob = await w.__cicada.screenshot();
@@ -95,20 +98,27 @@ async function axisHuesIn(
     const height = Math.min(Math.round(r.height * dpr), canvas.height - y);
     const data = context.getImageData(x, y, width, height).data;
     const counts = { red: 0, green: 0, blue: 0, total: width * height };
+    let redX = 0;
+    let redY = 0;
     // "Strongly X": the channel leads the other two by a wide margin — the
     // grey ground and the solids' muted node colors never qualify.
-    for (let i = 0; i < data.length; i += 4) {
+    for (let i = 0, p = 0; i < data.length; i += 4, p += 1) {
       const [rr, gg, bb] = [data[i]!, data[i + 1]!, data[i + 2]!];
-      if (rr > gg + 60 && rr > bb + 60) counts.red += 1;
-      else if (gg > rr + 50 && gg > bb + 50) counts.green += 1;
+      if (rr > gg + 60 && rr > bb + 60) {
+        counts.red += 1;
+        redX += p % width;
+        redY += Math.floor(p / width);
+      } else if (gg > rr + 50 && gg > bb + 50) counts.green += 1;
       else if (bb > rr + 50 && bb > gg + 50) counts.blue += 1;
     }
+    const redCentroid: [number, number] | null =
+      counts.red === 0 ? null : [redX / counts.red / dpr, redY / counts.red / dpr];
     const bytes = new Uint8Array(await blob.arrayBuffer());
     let binary = "";
     for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-    return { counts, png: btoa(binary) };
+    return { counts, redCentroid, png: btoa(binary) };
   }, rect);
-  return { counts: result.counts, png: Buffer.from(result.png, "base64") };
+  return { counts: result.counts, redCentroid: result.redCentroid, png: Buffer.from(result.png, "base64") };
 }
 
 async function open(page: Page): Promise<void> {
@@ -173,14 +183,21 @@ test("U5 — the gimbal is drawn in the viewport's upper-left and follows the ca
   expect(inside.counts.blue, JSON.stringify(inside.counts)).toBeGreaterThan(20);
   // … and not in the same-sized square to its right along the top edge,
   // which holds only the ground and the scene (the solids wear muted
-  // node colors; the ground triad at the origin sits far from the top).
+  // node colors; the ground triad at the origin sits far from the top). A
+  // triad drawn without the scissor — at the full viewport's scale — would
+  // put hundreds there; a handful tolerates another GL's anti-aliasing.
   const beside = { left: GIMBAL.left + GIMBAL.size + 20, top: GIMBAL.top, width: GIMBAL.size, height: GIMBAL.size };
   const outside = await axisHuesIn(page, beside);
-  expect(outside.counts.red + outside.counts.green + outside.counts.blue, JSON.stringify(outside.counts)).toBe(0);
+  expect(outside.counts.red + outside.counts.green + outside.counts.blue, JSON.stringify(outside.counts)).toBeLessThan(5);
   await evidence(page, testInfo, "gimbal-dark.png");
 
   // Orbit (Rhino preset: right button) a quarter of the width to the right:
-  // the camera swings about Z, the X/Y directions turn, Z stays up.
+  // the camera swings about Z, the X/Y directions turn, Z stays up. Two
+  // oracles, both of the GIMBAL (review finding 2026-08-24 — the directions
+  // used to come from the main camera, which turns whether or not the
+  // gimbal does, and nothing asserted the drawn pixels moved: a gimbal
+  // frozen at its first pose stayed green): `scene().gimbal` is the pose of
+  // the gimbal's own camera, and the red centroid is the drawing.
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height / 2;
   await page.mouse.move(cx, cy);
@@ -197,11 +214,26 @@ test("U5 — the gimbal is drawn in the viewport's upper-left and follows the ca
   expect(after.z[1]).toBeGreaterThan(0.5);
   for (const axis of [after.x, after.y, after.z]) expect(Math.hypot(...axis)).toBeCloseTo(1, 6);
   // The drawing followed: the hues are still in the square, and the red
-  // (X) pixels moved with the axis.
+  // (X) pixels MOVED — the centroid of the X bar + disc shifts with the
+  // axis. The X direction's screen component changed by > 0.2 (above) and
+  // the red mass sits ~24 CSS px out from the triad's centre, so the
+  // centroid moves by > ~5 CSS px; 4 is the bound, DPR-independent (the
+  // centroid is in CSS px).
   const turned = await axisHuesIn(page, square);
   expect(turned.counts.red).toBeGreaterThan(20);
   expect(turned.counts.green).toBeGreaterThan(20);
   expect(turned.counts.blue).toBeGreaterThan(20);
+  if (inside.redCentroid === null || turned.redCentroid === null) throw new Error("no red pixels in the gimbal square");
+  const moved = Math.hypot(
+    turned.redCentroid[0] - inside.redCentroid[0],
+    turned.redCentroid[1] - inside.redCentroid[1],
+  );
+  expect(moved, `red centroid ${JSON.stringify(inside.redCentroid)} → ${JSON.stringify(turned.redCentroid)}`).toBeGreaterThan(4);
+  // The numbers behind the two oracles, as evidence beside the PNGs.
+  writeFileSync(
+    testInfo.outputPath("gimbal-follow.json"),
+    JSON.stringify({ directions: { before, after }, redCentroidCssPx: { before: inside.redCentroid, after: turned.redCentroid, moved } }, null, 2),
+  );
   await viewportEvidence(testInfo, "viewport-gimbal-orbited.png", turned.png);
 
   // The light theme recolors it (darker hues on a light ground) and keeps it in place.

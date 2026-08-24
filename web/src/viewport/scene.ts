@@ -32,7 +32,7 @@ import {
 } from "./materials";
 import { EdgeBuilder, type EdgeJobHandle } from "./edgeBuilder";
 import { EDGE_QUIET_MS, EDGE_THRESHOLD_DEG, EDGE_TRIANGLE_LIMIT, edgeBuildAllowed, edgePolicy } from "./edgePolicy";
-import { Gimbal, axisDirections, type AxisColors, type AxisDirections } from "./gimbal";
+import { Gimbal, type AxisColors, type AxisDirections } from "./gimbal";
 import { decodePickPixel } from "./picking";
 import {
   type SceneStore,
@@ -131,7 +131,7 @@ export interface ExtendedStats extends ViewportStats {
   pickPasses: number;
   /** Main renders so far. */
   renders: number;
-  /** What the gimbal draws: each world axis as the camera sees it (`gimbal.ts`). */
+  /** What the gimbal draws: each world axis as the GIMBAL's camera sees it (`Gimbal.directions`). */
   gimbal: AxisDirections;
 }
 
@@ -1208,7 +1208,9 @@ export class ViewportScene {
       edgesDeferredBuilt: this.edgesDeferredBuilt,
       pickPasses: this.pickPasses,
       renders: this.renders,
-      gimbal: axisDirections(this.camera.quaternion),
+      // The GIMBAL's camera, not the main one: what is drawn, so a gimbal
+      // that stopped following reads as frozen here while the view turns.
+      gimbal: this.gimbal.directions(),
     };
   }
 }
