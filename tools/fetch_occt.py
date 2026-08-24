@@ -1253,7 +1253,8 @@ def bundle(manifest: dict, layout: Layout, directory: Path, log, run=run_tool, w
     prefix whose import closure is open, a binary whose own imports the
     bundle cannot satisfy and, on macOS, a machine without the tools the
     rpath rewrite needs — a refusal leaves the directory as it was.
-    Returns True when anything changed."""
+    Returns True when anything changed — a library, the rpath or the stamp;
+    a second run over the same prefix changes nothing and writes nothing."""
     plan = BundlePlan(layout, directory)
     if not plan.binary.is_file():
         raise FetchError(
@@ -1291,22 +1292,31 @@ def bundle(manifest: dict, layout: Layout, directory: Path, log, run=run_tool, w
                 stale.unlink()
                 removed.append(name)
     relinked = layout.is_macos and apply_macos_rpath(plan, rpath_plan, log, run)
+    # The stamp is a pure function of the prefix and the manifest — no
+    # wall-clock field — and is written only when its bytes would change, so a
+    # no-op bundle leaves the directory untouched (the review of 2026-08-24
+    # caught a stamp rewritten on every run; L3's `--check` compares against it).
     stamp = {
         "subdir": layout.subdir,
         "occt_version": manifest["occt_version"],
         "manifest_sha256": manifest["_sha256"],
         "library_dir": "." if layout.is_windows else "lib",
         "libraries": {source.name: source.stat().st_size for source in sources},
-        "written": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
     }
-    plan.stamp.write_text(json.dumps(stamp, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    text = json.dumps(stamp, indent=1, sort_keys=True) + "\n"
+    try:
+        stamped = plan.stamp.read_text(encoding="utf-8") != text
+    except OSError:
+        stamped = True
+    if stamped:
+        plan.stamp.write_text(text, encoding="utf-8")
     where = "beside the binary" if layout.is_windows else f"in {plan.library_dir.name}/ (rpath {BUNDLE_RPATH})"
     summary = f"bundle {directory}: {len(copied)} libraries copied, {kept} present at their sizes, {where}"
     if removed:
         summary += f"; removed {len(removed)} the prefix no longer carries ({', '.join(removed)})"
     log(summary)
     log(f"{plan.binary.name} needs no loader path: its imports resolve inside the bundle")
-    return bool(copied or removed or relinked)
+    return bool(copied or removed or relinked or stamped)
 
 
 # ---------------------------------------------------------------------------

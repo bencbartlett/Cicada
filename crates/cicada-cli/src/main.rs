@@ -66,6 +66,8 @@ enum Command {
     /// `serve`'s arguments, plus a Chromium-based browser in `--app` mode
     /// when one is installed (Edge or Chrome), else the default browser on
     /// the URL. The URL is printed either way; Ctrl-C stops the server.
+    /// Needs a SPA to open — `--web-dir web/dist` or the `embed` build —
+    /// and refuses without one (`serve` is the API-only shape).
     App {
         #[command(flatten)]
         serve: ServeCli,

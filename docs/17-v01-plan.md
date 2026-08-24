@@ -1072,6 +1072,24 @@ canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
   evidence is the unit table, the process-level test and one live run on
   the dev machine (the Edge app window opened, connected, and
   `/debug/screenshot` rendered through it).
+  **Review closure 2026-08-24**: the review ran `app` the way the palette
+  row spelled it — no `--web-dir`, no embed build — and the window would
+  have opened onto the server's "API only" page. Now `app` REFUSES before
+  binding when it has no SPA to open (`app::spa_source`: `--web-dir` with
+  its `index.html` first, else the embedded SPA, else the typed `NoSpa`
+  naming `--web-dir web/dist`, `--features embed` and `cicada serve` as
+  the API-only shape; a `--web-dir` without an `index.html` is refused
+  too — the server would serve a 404 there); the palette row names
+  `--web-dir web/dist`; `tests/app.rs` serves a stand-in SPA and reads
+  `/` (never "API only") and holds the refusal. The same pass made the
+  process-level test unable to stall `cargo test`: the server child is a
+  kill-on-drop guard with both pipes ours (the review's r5 mutation left
+  an orphan holding cargo's stderr for 13 minutes) and every console
+  line is read through a 60 s bound, so a line that never comes is a red
+  test. Still not done: no Playwright spec (as above); the merge with
+  `wt/open` must keep the ONE flattened `ServeCli` and add the O1
+  assertion (no path → the home root) on `app` — that rule does not
+  exist on this branch to test.
 - **L2 — no loader path at launch.** `tools/fetch_occt.py --bundle
   <dir>` copies the kernel's run-time library closure (the set
   `--check-closure` verifies) beside a `cicada` binary so Windows finds
@@ -1108,6 +1126,25 @@ canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
   names + sizes for L3's `--check`; the macOS branch has run only against
   mocked tools (no Mac here) — the first macOS bundle is the evidence
   that remains.
+  **Review closure 2026-08-24**: the stamp is now a pure function of the
+  prefix and the manifest — the wall-clock `written` field is gone — and
+  is written only when its bytes would change, so a no-op bundle leaves
+  the directory untouched (the idempotence test holds the stamp's bytes
+  AND mtime across the second run); the `--bundle takes exactly one
+  platform` refusal is tested through `main()` with a scratch `--dest`, a
+  `fetch` that fails loudly if reached and the message read off stderr
+  (the old assertion was the exit code alone, and under mutation would
+  have fetched into the real cache dir). Recorded for the first Mac run:
+  the contract's premise ("a macOS binary already carries the rpath its
+  build env set") holds for CI builds (`--github-env` adds the
+  `-Wl,-rpath,<prefix>/lib` RUSTFLAGS); a dev-shell Mac binary (the
+  `--print-env` env sets `DYLD_LIBRARY_PATH`, no rpath) carries none,
+  and `rpath_edits([])` answers `-add_rpath @executable_path/lib` —
+  tested in isolation. L3's first macOS `bundle.py --check` is the gate:
+  it should `otool -l` the binary before and after so the rpath list is
+  in the job log, and it is where conda's `@rpath/libTK*.7.8.dylib`
+  install names and the dylibs' own `@loader_path` rpaths get their
+  first real resolution.
 - **L3 — launchers and the bundle.** `tools/launch/Cicada.cmd` (Windows)
   and `tools/launch/Cicada.command` (macOS): a visible terminal that (1)
   builds `cicada` in release with the SPA embedded when it is missing or

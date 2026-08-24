@@ -831,8 +831,15 @@ initial load path; there is exactly one client-hydration code path.
   macOS: `open -na "Google Chrome" --args --app=<url>`, then Edge; Linux:
   `xdg-open`) — else the default browser on the plain URL; `--no-browser`
   opens nothing. The URL is printed either way, the terminal is the server
-  console, Ctrl-C stops the server. The decision is a pure function over a
-  probed environment (`cicada_cli::app::choose`), unit-tested per OS. A
+  console, Ctrl-C stops the server. The window needs a SPA to load —
+  `--web-dir` (with its `index.html`) first, else the embedded build's, the
+  server's own preference order — and with neither `app` refuses BEFORE
+  the server binds, naming both ways out: `cicada serve` is the API-only
+  shape, and the "API only" page above is never what an app window opens
+  onto (`cicada_cli::app::spa_source`, a pure function of the arguments,
+  the build and the disk; review finding 2026-08-24). The decision is a
+  pure function over a probed environment (`cicada_cli::app::choose`),
+  unit-tested per OS. A
   browser that fails to START is reported on stderr and the server keeps
   running with its URL on screen — the server is the product, never a dead
   server because a window failed. The windows the browser opens are its

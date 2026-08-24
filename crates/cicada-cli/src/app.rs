@@ -17,11 +17,83 @@
 //! code path reads ([`HostOs`] from `std::env::consts::OS`), never a
 //! `cfg`-gated body — every arm compiles on every OS (AGENTS.md working
 //! rule).
+//!
+//! The window needs something to load: `app` REFUSES, before the server
+//! binds, when the binary has no SPA to serve — no `--web-dir` and no
+//! embedded build ([`spa_source`]). `cicada serve` is the API-only shape;
+//! an app window onto the server's "API only" page is the one thing this
+//! command must never open (the first review's finding, 2026-08-24).
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::serve::{ServeArgs, serve_with};
+
+/// Where the app window's SPA comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Spa {
+    /// A built `web/dist` on disk, given as `--web-dir` (its `index.html`
+    /// exists). The server prefers it over an embedded SPA, and so does
+    /// this rule.
+    WebDir(PathBuf),
+    /// Baked into the binary (`--features embed`, the release shape).
+    Embedded,
+}
+
+/// Why `cicada app` has nothing to open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoSpa {
+    /// `--web-dir` names a directory without an `index.html` — the server
+    /// would serve the directory with a 404 where the app should be.
+    MissingIndex(PathBuf),
+    /// No `--web-dir`, and this build embeds no SPA: the server would
+    /// answer `/` with its "API only" page.
+    Nothing,
+}
+
+impl std::fmt::Display for NoSpa {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingIndex(dir) => write!(
+                f,
+                "--web-dir {} has no index.html — the app window would load a 404; \
+                 run `cd web && npm run build` first",
+                dir.display()
+            ),
+            Self::Nothing => write!(
+                f,
+                "cicada app has nothing to open: this build embeds no SPA and no --web-dir was given. \
+                 Pass --web-dir web/dist (after `cd web && npm run build`) or build with \
+                 `cargo build -p cicada-cli --features embed`; `cicada serve` is the API-only shape"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for NoSpa {}
+
+/// The rule for what the window loads — a pure function of the arguments,
+/// the build (`embedded` = `cfg!(feature = "embed")`) and the disk
+/// (`is_file`, injected so the tests need no files). `--web-dir` wins when
+/// given and must carry an `index.html` (the server's own preference
+/// order); otherwise the embedded SPA; else there is nothing, and
+/// `cicada app` refuses before binding anything.
+///
+/// # Errors
+///
+/// [`NoSpa`] — the reason, worded for the console.
+pub fn spa_source(
+    web_dir: Option<&Path>,
+    embedded: bool,
+    is_file: impl Fn(&Path) -> bool,
+) -> Result<Spa, NoSpa> {
+    match web_dir {
+        Some(dir) if is_file(&dir.join("index.html")) => Ok(Spa::WebDir(dir.to_owned())),
+        Some(dir) => Err(NoSpa::MissingIndex(dir.to_owned())),
+        None if embedded => Ok(Spa::Embedded),
+        None => Err(NoSpa::Nothing),
+    }
+}
 
 /// Arguments of `cicada app`.
 pub struct AppArgs {
@@ -388,9 +460,18 @@ pub fn open(launch: &Launch) -> std::io::Result<()> {
 ///
 /// # Errors
 ///
-/// Everything `cicada serve` refuses (bad paths, bind failures, a default
-/// pipeline that fails to open).
+/// Nothing to open ([`NoSpa`]: no `--web-dir` and no embedded SPA, or a
+/// `--web-dir` without an `index.html`) — refused before the server binds;
+/// then everything `cicada serve` refuses (bad paths, bind failures, a
+/// default pipeline that fails to open).
 pub fn app_command(args: &AppArgs) -> anyhow::Result<()> {
+    // The server would come up fine without a SPA — and answer `/` with its
+    // "API only" page, which is exactly what the window must never show.
+    spa_source(
+        args.serve.web_dir.as_deref(),
+        cfg!(feature = "embed"),
+        Path::is_file,
+    )?;
     serve_with(&args.serve, "app", |url| {
         if args.no_browser {
             println!("  --no-browser: open the URL above in a browser yourself.");
@@ -632,5 +713,46 @@ mod tests {
         }
         assert!(probe(HostOs::Linux).installed.is_empty());
         assert!(probe(HostOs::Other).installed.is_empty());
+    }
+
+    #[test]
+    fn the_window_needs_a_spa_web_dir_first_then_the_embedded_one() {
+        let dist = PathBuf::from("web/dist");
+        let built = |path: &Path| path == Path::new("web/dist/index.html");
+        // `--web-dir` with an index.html wins, embedded SPA or not — the
+        // server's own preference order.
+        assert_eq!(
+            spa_source(Some(&dist), false, built),
+            Ok(Spa::WebDir(dist.clone()))
+        );
+        assert_eq!(
+            spa_source(Some(&dist), true, built),
+            Ok(Spa::WebDir(dist.clone()))
+        );
+        // A `--web-dir` without one is refused even by an embed build: the
+        // server would serve that directory, 404 and all.
+        let empty = PathBuf::from("web/empty");
+        assert_eq!(
+            spa_source(Some(&empty), true, built),
+            Err(NoSpa::MissingIndex(empty.clone()))
+        );
+        let message = NoSpa::MissingIndex(empty).to_string();
+        assert!(
+            message.contains("web/empty has no index.html") && message.contains("npm run build"),
+            "{message}"
+        );
+        // No `--web-dir`: the embedded SPA, else nothing to open — and the
+        // refusal names both ways out and the API-only command.
+        assert_eq!(spa_source(None, true, built), Ok(Spa::Embedded));
+        assert_eq!(spa_source(None, false, built), Err(NoSpa::Nothing));
+        let message = NoSpa::Nothing.to_string();
+        for needle in [
+            "nothing to open",
+            "--web-dir web/dist",
+            "--features embed",
+            "cicada serve",
+        ] {
+            assert!(message.contains(needle), "{message}");
+        }
     }
 }

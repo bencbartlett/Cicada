@@ -5,7 +5,9 @@ uses, the PE / ELF / Mach-O import readers on synthetic files, and `--bundle`
 (the closure beside a binary; the macOS tools mocked). Offline,
 deterministic; nothing here touches the network or the real cache dir."""
 
+import contextlib
 import hashlib
+import io
 import json
 import shutil
 import struct
@@ -612,8 +614,14 @@ class BundleTest(unittest.TestCase):
         directory = self.windows_bundle_dir()
         fo.bundle(self.manifest, layout, directory, self.log)
         self.messages.clear()
+        stamp = directory / fo.BUNDLE_STAMP_NAME
+        before = (stamp.read_bytes(), stamp.stat().st_mtime_ns)
+        self.assertNotIn("written", json.loads(before[0]), "the stamp carries no wall-clock field")
         self.assertFalse(fo.bundle(self.manifest, layout, directory, self.log), "warm: nothing to do")
         self.assertTrue(any("0 libraries copied, 3 present at their sizes" in m for m in self.messages), self.messages)
+        # A no-op bundle does not touch the directory: the stamp is byte-stable
+        # and was not rewritten (same bytes, same mtime).
+        self.assertEqual((stamp.read_bytes(), stamp.stat().st_mtime_ns), before)
         # A library that lost bytes is copied again; the intact ones are left alone.
         (directory / "TKBO.dll").write_bytes(b"x")
         copied = []
@@ -672,8 +680,25 @@ class BundleTest(unittest.TestCase):
         linux = fo.Layout(self.root / "cache", "linux-64", "7.8.1")
         with self.assertRaisesRegex(fo.FetchError, r"linux-64 is not one of them.*ORIGIN"):
             fo.BundlePlan(linux, fresh)
-        # The CLI refuses two platforms for one binary before fetching anything.
-        self.assertEqual(fo.main(["--subdir", "win-64", "--subdir", "linux-64", "--bundle", str(fresh), "--quiet"]), 1)
+        # The CLI refuses two platforms for one binary BEFORE fetching anything:
+        # a fetch here would reach the network, so one is made to fail loudly,
+        # the cache root is a scratch dir (never the real one) and the refusal's
+        # words are read off stderr.
+        def never_fetch(*_args, **_kwargs):
+            raise AssertionError("--bundle with two platforms must be refused before any fetch")
+
+        original_fetch = fo.fetch
+        fo.fetch = never_fetch
+        stderr = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(stderr):
+                code = fo.main(
+                    ["--dest", str(self.root / "cli-cache"), "--subdir", "win-64", "--subdir", "linux-64", "--bundle", str(fresh)]
+                )
+        finally:
+            fo.fetch = original_fetch
+        self.assertEqual(code, 1)
+        self.assertIn("--bundle takes exactly one platform", stderr.getvalue())
 
     # -- macOS --------------------------------------------------------------
 
