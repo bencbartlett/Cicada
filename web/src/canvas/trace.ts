@@ -34,19 +34,33 @@
  * Lanes. Every run occupies its line on a lattice of `TRACE_LANE_UNITS`
  * (¼ unit) — the horizontal lattice for rows, the vertical for channels —
  * over its extent. The STUBS are pinned to their port's row (a wire must
- * reach its handle) and are recorded first; the FREE runs — the Z's
- * vertical channel, the stair's channel and escapes, the back route's
- * three — are then placed, in one deterministic order (source position,
- * target position, then the wire id), each on the lattice line nearest its
- * natural place whose occupied extents it does not touch, so no two
- * parallel runs coincide and the picture never depends on render order.
+ * reach its handle) and are recorded first, at their natural length; then
+ * the horizontal channels — the stair's and the back route's — are placed
+ * in the wire order (source position, target position, then the wire id),
+ * each on the row line nearest its natural place that no other wire's run
+ * occupies; then the VERTICAL runs — the Z's channel, the stair's and the
+ * back route's two — are solved a column at a time (the runs that can
+ * meet) by a depth-first search in top-down order over each run's lines,
+ * nearest its natural place first, under two constraints: no two runs
+ * that overlap on one line, and no stub — at the length its line gives
+ * it, as drawn — running into another wire's run on its row (a channel, a
+ * level line, the stub of a port that shares the row). The natural-first
+ * greedy is the search's first branch; it backtracks only where that
+ * fails, so the picture is the natural one wherever there is room, and
+ * the wall's busiest three-unit gap (22 verticals, 8 deep, on seven lines
+ * a Z may take) comes out with nothing coinciding. Every order is a pure
+ * function of the inputs, so the picture never depends on render order.
  * Two wires out of one port share their stub until they part — a trunk,
  * as on a board. Where a gap is too narrow for full legs AND lanes, the
  * legs shrink toward `TRACE_MIN_LEG_UNITS` before any two runs are let
  * coincide (Ben's finding U6 ranks them: the radius "~1 unit", the overlap
- * "never"); only a gap narrower than the lanes need even so collapses the
- * runs onto the one line that fits (move the nodes apart). The router
- * knows no obstacles: a run may cross a node that lies in its way.
+ * "never"). Only a column with no overlap-free assignment at all falls
+ * back to the greedy — the nearest free line, else the line with the
+ * fewest runs over the extent, so coincidences spread rather than stack —
+ * and the router measures its own drawing: every wire whose run coincides
+ * with another's is reported in `TraceLanes.collapsed` (the canvas shows
+ * the count as `data-trace-collapsed`; never silent). The router knows no
+ * obstacles: a run may cross a node that lies in its way.
  */
 import type { GraphView } from "../protocol/messages";
 
@@ -66,15 +80,15 @@ export const TRACE_STAIRCASE_UNITS = 6;
 export const TRACE_MIN_LEG_UNITS = 0.5;
 
 /**
- * How far a lane search walks from the natural line, in lattice steps, before
- * it gives up and lets the run coincide (16 units).
+ * How far from the natural line a Z's channel, or a horizontal channel, may
+ * be laned, in lattice steps (16 units).
  */
 export const TRACE_LANE_STEPS = 64;
 
 /**
  * A stair's or back route's verticals may move at most this many steps (2
- * units) — the bound its horizontal channel is checked against, so the
- * assignment stays exact without a second pass.
+ * units) — the bound its horizontal channel's extent is widened by when
+ * the channel is placed, before the verticals are.
  */
 const SIDE_STEPS = 8;
 
@@ -305,24 +319,27 @@ export function svgPath(points: readonly Point[]): string {
 }
 
 /**
- * The drawn trace of a wire: its SVG path and the label anchor (the middle
- * of its middle run — where the `map` chip sits). `route` is the lane
- * assignment's channels for this wire (`assignTraceLanes`); without one the
- * natural route is drawn (the in-flight connection line; spline mode never
- * calls this). The endpoints decide the route's kind — a route assigned
- * from the row model that disagrees in a tight spot yields to them and
- * draws its natural channels.
+ * The drawn trace of a wire: its SVG path, the label anchor (the middle of
+ * its middle run — where the `map` chip sits), and whether the assigned
+ * route was set aside. `route` is the lane assignment's channels for this
+ * wire (`assignTraceLanes`); without one the natural route is drawn (the
+ * in-flight connection line; spline mode never calls this). The endpoints
+ * decide the route's kind — a route assigned from the row model that
+ * disagrees in a tight spot yields to them and draws its natural channels,
+ * and the last element says so (the edge marks itself `data-trace-yield`,
+ * so the fallback is never silent).
  */
-export function tracePath(ends: TraceEnds, unit: number, route?: TraceRoute): [string, number, number] {
+export function tracePath(ends: TraceEnds, unit: number, route?: TraceRoute): [string, number, number, boolean] {
   const natural = naturalRoute(ends, unit);
-  const use = route !== undefined && route.kind === natural.kind ? route : natural;
+  const yielded = route !== undefined && route.kind !== natural.kind;
+  const use = route !== undefined && !yielded ? route : natural;
   const corners = routeCorners(ends, use, unit);
   const points = chamfer(corners, TRACE_CORNER_UNITS * unit);
   const runs = simplify(corners);
   const mid = Math.floor((runs.length - 1) / 2);
   const a = runs[mid]!;
   const b = runs[Math.min(mid + 1, runs.length - 1)]!;
-  return [svgPath(points), (a.x + b.x) / 2, (a.y + b.y) / 2];
+  return [svgPath(points), (a.x + b.x) / 2, (a.y + b.y) / 2, yielded];
 }
 
 /** An occupied extent on a lattice line and the wire it belongs to (a wire never blocks itself). */
@@ -330,27 +347,35 @@ interface Extent {
   lo: number;
   hi: number;
   owner: string;
+  /** A stub whose inner end a vertical run still decides: not a fixed obstacle, a constraint between runs. */
+  floating?: boolean;
 }
 
 /** Occupied extents per lattice line (key = the line's lattice index). */
 type Occupancy = Map<number, Extent[]>;
 
-function isFree(occupancy: Occupancy, index: number, lo: number, hi: number, owner: string): boolean {
-  const taken = occupancy.get(index);
-  if (taken === undefined) return true;
-  // Closed intervals: runs that merely touch would meet at their cuts.
-  return taken.every((e) => e.owner === owner || hi < e.lo - EPS || lo > e.hi + EPS);
+/** Whether two closed intervals meet — runs that merely touch would meet at their cuts. */
+function meets(aLo: number, aHi: number, bLo: number, bHi: number): boolean {
+  return !(aHi < bLo - EPS || aLo > bHi + EPS);
 }
 
-function occupy(occupancy: Occupancy, index: number, lo: number, hi: number, owner: string): void {
+/** The fixed extents of OTHER wires a run over `[lo, hi]` would meet on a line. */
+function blockers(occupancy: Occupancy, index: number, lo: number, hi: number, owner: string): Extent[] {
   const taken = occupancy.get(index);
-  const extent = { lo: Math.min(lo, hi), hi: Math.max(lo, hi), owner };
+  if (taken === undefined) return [];
+  return taken.filter((e) => e.owner !== owner && e.floating !== true && meets(lo, hi, e.lo, e.hi));
+}
+
+function occupy(occupancy: Occupancy, index: number, lo: number, hi: number, owner: string): Extent {
+  const taken = occupancy.get(index);
+  const extent: Extent = { lo: Math.min(lo, hi), hi: Math.max(lo, hi), owner };
   if (taken === undefined) occupancy.set(index, [extent]);
   else taken.push(extent);
+  return extent;
 }
 
+/** Where a run may go: its natural line, the admissible range, and how far to look. */
 interface LaneSearch {
-  occupancy: Occupancy;
   /** The run's natural line (flow px). */
   natural: number;
   /** The lines the run may take, `[min, max]` (either may be infinite). */
@@ -368,35 +393,59 @@ interface LaneSearch {
   accept?: (line: number) => boolean;
 }
 
-/**
- * The lattice line for a free run: the nearest to `natural` inside `range`
- * (stepping outwards, the far side first) that passes `accept` and whose
- * occupied extents the run does not touch, within `steps` of the natural
- * line. None free: the nearest admissible line even so — the runs coincide,
- * the one case the docs allow; no admissible line at all: the natural place
- * clamped into the range. Records the run on the line it takes.
- */
-function takeLane(search: LaneSearch): number {
-  const { occupancy, natural, pitch, origin, steps, owner } = search;
+interface Candidate {
+  k: number;
+  line: number;
+}
+
+/** The admissible lattice lines within `steps` of the natural line, nearest first (the far side first at each step). */
+function admissibleLines(search: LaneSearch): Candidate[] {
+  const { natural, pitch, origin, steps } = search;
   const [min, max] = search.range;
-  const [lo, hi] = search.extent;
   const accept = search.accept ?? (() => true);
   const q = Math.round((natural - origin) / pitch);
-  let nearestTaken: number | null = null;
+  const out: Candidate[] = [];
   for (let step = 0; step <= steps; step += 1) {
     for (const k of step === 0 ? [q] : [q + step, q - step]) {
       const line = origin + k * pitch;
       if (line < min - EPS || line > max + EPS || !accept(line)) continue;
-      if (isFree(occupancy, k, lo, hi, owner)) {
-        occupy(occupancy, k, lo, hi, owner);
-        return line;
-      }
-      if (nearestTaken === null) nearestTaken = k;
+      out.push({ k, line });
     }
   }
-  const k = nearestTaken ?? Math.round((clamp(natural, min, max) - origin) / pitch);
-  occupy(occupancy, k, lo, hi, owner);
-  return nearestTaken === null ? clamp(natural, min, max) : origin + k * pitch;
+  return out;
+}
+
+/**
+ * The row line for a horizontal channel: the nearest to `natural` inside
+ * `range` (stepping outwards, the far side first) that passes `accept` and
+ * whose occupied extents the run does not touch, within `steps` of the
+ * natural line. None free: the admissible line with the FEWEST runs over
+ * this extent (the nearest such), so coincidences spread instead of
+ * stacking, and `collapsed` says so. No admissible line at all: the natural
+ * place clamped into the range, `collapsed` if that line already carries a
+ * run over the extent. Records the run on the line it takes.
+ */
+function takeLane(occupancy: Occupancy, search: LaneSearch): { line: number; collapsed: boolean } {
+  const [lo, hi] = search.extent;
+  const candidates = admissibleLines(search);
+  let lightest: { k: number; line: number; runs: number } | null = null;
+  for (const c of candidates) {
+    const runs = blockers(occupancy, c.k, lo, hi, search.owner).length;
+    if (runs === 0) {
+      occupy(occupancy, c.k, lo, hi, search.owner);
+      return { line: c.line, collapsed: false };
+    }
+    if (lightest === null || runs < lightest.runs) lightest = { ...c, runs };
+  }
+  if (lightest !== null) {
+    occupy(occupancy, lightest.k, lo, hi, search.owner);
+    return { line: lightest.line, collapsed: true };
+  }
+  const line = clamp(search.natural, search.range[0], search.range[1]);
+  const k = Math.round((line - search.origin) / search.pitch);
+  const collapsed = blockers(occupancy, k, lo, hi, search.owner).length > 0;
+  occupy(occupancy, k, lo, hi, search.owner);
+  return { line, collapsed };
 }
 
 /** The lane order: source position, target position, then the wire id — the same for any input order. */
@@ -410,151 +459,458 @@ export function compareTraceWires(a: TraceWire, b: TraceWire): number {
   );
 }
 
+/** The lane assignment: every wire's route, and the wires a run of which had to share a line. */
+export interface TraceLanes {
+  routes: Map<string, TraceRoute>;
+  /**
+   * The ids of the wires a run of which coincides with another wire's run
+   * — on its column line, or along the stub its line decides — because no
+   * assignment of its column kept every run apart within the search's
+   * budget (in lane order, each wire once). Empty on every committed
+   * example.
+   */
+  collapsed: string[];
+}
+
+/**
+ * How many candidate placements the search over one column's runs may try
+ * before it gives the column up to the greedy fallback (and reports what
+ * coincides). The wall's busiest column — 22 runs — settles in under a
+ * hundred; the budget is for a column no assignment can satisfy.
+ */
+const LANE_SEARCH_BUDGET = 4000;
+
+/** A wire being laned: its natural route and the channels placed so far. */
+interface Plan {
+  wire: TraceWire;
+  /** The wire's place in `compareTraceWires` order — the last key of every other order. */
+  order: number;
+  natural: TraceRoute;
+  /** The horizontal channel (stair, back), once placed. */
+  hy: number;
+  vx: number;
+  vx1: number;
+  vx2: number;
+  /** The wire's pinned stubs as recorded on their rows, at their natural length (`null` for a level line — one run, never moved). */
+  sourceStub: Extent | null;
+  targetStub: Extent | null;
+}
+
+/** A pinned stub whose inner end a vertical run decides. */
+interface Stub {
+  /** The row's lattice index. */
+  row: number;
+  /** The handle's x — the stub's fixed end. */
+  handle: number;
+  /** Out of a source port (`[handle, x]`; wires out of ONE port share it — the trunk) or into a target port (`[x, handle]`). */
+  side: "source" | "target";
+}
+
+/** One vertical run waiting for its line. */
+interface VerticalRun {
+  plan: Plan;
+  which: "vx" | "vx1" | "vx2";
+  natural: number;
+  range: [number, number];
+  extent: [number, number];
+  /** The lines the run may take, nearest its natural place first. */
+  domain: Candidate[];
+  /** The stubs this run's line decides: a Z's two, a stair's or back route's one. */
+  stubs: Stub[];
+}
+
+const ORDER_OF_WHICH = { vx: 0, vx1: 0, vx2: 1 };
+
+/**
+ * The stub's DRAWN extent once its run takes `x`: `chamfer` cuts the corner
+ * at the stub's inner end by the shorter of a leg, the stub, and half the
+ * vertical beside it (`vertical` = the run's length), so two stubs facing
+ * each other on one row may come a leg or two closer than their corners
+ * before their drawn runs meet.
+ */
+function drawnStub(stub: Stub, x: number, vertical: number, unit: number): [number, number] {
+  const cut = Math.min(TRACE_CORNER_UNITS * unit, Math.abs(x - stub.handle), vertical / 2);
+  const inner = x - Math.sign(x - stub.handle) * cut;
+  return [Math.min(stub.handle, inner), Math.max(stub.handle, inner)];
+}
+
+/** Whether two intervals overlap over a positive length (runs that merely touch end to end do not coincide). */
+function overlap(aLo: number, aHi: number, bLo: number, bHi: number): boolean {
+  return Math.min(aHi, bHi) - Math.max(aLo, bLo) > EPS;
+}
+
 /**
  * Lanes for every wire at once. First every wire's pinned stubs are
- * recorded on the rows they lie on; then, in `compareTraceWires` order,
- * each free run takes the lattice line nearest its natural place that no
- * other wire's run occupies over its extent. The horizontal lattice runs
- * THROUGH the port rows — `rowOrigin` is their residue modulo the pitch
- * (`rowLatticeOrigin`), so a row itself, and a leg away from it, are
+ * recorded on the rows they lie on, at their natural length; then, in
+ * `compareTraceWires` order, the stairs' and back routes' horizontal
+ * channels take the row lines nearest their natural places that no other
+ * wire's run occupies over their extents; then the vertical runs. Those
+ * are solved a COLUMN at a time — a column being the runs that can meet
+ * (overlapping extents, or stubs on a shared row that can run into each
+ * other) — by a depth-first search in top-down order over each run's
+ * lines, nearest its natural place first, under two constraints: no two
+ * runs that overlap share a line, and no stub a line decides runs into
+ * another wire's run on its row (a channel, a level line, or the stub of
+ * a port sharing the row — the trunk out of one port excepted). The
+ * greedy, natural-first placement is the search's first branch; it
+ * backtracks only where that fails, so the picture is the natural one
+ * wherever there is room. A column with no overlap-free assignment within
+ * `LANE_SEARCH_BUDGET` falls back to the greedy placement — the nearest
+ * free line, else the line with the fewest runs over the extent — and
+ * every coincidence is reported in `collapsed`. The horizontal lattice
+ * runs THROUGH the port rows — `rowOrigin` is their residue modulo the
+ * pitch (`rowLatticeOrigin`), so a row itself, and a leg away from it, are
  * lattice lines; the vertical lattice is the canvas grid's (the Z's
  * midpoints lie on it). Pure in its inputs — the same wires in any order
  * give the same routes — so a re-render never moves a trace.
  */
-export function assignTraceLanes(wires: readonly TraceWire[], unit: number, rowOrigin = 0): Map<string, TraceRoute> {
+export function assignTraceLanes(wires: readonly TraceWire[], unit: number, rowOrigin = 0): TraceLanes {
   const pitch = TRACE_LANE_UNITS * unit;
   const rows: Occupancy = new Map();
-  const columns: Occupancy = new Map();
   const row = (y: number) => Math.round((y - rowOrigin) / pitch);
-  const ordered = [...wires].sort(compareTraceWires).map((wire) => ({ wire, natural: naturalRoute(wire.ends, unit) }));
+  const margin = SIDE_STEPS * pitch;
+  const plans: Plan[] = [...wires].sort(compareTraceWires).map((wire, order) => {
+    const natural = naturalRoute(wire.ends, unit);
+    const stubs = { sourceStub: null, targetStub: null };
+    return natural.kind === "forward"
+      ? { wire, order, natural, hy: NaN, vx: natural.vx, vx1: NaN, vx2: NaN, ...stubs }
+      : { wire, order, natural, hy: natural.hy, vx: NaN, vx1: natural.vx1, vx2: natural.vx2, ...stubs };
+  });
+  const planOf = new Map(plans.map((plan) => [plan.wire.id, plan]));
 
-  // Pass 1 — the pinned stubs (natural extents; a laned channel moves a
-  // Z's cut by at most the lanes' room).
-  for (const { wire, natural } of ordered) {
+  // Pass 1 — the pinned stubs, at their natural length.
+  for (const plan of plans) {
+    const { wire, natural } = plan;
     const { sx, sy, tx, ty } = wire.ends;
     if (natural.kind === "forward") {
-      if (Math.abs(ty - sy) < EPS) occupy(rows, row(sy), sx, tx, wire.id);
-      else {
-        occupy(rows, row(sy), sx, natural.vx, wire.id);
-        occupy(rows, row(ty), natural.vx, tx, wire.id);
+      if (Math.abs(ty - sy) < EPS) {
+        occupy(rows, row(sy), sx, tx, wire.id);
+        continue;
       }
+      plan.sourceStub = occupy(rows, row(sy), sx, natural.vx, wire.id);
+      plan.targetStub = occupy(rows, row(ty), natural.vx, tx, wire.id);
     } else {
-      occupy(rows, row(sy), sx, natural.vx1, wire.id);
-      occupy(rows, row(ty), natural.vx2, tx, wire.id);
+      plan.sourceStub = occupy(rows, row(sy), sx, natural.vx1, wire.id);
+      plan.targetStub = occupy(rows, row(ty), natural.vx2, tx, wire.id);
     }
   }
 
-  // Pass 2 — the free runs.
-  const routes = new Map<string, TraceRoute>();
-  const margin = SIDE_STEPS * pitch;
-  for (const { wire, natural } of ordered) {
+  // Pass 2 — the horizontal channels, in wire order.
+  for (const plan of plans) {
+    const { wire, natural } = plan;
     const { ends } = wire;
-    const { sx, sy, tx, ty } = ends;
-    const owner = wire.id;
-    const span: [number, number] = [Math.min(sy, ty), Math.max(sy, ty)];
-    if (natural.kind === "forward") {
-      // A jog or a level line has no vertical run to lane.
-      if (Math.abs(ty - sy) < 2 * TRACE_MIN_LEG_UNITS * unit - EPS) {
-        routes.set(owner, natural);
-        continue;
-      }
-      const vx = takeLane({
-        occupancy: columns,
-        natural: natural.vx,
-        range: forwardChannelRange(ends, unit),
-        extent: span,
-        owner,
-        pitch,
-        origin: 0,
-        steps: TRACE_LANE_STEPS,
-      });
-      routes.set(owner, { kind: "forward", vx });
-      continue;
-    }
+    const { sx, tx } = ends;
+    if (natural.kind === "forward") continue;
     if (natural.kind === "stair") {
-      // The channel first — between the rows, on one of them, or a detour a
-      // leg or more beyond them, nearest to the midpoint first — its extent
-      // widened by the most the two verticals may still move (and the
-      // whole line when it runs on a row).
-      const hy = takeLane({
-        occupancy: rows,
+      // Between the rows, on one of them, or a detour a leg or more beyond
+      // them, nearest to the midpoint first — its extent widened by the
+      // most the two verticals may still move (and the whole line when it
+      // runs on a row).
+      const took = takeLane(rows, {
         natural: natural.hy,
         range: [-Infinity, Infinity],
         extent: [Math.max(sx, natural.vx1 - margin), Math.min(tx, natural.vx2 + margin)],
-        owner,
+        owner: wire.id,
         pitch,
         origin: rowOrigin,
         steps: TRACE_LANE_STEPS,
         accept: (line) => stairChannelOk(ends, line, unit),
       });
-      const [range1, range2] = stairVerticalRanges(ends, unit);
-      const vx1 =
-        Math.abs(hy - sy) < EPS
-          ? natural.vx1
-          : takeLane({
-              occupancy: columns,
-              natural: natural.vx1,
-              range: range1,
-              extent: [Math.min(sy, hy), Math.max(sy, hy)],
-              owner,
-              pitch,
-              origin: 0,
-              steps: SIDE_STEPS,
-            });
-      const vx2 =
-        Math.abs(hy - ty) < EPS
-          ? natural.vx2
-          : takeLane({
-              occupancy: columns,
-              natural: natural.vx2,
-              range: range2,
-              extent: [Math.min(hy, ty), Math.max(hy, ty)],
-              owner,
-              pitch,
-              origin: 0,
-              steps: SIDE_STEPS,
-            });
-      // The channel's true extent, now the verticals are placed.
-      occupy(rows, row(hy), Math.abs(hy - sy) < EPS ? sx : vx1, Math.abs(hy - ty) < EPS ? tx : vx2, owner);
-      routes.set(owner, { kind: "stair", vx1, hy, vx2 });
+      plan.hy = took.line;
       continue;
     }
-    // The back route: the horizontal channel first, widened likewise; then
-    // the verticals, exactly, on the final channel.
-    const hy = takeLane({
-      occupancy: rows,
+    const took = takeLane(rows, {
       natural: natural.hy,
       range: backChannelRange(ends, unit),
       extent: [natural.vx2 - margin, natural.vx1 + margin],
-      owner,
+      owner: wire.id,
       pitch,
       origin: rowOrigin,
       steps: TRACE_LANE_STEPS,
     });
-    const bounds = backVerticals(ends, unit);
-    const vx1 = takeLane({
-      occupancy: columns,
-      natural: natural.vx1,
-      range: [bounds.vx1Min, Infinity],
-      extent: [Math.min(sy, hy), Math.max(sy, hy)],
-      owner,
-      pitch,
-      origin: 0,
-      steps: SIDE_STEPS,
-    });
-    const vx2 = takeLane({
-      occupancy: columns,
-      natural: natural.vx2,
-      range: [-Infinity, bounds.vx2Max],
-      extent: [Math.min(hy, ty), Math.max(hy, ty)],
-      owner,
-      pitch,
-      origin: 0,
-      steps: SIDE_STEPS,
-    });
-    routes.set(owner, { kind: "back", vx1, hy, vx2 });
+    plan.hy = took.line;
   }
-  return routes;
+
+  // Pass 3 — the vertical runs: gather them, with their lines and the
+  // stubs they decide.
+  const between = (a: number, b: number): [number, number] => [Math.min(a, b), Math.max(a, b)];
+  const runs: VerticalRun[] = [];
+  const gather = (plan: Plan, which: VerticalRun["which"], natural: number, range: [number, number], extent: [number, number], steps: number) => {
+    const { sx, sy, tx, ty } = plan.wire.ends;
+    const domain = admissibleLines({ natural, range, extent, owner: plan.wire.id, pitch, origin: 0, steps });
+    const stubs: Stub[] = [];
+    if (which !== "vx2" && plan.sourceStub !== null) {
+      plan.sourceStub.floating = true;
+      stubs.push({ row: row(sy), handle: sx, side: "source" });
+    }
+    if (which !== "vx1" && plan.targetStub !== null) {
+      plan.targetStub.floating = true;
+      stubs.push({ row: row(ty), handle: tx, side: "target" });
+    }
+    runs.push({ plan, which, natural, range, extent, domain, stubs });
+  };
+  for (const plan of plans) {
+    const { wire, natural, hy } = plan;
+    const { ends } = wire;
+    const { sy, ty } = ends;
+    if (natural.kind === "forward") {
+      // A jog or a level line has no vertical run to lane.
+      if (Math.abs(ty - sy) < 2 * TRACE_MIN_LEG_UNITS * unit - EPS) continue;
+      gather(plan, "vx", natural.vx, forwardChannelRange(ends, unit), between(sy, ty), TRACE_LANE_STEPS);
+      continue;
+    }
+    if (natural.kind === "stair") {
+      // A channel on a row leaves that side without a vertical.
+      const [range1, range2] = stairVerticalRanges(ends, unit);
+      if (Math.abs(hy - sy) >= EPS) gather(plan, "vx1", natural.vx1, range1, between(sy, hy), SIDE_STEPS);
+      if (Math.abs(hy - ty) >= EPS) gather(plan, "vx2", natural.vx2, range2, between(hy, ty), SIDE_STEPS);
+      continue;
+    }
+    const bounds = backVerticals(ends, unit);
+    gather(plan, "vx1", natural.vx1, [bounds.vx1Min, Infinity], between(sy, hy), SIDE_STEPS);
+    gather(plan, "vx2", natural.vx2, [-Infinity, bounds.vx2Max], between(hy, ty), SIDE_STEPS);
+  }
+  runs.sort(
+    (a, b) =>
+      a.extent[0] - b.extent[0] ||
+      a.extent[1] - b.extent[1] ||
+      a.plan.order - b.plan.order ||
+      ORDER_OF_WHICH[a.which] - ORDER_OF_WHICH[b.which],
+  );
+
+  // The trunk: wires out of one port share their source stub.
+  const trunkMates = (a: Plan, b: Plan): boolean =>
+    Math.abs(a.wire.ends.sx - b.wire.ends.sx) < EPS && Math.abs(a.wire.ends.sy - b.wire.ends.sy) < EPS;
+  const vertical = (run: VerticalRun) => run.extent[1] - run.extent[0];
+  // Whether a stub at `x`, as drawn, runs into a FIXED run on its row (a
+  // channel, a level line, a stub no run decides).
+  const stubBlocked = (run: VerticalRun, stub: Stub, x: number): boolean => {
+    const [lo, hi] = drawnStub(stub, x, vertical(run), unit);
+    return blockers(rows, stub.row, lo, hi, run.plan.wire.id).some((e) => {
+      const other = planOf.get(e.owner);
+      return overlap(lo, hi, e.lo, e.hi) && !(stub.side === "source" && other !== undefined && trunkMates(run.plan, other));
+    });
+  };
+  // Whether two runs at the given lines meet: the same column line over
+  // extents that touch, or stubs on a shared row whose drawn runs overlap.
+  const conflict = (a: VerticalRun, ca: Candidate, b: VerticalRun, cb: Candidate): boolean => {
+    if (ca.k === cb.k && meets(a.extent[0], a.extent[1], b.extent[0], b.extent[1])) return true;
+    for (const sa of a.stubs) {
+      for (const sb of b.stubs) {
+        if (sa.row !== sb.row) continue;
+        if (sa.side === "source" && sb.side === "source" && trunkMates(a.plan, b.plan)) continue;
+        const [alo, ahi] = drawnStub(sa, ca.line, vertical(a), unit);
+        const [blo, bhi] = drawnStub(sb, cb.line, vertical(b), unit);
+        if (overlap(alo, ahi, blo, bhi)) return true;
+      }
+    }
+    return false;
+  };
+  // Each run's lines, those that keep its stubs clear of the fixed runs
+  // first; a run none of whose lines does keeps them all (it coincides
+  // wherever it goes — the measure below will say so).
+  for (const run of runs) {
+    const clear = run.domain.filter((c) => run.stubs.every((stub) => !stubBlocked(run, stub, c.line)));
+    if (clear.length > 0) run.domain = clear;
+  }
+
+  // Columns: the runs that can meet — on a line both may take over
+  // overlapping extents, or by stubs on a shared row, by the widest they
+  // can reach.
+  const parent = runs.map((_, i) => i);
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i]!)));
+  const hull = (run: VerticalRun, stub: Stub): [number, number] => {
+    const lines = run.domain.map((c) => c.line);
+    return [Math.min(stub.handle, ...lines), Math.max(stub.handle, ...lines)];
+  };
+  const lineSets = runs.map((run) => new Set(run.domain.map((c) => c.k)));
+  for (let i = 0; i < runs.length; i += 1) {
+    for (let j = i + 1; j < runs.length; j += 1) {
+      const a = runs[i]!;
+      const b = runs[j]!;
+      const shareLine = [...lineSets[i]!].some((k) => lineSets[j]!.has(k));
+      let linked = shareLine && meets(a.extent[0], a.extent[1], b.extent[0], b.extent[1]);
+      for (const sa of a.stubs) {
+        if (linked) break;
+        for (const sb of b.stubs) {
+          if (sa.row !== sb.row) continue;
+          if (sa.side === "source" && sb.side === "source" && trunkMates(a.plan, b.plan)) continue;
+          const [alo, ahi] = hull(a, sa);
+          const [blo, bhi] = hull(b, sb);
+          if (meets(alo, ahi, blo, bhi)) {
+            linked = true;
+            break;
+          }
+        }
+      }
+      if (linked) parent[find(i)] = find(j);
+    }
+  }
+  const columns = new Map<number, VerticalRun[]>();
+  runs.forEach((run, i) => {
+    const root = find(i);
+    const column = columns.get(root);
+    if (column === undefined) columns.set(root, [run]);
+    else column.push(run);
+  });
+
+  // Each column: the search, else the greedy fallback.
+  const placeAll = (column: readonly VerticalRun[], chosen: readonly Candidate[]) => {
+    column.forEach((run, i) => {
+      run.plan[run.which] = chosen[i]!.line;
+    });
+  };
+  for (const column of columns.values()) {
+    const chosen: Candidate[] = [];
+    const fits = (i: number, c: Candidate): boolean => {
+      const run = column[i]!;
+      for (let j = 0; j < i; j += 1) if (conflict(run, c, column[j]!, chosen[j]!)) return false;
+      return true;
+    };
+    // Depth-first with forward checking: each run keeps the candidates no
+    // assignment so far rules out; an assignment that leaves a later run
+    // none is undone at once (the trail), so a dead end is seen at the
+    // first run it dooms, not at that run.
+    let budget = LANE_SEARCH_BUDGET;
+    const alive = column.map((run) => run.domain.map(() => true));
+    const aliveCount = column.map((run) => run.domain.length);
+    const trail: [number, number][] = [];
+    const undo = (mark: number) => {
+      while (trail.length > mark) {
+        const [j, d] = trail.pop()!;
+        alive[j]![d] = true;
+        aliveCount[j] = aliveCount[j]! + 1;
+      }
+    };
+    const assign = (i: number, c: Candidate): boolean => {
+      for (let j = i + 1; j < column.length; j += 1) {
+        const other = column[j]!;
+        other.domain.forEach((d, di) => {
+          if (alive[j]![di] && conflict(other, d, column[i]!, c)) {
+            alive[j]![di] = false;
+            aliveCount[j] = aliveCount[j]! - 1;
+            trail.push([j, di]);
+          }
+        });
+        if (aliveCount[j] === 0) return false;
+      }
+      return true;
+    };
+    const search = (i: number): boolean => {
+      if (i === column.length) return true;
+      const run = column[i]!;
+      for (let ci = 0; ci < run.domain.length; ci += 1) {
+        if (!alive[i]![ci]) continue;
+        if (budget <= 0) return false;
+        budget -= 1;
+        const c = run.domain[ci]!;
+        const mark = trail.length;
+        chosen[i] = c;
+        if (assign(i, c) && search(i + 1)) return true;
+        undo(mark);
+      }
+      return false;
+    };
+    if (search(0)) {
+      placeAll(column, chosen);
+      continue;
+    }
+    // The fallback: top-down, the nearest line that fits; else the nearest
+    // whose column line is free (its stub coincides); else the line with the
+    // fewest runs over the extent (the column coincides) — reported.
+    chosen.length = 0;
+    column.forEach((run, i) => {
+      if (run.domain.length === 0) {
+        // No lattice line in the range at all (a gap too narrow for one
+        // between the shrunken legs): the natural place, clamped.
+        const line = clamp(run.natural, run.range[0], run.range[1]);
+        chosen[i] = { k: Math.round(line / pitch), line };
+        return;
+      }
+      const fitting = run.domain.find((c) => fits(i, c));
+      if (fitting !== undefined) {
+        chosen[i] = fitting;
+        return;
+      }
+      const load = (c: Candidate) =>
+        column.slice(0, i).filter((other, j) => chosen[j]!.k === c.k && meets(run.extent[0], run.extent[1], other.extent[0], other.extent[1])).length;
+      const free = run.domain.find((c) => load(c) === 0);
+      chosen[i] = free ?? run.domain.reduce((best, c) => (load(c) < load(best) ? c : best), run.domain[0]!);
+    });
+    placeAll(column, chosen);
+  }
+
+  const routes = new Map<string, TraceRoute>();
+  for (const plan of plans) {
+    const { natural, hy, vx, vx1, vx2 } = plan;
+    if (natural.kind === "forward") routes.set(plan.wire.id, { kind: "forward", vx });
+    else routes.set(plan.wire.id, { kind: natural.kind, vx1, hy, vx2 });
+  }
+  return { routes, collapsed: coincidences(plans, routes, unit) };
+}
+
+/** A drawn axis-aligned run of a wire, for the measure of coincidences. */
+interface DrawnRun {
+  owner: string;
+  /** The wire's first point — wires out of one port start at the same point. */
+  start: Point;
+  kind: "h" | "v";
+  at: number;
+  lo: number;
+  hi: number;
+}
+
+/**
+ * The wires whose drawn runs coincide with another wire's — parallel, on
+ * one line, overlapping over a positive length — less the trunk: the runs
+ * along the row of a source port both wires leave. Measured on the routes
+ * as drawn (`routeCorners` + `chamfer`, what `tracePath` draws), so the
+ * report is what the picture shows, not what the model feared.
+ */
+function coincidences(plans: readonly Plan[], routes: ReadonlyMap<string, TraceRoute>, unit: number): string[] {
+  const byLine = new Map<string, DrawnRun[]>();
+  for (const plan of plans) {
+    const { ends } = plan.wire;
+    const route = routes.get(plan.wire.id);
+    if (route === undefined) continue;
+    const points = chamfer(routeCorners(ends, route, unit), TRACE_CORNER_UNITS * unit);
+    const start = points[0];
+    if (start === undefined) continue;
+    for (let i = 1; i < points.length; i += 1) {
+      const a = points[i - 1]!;
+      const b = points[i]!;
+      let run: DrawnRun | null = null;
+      if (Math.abs(b.y - a.y) < EPS) run = { owner: plan.wire.id, start, kind: "h", at: a.y, lo: Math.min(a.x, b.x), hi: Math.max(a.x, b.x) };
+      else if (Math.abs(b.x - a.x) < EPS) run = { owner: plan.wire.id, start, kind: "v", at: a.x, lo: Math.min(a.y, b.y), hi: Math.max(a.y, b.y) };
+      if (run === null) continue;
+      const key = `${run.kind}${Math.round(run.at * 100)}`;
+      const line = byLine.get(key);
+      if (line === undefined) byLine.set(key, [run]);
+      else line.push(run);
+    }
+  }
+  const collapsed: string[] = [];
+  const report = (id: string) => {
+    if (!collapsed.includes(id)) collapsed.push(id);
+  };
+  for (const line of byLine.values()) {
+    if (line.length < 2) continue;
+    line.sort((a, b) => a.lo - b.lo);
+    for (let i = 0; i < line.length; i += 1) {
+      for (let j = i + 1; j < line.length && line[j]!.lo < line[i]!.hi - EPS; j += 1) {
+        const a = line[i]!;
+        const b = line[j]!;
+        if (a.owner === b.owner) continue;
+        const trunk = a.kind === "h" && same(a.start, b.start) && Math.abs(a.at - a.start.y) < EPS;
+        if (trunk) continue;
+        report(a.owner);
+        report(b.owner);
+      }
+    }
+  }
+  // In lane order, like every other list the assignment hands out.
+  const order = new Map(plans.map((plan) => [plan.wire.id, plan.order]));
+  return collapsed.sort((a, b) => order.get(a)! - order.get(b)!);
 }
 
 /**

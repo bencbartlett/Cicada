@@ -1123,7 +1123,23 @@ packages in sequence, each reviewed.
   model of the graph plus the canvas's live node positions, corrected by
   React Flow's measured handle geometry, while each edge draws from its
   measured handles — the router clamps an assigned channel into what its
-  own endpoints allow.*
+  own endpoints allow. Review closed 2026-08-24: the first router
+  stacked five of the wall's wires on one lane — its busiest three-unit
+  gap carries 22 vertical runs, 8 deep, on seven lines a Z may take; the
+  source-row order scattered short runs over the lines before the long
+  ones arrived, and the saturation fallback dropped every loser on the
+  natural line — so the vertical runs are now solved a column at a time
+  by a depth-first search (top-down, natural-first, backtracking only
+  where the greedy fails) under the column constraint AND the stub
+  constraint (a stub's drawn length is its line's doing, and two ports
+  on one row between adjacent columns must not run into each other);
+  collapses are measured on the drawing and reported
+  (`data-trace-collapsed`, `data-trace-yield`), the wall is a committed
+  fixture of the unit test (`web/src/canvas/fixtures/wallTraceWires.ts`)
+  and has its own Playwright spec (`wall_traces.spec.ts`, run last:
+  opening the wall starts its carve), and both oracles — one module,
+  `web/e2e/traceOracle.ts` — measure the cuts at a wire's ends. Still
+  open: obstacle awareness (§Follow-ups).*
 - **B3 — typed literals on unconnected inputs.** Every input port that is
   not wired and whose type takes a literal (`Number`, `Integer`, `Text`,
   `Boolean` and their `?` forms; never a transport-driven port) shows
@@ -1156,6 +1172,17 @@ small, by hand). Then the verify-change loop on main, the wall hash
 unchanged, and the push.
 
 ## Follow-ups (found by the v0.1 reviews and measurements; scheduled, not yet placed)
+
+- **Obstacle-aware trace channels (B2 review, 2026-08-24)** — the trace
+  router knows no obstacles: a stair's long run along a row, or a Z's
+  channel, may cross a node's face (the review counted 39 such crossings
+  by 24 of the wall's 70 wires; 20 on 07-simple-cad), and a channel that
+  runs along a row a node sits on coincides with that node's port stub —
+  the one coincidence the lanes cannot route around. The fix is to treat
+  every node box as occupied extents on both lattices (rows and columns)
+  so a channel detours around a node on its row as it already does
+  around another wire's run; out of the B2 contract, recorded in docs/16
+  §Canvas conventions as the router's limitation.
 
 - **The first Nightlies (2026-08-22..24)** — **read and fixed
   2026-08-24**. Three nights red on two jobs with the engine unchanged;

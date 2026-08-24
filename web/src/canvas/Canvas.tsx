@@ -618,12 +618,16 @@ function CanvasInner() {
       ref={containerRef}
       className={`cicada-canvas${writer ? "" : " readonly"}`}
       data-lod={tier}
+      // Trace mode's one routing fallback, never silent: how many wires
+      // share a lane because a column ran out of lines (docs/16; 0 on
+      // every committed example).
+      data-trace-collapsed={wireMode === "trace" ? traceLanes.collapsed.length : undefined}
       data-testid="canvas"
       onPointerDownCapture={onPointerDownCapture}
       onContextMenu={onContextMenu}
       onDoubleClick={onDoubleClick}
     >
-      <TraceLanesContext.Provider value={traceLanes}>
+      <TraceLanesContext.Provider value={traceLanes.routes}>
         <ReactFlow<CanvasNode, CanvasEdge>
           nodes={nodes}
           edges={edges}

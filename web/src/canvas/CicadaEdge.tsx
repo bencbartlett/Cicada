@@ -40,10 +40,12 @@ function CicadaEdgeImpl({
   // canvas's per-render memo); the endpoints are React Flow's measured
   // handles, so the trace meets them exactly.
   const route = useTraceRoute(id);
-  const [path, labelX, labelY] =
-    wireMode === "trace"
-      ? tracePath({ sx: sourceX, sy: sourceY, tx: targetX, ty: targetY }, unit, route)
-      : getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
+  const trace = wireMode === "trace" ? tracePath({ sx: sourceX, sy: sourceY, tx: targetX, ty: targetY }, unit, route) : null;
+  const [path, labelX, labelY] = trace ?? getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
+  // The router's one drawing fallback — the assigned route's kind disagreed
+  // with the measured endpoints and the natural route was drawn — is marked
+  // on the edge, never silent (the traces spec asserts it never happens).
+  const yielded = trace !== null && trace[3];
 
   const title = red
     ? `${wire?.id ?? id}: ${wire?.reason ?? "red"}`
@@ -57,7 +59,7 @@ function CicadaEdgeImpl({
   if (selected) classes.push("selected");
 
   return (
-    <g className={classes.join(" ")} data-wire={wire?.id ?? id}>
+    <g className={classes.join(" ")} data-wire={wire?.id ?? id} data-trace-yield={yielded ? "" : undefined}>
       <title>{title}</title>
       {selected && (
         <path d={path} className="cicada-edge-glow" style={{ stroke: color, strokeWidth: width + 6 }} />

@@ -4,61 +4,28 @@
  * React Flow's smooth-step path —
  *
  *   - every wire is `M`/`L` runs only, each horizontal, vertical or 45°;
- *   - every 45° cut between a horizontal and a vertical run has legs of
- *     one grid unit (`hello.unitPx`) — the corner floor;
+ *   - every 45° cut between a horizontal and a vertical run — the cuts at a
+ *     wire's ends included — has legs of one grid unit (`hello.unitPx`),
+ *     shrunken no further than the half-unit floor in a tight gap;
  *   - no two parallel runs of different wires coincide, except the stub
  *     wires out of ONE port share (the trunk, pinned to the port's row);
+ *   - the router reports no collapsed lane (`data-trace-collapsed` = 0) and
+ *     no edge drew its fallback route (`data-trace-yield` absent);
  *   - stroke colour and width are the spline mode's, wire for wire;
  *   - a re-render (selecting a node) moves nothing;
  *   - the in-flight connection line is a trace too.
  *
+ * The oracle is `traceOracle.ts`, shared with the router's unit test and
+ * with `wall_traces.spec.ts` (the wall, in its own file so it runs last).
  * Evidence: whole-page screenshots of `06-lists` and `07-simple-cad` in
  * trace mode land in this test's output dir under `web/test-results/`.
  */
 import { expect, test, type Page } from "@playwright/test";
 import config from "../playwright.config";
+import { cornerLegs, overlaps, parsePath, segments, type Pt } from "./traceOracle";
 
 const meta = config.metadata as { token: string };
 const TOKEN = meta.token;
-
-interface Pt {
-  x: number;
-  y: number;
-}
-
-type Seg =
-  | { kind: "h" | "v"; at: number; lo: number; hi: number }
-  | { kind: "d"; dx: number; dy: number };
-
-/** `M x y L x y …` → points; anything but M/L (a bezier's `C`) throws. */
-function parsePath(d: string): Pt[] {
-  const tokens = d.trim().split(/\s*([A-Za-z])\s*/).filter((t) => t !== "");
-  const points: Pt[] = [];
-  for (let i = 0; i < tokens.length; i += 2) {
-    const command = tokens[i]!;
-    if (command !== "M" && command !== "L") throw new Error(`not a trace: command ${command} in ${d}`);
-    const [x, y] = (tokens[i + 1] ?? "").trim().split(/[\s,]+/).map(Number);
-    if (x === undefined || y === undefined || Number.isNaN(x) || Number.isNaN(y)) throw new Error(`bad pair in ${d}`);
-    points.push({ x, y });
-  }
-  return points;
-}
-
-/** Typed runs; a diagonal that is not 45° throws. */
-function segments(points: readonly Pt[], id: string): Seg[] {
-  const out: Seg[] = [];
-  for (let i = 1; i < points.length; i += 1) {
-    const a = points[i - 1]!;
-    const b = points[i]!;
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    if (Math.abs(dy) < 0.02) out.push({ kind: "h", at: a.y, lo: Math.min(a.x, b.x), hi: Math.max(a.x, b.x) });
-    else if (Math.abs(dx) < 0.02) out.push({ kind: "v", at: a.x, lo: Math.min(a.y, b.y), hi: Math.max(a.y, b.y) });
-    else if (Math.abs(Math.abs(dx) - Math.abs(dy)) < 0.05) out.push({ kind: "d", dx, dy });
-    else throw new Error(`${id}: a run that is neither orthogonal nor 45°: ${JSON.stringify([a, b])}`);
-  }
-  return out;
-}
 
 interface Wire {
   d: string;
@@ -107,37 +74,6 @@ async function open(page: Page, pipeline: string, minNodes: number): Promise<voi
 }
 
 /**
- * Pairs of parallel axis-aligned runs of DIFFERENT wires that share a line
- * and overlap in length — less the trunk: horizontal runs on the row of a
- * source port both wires leave (their paths start at the same point).
- */
-function overlaps(paths: ReadonlyMap<string, Pt[]>): string[] {
-  const found: string[] = [];
-  const all = [...paths].flatMap(([id, points]) =>
-    segments(points, id).map((s) => ({ id, s, start: points[0]! })),
-  );
-  for (let i = 0; i < all.length; i += 1) {
-    for (let j = i + 1; j < all.length; j += 1) {
-      const a = all[i]!;
-      const b = all[j]!;
-      if (a.id === b.id || a.s.kind === "d" || b.s.kind === "d" || a.s.kind !== b.s.kind) continue;
-      if (Math.abs(a.s.at - b.s.at) > 0.02) continue;
-      const lo = Math.max(a.s.lo, b.s.lo);
-      const hi = Math.min(a.s.hi, b.s.hi);
-      if (hi - lo <= 0.02) continue;
-      const trunk =
-        a.s.kind === "h" &&
-        Math.abs(a.start.x - b.start.x) < 0.02 &&
-        Math.abs(a.start.y - b.start.y) < 0.02 &&
-        Math.abs(a.s.at - a.start.y) < 0.02;
-      if (trunk) continue;
-      found.push(`${a.id} ∥ ${b.id} on ${a.s.kind}=${a.s.at} over [${lo}, ${hi}]`);
-    }
-  }
-  return found;
-}
-
-/**
  * Switch to trace mode and check every wire against the contract; returns
  * the traces. `spline` is the same wires as drawn in spline mode, for the
  * stroke comparison.
@@ -159,27 +95,22 @@ async function assertTraces(page: Page, spline: ReadonlyMap<string, Wire>): Prom
     expect(w.width, `${id}: stroke width`).toBe(before.width);
     const points = parsePath(w.d);
     paths.set(id, points);
-    const segs = segments(points, id);
-    for (let i = 0; i < segs.length; i += 1) {
-      const s = segs[i]!;
-      if (s.kind !== "d") continue;
-      const prev = segs[i - 1];
-      const next = segs[i + 1];
-      // A diagonal between a horizontal and a vertical run is a corner cut:
-      // its legs are one unit — shrunken toward the half-unit floor only in
-      // a gap too narrow for full legs and the lanes (docs/16). A jog's lone
-      // diagonal, between two horizontals, is as tall as the jog.
-      if (prev !== undefined && next !== undefined && prev.kind !== "d" && next.kind !== "d" && prev.kind !== next.kind) {
-        expect(Math.abs(s.dx), `${id}: corner leg`).toBeGreaterThanOrEqual(unit / 2 - 0.05);
-        expect(Math.abs(s.dx), `${id}: corner leg`).toBeLessThanOrEqual(unit + 0.05);
-        corners += 1;
-        if (Math.abs(Math.abs(s.dx) - unit) < 0.05) fullCorners += 1;
-      }
+    // Every corner cut's legs are one unit — shrunken toward the half-unit
+    // floor only in a gap too narrow for full legs and the lanes (docs/16);
+    // the cuts at a wire's very ends (a stub consumed whole) included.
+    for (const leg of cornerLegs(segments(points, id))) {
+      expect(leg, `${id}: corner leg`).toBeGreaterThanOrEqual(unit / 2 - 0.05);
+      expect(leg, `${id}: corner leg`).toBeLessThanOrEqual(unit + 0.05);
+      corners += 1;
+      if (Math.abs(leg - unit) < 0.05) fullCorners += 1;
     }
   }
   expect(corners, "the graph has corners to check").toBeGreaterThan(0);
   expect(fullCorners, "most corners have full one-unit legs").toBeGreaterThan(corners / 2);
   expect(overlaps(paths)).toEqual([]);
+  // The router's two fallbacks are marked, never silent — and never taken here.
+  await expect(page.locator(".cicada-canvas")).toHaveAttribute("data-trace-collapsed", "0");
+  await expect(page.locator("g.cicada-edge[data-trace-yield]")).toHaveCount(0);
   return trace;
 }
 
@@ -192,6 +123,8 @@ test("U6 — 06-lists in trace mode: orthogonal runs, one-unit 45° corners, lan
   expect(spline.size).toBeGreaterThan(10);
   // Spline mode really is bezier: every path has a cubic.
   for (const [id, w] of spline) expect(w.d, id).toMatch(/C/);
+  // Spline mode carries no trace counters.
+  await expect(page.locator(".cicada-canvas")).not.toHaveAttribute("data-trace-collapsed", /.*/);
 
   const trace = await assertTraces(page, spline);
 
