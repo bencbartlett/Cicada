@@ -696,7 +696,7 @@
   transition: width 120ms linear;
 }
 
-/* closest-zoom value previews: a second line inside the output row */
+/* value previews (near tier and up, `showsPortValues`): a second line inside the output row */
 .cn-port.cn-out.with-value {
   flex-direction: column;
   align-items: flex-end;
