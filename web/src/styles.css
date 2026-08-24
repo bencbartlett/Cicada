@@ -25,8 +25,16 @@
   --running: #7ac2ff;
   --cached: #9aa2b1;
   --blocked: #b19a4a;
-  --grid: #20242a;
-  --grid-strong: #2a2f37;
+  /* grid lines: halfway from their previous values (#20242a / #2a2f37)
+     to --bg, so they read at about half the strength (docs/16 §Theme) */
+  --grid: #1b1e23;
+  --grid-strong: #202329;
+  /* viewport axes (ground-origin triad + the gimbal): X red, Y green, Z
+     blue — the CAD convention (Rhino, Blender), the one non-semantic hue
+     set (docs/16 §Viewport conventions) */
+  --axis-x: #ff6b6b;
+  --axis-y: #6bd36b;
+  --axis-z: #5c9dff;
   --shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
 
   /* kind families — one hue each, everywhere */
@@ -73,8 +81,12 @@
   --running: #1f6fd0;
   --cached: #6f7683;
   --blocked: #8a6d1d;
-  --grid: #e8ebf0;
-  --grid-strong: #dde1e8;
+  /* halfway from the previous values (#e8ebf0 / #dde1e8) to --bg */
+  --grid: #eef0f4;
+  --grid-strong: #e9ebf0;
+  --axis-x: #d12b2b;
+  --axis-y: #1f8f3a;
+  --axis-z: #1f5fd0;
   --shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
 }
 

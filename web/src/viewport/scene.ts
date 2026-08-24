@@ -14,6 +14,8 @@
  *
  * Rendering is on demand (frames, camera, hover, selection, resize); a
  * `requestAnimationFrame` loop runs only while the controls are moving.
+ * The gimbal (`gimbal.ts`) is drawn into its corner at the end of the same
+ * render, so it follows the camera at no cost while the view is still.
  */
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -30,6 +32,7 @@ import {
 } from "./materials";
 import { EdgeBuilder, type EdgeJobHandle } from "./edgeBuilder";
 import { EDGE_QUIET_MS, EDGE_THRESHOLD_DEG, EDGE_TRIANGLE_LIMIT, edgeBuildAllowed, edgePolicy } from "./edgePolicy";
+import { Gimbal, axisDirections, type AxisColors, type AxisDirections } from "./gimbal";
 import { decodePickPixel } from "./picking";
 import {
   type SceneStore,
@@ -54,6 +57,10 @@ export interface ThemeColors {
   edge: THREE.Color;
   curve: THREE.Color;
   point: THREE.Color;
+  /** The axes' hues — X red, Y green, Z blue (docs/16 §Viewport conventions): the ground triad and the gimbal. */
+  axisX: THREE.Color;
+  axisY: THREE.Color;
+  axisZ: THREE.Color;
 }
 
 export interface ScenePick extends PickTarget {
@@ -124,6 +131,12 @@ export interface ExtendedStats extends ViewportStats {
   pickPasses: number;
   /** Main renders so far. */
   renders: number;
+  /** What the gimbal draws: each world axis as the camera sees it (`gimbal.ts`). */
+  gimbal: AxisDirections;
+}
+
+function axisColorsOf(theme: ThemeColors): AxisColors {
+  return { x: theme.axisX, y: theme.axisY, z: theme.axisZ };
 }
 
 /** A "nice" grid step (1·2·5 × 10^k) so ~`divisions` cells span `extent`. */
@@ -172,6 +185,10 @@ export class ViewportScene {
   private blobGeometries = new Map<string, THREE.BufferGeometry>();
   private blobEdges = new Map<string, THREE.BufferGeometry | null>();
   private helpers = new THREE.Group();
+  /** The X/Y/Z triad in the upper-left, drawn at the end of every `render()`. */
+  private gimbal: Gimbal;
+  /** The canvas's CSS-pixel size as of the last `resize()` (the gimbal's corner is measured from it). */
+  private viewSize = { width: 1, height: 1 };
   private theme: ThemeColors;
   private displayMode: DisplayMode = "shaded_edges";
   private highlightedNodes = new Set<number>();
@@ -277,6 +294,7 @@ export class ViewportScene {
     this.helpers.layers.set(LAYER_DECOR);
     this.scene.add(this.helpers);
     this.rebuildHelpers(1, new THREE.Vector3());
+    this.gimbal = new Gimbal(axisColorsOf(theme), theme.background);
 
     this.canvas.addEventListener("webglcontextlost", this.onContextLost);
     this.canvas.addEventListener("webglcontextrestored", this.onContextRestored);
@@ -339,6 +357,7 @@ export class ViewportScene {
     this.blobGeometries.clear();
     this.blobEdges.clear();
     this.disposeHelpers();
+    this.gimbal.dispose();
     this.pickTarget.dispose();
     this.pickMaterial.dispose();
     this.renderer.dispose();
@@ -384,6 +403,7 @@ export class ViewportScene {
     const width = Math.max(1, Math.floor(this.container.clientWidth));
     const height = Math.max(1, Math.floor(this.container.clientHeight));
     this.renderer.setSize(width, height, false);
+    this.viewSize = { width, height };
     this.canvas.style.width = `${width}px`;
     this.canvas.style.height = `${height}px`;
     this.camera.aspect = width / height;
@@ -906,6 +926,7 @@ export class ViewportScene {
     this.renderer.setClearColor(theme.background, 1);
     this.shared.uAccent.value.copy(theme.accent);
     this.rebuildHelpers(this.gridStep, this.gridCenter);
+    this.gimbal.setColors(axisColorsOf(theme), theme.background);
     this.rebuildAll();
   }
 
@@ -1096,7 +1117,9 @@ export class ViewportScene {
     gridMaterial.opacity = 0.9;
     gridMaterial.depthWrite = false;
     this.helpers.add(grid);
+    // The origin triad wears the theme's axis hues — the same as the gimbal's.
     const axes = new THREE.AxesHelper(step * 2);
+    axes.setColors(this.theme.axisX, this.theme.axisY, this.theme.axisZ);
     axes.layers.set(LAYER_DECOR);
     this.helpers.add(axes);
   }
@@ -1117,7 +1140,7 @@ export class ViewportScene {
     if (moving || this.interacting) this.requestRender();
   };
 
-  /** One synchronous render of the main view. */
+  /** One synchronous render of the main view, then the gimbal over it. */
   render(): void {
     if (this.disposed) return;
     const distance = this.camera.position.distanceTo(this.controls.target);
@@ -1126,7 +1149,12 @@ export class ViewportScene {
     this.camera.updateProjectionMatrix();
     this.renderer.setRenderTarget(null);
     this.renderer.render(this.scene, this.camera);
+    // The readout's draw count is the geometry's: sampled before the gimbal's
+    // handful of draws (`info` resets per `renderer.render`).
     this.lastDrawCalls = this.renderer.info.render.calls;
+    // The gimbal rides the same on-demand render — nothing is drawn at idle.
+    this.gimbal.follow(this.camera);
+    this.gimbal.render(this.renderer, this.viewSize.width, this.viewSize.height);
     this.renders += 1;
     this.callbacks.onRendered();
   }
@@ -1180,6 +1208,7 @@ export class ViewportScene {
       edgesDeferredBuilt: this.edgesDeferredBuilt,
       pickPasses: this.pickPasses,
       renders: this.renders,
+      gimbal: axisDirections(this.camera.quaternion),
     };
   }
 }

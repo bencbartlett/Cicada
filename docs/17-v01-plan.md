@@ -1090,7 +1090,14 @@ packages in sequence, each reviewed.
   each frame, axis colours per docs/16 §Viewport conventions,
   non-interactive in this slice; output value summaries appear one tier
   earlier (`near`, zoom ≥ 0.65, instead of `closest`), the docs/16 LOD
-  table revised, `grid.test.ts` pinned.
+  table revised, `grid.test.ts` pinned. *Implemented 2026-08-24; three
+  things the contract did not foresee, settled the small way: docs/16
+  §Viewport conventions recorded no axis colours, so B1 defines them as
+  theme tokens (`--axis-x/y/z`, X red · Y green · Z blue, shared by the
+  ground triad); the toolbar overlay already occupies the corner, so the
+  gimbal sits under it (56 px down); and the tier gate lived in TWO
+  places — `CicadaNode.tsx` renders the summaries, `Canvas.tsx` fetches
+  them with `inspect` — so both now read one `showsPortValues` rule.*
 - **B2 — traces.** A router of our own (`web/src/canvas/trace.ts`, pure,
   unit-tested) replaces `getSmoothStepPath` in trace mode: orthogonal
   runs with 45° corners whose radius is ≥ 1 grid unit (`hello.unitPx`),
