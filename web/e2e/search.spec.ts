@@ -103,9 +103,12 @@ test("a Grasshopper name finds the node that replaces it first, the row says whi
     "title",
     "count: Integer — Number of values.",
   );
+  // Anchored at the start: from the near tier up the row's hover also
+  // carries the value line below the doc (docs/16 LOD table, B1), and the
+  // default zoom is near.
   await expect(seriesNode.locator(".cn-port.cn-out:not(.cn-empty)")).toHaveAttribute(
     "title",
-    "out: [Number] — `count` numbers, `start` first, each `step` after the previous.",
+    /^out: \[Number\] — `count` numbers, `start` first, each `step` after the previous\.(\n|$)/,
   );
   await expect(page.locator(".react-flow__node[data-id='size'] .cn-port.cn-out:not(.cn-empty)")).toHaveAttribute(
     "title",
