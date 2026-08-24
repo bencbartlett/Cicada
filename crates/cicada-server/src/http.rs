@@ -777,10 +777,12 @@ fn files_status(error: &FilesError) -> StatusCode {
 /// them (project-relative, `/`-separated); shallow (depth 4), and skipping
 /// exactly the directories `GET /api/files` leaves unlisted
 /// ([`files::skipped_directory`]: dot-names, `node_modules` / `target`, the
-/// OS-hidden ones — under a home root that is `AppData` and its scratch
-/// trees, which the picker never shows and this walk must not spend
-/// seconds in). A pipeline is what the listing calls one
-/// ([`files::is_pipeline_name`], extension case-insensitive).
+/// OS-hidden ones), so the two never disagree about what a root contains.
+/// A pipeline is what the listing calls one ([`files::is_pipeline_name`],
+/// extension case-insensitive). Over a home root this is still a walk of
+/// everything not hidden (measured 2026-08-24: 1.4 s, 24 pipelines, 16 of
+/// them scratch copies under a non-hidden `AppData`) — the picker reads
+/// `/api/files`, never this.
 fn collect_pipelines(
     root: &Path,
     dir: &Path,
@@ -1700,9 +1702,9 @@ mod tests {
 
     /// `/api/project`'s walk skips exactly what `GET /api/files` leaves
     /// unlisted — ONE predicate, `files::skipped_directory` — and collects
-    /// what the listing calls a pipeline (`.CIC` included). Under a home
-    /// root the two disagreeing was a 3 s walk through `AppData`'s scratch
-    /// trees that listed two dozen pipelines the picker never shows. The
+    /// what the listing calls a pipeline (`.CIC` included): the two must
+    /// never disagree about what a root contains (before, the walk
+    /// descended into OS-hidden directories the listing left out). The
     /// OS-hidden arm needs Windows' attribute and SKIPS LOUDLY elsewhere
     /// (the dot-name and build-tree arms are asserted everywhere).
     #[test]

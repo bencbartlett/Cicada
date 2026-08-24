@@ -1070,10 +1070,14 @@ canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
   404 `not_found` on every OS, not 403 (`ErrorKind::InvalidFilename` /
   `NotADirectory` → not found); `/api/project`'s walk and the listing
   share ONE skip predicate (`files::skipped_directory` — dot-names,
-  `node_modules` / `target`, OS-hidden), so the walk over a home root no
-  longer spends seconds under `AppData` listing scratch pipelines;
-  unlisted is documented as not unenterable (the root is the boundary;
-  route-tested); `cicada serve Upper.CIC` resolves like the list and
+  `node_modules` / `target`, OS-hidden), so they never disagree about
+  what a root contains — NOT a speed fix: measured over this home root
+  the walk still takes 1.4 s for 24 pipelines, 16 of them scratch copies
+  under `AppData`, which this profile does not mark hidden (a default
+  Windows profile does; `attrib` checked), so both the listing and the
+  walk include it — the picker must read `/api/files` and never
+  `/api/project`, as already recorded; unlisted is documented as not
+  unenterable (the root is the boundary; route-tested); `cicada serve Upper.CIC` resolves like the list and
   `?pipeline=` accept it; a `scripts/` the watcher cannot re-watch is a
   `warning` notice to the session (`Session::notify_warning`) besides
   the console line. Declined: a duplicate `?dir=` is axum's plain-text
