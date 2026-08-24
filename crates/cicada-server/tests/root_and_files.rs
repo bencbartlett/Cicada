@@ -1,11 +1,13 @@
 //! The root and the file list (docs/17 wave 4 O1; docs/13 §Projects,
-//! pipelines, sessions, §HTTP surface `GET /api/files`) over a REAL served
-//! root in a temp dir: a root with no default pipeline opens nothing and
-//! serves its listing one directory at a time in the documented shape;
-//! every escape is refused with the typed body and nothing above the root
-//! is ever named; an unreadable directory is `io_error`; a pipeline in a
-//! SUBDIRECTORY of the root opens by its root-relative name. No network
-//! beyond loopback; the store lives in the temp dir.
+//! pipelines, sessions, §HTTP surface `GET /api/files`, §External changes
+//! and file watching) over a REAL served root in a temp dir: a root with no
+//! default pipeline opens nothing and serves its listing one directory at
+//! a time in the documented shape; every escape is refused with the typed
+//! body and nothing above the root is ever named; an unreadable directory
+//! is `io_error`; a pipeline in a SUBDIRECTORY of the root opens by its
+//! root-relative name and its external changes still reload — the watcher
+//! follows sessions, not the root (a root may be a home directory). No
+//! network beyond loopback; the store lives in the temp dir.
 //!
 //! Two fixtures need the OS's co-operation and SKIP LOUDLY (a printed
 //! reason, those assertions left out — never `#[ignore]`, never a silent
@@ -23,12 +25,26 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use cicada_server::protocol::PROTOCOL_VERSION;
 use cicada_server::{ServeConfig, ServerHandle, serve};
+use futures_util::{SinkExt as _, StreamExt as _};
+use tokio_tungstenite::tungstenite::Message;
 
 const PIPELINE: &str = "# cicada 1\n\
                         size = slider(value=2.0, min=0.5, max=5.0)\n\
                         span = construct_domain(start=0.0, end=size)\n\
                         block = box(x=span, y=span, z=span)\n";
+
+const PIPELINE_CHANGED: &str = "# cicada 1\n\
+                                size = slider(value=3.0, min=0.5, max=5.0)\n\
+                                span = construct_domain(start=0.0, end=size)\n\
+                                block = box(x=span, y=span, z=span)\n";
+
+/// A script node (discovery refuses a `.py` with none) — nothing in the
+/// pipeline uses it; its ARRIVAL beside the pipeline is what must be seen.
+const SCRIPT: &str = "import cicada\n\n\
+                      @cicada.node(title=\"Triple\", description=\"x times three.\")\n\
+                      def triple(x: \"Number\") -> \"Number\":\n    return x * 3.0\n";
 
 /// Minimal HTTP/1.1 GET (loopback only): `(status, body)`.
 fn http_get(addr: SocketAddr, path: &str, token: Option<&str>) -> (u16, String) {
@@ -242,6 +258,50 @@ impl Drop for Denied {
                 .status();
         }
     }
+}
+
+type Socket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// The next text message of `kind` (others — deltas, statuses — are
+/// skipped), within a deadline; what WAS seen is the failure's report.
+async fn next_of(socket: &mut Socket, kind: &str) -> serde_json::Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let mut seen = Vec::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        match tokio::time::timeout(remaining, socket.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+                if value["type"] == kind {
+                    return value;
+                }
+                seen.push(value["type"].as_str().unwrap_or("?").to_owned());
+            }
+            Ok(Some(Ok(_))) => {}
+            Ok(Some(Err(error))) => panic!("socket error while waiting for {kind}: {error}"),
+            Ok(None) => panic!("socket closed while waiting for {kind}; saw {seen:?}"),
+            Err(elapsed) => panic!("no `{kind}` within 20 s ({elapsed}); saw {seen:?}"),
+        }
+    }
+}
+
+async fn join(addr: SocketAddr, pipeline: &str) -> Socket {
+    let url = format!("ws://{addr}/ws?token=t&pipeline={pipeline}");
+    let (mut socket, _) = tokio_tungstenite::connect_async(url).await.expect("ws");
+    socket
+        .send(Message::Text(
+            format!(
+                r#"{{"v":{PROTOCOL_VERSION},"type":"hello","payload":{{"v":{PROTOCOL_VERSION}}}}}"#
+            )
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let hello = next_of(&mut socket, "hello").await;
+    assert_eq!(hello["payload"]["role"], "writer", "{hello}");
+    let _snapshot = next_of(&mut socket, "snapshot").await;
+    socket
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -522,4 +582,52 @@ async fn an_unreadable_directory_is_io_error_and_still_a_directory_of_its_parent
     );
     handle.shutdown().await;
     drop(denied);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pipeline_in_a_subdirectory_reloads_on_external_changes_including_a_late_scripts_dir() {
+    let fx = fixture();
+    let handle = start(&fx).await;
+    let addr = handle.addr;
+    let mut socket = join(addr, "sub/p.cic").await;
+    let (_, before) = get(addr, "/debug/state?pipeline=sub/p.cic&wait=true").await;
+    assert!(before["text"].as_str().unwrap().contains("value=2.0"));
+
+    // ---- 1. The `.cic` changes under the session (git checkout, an
+    // editor): the watch on the pipeline's OWN directory sees it — the
+    // root is not watched as a tree.
+    std::fs::write(fx.root.join("sub").join("p.cic"), PIPELINE_CHANGED).unwrap();
+    let barrier = next_of(&mut socket, "snapshot").await;
+    assert_eq!(
+        barrier["payload"]["reason"], "external file change",
+        "{barrier}"
+    );
+    let (_, after) = get(addr, "/debug/state?pipeline=sub/p.cic&wait=true").await;
+    assert!(
+        after["text"].as_str().unwrap().contains("value=3.0"),
+        "{}",
+        after["text"]
+    );
+
+    // ---- 2. A `scripts/` directory appears beside it AFTER the session
+    // opened, with a script inside: no watch existed for either event when
+    // the session opened — the directory's arrival is seen on the parent's
+    // watch, rescans, and puts the new directory under watch.
+    let scripts = fx.root.join("sub").join("scripts");
+    std::fs::create_dir(&scripts).unwrap();
+    std::fs::write(scripts.join("helper.py"), SCRIPT).unwrap();
+    let barrier = next_of(&mut socket, "snapshot").await;
+    assert_eq!(
+        barrier["payload"]["reason"], "external file change",
+        "{barrier}"
+    );
+
+    // ---- 3. A later change INSIDE it is seen through that late watch.
+    std::fs::write(scripts.join("helper.py"), format!("{SCRIPT}\n# edited\n")).unwrap();
+    let barrier = next_of(&mut socket, "snapshot").await;
+    assert_eq!(
+        barrier["payload"]["reason"], "external file change",
+        "{barrier}"
+    );
+    handle.shutdown().await;
 }

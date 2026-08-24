@@ -1022,6 +1022,37 @@ canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
   documented in docs/13 §HTTP surface; route tests for the shape and for
   every escape. The server still binds 127.0.0.1 only, and the list
   reveals nothing above the root.
+  *Built 2026-08-24 (`wt/open`: `cicada_cli::serve::resolve_root` — the
+  function `cicada app` calls — `cicada_server::files`, `GET
+  /api/files`, `tests/root_and_files.rs`).* What the contract did not
+  foresee, each the smaller honest deviation: (1) the watcher no longer
+  watches the root recursively — it watches each open pipeline's
+  directory and its `scripts/`, non-recursively, and a `scripts/` that
+  appears later is watched from its arrival (a recursive watch over a
+  home directory exhausts inotify and floods every backend; docs/13
+  §External changes revised, the watcher driven by a route test over a
+  subdirectory pipeline). (2) Two refusals beyond the contract's two: a
+  `dir` that does not exist, or names a file, is `404 not_found` (403
+  for a missing directory would be false); and besides dot-directories /
+  `node_modules` / `target`, directories the OS marks hidden are not
+  listed (a Windows home directory carries a dozen hidden junctions —
+  `Application Data`, `Cookies`, … — that Explorer hides and nobody can
+  enter). (3) A symlink whose canonical path leaves the root is refused
+  as the contract says AND not listed — what the picker shows must be
+  enterable — and so is a link the server cannot follow at all (dangling,
+  or its target unreadable to it); hidden directories and links are
+  dropped before anything follows them, so one odd reparse point under a
+  home root cannot fail the whole listing. Found, not fixed (follow-ups,
+  not in O1's contract):
+  relative exporter paths resolve against the server's cwd = the ROOT —
+  under a home root, the home directory — while `cicada run` resolves
+  against the pipeline's directory (the two agree only for a pipeline at
+  the root; pre-existing for any served directory); the git handle is
+  rooted at the root, so a pipeline inside a repository under a home
+  root reads `not_a_repo`; and `GET /api/project` still walks the root
+  to depth 4, which over a home root is slow and lists every `.cic`
+  within reach — O2's picker must use `/api/files`, and the landing page
+  should stop calling `/api/project` for the list.
 - **O2 — File → Open / Recent / Close.** The top bar gains a File menu:
   Open… (a dialog over `/api/files` with breadcrumbs, directories and
   pipelines, keyboard navigation; Enter / double-click opens), Recent

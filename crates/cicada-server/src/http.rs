@@ -10,7 +10,7 @@
 //! exactly Jupyter's shape). Nothing here assumes locality except the
 //! default bind; a reverse proxy with real auth is the remote story.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -142,6 +142,14 @@ struct AppState {
     token: String,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    /// The directories under watch (docs/13 §External changes): each open
+    /// pipeline's directory and its `scripts/`, NON-recursively — never
+    /// the root as a tree. The root may be the user's whole home
+    /// directory (v0.1 wave 4), and a recursive watch over it is
+    /// unbounded: inotify runs out of watches and refuses, every other
+    /// backend floods the coalescing thread with events about nothing
+    /// the watcher acts on. Locked before `watcher`.
+    watched: Mutex<HashSet<PathBuf>>,
     /// The project's git handle (doc 17 item 2): every git route runs
     /// through it, with the project dir as cwd.
     git: Git,
@@ -189,9 +197,11 @@ impl ServerHandle {
     }
 }
 
-/// Start serving. Opens the default pipeline eagerly (so a broken project
-/// fails at startup, loudly), starts the project watcher, binds, and
-/// returns a handle.
+/// Start serving. Starts the file watcher (every session's directories
+/// join it as they open), opens the default pipeline eagerly (so a broken
+/// project fails at startup, loudly), binds, and returns a handle. With no
+/// default pipeline nothing is opened: the root is served for the app's
+/// picker (`GET /api/files`) and sessions open on first `?pipeline=`.
 ///
 /// # Errors
 ///
@@ -212,16 +222,18 @@ pub async fn serve(mut config: ServeConfig) -> Result<ServerHandle, ServeError> 
         token: token.clone(),
         sessions: Mutex::new(HashMap::new()),
         watcher: Mutex::new(None),
+        watched: Mutex::new(HashSet::new()),
         git: Git::new(&config.project_dir),
         config,
     });
+    // The watcher first: opening a session adds its directories to it.
+    start_watcher(&state)?;
     if let Some(pipeline) = state.config.pipeline.clone() {
         let opening = Arc::clone(&state);
         tokio::task::spawn_blocking(move || open_session(&opening, &pipeline))
             .await
             .map_err(|e| ServeError::Watch(e.to_string()))??;
     }
-    start_watcher(&state)?;
 
     let app = router(Arc::clone(&state));
     let addr = SocketAddr::new(state.config.host, state.config.port);
@@ -333,6 +345,9 @@ fn open_session(state: &AppState, relative: &str) -> Result<Arc<Session>, ServeE
     {
         return Ok(Arc::clone(existing));
     }
+    // Its directories join the watcher BEFORE the session exists: a
+    // session whose external changes nobody would see is not opened.
+    watch_pipeline_dirs(state, &pipeline)?;
     let session = Session::open(SessionConfig {
         project_dir: state.config.project_dir.clone(),
         pipeline,
@@ -352,13 +367,119 @@ fn open_session(state: &AppState, relative: &str) -> Result<Arc<Session>, ServeE
     Ok(session)
 }
 
-/// The project watcher (docs/13 §External changes): debounced; `.cic`,
+/// Watch what the watcher acts on for one pipeline: its directory (the
+/// `.cic` and its sidecar live there) and the `scripts/` beside it when it
+/// exists, both non-recursively. Idempotent — sessions sharing a directory
+/// share its watch.
+fn watch_pipeline_dirs(state: &AppState, pipeline: &Path) -> Result<(), ServeError> {
+    let Some(dir) = pipeline.parent() else {
+        return Ok(());
+    };
+    ensure_watched(state, dir)?;
+    let scripts = dir.join("scripts");
+    if scripts.is_dir() {
+        ensure_watched(state, &scripts)?;
+    }
+    Ok(())
+}
+
+/// Add `dir` to the watcher unless it already is.
+fn ensure_watched(state: &AppState, dir: &Path) -> Result<(), ServeError> {
+    use notify::Watcher as _;
+    let mut known = state
+        .watched
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if known.contains(dir) {
+        return Ok(());
+    }
+    let mut watcher = state
+        .watcher
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(watcher) = watcher.as_mut() else {
+        return Err(ServeError::Watch(
+            "the file watcher is not running — a session cannot open without it".to_owned(),
+        ));
+    };
+    watcher
+        .watch(dir, notify::RecursiveMode::NonRecursive)
+        .map_err(|e| ServeError::Watch(format!("{}: {e}", dir.display())))?;
+    known.insert(dir.to_owned());
+    Ok(())
+}
+
+/// Watch `dir` afresh: a `scripts/` directory that appeared (or was
+/// replaced) after its pipeline opened — the OS forgets a watch with the
+/// directory it was on, so the set's memory of it is dropped first.
+fn rewatch(state: &AppState, dir: &Path) -> Result<(), ServeError> {
+    use notify::Watcher as _;
+    {
+        let mut known = state
+            .watched
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        known.remove(dir);
+        if let Some(watcher) = state
+            .watcher
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+        {
+            // Not watched any more (or never): nothing to undo.
+            let _ = watcher.unwatch(dir);
+        }
+    }
+    ensure_watched(state, dir)
+}
+
+/// What a batch of changed paths means for one pipeline (the watcher
+/// thread's decision, factored out for its tests): reload when the `.cic`
+/// or its sidecar changed; reload AND rescan scripts when a `scripts/*.py`
+/// beside it changed, or when `scripts/` itself appeared, vanished or was
+/// replaced (`scripts_dir_changed` — the caller re-watches it: a directory
+/// created after the session opened holds files no watch saw arrive).
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Reaction {
+    reload: bool,
+    rescan: bool,
+    scripts_dir_changed: bool,
+}
+
+fn classify_change(changed: &[PathBuf], pipeline: &Path) -> Reaction {
+    let sidecar = crate::sidecar::Sidecar::path_for(pipeline);
+    let scripts_dir = pipeline.parent().map(|d| d.join("scripts"));
+    let mut reaction = Reaction::default();
+    for path in changed {
+        if same_file(path, pipeline) || same_file(path, &sidecar) {
+            reaction.reload = true;
+        }
+        let Some(scripts_dir) = &scripts_dir else {
+            continue;
+        };
+        if path.extension().is_some_and(|e| e == "py")
+            && path.parent().is_some_and(|p| same_file(p, scripts_dir))
+        {
+            reaction.reload = true;
+            reaction.rescan = true;
+        } else if same_file(path, scripts_dir) {
+            reaction.reload = true;
+            reaction.rescan = true;
+            reaction.scripts_dir_changed = true;
+        }
+    }
+    reaction
+}
+
+/// The file watcher (docs/13 §External changes): debounced; `.cic`,
 /// sidecar, and `scripts/*.py` changes reload the affected sessions with a
 /// barrier snapshot. The sessions ignore their own writes by text hash.
+/// Started empty: [`watch_pipeline_dirs`] adds each opening session's
+/// directories (non-recursively) — the root itself is never watched as a
+/// tree.
 fn start_watcher(state: &Arc<AppState>) -> Result<(), ServeError> {
-    use notify::Watcher as _;
     let (tx, rx) = std::sync::mpsc::channel::<PathBuf>();
-    let mut watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
+    let watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
         if let Ok(event) = result {
             // Drop ACCESS events (open / read / close): a read is not a
             // change. This matters because `reload_from_disk` READS the
@@ -377,9 +498,6 @@ fn start_watcher(state: &Arc<AppState>) -> Result<(), ServeError> {
         }
     })
     .map_err(|e| ServeError::Watch(e.to_string()))?;
-    watcher
-        .watch(&state.config.project_dir, notify::RecursiveMode::Recursive)
-        .map_err(|e| ServeError::Watch(e.to_string()))?;
     *state
         .watcher
         .lock()
@@ -406,25 +524,19 @@ fn start_watcher(state: &Arc<AppState>) -> Result<(), ServeError> {
                     .collect();
                 for session in sessions {
                     let pipeline = session.pipeline().to_owned();
-                    let sidecar = crate::sidecar::Sidecar::path_for(&pipeline);
-                    let scripts_dir = pipeline.parent().map(|d| d.join("scripts"));
-                    let mut reload = false;
-                    let mut rescan = false;
-                    for path in &changed {
-                        if same_file(path, &pipeline) || same_file(path, &sidecar) {
-                            reload = true;
-                        }
-                        if path.extension().is_some_and(|e| e == "py")
-                            && scripts_dir
-                                .as_ref()
-                                .is_some_and(|dir| path.parent().is_some_and(|p| same_file(p, dir)))
-                        {
-                            reload = true;
-                            rescan = true;
-                        }
+                    let reaction = classify_change(&changed, &pipeline);
+                    if reaction.scripts_dir_changed
+                        && let Some(scripts_dir) = pipeline.parent().map(|d| d.join("scripts"))
+                        && scripts_dir.is_dir()
+                        && let Err(error) = rewatch(&state, &scripts_dir)
+                    {
+                        eprintln!(
+                            "watching {} failed: {error} — later script changes there go unseen",
+                            scripts_dir.display()
+                        );
                     }
-                    if reload {
-                        match session.reload_from_disk("external file change", rescan) {
+                    if reaction.reload {
+                        match session.reload_from_disk("external file change", reaction.rescan) {
                             Ok(true) => {
                                 eprintln!("reloaded {} (external change)", session.relative());
                             }
@@ -1465,6 +1577,77 @@ mod tests {
     use crate::viewmodel::WireEnd;
     use std::sync::Mutex as StdMutex;
     use tokio::sync::Semaphore;
+
+    /// The watcher thread's decision over a burst of changed paths
+    /// (docs/13 §External changes): what reloads, what rescans, and when
+    /// `scripts/` itself must be (re)watched — for a pipeline that sits in
+    /// a SUBDIRECTORY of the root, the shape the root-as-home serves.
+    #[test]
+    fn a_change_is_classified_by_what_the_session_owns() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let scripts_dir = root.join("sub").join("scripts");
+        std::fs::create_dir_all(&scripts_dir).unwrap();
+        std::fs::create_dir_all(root.join("other")).unwrap();
+        let pipeline = root.join("sub").join("p.cic");
+        std::fs::write(&pipeline, "# cicada 1\n").unwrap();
+        let sidecar = crate::sidecar::Sidecar::path_for(&pipeline);
+        std::fs::write(&sidecar, "{}").unwrap();
+        let script = scripts_dir.join("a.py");
+        std::fs::write(&script, "").unwrap();
+        // Another pipeline's file, a non-pipeline file beside ours, a `.py`
+        // that is NOT under scripts/: none of them is this session's.
+        let other = root.join("other").join("p.cic");
+        std::fs::write(&other, "# cicada 1\n").unwrap();
+        let readme = root.join("sub").join("README.md");
+        std::fs::write(&readme, "").unwrap();
+        let stray = root.join("sub").join("stray.py");
+        std::fs::write(&stray, "").unwrap();
+
+        let classify = |paths: &[&Path]| {
+            let changed: Vec<PathBuf> = paths.iter().map(|p| p.to_path_buf()).collect();
+            classify_change(&changed, &pipeline)
+        };
+        let reload = Reaction {
+            reload: true,
+            rescan: false,
+            scripts_dir_changed: false,
+        };
+        let rescan = Reaction {
+            reload: true,
+            rescan: true,
+            scripts_dir_changed: false,
+        };
+        let rewatch = Reaction {
+            reload: true,
+            rescan: true,
+            scripts_dir_changed: true,
+        };
+        assert_eq!(classify(&[]), Reaction::default());
+        assert_eq!(
+            classify(&[&other, &readme, &stray]),
+            Reaction::default(),
+            "another pipeline, a README, a .py outside scripts/: nothing"
+        );
+        assert_eq!(classify(&[&pipeline]), reload);
+        assert_eq!(classify(&[&sidecar]), reload);
+        assert_eq!(classify(&[&script]), rescan);
+        assert_eq!(
+            classify(&[&scripts_dir]),
+            rewatch,
+            "scripts/ itself changed"
+        );
+        assert_eq!(
+            classify(&[&readme, &script, &pipeline]),
+            rescan,
+            "a burst is the union of its parts"
+        );
+        // `scripts/` just deleted (or about to be created): still recognised
+        // by its name, so the reload rescans to none (or the re-watch lands
+        // when it exists again).
+        std::fs::remove_dir_all(&scripts_dir).unwrap();
+        assert_eq!(classify(&[&scripts_dir]), rewatch);
+    }
 
     /// What the mock client saw, in wire order.
     #[derive(Debug, Clone, PartialEq, Eq)]

@@ -792,8 +792,20 @@ beyond "layer by dependency depth, stack in definition order".
 
 Humans edit through the canvas (locked decision), but files still
 change on disk — chiefly via git (checkout, pull, restore), rarely via
-a stray editor. The engine watches the project directory (debounced):
-an external change to a `.cic`, sidecar, or script triggers reload →
+a stray editor. The engine watches (debounced) each OPEN pipeline's
+directory and the `scripts/` beside it, non-recursively — never the
+root as a tree: since v0.1 wave 4 (O1) the root may be the user's whole
+home directory, and a recursive watch over it is unbounded (inotify's
+watch limit refuses it outright; every backend floods the coalescing
+thread with events about nothing the watcher acts on). The watched set
+is exactly what the watcher reacts to — the `.cic`, its sidecar (same
+directory), `scripts/*.py` — and a `scripts/` that appears after its
+pipeline opened is put under watch on its arrival, which itself
+rescans (a directory checked out together with its files is not
+missed; `http.rs`'s `classify_change` is the decision, unit-tested, and
+`tests/root_and_files.rs` drives the real watcher over a pipeline in a
+subdirectory of the root). An external change to a `.cic`, sidecar, or
+script triggers reload →
 re-check → **reload barrier** in the op log (undo stack cleared) →
 full snapshot broadcast to clients. Honest and simple; no
 three-way-merge machinery. The session's own writes echo back through
