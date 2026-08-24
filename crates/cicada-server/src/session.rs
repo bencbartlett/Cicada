@@ -10714,6 +10714,12 @@ size = slider(value=4.0, min=0.5, max=5.0)
         drain(&mut rx);
 
         session.handle(writer, None, ClientMessage::TransportPlay {});
+        // Play paints the frame it stands on — frame 0 — through the same
+        // one-slot latest-wins queue as the ticks below: wait for it, or
+        // the first tick's frame replaces it while it is still queued and
+        // the count at the end reads 200 (CI's macos-latest, 2026-08-24,
+        // run 32763474709 — a loaded runner; the sibling tests wait here).
+        session.wait_idle();
         for _ in 0..200 {
             clock.advance(FRAME_NS);
             session.transport_tick();
