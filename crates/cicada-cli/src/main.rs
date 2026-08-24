@@ -59,32 +59,19 @@ enum Command {
     /// Serve the app: engine server + canvas + viewport on localhost with a
     /// session token (doc 15 stage 5; docs/13). Prints the URL to open.
     Serve {
-        /// A project directory, or a .cic file (its directory becomes the
-        /// project and the file the default pipeline). Default: `.`.
-        #[arg(default_value = ".")]
-        path: PathBuf,
-        /// Bind host (127.0.0.1 by default — remote deployment goes behind
-        /// a reverse proxy with real auth, docs/13).
-        #[arg(long, default_value = "127.0.0.1")]
-        host: IpAddr,
-        /// Port; 0 picks a free one.
-        #[arg(long, default_value_t = cicada_server::DEFAULT_PORT)]
-        port: u16,
-        /// Fixed session token (tests/automation); default: random.
+        #[command(flatten)]
+        serve: ServeCli,
+    },
+    /// Serve the app AND open its window (v0.1 wave 4, docs/17 L1): exactly
+    /// `serve`'s arguments, plus a Chromium-based browser in `--app` mode
+    /// when one is installed (Edge or Chrome), else the default browser on
+    /// the URL. The URL is printed either way; Ctrl-C stops the server.
+    App {
+        #[command(flatten)]
+        serve: ServeCli,
+        /// Print the URL and open nothing.
         #[arg(long)]
-        token: Option<String>,
-        /// Cache directory override (tests/CI); default: the per-project
-        /// store in the USER cache dir — never the project folder.
-        #[arg(long)]
-        cache_dir: Option<PathBuf>,
-        /// Worker threads; 0 = all cores minus two.
-        #[arg(long, default_value_t = 0)]
-        threads: usize,
-        /// Serve a built SPA (`web/dist`) from this directory. Without it
-        /// (and without the `embed` build feature) the server is API-only
-        /// and says so at `/`; dev uses `npm run dev`'s Vite proxy.
-        #[arg(long)]
-        web_dir: Option<PathBuf>,
+        no_browser: bool,
     },
     /// Serve the node catalog and the checker to agents as a Model Context
     /// Protocol server over stdio (docs/11 read tools; DECISIONS.md
@@ -99,6 +86,53 @@ enum Command {
         #[arg(long)]
         project: Option<PathBuf>,
     },
+}
+
+/// `serve`'s arguments — shared with `app` by flattening, so the two
+/// subcommands can never drift (one declaration, one resolution in
+/// `cicada_cli::serve`).
+#[derive(clap::Args)]
+struct ServeCli {
+    /// A project directory, or a .cic file (its directory becomes the
+    /// project and the file the default pipeline). Default: `.`.
+    #[arg(default_value = ".")]
+    path: PathBuf,
+    /// Bind host (127.0.0.1 by default — remote deployment goes behind
+    /// a reverse proxy with real auth, docs/13).
+    #[arg(long, default_value = "127.0.0.1")]
+    host: IpAddr,
+    /// Port; 0 picks a free one.
+    #[arg(long, default_value_t = cicada_server::DEFAULT_PORT)]
+    port: u16,
+    /// Fixed session token (tests/automation); default: random.
+    #[arg(long)]
+    token: Option<String>,
+    /// Cache directory override (tests/CI); default: the per-project
+    /// store in the USER cache dir — never the project folder.
+    #[arg(long)]
+    cache_dir: Option<PathBuf>,
+    /// Worker threads; 0 = all cores minus two.
+    #[arg(long, default_value_t = 0)]
+    threads: usize,
+    /// Serve a built SPA (`web/dist`) from this directory. Without it
+    /// (and without the `embed` build feature) the server is API-only
+    /// and says so at `/`; dev uses `npm run dev`'s Vite proxy.
+    #[arg(long)]
+    web_dir: Option<PathBuf>,
+}
+
+impl ServeCli {
+    fn into_args(self) -> cicada_cli::serve::ServeArgs {
+        cicada_cli::serve::ServeArgs {
+            path: self.path,
+            host: self.host,
+            port: self.port,
+            token: self.token,
+            cache_dir: self.cache_dir,
+            threads: self.threads,
+            web_dir: self.web_dir,
+        }
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -119,23 +153,13 @@ fn main() -> anyhow::Result<()> {
             cache_dir,
             threads,
         }),
-        Command::Serve {
-            path,
-            host,
-            port,
-            token,
-            cache_dir,
-            threads,
-            web_dir,
-        } => cicada_cli::serve::serve_command(&cicada_cli::serve::ServeArgs {
-            path,
-            host,
-            port,
-            token,
-            cache_dir,
-            threads,
-            web_dir,
-        }),
+        Command::Serve { serve } => cicada_cli::serve::serve_command(&serve.into_args()),
+        Command::App { serve, no_browser } => {
+            cicada_cli::app::app_command(&cicada_cli::app::AppArgs {
+                serve: serve.into_args(),
+                no_browser,
+            })
+        }
         Command::Mcp { project } => {
             cicada_cli::mcp::mcp_command(&cicada_cli::mcp::McpArgs { project })
         }

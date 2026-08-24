@@ -822,6 +822,22 @@ initial load path; there is exactly one client-hydration code path.
   loudly at `/` and dev uses Vite's proxy (`cd web && npm run dev`).
   Distribution is one file; the v0.2 desktop app wraps this same server
   + a webview.
+- **`cicada app [path]`** (v0.1 wave 4, docs/17 L1) is `serve` plus the
+  window: exactly `serve`'s arguments, resolved by the same function (the
+  path rule is `serve`'s, whatever it becomes), then a Chromium-based
+  browser in `--app=<url>` mode when the machine has one — a dedicated
+  window without tabs or an address bar (Windows: Edge, then Chrome, found
+  through the registry's `App Paths` or the usual Program Files dirs;
+  macOS: `open -na "Google Chrome" --args --app=<url>`, then Edge; Linux:
+  `xdg-open`) — else the default browser on the plain URL; `--no-browser`
+  opens nothing. The URL is printed either way, the terminal is the server
+  console, Ctrl-C stops the server. The decision is a pure function over a
+  probed environment (`cicada_cli::app::choose`), unit-tested per OS. A
+  browser that fails to START is reported on stderr and the server keeps
+  running with its URL on screen — the server is the product, never a dead
+  server because a window failed. The windows the browser opens are its
+  own: stopping the server leaves them showing a disconnected app, as
+  closing a tab would.
 
 ## Latency targets (measured, not vibed — spike criteria feed here)
 

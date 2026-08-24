@@ -1056,6 +1056,22 @@ canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
   Ctrl-C stops the server. The terminal it runs in is the server
   console. Browser discovery is a pure function over a probed
   environment, unit-tested.
+  **Done 2026-08-24 (`wt/launch`)**: `crates/cicada-cli/src/app.rs` —
+  `choose(&Environment, url)` over `probe(os)`, 11 unit tests holding the
+  table above per OS; `serve::serve_with` is the ONE path resolution both
+  subcommands call (`main.rs` flattens one `ServeCli` into `Serve` and
+  `App`); `crates/cicada-cli/tests/app.rs` drives the binary with
+  `--no-browser` (the URL line, `/health` over it, `serve` and `app`
+  refusing a bad path with identical words). Recorded deviations: the
+  Windows default-browser fallback is `rundll32
+  url.dll,FileProtocolHandler <url>` (no shell between us and the URL's
+  `&`; `cmd /c start` would need escaping); a browser that fails to
+  START is a stderr warning and the server keeps running with its URL on
+  screen (the contract did not say; the server is the product); no
+  Playwright spec — the window is the browser's, not the SPA's, so the
+  evidence is the unit table, the process-level test and one live run on
+  the dev machine (the Edge app window opened, connected, and
+  `/debug/screenshot` rendered through it).
 - **L2 — no loader path at launch.** `tools/fetch_occt.py --bundle
   <dir>` copies the kernel's run-time library closure (the set
   `--check-closure` verifies) beside a `cicada` binary so Windows finds
