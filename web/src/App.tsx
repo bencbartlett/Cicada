@@ -5,13 +5,14 @@
  * Regions are components owned by their folders; this file only arranges
  * them and applies per-user settings (theme, split).
  */
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { Canvas } from "./canvas/Canvas";
 import { useKeyboard } from "./keyboard";
 import { CommitDialog } from "./panels/CommitDialog";
 import { ConnBanner } from "./panels/ConnBanner";
 import { Inspector } from "./panels/Inspector";
 import { Notices } from "./panels/Notices";
+import { OpenDialog } from "./panels/OpenDialog";
 import { Ribbon } from "./panels/Ribbon";
 import { StatusBar } from "./panels/StatusBar";
 import { TopBar } from "./panels/TopBar";
@@ -32,10 +33,7 @@ export function App() {
   const dragging = useRef(false);
   useKeyboard();
 
-  useEffect(() => {
-    document.documentElement.dataset.theme = settings.theme;
-  }, [settings.theme]);
-
+  // The theme on the document is `Root`'s (every screen shares it).
   const [a, b] = SPLITS[settings.split] ?? SPLITS.canvas!;
   const style = { "--split-a": a, "--split-b": b } as React.CSSProperties;
 
@@ -98,6 +96,7 @@ export function App() {
       <StatusBar />
       <Notices />
       <CommitDialog />
+      <OpenDialog />
     </div>
   );
 }

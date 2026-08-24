@@ -1,36 +1,20 @@
 /**
- * No pipeline in the URL: list the project's pipelines (needs the token) or
- * explain how to get a URL. `cicada serve <file.cic>` prints a URL with both.
+ * No pipeline in the URL (docs/16 §Application layout; docs/17 wave 4 O2):
+ * with a token the page IS the picker — the pipelines this origin opened
+ * recently, and the served root's file list one directory at a time (`GET
+ * /api/files`, never `/api/project`: over a home root its walk is seconds
+ * and lists what the picker must not show). Choosing one opens it in this
+ * tab through the route (`history.pushState`, so Back returns to the
+ * picker). Without a token the page can only explain how to get a URL:
+ * `cicada serve` prints one with the token.
  */
-import { useEffect, useState } from "react";
-import type { ProjectGit } from "../protocol/messages";
-import { projectGitLine } from "./gitFormat";
-
-interface ProjectInfo {
-  project: string;
-  pipelines: string[];
-  default: string | null;
-  open: string[];
-  engine: string;
-  /** The project's git summary (docs/13 `GET /api/project`; additive, so older servers may omit it). */
-  git?: ProjectGit;
-}
-
+import { useState } from "react";
+import { browserStorage, readRecent } from "../state/recent";
+import { openPipeline, routeSearch } from "../state/route";
+import { FileBrowser } from "./FileBrowser";
 
 export function Landing({ token }: { token?: string }) {
-  const [info, setInfo] = useState<ProjectInfo | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (token === undefined) return;
-    fetch("/api/project", { headers: { "X-Cicada-Token": token } })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
-        return (await response.json()) as ProjectInfo;
-      })
-      .then(setInfo)
-      .catch((e: unknown) => setError(String(e)));
-  }, [token]);
+  const [recent] = useState(() => readRecent(browserStorage()));
 
   if (token === undefined) {
     return (
@@ -38,8 +22,7 @@ export function Landing({ token }: { token?: string }) {
         <h1>Cicada</h1>
         <p>
           This page needs the session token. Open the URL that <code>cicada serve</code> printed
-          (<code>?token=…&amp;pipeline=…</code>) — the token is Jupyter-style: it lives in the URL,
-          never in the page.
+          (<code>?token=…</code>) — the token is Jupyter-style: it lives in the URL, never in the page.
         </p>
       </main>
     );
@@ -47,39 +30,39 @@ export function Landing({ token }: { token?: string }) {
   return (
     <main className="landing" data-testid="landing">
       <h1>Cicada</h1>
-      {error !== null && <p style={{ color: "var(--error)" }}>{error}</p>}
-      {info === null && error === null && <p className="dim">loading project…</p>}
-      {info !== null && (
-        <>
-          <p>
-            Project <code>{info.project}</code> · {info.engine}
-            {projectGitLine(info.git) !== null && (
-              <>
-                {" · "}
-                <span className="dim" data-testid="landing-git">
-                  {projectGitLine(info.git)}
-                </span>
-              </>
-            )}
-          </p>
-          <p>Open a pipeline:</p>
-          <ul>
-            {info.pipelines.map((p) => (
-              <li key={p}>
-                <a href={`?token=${encodeURIComponent(token)}&pipeline=${encodeURIComponent(p)}`}>
-                  {p}
+      <p className="dim">
+        Open a pipeline under the served root — Enter or a double-click opens it here; a directory opens
+        in place.
+      </p>
+      {recent.length > 0 && (
+        <section className="landing-section" data-testid="landing-recent">
+          <h2>Recent</h2>
+          <ul className="landing-recent">
+            {recent.map((entry) => (
+              <li key={entry}>
+                <a
+                  className="mono"
+                  href={routeSearch({ token, pipeline: entry, view: "app" })}
+                  onClick={(event) => {
+                    // A plain click stays in this tab through the route; a
+                    // modified click (new tab, new window) is the browser's.
+                    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                    event.preventDefault();
+                    openPipeline(entry);
+                  }}
+                  data-testid={`landing-recent-${entry}`}
+                >
+                  {entry}
                 </a>
-                {info.open.includes(p) && <span className="badge accent">open</span>}
               </li>
             ))}
           </ul>
-          {info.pipelines.length === 0 && (
-            <p className="dim">
-              No <code>.cic</code> files in this project yet — create one and reload.
-            </p>
-          )}
-        </>
+        </section>
       )}
+      <section className="landing-section">
+        <h2>Files</h2>
+        <FileBrowser token={token} onOpen={openPipeline} autoFocus />
+      </section>
     </main>
   );
 }

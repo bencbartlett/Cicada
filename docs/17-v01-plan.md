@@ -1099,6 +1099,42 @@ canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
   `web/e2e/files.spec.ts` (the scratch `examples/` tree lists; opening
   `02-solids.cic` then `06-lists.cic` shows each graph; Recent holds
   both; Close shows the picker).
+  *Built 2026-08-24 (`wt/open`).* The URL is the route
+  (`web/src/state/route.ts`: `parseRoute` / `routeSearch` / `popoutUrl`,
+  the `useRoute` store, `installRouting(window, syncConnection)` in
+  `main.tsx`, `openPipeline` / `closePipeline` = one `history.pushState`
+  + a route change; `popstate` follows the URL); the connection follows
+  the route (`connection.ts`: `syncConnection` → `startConnection` /
+  `stopConnection`, one socket at a time, the same route a no-op; the
+  store's `resetSession` clears every pipeline-bound slice and bumps
+  `displayResets` so the viewport's ledger empties before the next
+  join's `display_reset`); `Root.tsx` picks the screen. The picker
+  (`Landing.tsx`) and the dialog (`OpenDialog.tsx`) share
+  `FileBrowser.tsx` over `protocol/files.ts` (the typed `GET /api/files`
+  client); `FileMenu.tsx` sits left of the project name; Recent is
+  `state/recent.ts` (remembered on the `hello`, `cicada.recent.v1`).
+  Tests: vitest for the route, the recent list, the files client, the
+  pure path/cursor helpers, the browser component (jsdom: keyboard walk,
+  Backspace, double-click, a refused listing, a stale answer), the
+  store's reset, and the connection's route following (a fake socket:
+  one socket per pipeline, the switch closes the first and resets the
+  store, the picker leaves none, an abandoned socket's late close says
+  nothing); `web/e2e/files.spec.ts` as the contract names it, plus Back
+  / Forward, the Recent entry, `localStorage`, the first session's
+  0 clients after the switch, and a tap proving the picker never reads
+  `/api/project`. What the contract did not foresee, the smaller honest
+  choice: (1) Recent is remembered when the session's `hello` arrives,
+  not when the file is asked for — a URL naming a file the server
+  refuses never becomes recent. (2) The landing's project line (engine,
+  git summary from `/api/project`) is gone with the `/api/project` read;
+  `projectGitLine` and its test were removed (the top bar's git chip
+  carries the git facts once a pipeline is open). (3) The Open dialog
+  starts in the open pipeline's own directory, the picker at the root.
+  (4) The same pipeline chosen again pushes no history entry and
+  reconnects nothing. (5) The pure helper module is `panels/filePaths.ts`,
+  not `fileBrowser.ts`: on a case-insensitive file system TypeScript
+  conflates `./fileBrowser` with `./FileBrowser.tsx` (TS1149) — names
+  differing only in case are a Windows hazard in this tree.
 - **O3 — the pop-out viewport.** A viewport header button opens
   `window.open(<same URL> + "&view=viewport", "cicada-viewport")`; with
   `view=viewport` the SPA renders the viewport alone (no canvas, panels
@@ -1109,6 +1145,46 @@ canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
   sync is explicitly not in this slice). docs/13 (the join hint),
   docs/16 §Viewport conventions; a Playwright spec: the pop-out shows
   the geometry and stays read-only while the main window keeps writing.
+  *Built 2026-08-24 (`wt/open`).* The hint is the client's `hello`'s
+  optional `role` (`ClientMessage::Hello { v, role: Option<Role> }`,
+  additive — omitted unless asked for, an older client reads as `None`,
+  `PROTOCOL_VERSION` unchanged): `client_loop` parses it,
+  `attach_client` hands it to `Session::join`, and a declared observer
+  (`Client::observer_only`) is never the writer — `register_client`
+  leaves a free lease free, `transfer_lease_if_free` skips it, and its
+  `take_lease` is `IntentError::DeclaredObserver` (kind `lease`, the
+  reason in the message; 403 on the HTTP mapping). Tests: the wire shape
+  (`protocol.rs`), the session rules (`a_declared_observer_never_takes_
+  the_lease`: free lease left free, refused `take_lease` with nothing
+  broadcast, no promotion while only declared observers remain and the
+  rejoin takes the lease back, an ordinary observer promoted ahead of an
+  older declared one), the socket path (`tests/observer_join.rs`), and
+  the client (`CicadaClient.hello()` + `client.test.ts`, `connection.test.ts`
+  for the `view=viewport` route). The web half: `viewport/popout.ts`
+  (`popOutViewport`: `window.open(popoutUrl(location), "cicada-viewport")`,
+  a blocked pop-up is a warning notice), the toolbar button in
+  `Viewport.tsx` (hidden inside a pop-out; the file's diff is the
+  button, one hook and two imports), `ViewportOnly.tsx` (the viewport,
+  the connection banner, the notices, a chip naming the pipeline and
+  `read-only observer`), the route's `view` → `role: observer` in
+  `optionsForRoute`. `web/e2e/popout.spec.ts`: the named window's URL,
+  the viewport alone, `hello.role` observer with the main window's id
+  the lease holder, geometry in the pop-out, the main window's
+  `set_param` moving the pop-out's text and bounds with both roles
+  unchanged, `take_lease` refused with "declared observer", a write
+  refused, the writer unchanged after the pop-out closes. A finding
+  worth recording: the spec's first run FAILED against a stale engine
+  binary — an OLDER server ignores the unknown `role` field (serde's
+  default), joins the pop-out as an ordinary observer, and its
+  `take_lease` SUCCEEDS; the client cannot tell a declared join from an
+  ordinary one by the `hello`'s `role` alone. Mixed-age engine and SPA
+  are a dev-only shape (the embedded SPA ships with its engine), so no
+  acknowledgement field was added; if that shape ever matters, an
+  additive `hello.declared` from the server is the one-line answer.
+  Not in this slice, as the contract says: camera sync between the
+  windows; also not done: the pop-out following the main window's
+  pipeline switches (it stays on the pipeline it was opened for), and
+  hotkeys in the pop-out (the toolbar's buttons are its controls).
 
 **Track L — `wt/launch` (cli + tools + docs).**
 - **L1 — `cicada app [path]`.** = `serve` + opens the app window: a

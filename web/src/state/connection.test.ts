@@ -12,8 +12,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerEnvelope } from "../protocol/messages";
 import { catalogPolicy, stopCatalogRefresh } from "./catalog";
-import { getClient, startConnection } from "./connection";
+import { getClient, optionsForRoute, startConnection, stopConnection, syncConnection } from "./connection";
 import { stopGitStatus } from "./git";
+import { readRecent } from "./recent";
+import type { Route } from "./route";
 import { useCicada } from "./store";
 
 const HISTORY = { can_undo: false, can_redo: false, undo_label: null, redo_label: null, depth: 0 };
@@ -202,5 +204,120 @@ describe("startConnection wires the socket to the catalog policy", () => {
 
     const handle = (window as unknown as { __cicada: { catalog: () => { reads: number; busy: boolean; nodes: number } } }).__cicada;
     expect(handle.catalog(), "what Playwright reads").toEqual({ reads: 2, busy: false, nodes: 3 });
+  });
+});
+
+/**
+ * The route drives the socket (docs/16 §Application layout; docs/13 — the
+ * join hint): a pipeline route opens ONE socket to that pipeline, the
+ * pop-out route's hello declares the observer, another pipeline closes the
+ * first socket and resets the store before the next join, the same route
+ * again (a `popstate` back to the open file) touches nothing, and the
+ * picker leaves no socket. The hello remembers the pipeline under Recent.
+ */
+describe("syncConnection follows the route", () => {
+  const fakeWindow = {
+    location: { protocol: "http:", host: "127.0.0.1:8420" },
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  };
+  const storage = new Map<string, string>();
+  const fakeStorage = {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      storage.set(key, value);
+    },
+  };
+
+  beforeEach(() => {
+    FakeSocket.instances = [];
+    storage.clear();
+    vi.stubGlobal("window", fakeWindow);
+    vi.stubGlobal("WebSocket", FakeSocket);
+    vi.stubGlobal("localStorage", fakeStorage);
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response("not in this test", { status: 503 }))));
+  });
+
+  afterEach(() => {
+    stopConnection();
+    stopCatalogRefresh();
+    stopGitStatus(fakeWindow);
+    vi.unstubAllGlobals();
+  });
+
+  const route = (pipeline: string | undefined, view: "app" | "viewport" = "app"): Route => ({ token: "tok", pipeline, view });
+  const hello = (pipeline: string): ServerEnvelope => ({ ...HELLO, payload: { ...HELLO.payload, pipeline } });
+  const debug = () => (window as unknown as { __cicada: { connection: () => unknown } }).__cicada.connection();
+
+  it("opens one socket per pipeline, switches by closing the first, ignores the same route, and closes for the picker", () => {
+    expect(optionsForRoute(route(undefined))).toBeNull();
+    expect(optionsForRoute({ token: undefined, pipeline: "a.cic", view: "app" })).toBeNull();
+    expect(optionsForRoute(route("a.cic"))).toEqual({ token: "tok", pipeline: "a.cic" });
+    expect(optionsForRoute(route("a.cic", "viewport"))).toEqual({ token: "tok", pipeline: "a.cic", role: "observer" });
+
+    syncConnection(route("a.cic"));
+    expect(FakeSocket.instances).toHaveLength(1);
+    const first = FakeSocket.instances[0]!;
+    expect(first.url).toBe("ws://127.0.0.1:8420/ws?token=tok&pipeline=a.cic");
+    expect(useCicada.getState().pipeline).toBe("a.cic");
+    expect(useCicada.getState().connection).toBe("connecting");
+    first.open();
+    first.deliver(hello("a.cic"));
+    expect(useCicada.getState().hello?.pipeline).toBe("a.cic");
+    expect(JSON.parse(first.sent[0]!).payload, "the main window's hello carries no role").toEqual({ v: 1 });
+    expect(readRecent(fakeStorage), "remembered on the hello").toEqual(["a.cic"]);
+    expect(debug()).toEqual({ token: "tok", pipeline: "a.cic" });
+
+    syncConnection(route("a.cic"));
+    expect(FakeSocket.instances, "the same route again: no new socket").toHaveLength(1);
+    expect(first.readyState).toBe(FakeSocket.OPEN);
+
+    useCicada.setState({ text: "old text" });
+    syncConnection(route("sub/b.cic"));
+    expect(first.readyState, "the first socket is closed by us").toBe(FakeSocket.CLOSED);
+    expect(FakeSocket.instances).toHaveLength(2);
+    const second = FakeSocket.instances[1]!;
+    expect(second.url).toBe("ws://127.0.0.1:8420/ws?token=tok&pipeline=sub%2Fb.cic");
+    const s = useCicada.getState();
+    expect([s.pipeline, s.text, s.hello, s.connection], "the store is reset before the next join").toEqual(["sub/b.cic", "", null, "connecting"]);
+    expect(getClient(), "the live client is the second").not.toBeNull();
+    second.open();
+    second.deliver(hello("sub/b.cic"));
+    expect(readRecent(fakeStorage)).toEqual(["sub/b.cic", "a.cic"]);
+
+    syncConnection(route(undefined));
+    expect(second.readyState).toBe(FakeSocket.CLOSED);
+    expect(getClient()).toBeNull();
+    expect(debug()).toBeNull();
+    expect(useCicada.getState().pipeline).toBe("");
+    expect(useCicada.getState().hello).toBeNull();
+    syncConnection(route(undefined));
+    expect(FakeSocket.instances, "the picker again: nothing to do").toHaveLength(2);
+  });
+
+  it("the pop-out route joins as a declared observer: role: observer in its hello", () => {
+    syncConnection(route("a.cic", "viewport"));
+    const socket = FakeSocket.instances[0]!;
+    socket.open();
+    expect(JSON.parse(socket.sent[0]!)).toEqual({ v: 1, id: "1", type: "hello", payload: { v: 1, role: "observer" } });
+    expect(debug()).toEqual({ token: "tok", pipeline: "a.cic", role: "observer" });
+    // The same pipeline as the app (no role) is a different connection.
+    syncConnection(route("a.cic"));
+    expect(FakeSocket.instances).toHaveLength(2);
+    expect(JSON.parse(FakeSocket.instances[1]!.sent[0] ?? "{}").payload ?? null, "not sent before open").toBeNull();
+  });
+
+  it("a socket we closed reports nothing over the next pipeline's store", () => {
+    syncConnection(route("a.cic"));
+    const first = FakeSocket.instances[0]!;
+    first.open();
+    syncConnection(route("b.cic"));
+    // The browser fires the old socket's close AFTER the switch: the new
+    // pipeline's "connecting" must stand, and no reconnect may be scheduled
+    // for a socket we abandoned.
+    first.onclose?.({ code: 1000, reason: "" });
+    expect(useCicada.getState().connection).toBe("connecting");
+    expect(useCicada.getState().pipeline).toBe("b.cic");
+    expect(FakeSocket.instances).toHaveLength(2);
   });
 });
