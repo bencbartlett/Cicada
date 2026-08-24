@@ -13,6 +13,7 @@ import {
   portTitle,
   pxToCell,
   searchRank,
+  showsPortValues,
   sliderStep,
   snapToStep,
   statusBadge,
@@ -79,6 +80,23 @@ describe("lodTier", () => {
     expect(lodTier(0.5)).toBe("mid");
     expect(lodTier(1)).toBe("near");
     expect(lodTier(2)).toBe("closest");
+  });
+  it("flips at the docs/16 table's thresholds — 0.35 · 0.65 · 1.6, each inclusive upward", () => {
+    expect(lodTier(0.3499)).toBe("far");
+    expect(lodTier(0.35)).toBe("mid");
+    expect(lodTier(0.6499)).toBe("mid");
+    expect(lodTier(0.65)).toBe("near");
+    expect(lodTier(1.5999)).toBe("near");
+    expect(lodTier(1.6)).toBe("closest");
+  });
+  it("shows the output value summaries from near up (U7: one tier earlier than closest)", () => {
+    expect(showsPortValues("far")).toBe(false);
+    expect(showsPortValues("mid")).toBe(false);
+    expect(showsPortValues("near")).toBe(true);
+    expect(showsPortValues("closest")).toBe(true);
+    // The zoom that first shows them is the near tier's floor.
+    expect(showsPortValues(lodTier(0.65))).toBe(true);
+    expect(showsPortValues(lodTier(0.64))).toBe(false);
   });
 });
 

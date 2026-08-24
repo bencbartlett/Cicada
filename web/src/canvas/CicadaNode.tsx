@@ -7,8 +7,8 @@
  * instead: no handle, no literal), an optional param widget row, comment note above, excluded
  * outline, a git change badge when the binding differs from HEAD (docs/16
  * canvas badges; doc 10's status strip markers — added / modified /
- * renamed; removed nodes live only in the Git tab), and — at the closest
- * zoom tier — output value summaries below.
+ * renamed; removed nodes live only in the Git tab), and — from the near
+ * zoom tier up (`showsPortValues`) — output value summaries below.
  *
  * Everything dynamic (status, probe verdicts, values, dirty flash, picks) is
  * read from the store per node so a status tick never rebuilds the graph.
@@ -21,7 +21,16 @@ import type { DrivenSignal, InputView, NodeView, OutputView, ProbeVerdict, Value
 import { literalKindOf } from "../state/literals";
 import { canWrite, useCicada } from "../state/store";
 import { sendWrite, type CanvasNode } from "./flow";
-import { drivenTitle, firstLine, isRefinement, outputDoc, portTitle, statusBadge, transportDrivenSignal } from "./grid";
+import {
+  drivenTitle,
+  firstLine,
+  isRefinement,
+  outputDoc,
+  portTitle,
+  showsPortValues,
+  statusBadge,
+  transportDrivenSignal,
+} from "./grid";
 import { LiteralWidget } from "./LiteralWidgets";
 import { useLodTier } from "./lod";
 import { ParamWidget } from "./ParamWidget";
@@ -209,13 +218,13 @@ function OutputRow({
   output: OutputView;
   /** The catalog's one-line doc of this port (a bare `out`'s `# Returns` line), if any. */
   doc: string | undefined;
-  /** Closest-zoom preview: `undefined` = not shown, `null` = no value yet. */
+  /** The value preview (near tier and up): `undefined` = not shown, `null` = no value yet. */
   value: ValueSummary | null | undefined;
 }) {
   const color = kindColor(output.base);
   const type = output.resolved ?? output.type;
   const shown = value !== undefined;
-  // Hover: `name: type — doc`, the displayable tag, then the value line at the closest zoom.
+  // Hover: `name: type — doc`, the displayable tag, then the value line when the tier shows values.
   const tag = output.displayable ? " (displayable)" : "";
   const valueLine = shown ? `\n${summaryText(value)}` : "";
   const title = portTitle(output.name, type, doc) + tag + valueLine;
@@ -328,9 +337,9 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
   const badge = disabled
     ? { label: "off", className: "state-off", title: "disabled (#off) — D or the menu enables it" }
     : statusBadge(status, view.diagnostics.length);
-  // Closest zoom: every output shows what is sitting on it (docs/16).
+  // Near zoom and up: every output shows what is sitting on it (docs/16 LOD table).
   const outputValues =
-    tier === "closest" && values !== undefined ? new Map(values.outputs) : null;
+    showsPortValues(tier) && values !== undefined ? new Map(values.outputs) : null;
   const displayable = !disabled && view.outputs.some((o) => o.displayable);
   // A drag is heading somewhere: `probing` once the verdicts for ITS source
   // are in, `awaiting` while they are not (the gate fails closed meanwhile).

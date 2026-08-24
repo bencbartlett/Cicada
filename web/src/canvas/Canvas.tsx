@@ -53,7 +53,7 @@ import {
   type CanvasEdge,
   type CanvasNode,
 } from "./flow";
-import { pxToCell } from "./grid";
+import { pxToCell, showsPortValues } from "./grid";
 import { useLodTier } from "./lod";
 import { SearchBox } from "./SearchBox";
 
@@ -475,9 +475,9 @@ function CanvasInner() {
     });
   };
 
-  // ------------------------------------------ closest-zoom value previews
+  // ------------------------------------ value previews (near tier and up)
   useEffect(() => {
-    if (tier !== "closest") return;
+    if (!showsPortValues(tier)) return;
     const container = containerRef.current;
     if (container === null) return;
     const state = useCicada.getState();

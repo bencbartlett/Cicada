@@ -54,11 +54,23 @@ export function snapToStep(x: number, min: number, step: number): number {
 /** Zoom LOD tiers (docs/16 §Canvas conventions: far · mid · near · closest). */
 export type LodTier = "far" | "mid" | "near" | "closest";
 
+/** The tier of a canvas zoom factor; the thresholds are the docs/16 LOD table's. */
 export function lodTier(zoom: number): LodTier {
   if (zoom < 0.35) return "far";
   if (zoom < 0.65) return "mid";
   if (zoom < 1.6) return "near";
   return "closest";
+}
+
+/**
+ * Whether a tier shows the output value summaries (docs/16 LOD table): from
+ * `near` (zoom ≥ 0.65) up — one tier earlier than the original design's
+ * `closest`, since Ben's first user test (U7, 2026-08-24: the previews
+ * needed too much zoom). ONE rule for the node face (which renders them)
+ * and the canvas (which fetches them with `inspect`).
+ */
+export function showsPortValues(tier: LodTier): boolean {
+  return tier === "near" || tier === "closest";
 }
 
 /** One search-to-place hit: the catalog node plus the ports a probed wire could land on. */
