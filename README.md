@@ -102,7 +102,9 @@ your default browser. Ctrl-C in the console stops it. Arguments go to
 
 The same steps by hand, and everything else the binary does, are in
 [AGENTS.md](AGENTS.md)'s command palette. `python tools/launch/bundle.py
---out dist/` turns an existing release build into a redistributable folder
+--out dist/` turns an existing release build with the app embedded
+(`--features embed`; a build without it is refused unless you ask for an
+engine-only bundle with `--allow-no-spa`) into a redistributable folder
 — the engine with its libraries, a double-clickable `Cicada.cmd` /
 `Cicada.app` and a `README.txt` that states what the machine still needs
 (Python 3) — and `bundle.py --check dist/` verifies it.

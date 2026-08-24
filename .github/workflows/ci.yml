@@ -105,7 +105,7 @@ jobs:
         run: |
           binary=target/debug/cicada
           if [ "$RUNNER_OS" = Windows ]; then binary=$binary.exe; fi
-          python tools/launch/bundle.py --out "$RUNNER_TEMP/cicada-bundle" --binary "$binary" --cache-root "$RUNNER_TEMP/cicada-occt"
+          python tools/launch/bundle.py --out "$RUNNER_TEMP/cicada-bundle" --binary "$binary" --cache-root "$RUNNER_TEMP/cicada-occt" --allow-no-spa
           python tools/launch/bundle.py --check "$RUNNER_TEMP/cicada-bundle"
 
   web:

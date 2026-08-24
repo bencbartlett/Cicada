@@ -1241,6 +1241,48 @@ canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
   handling of the ad-hoc-signed app, and the real `install_name_tool`
   path — the first macOS CI `--check` (rpaths logged) is the gate, then
   one double-click on a Mac.
+  **Review closure 2026-08-24** (verdict ship, no major; every minor
+  fixed, the notes taken): the staleness rule no longer goes "stale" for
+  good — `mark_built` touches the binary BEFORE stamping it, because the
+  rule watches files cargo does not call inputs (`Cargo.lock` after a
+  checkout, tests under `crates/`) and cargo leaves an up-to-date binary
+  untouched (reproduced: `touch Cargo.lock` → `to build` → a 0.29 s no-op
+  cargo build → fresh twice after; before the fix, `to build` on every
+  launch); `bundle.py --out` REFUSES a binary that embeds no SPA before
+  writing anything (`embeds_spa`: two lines of `web/index.html` an `embed`
+  build carries verbatim — rust-embed stores the files uncompressed with
+  `debug-embed` on — and no other build does; the debug binary carries
+  the API-only page's `<!doctype html>` but neither marker, the release
+  binary both exactly once), unless `--allow-no-spa` asks for an
+  engine-only bundle whose README says ENGINE ONLY and whose stamp records
+  `"spa": false` — CI passes it; `--check` holds the binary and the stamp
+  to agree about the SPA (a plain release build swapped in after the
+  bundle was made passed every check and would have died at the first
+  double-click) and `--out` re-copies a bundled copy whose size stopped
+  matching the recorded source; `--smoke` refuses an engine-only bundle
+  up front and took injectable `start`/`get` so its assertions (the URL
+  line, `/health` = `ok`, `/` the SPA and never the API-only page, the
+  clean env, the stop, the early-exit message) have an offline test — the
+  mutation that accepted the API-only page is KILLED, as are the review's
+  other two survivors (`observe`'s stamp wiring hard-wired true; the
+  `Info.plist` executable check dropped) and every new guard (14 of 14
+  re-applied; `Console.stop` now joins its reader threads so the
+  early-exit message carries the WHOLE stderr, and the fake pipe in the
+  test returns only at "exit" so that join is what the test proves); the
+  Windows build env carries `core.longpaths=true` through `GIT_CONFIG_*`
+  (appended after a caller's own entries; a non-numeric
+  `GIT_CONFIG_COUNT` is a loud refusal) for the oneTBB clone on a machine
+  without the global; `cicada app` runs in the CALLER's directory when
+  the launcher was given arguments and in the repository when none
+  (`app_cwd`; a relative path from `<repo>/tools` now reaches the server —
+  `/health` ok, `/api/project` naming `02-solids.cic` — where it was "os
+  error 3" before); the bundle's README.txt is ASCII like the launchers
+  (`type README.txt` in a cp1252 console and Notepad agree).
+  `tools/test_launch.py` is 41 (the offline suite 160); the real
+  evidence re-ran on the release + embed build: `--out` then `--check
+  --smoke` OK, and on the debug build: refused, then `--allow-no-spa` →
+  `--check` OK, `--smoke` refused. Still untested: everything macOS runs
+  for real.
 
 **Track B — `wt/canvas` (web canvas + viewport + docs/16).** Four
 packages in sequence, each reviewed.

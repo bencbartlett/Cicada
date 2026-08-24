@@ -862,11 +862,16 @@ initial load path; there is exactly one client-hydration code path.
   Gatekeeper's app translocation runs a downloaded app from a random
   read-only copy and anything outside the bundle would be gone; the
   launcher script there is `Cicada.command`, never `Cicada`, the binary's
-  name on a case-insensitive disk. `--check` verifies a bundle from a
-  minimal environment (Windows: PATH = System32 alone) and `--smoke` runs
-  its `cicada app --no-browser` to `/health` and `/`. The bundle removes the
-  loader path, not the engine's Python: `cicada app` starts the script host
-  at launch, and the bundle's README says so.
+  name on a case-insensitive disk. A binary that embeds no SPA is refused
+  before anything is written (a plain `cargo build --release` would die at
+  the first double-click with `cicada app`'s refusal above) unless
+  `--allow-no-spa` asks for an engine-only bundle whose README says so.
+  `--check` verifies a bundle from a minimal environment (Windows: PATH =
+  System32 alone), holding the binary and the bundle's stamp to agree
+  about the SPA, and `--smoke` runs its `cicada app --no-browser` to
+  `/health` and `/`. The bundle removes the loader path, not the engine's
+  Python: `cicada app` starts the script host at launch, and the bundle's
+  README says so.
 
 ## Latency targets (measured, not vibed — spike criteria feed here)
 

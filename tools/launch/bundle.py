@@ -40,20 +40,34 @@ is copied again only when the SOURCE binary changed -- size or mtime --
 recorded in `.cicada-bundle.json`, a pure function of the inputs; launcher,
 plist and README are rewritten only when their bytes would change).
 
+The binary must embed the SPA (`embeds_spa`: two lines of `web/index.html`
+an `embed` build carries verbatim -- rust-embed stores the files
+uncompressed, `debug-embed` on -- and no other build does): a plain
+`cargo build --release` is the easy mistake, and its bundle would die at
+the first double-click with `cicada app has nothing to open`. `--out`
+refuses such a binary BEFORE copying anything, unless `--allow-no-spa`
+asks for an engine-only bundle (CI's debug binaries): then the README says
+ENGINE ONLY and what still works (run, serve, mcp), and the stamp records
+`"spa": false`. The README is ASCII like the launchers, so `type
+README.txt` in a cp1252 console and Notepad agree.
+
 `--check DIR` verifies a bundle and exits non-zero naming every problem:
 the launcher files are present; the L2 stamp's libraries are present at
 their recorded sizes; the binary's own imports resolve inside the bundle
 or the OS (the static read `fetch_occt --check-closure` does); on macOS the
-binary's rpath is `@executable_path/lib` and no prefix rpath remains; and
-the binary answers `--help` from inside the bundle under a MINIMAL
-environment (Windows: PATH = System32 alone; macOS: the system PATH, no
-loader variable) -- the sentence the contract asks for. `--smoke` adds the
-process-level proof: the bundle's `cicada app --no-browser` over a scratch
-pipeline prints its URL, `/health` answers `ok` over it and `/` is the SPA,
-never the server's "API only" page; then the server is stopped. CI's
-Windows and macOS jobs run `--check` on the binaries they built (debug, no
-SPA -- so not `--smoke`); the release bundle's smoke is the launcher work's
-own evidence.
+binary's rpath is `@executable_path/lib` and no prefix rpath remains;
+`Info.plist` names the launcher as the executable; the binary agrees with
+the stamp about the SPA (a binary swapped in after the bundle was made is
+caught); and the binary answers `--help` from inside the bundle under a
+MINIMAL environment (Windows: PATH = System32 alone; macOS: the system
+PATH, no loader variable) -- the sentence the contract asks for. `--smoke`
+adds the process-level proof: the bundle's `cicada app --no-browser` over a
+scratch pipeline prints its URL, `/health` answers `ok` over it and `/` is
+the SPA, never the server's "API only" page; then the server is stopped.
+An engine-only bundle refuses the smoke up front (nothing to open). CI's
+Windows and macOS jobs run `--out --allow-no-spa` + `--check` on the
+binaries they built (debug, no SPA -- so not `--smoke`); the release
+bundle's smoke is the launcher work's own evidence.
 
 Exit status: 0 on success; 1 on any refusal or failed check, always through
 an `error:` line, never a silent fallback.
@@ -190,6 +204,18 @@ def read_json(path: Path) -> dict | None:
         return {}
 
 
+#: Two lines of the SPA's `index.html` (web/index.html, kept by Vite's build)
+#: that an `embed` build carries verbatim and no other build does: the
+#: server's own "API only" page has another title and no mount point.
+SPA_MARKERS = (b"<title>Cicada</title>", b'<div id="root"></div>')
+
+
+def embeds_spa(binary: Path) -> bool:
+    """Whether `binary` carries the SPA -- every marker present in its bytes."""
+    data = binary.read_bytes()
+    return all(marker in data for marker in SPA_MARKERS)
+
+
 # ---------------------------------------------------------------------------
 # The files the bundle writes (pure)
 # ---------------------------------------------------------------------------
@@ -271,29 +297,51 @@ def info_plist_text(version: str) -> str:
     return plistlib.dumps(info, sort_keys=True).decode("utf-8")
 
 
-def readme_text(subdir: str, version: str, commit: str | None) -> str:
+def readme_text(subdir: str, version: str, commit: str | None, spa: bool = True) -> str:
+    """`README.txt` -- ASCII only, like the launchers: `type README.txt` in a
+    cp1252 console and Notepad must agree. `spa=False` is the engine-only
+    bundle (`--allow-no-spa`), whose launcher would stop at `cicada app`."""
     windows = subdir.startswith("win-")
     launcher = WINDOWS_LAUNCHER if windows else MACOS_APP
     binary = "cicada.exe" if windows else f"{MACOS_APP}/Contents/MacOS/cicada"
     lines = [
-        f"Cicada {version} — {subdir}" + (f", commit {commit}" if commit else ""),
+        f"Cicada {version} -- {subdir}" + (f", commit {commit}" if commit else ""),
         "",
         "WORK IN PROGRESS. Cicada is pre-release software under daily development;",
         "nothing is stable, there is no support, and the file formats change without",
         "notice. This folder is a development build for trying it, not a release.",
         "",
-        "Run it",
-        f"  Double-click {launcher}. A terminal window opens — it is the server",
-        "  console — and the app window follows in Edge or Chrome (app mode) when",
-        "  one is installed, else in your default browser. Close the console window",
-        "  or press Ctrl-C in it to stop the server.",
-        "",
-        f"  From a terminal: {binary} app [FOLDER-or-FILE.cic]  — the same thing;",
-        f"  {binary} --help lists everything else (run, mcp, catalog, serve).",
-        "",
-        "What this folder carries",
-        "  The cicada engine with the app built in, and the geometry kernel's run-time",
-        "  libraries beside it — it needs no environment variable and no install.",
+    ]
+    if spa:
+        lines += [
+            "Run it",
+            f"  Double-click {launcher}. A terminal window opens -- it is the server",
+            "  console -- and the app window follows in Edge or Chrome (app mode) when",
+            "  one is installed, else in your default browser. Close the console window",
+            "  or press Ctrl-C in it to stop the server.",
+            "",
+            f"  From a terminal: {binary} app [FOLDER-or-FILE.cic]  -- the same thing;",
+            f"  {binary} --help lists everything else (run, mcp, catalog, serve).",
+            "",
+            "What this folder carries",
+            "  The cicada engine with the app built in, and the geometry kernel's run-time",
+            "  libraries beside it -- it needs no environment variable and no install.",
+        ]
+    else:
+        lines += [
+            "ENGINE ONLY",
+            f"  This build embeds no app: double-clicking {launcher} stops with",
+            "  `cicada app has nothing to open`. Use the engine from a terminal --",
+            f"  {binary} run FILE.cic, {binary} serve (API only), {binary} mcp;",
+            f"  {binary} --help lists everything -- or make the bundle from a build with",
+            "  the app embedded (cd web && npm run build, then",
+            "  cargo build --release -p cicada-cli --features embed).",
+            "",
+            "What this folder carries",
+            "  The cicada engine WITHOUT the app, and the geometry kernel's run-time",
+            "  libraries beside it -- it needs no environment variable and no install.",
+        ]
+    lines += [
         "",
         "What it needs from your machine",
         "  Python 3 on PATH (or CICADA_PYTHON naming the interpreter): the engine's",
@@ -301,13 +349,13 @@ def readme_text(subdir: str, version: str, commit: str | None) -> str:
     ]
     if windows:
         lines += [
-            "  The Microsoft Visual C++ 2015–2022 x64 runtime (msvcp140.dll, vcruntime140.dll);",
+            "  The Microsoft Visual C++ 2015-2022 x64 runtime (msvcp140.dll, vcruntime140.dll);",
             "  most machines have it, Microsoft's vc_redist.x64.exe installs it.",
         ]
     else:
         lines += [
             "  The first time, macOS will refuse an app Apple has not notarized: right-click",
-            f"  {MACOS_APP} → Open (or System Settings → Privacy & Security → Open Anyway).",
+            f"  {MACOS_APP} -> Open (or System Settings -> Privacy & Security -> Open Anyway).",
             "  The binary is signed ad hoc; nothing in this folder phones home.",
         ]
     lines += [
@@ -316,12 +364,14 @@ def readme_text(subdir: str, version: str, commit: str | None) -> str:
         "Where things go",
         "  The engine's cache lives in your user cache directory, never beside your",
         "  files. The app WRITES the project it serves (the .cic file and a layout",
-        "  sidecar) as you edit — open a copy if you only want to look.",
+        "  sidecar) as you edit -- open a copy if you only want to look.",
         "",
         "The source, its documentation and the design ledger are in the Cicada",
         "repository (README.md, AGENTS.md, docs/).",
     ]
-    return "\n".join(lines) + "\n"
+    text = "\n".join(lines) + "\n"
+    assert all(ord(c) < 128 for c in text), "README.txt is ASCII (module docstring)"
+    return text
 
 
 def write_if_changed(path: Path, text: str, executable: bool = False) -> bool:
@@ -452,8 +502,11 @@ def make_bundle(
     run: Run = run_capture,
     which=shutil.which,
     commit: str | None = None,
+    allow_no_spa: bool = False,
 ) -> Places:
-    """Produce (or refresh) the bundle in `out` from `binary`."""
+    """Produce (or refresh) the bundle in `out` from `binary`; refused, before
+    anything is written, when the binary embeds no SPA and `allow_no_spa` is
+    not set (module docstring)."""
     environ = dict(os.environ if environ is None else environ)
     system = "windows" if layout.is_windows else "darwin"
     if not binary.is_file():
@@ -462,11 +515,18 @@ def make_bundle(
             "or name one with --binary"
         )
     spots = places(out, layout.subdir)
+    spa = embeds_spa(binary)
+    if not spa and not allow_no_spa:
+        raise BundleError(
+            f"{binary} embeds no SPA, so `cicada app` -- what {spots.launcher.name} runs -- would refuse to open. "
+            "Build it with `cd web && npm run build` then `cargo build --release -p cicada-cli --features embed`, "
+            "or pass --allow-no-spa for an engine-only bundle (run, serve, mcp; its README says so)"
+        )
     previous = read_json(spots.stamp) or {}
     source = source_record(binary)
     spots.binary_dir.mkdir(parents=True, exist_ok=True)
     copied = False
-    if not spots.binary.is_file() or previous.get("binary_source") != source:
+    if not spots.binary.is_file() or previous.get("binary_source") != source or spots.binary.stat().st_size != source["size"]:
         shutil.copy2(binary, spots.binary)
         copied = True
         log(f"copied {binary} -> {spots.binary}")
@@ -485,10 +545,13 @@ def make_bundle(
     changed.append(write_if_changed(spots.launcher, windows_launcher_text() if spots.is_windows else macos_launcher_text(), executable=True))
     if spots.plist is not None:
         changed.append(write_if_changed(spots.plist, info_plist_text(version)))
-    changed.append(write_if_changed(spots.readme, readme_text(layout.subdir, version, commit)))
-    stamp = {"binary_source": source, "commit": commit, "subdir": layout.subdir, "version": version}
+    changed.append(write_if_changed(spots.readme, readme_text(layout.subdir, version, commit, spa)))
+    stamp = {"binary_source": source, "commit": commit, "spa": spa, "subdir": layout.subdir, "version": version}
     changed.append(write_if_changed(spots.stamp, json.dumps(stamp, indent=1, sort_keys=True) + "\n"))
-    log(f"bundle {out}: cicada {version}, {spots.launcher.relative_to(out)}, {README_NAME}" + ("" if any(changed) else " -- unchanged"))
+    log(
+        f"bundle {out}: cicada {version}{'' if spa else ' (engine only -- no SPA)'}, {spots.launcher.relative_to(out)}, {README_NAME}"
+        + ("" if any(changed) else " -- unchanged")
+    )
     return spots
 
 
@@ -547,6 +610,19 @@ def check_bundle(out: Path, log: Callable[[str], None], environ: dict[str, str] 
     if problems:
         return problems
     log(f"{spots.binary.name}: every import resolves inside the bundle or the OS")
+    # The binary and the bundle's own stamp agree about the SPA: a plain
+    # release build swapped in after the bundle was made would pass every
+    # check above and die at the first double-click.
+    recorded = (read_json(spots.stamp) or {}).get("spa")
+    if not isinstance(recorded, bool):
+        return [f"{spots.stamp.relative_to(out)} does not record whether the SPA is embedded -- remake the bundle (bundle.py --out)"]
+    actual = embeds_spa(spots.binary)
+    if actual != recorded:
+        return [
+            f"{spots.binary.name} {'embeds the' if actual else 'embeds no'} SPA but {STAMP_NAME} says it "
+            f"{'does' if recorded else 'does not'} -- not the binary this bundle was made from; remake the bundle (bundle.py --out)"
+        ]
+    log(f"{spots.binary.name} {'embeds the SPA' if actual else 'embeds no SPA (engine only, as the bundle records)'}")
     if spots.plist is not None:
         try:
             info = plistlib.loads(spots.plist.read_bytes())
@@ -577,12 +653,13 @@ def check_bundle(out: Path, log: Callable[[str], None], environ: dict[str, str] 
 class Console:
     """A child's stdout, line by line, through a bounded wait."""
 
-    def __init__(self, process: subprocess.Popen):
+    def __init__(self, process):
         self.process = process
         self.lines: queue.Queue[str | None] = queue.Queue()
         self.stderr: list[str] = []
-        threading.Thread(target=self._pump, daemon=True).start()
-        threading.Thread(target=self._drain, daemon=True).start()
+        self.readers = [threading.Thread(target=self._pump, daemon=True), threading.Thread(target=self._drain, daemon=True)]
+        for reader in self.readers:
+            reader.start()
 
     def _pump(self) -> None:
         assert self.process.stdout is not None
@@ -615,6 +692,10 @@ class Console:
         except subprocess.TimeoutExpired:
             self.process.kill()
             self.process.wait()
+        # The pipes hit EOF once the process is gone: wait for the readers so
+        # an error message built after `stop` carries the WHOLE stderr.
+        for reader in self.readers:
+            reader.join(timeout=LINE_TIMEOUT_SECONDS)
 
 
 def http_get(url: str) -> tuple[int, str]:
@@ -625,11 +706,28 @@ def http_get(url: str) -> tuple[int, str]:
         return error.code, error.read().decode("utf-8", errors="replace")
 
 
-def smoke(out: Path, log: Callable[[str], None], environ: dict[str, str] | None = None, python: str | None = None) -> str:
+def smoke(
+    out: Path,
+    log: Callable[[str], None],
+    environ: dict[str, str] | None = None,
+    python: str | None = None,
+    start: Callable[..., object] = subprocess.Popen,
+    get: Callable[[str], tuple[int, str]] = http_get,
+) -> str:
     """Start the bundle's `cicada app --no-browser` over a scratch pipeline,
-    read its URL, prove `/health` and `/` over it, stop it. Returns the URL."""
+    read its URL, prove `/health` and `/` over it, stop it. Returns the URL.
+    `start` (a `Popen`) and `get` (an HTTP GET) are injectable so the
+    assertions have an offline test; refused up front for an engine-only
+    bundle, whose `cicada app` has nothing to open."""
     environ = dict(os.environ if environ is None else environ)
     spots = detect_places(out)
+    recorded = (read_json(spots.stamp) or {}).get("spa")
+    if recorded is not True:
+        raise BundleError(
+            f"smoke: {out} is an engine-only bundle (its {STAMP_NAME} "
+            f"{'says the SPA is not embedded' if recorded is False else 'does not record the SPA'}): "
+            "`cicada app` has nothing to open; make the bundle from a `--features embed` build"
+        )
     system = "windows" if spots.is_windows else "darwin"
     env = clean_environment(system, environ)
     # The engine's script host needs an interpreter: the one running this.
@@ -653,7 +751,7 @@ def smoke(out: Path, log: Callable[[str], None], environ: dict[str, str] | None 
             str(scratch / "demo.cic"),
         ]
         log("smoke: " + " ".join(argv[1:]))
-        process = subprocess.Popen(
+        process = start(
             argv,
             cwd=str(spots.binary_dir),
             env=env,
@@ -671,11 +769,11 @@ def smoke(out: Path, log: Callable[[str], None], environ: dict[str, str] | None 
                 url = parse_url_line(console.line("the URL line"))
             log(f"smoke: {url}")
             base = url.split("/?", 1)[0]
-            status, body = http_get(f"{base}/health?token={token}")
+            status, body = get(f"{base}/health?token={token}")
             if status != 200 or body.strip() != "ok":
                 raise BundleError(f"smoke: GET /health answered {status} {body.strip()!r}, not 200 ok")
             log("smoke: /health -> ok")
-            status, body = http_get(f"{base}/?token={token}")
+            status, body = get(f"{base}/?token={token}")
             if status != 200 or "API only" in body or "<html" not in body.lower():
                 raise BundleError(f"smoke: GET / answered {status} and is not the SPA:\n{body[:400]}")
             log("smoke: / is the SPA (never the API-only page)")
@@ -698,6 +796,11 @@ def main(argv: list[str], environ: dict[str, str] | None = None) -> int:
     parser.add_argument("--binary", type=Path, help="the built cicada binary (default: the release build in cargo's target dir)")
     parser.add_argument("--cache-root", type=Path, help="fetch_occt.py's --dest (default: the user cache dir)")
     parser.add_argument("--smoke", action="store_true", help="with --check: run the bundle's `cicada app --no-browser` and read /health")
+    parser.add_argument(
+        "--allow-no-spa",
+        action="store_true",
+        help="with --out: bundle a binary that embeds no SPA -- engine only (run, serve, mcp; `cicada app` refuses); CI's debug binaries",
+    )
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args(argv)
     environ = dict(os.environ if environ is None else environ)
@@ -708,6 +811,8 @@ def main(argv: list[str], environ: dict[str, str] | None = None) -> int:
 
     try:
         if args.check is not None:
+            if args.allow_no_spa:
+                raise BundleError("--allow-no-spa goes with --out")
             problems = check_bundle(args.check, log, environ)
             if problems:
                 raise BundleError(f"bundle {args.check} fails its check:\n  " + "\n  ".join(problems))
@@ -722,7 +827,9 @@ def main(argv: list[str], environ: dict[str, str] | None = None) -> int:
         layout = fo.Layout(args.cache_root or fo.default_cache_root(environ), fo.detect_subdir(), manifest["occt_version"])
         binary = args.binary if args.binary is not None else default_binary(cargo_target_dir(run_capture, REPO, environ), system)
         fo.fetch(manifest, layout, log)
-        spots = make_bundle(binary, args.out, layout, manifest, log, environ, commit=git_commit(REPO, run_capture))
+        spots = make_bundle(
+            binary, args.out, layout, manifest, log, environ, commit=git_commit(REPO, run_capture), allow_no_spa=args.allow_no_spa
+        )
         print(f"bundle {args.out}: {spots.launcher.relative_to(args.out)} runs `cicada app`; `bundle.py --check {args.out}` verifies it")
         return 0
     except (BundleError, fo.FetchError) as error:

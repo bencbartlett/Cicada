@@ -28,7 +28,25 @@ binary is missing, when the launcher's stamp beside it does not match the
 binary (so a binary somebody else built -- maybe without the SPA -- is never
 trusted), when any engine source is newer than the binary, or when the SPA
 was rebuilt. Cargo and Vite are incremental on top, so a forced rebuild on a
-warm tree costs seconds.
+warm tree costs seconds. After a successful build the binary's mtime is
+touched BEFORE it is stamped (`mark_built`): the rule watches files cargo
+does not consider build inputs (`Cargo.lock` after a checkout, tests, docs
+under `crates/`), and cargo leaves an up-to-date binary untouched -- without
+the touch such a file would make every later launch "stale" and run a no-op
+cargo build for good.
+
+Where `cicada app` runs (`app_cwd`): with arguments, in the directory the
+launcher was started from -- a relative path means what it would mean had
+you typed `cicada app` there; with none (a double-click), in the repository,
+so that on a branch where a path-less `cicada app` serves the current
+directory it serves the repository, never `tools/launch/` (with O1's home
+root the no-argument case is cwd-independent either way).
+
+The build's git on Windows gets `core.longpaths=true` through
+`GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_0`/`GIT_CONFIG_VALUE_0` (appended after
+any entries the caller already set): the kernel build clones oneTBB, whose
+doc assets exceed MAX_PATH, and the clone fails deterministically without it
+on a machine that lacks the global setting (AGENTS.md, Dev machine notes).
 
 The engine's Python: `cicada app` starts the script host at launch whether
 or not the pipeline has script nodes, and finds the interpreter through
@@ -198,6 +216,19 @@ def read_stamp(path: Path) -> dict | None:
         return {}
 
 
+def mark_built(binary: Path, release_dir: Path) -> dict:
+    """After a successful `cargo build`: touch the binary, then stamp it.
+
+    The touch is what keeps a no-op build from recurring (module docstring):
+    cargo rewrites the binary only when an input changed, and the staleness
+    rule compares it against files cargo does not call inputs. Touched first,
+    the stamp pins the new mtime."""
+    os.utime(binary, None)
+    stamp = stamp_for(binary)
+    (release_dir / STAMP_NAME).write_text(json.dumps(stamp, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    return stamp
+
+
 @dataclass(frozen=True)
 class State:
     """What the tree looks like -- the inputs of [`decide`]."""
@@ -327,7 +358,28 @@ def build_environment(base: dict[str, str], layout: fo.Layout, system: str, cmak
         separator = ";" if system == "windows" else ":"
         current = base.get("PATH", "")
         env["PATH"] = separator.join(prefix + ([current] if current else []))
+    if system == "windows":
+        add_git_config(env, GIT_LONGPATHS)
     return env
+
+
+#: The git setting the Windows kernel build needs per process (module docstring).
+GIT_LONGPATHS = ("core.longpaths", "true")
+
+
+def add_git_config(env: dict[str, str], setting: tuple[str, str]) -> None:
+    """Append one `key=value` to the `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n` /
+    `GIT_CONFIG_VALUE_n` block git reads from the environment, after any
+    entries already there (they are kept)."""
+    count_text = env.get("GIT_CONFIG_COUNT", "0")
+    try:
+        count = int(count_text)
+    except ValueError as error:
+        raise LaunchError(f"GIT_CONFIG_COUNT is {count_text!r}, not a number -- git itself would refuse it") from error
+    key, value = setting
+    env[f"GIT_CONFIG_KEY_{count}"] = key
+    env[f"GIT_CONFIG_VALUE_{count}"] = value
+    env["GIT_CONFIG_COUNT"] = str(count + 1)
 
 
 def run_environment(base: dict[str, str], layout: fo.Layout, system: str, python: Path) -> dict[str, str]:
@@ -366,6 +418,13 @@ def split_args(argv: list[str]) -> tuple[set[str], list[str]]:
     flags = {arg for arg in argv if arg in LAUNCHER_FLAGS}
     rest = [arg for arg in argv if arg not in LAUNCHER_FLAGS]
     return flags, rest
+
+
+def app_cwd(app_args: list[str], caller_cwd: Path, repo: Path) -> Path:
+    """Where `cicada app` runs (module docstring): the caller's directory when
+    the launcher was given arguments (their relative paths keep their
+    meaning), the repository when it was given none (the double-click)."""
+    return caller_cwd if app_args else repo
 
 
 # ---------------------------------------------------------------------------
@@ -477,7 +536,7 @@ def launch(argv: list[str], environ: dict[str, str] | None = None, system: str |
         )
         if not binary.is_file():
             raise LaunchError(f"cargo build succeeded but {binary} is not there")
-        (release_dir / STAMP_NAME).write_text(json.dumps(stamp_for(binary), indent=1, sort_keys=True) + "\n", encoding="utf-8")
+        mark_built(binary, release_dir)
         say(f"stamped {binary.name} as {PROFILE} + {','.join(FEATURES)}")
 
     # The run-time libraries beside the binary (L2): idempotent, a second
@@ -493,9 +552,10 @@ def launch(argv: list[str], environ: dict[str, str] | None = None, system: str |
 
     run_env = run_environment(environ, layout, system, python)
     command = [str(binary), "app", *app_args]
-    say(f"running: {' '.join(command)}  (no loader path in its environment; Ctrl-C stops the server)")
+    cwd = app_cwd(app_args, Path.cwd(), REPO)
+    say(f"running: {' '.join(command)}  (in {cwd}; no loader path in its environment; Ctrl-C stops the server)")
     try:
-        process = subprocess.Popen(command, cwd=str(REPO), env=run_env)
+        process = subprocess.Popen(command, cwd=str(cwd), env=run_env)
     except OSError as error:
         raise LaunchError(f"could not start {binary}: {error}") from error
     try:
