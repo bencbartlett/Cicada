@@ -22,6 +22,7 @@ every library's import table.
     python tools/fetch_occt.py --dest DIR           # cache root (default below)
     python tools/fetch_occt.py --subdir linux-64    # another platform's prefix (prefetch / inspection)
     python tools/fetch_occt.py --check-closure      # static import-closure check of the prefix
+    python tools/fetch_occt.py --bundle DIR         # the run-time closure beside DIR's cicada binary (no loader path needed)
     python tools/fetch_occt.py --manifest-hash      # the CI cache key
     python tools/fetch_occt.py regenerate-manifest  # MAINTAINER: re-resolve from anaconda.org
 
@@ -32,6 +33,16 @@ platform is `<root>/occt-<version>-<subdir>`; downloads sit in
 (conda's Windows layout) and `<prefix>` elsewhere; the shared libraries are in
 `<DEP_OCCT_ROOT>/bin` (Windows, goes on PATH) or `<prefix>/lib` (goes on
 LD_LIBRARY_PATH / DYLD_LIBRARY_PATH).
+
+The env this script prints is for BUILDING and for dev shells. A binary that
+is launched outside such a shell (a double-click, a launcher, another tool)
+needs the shared libraries where the OS looks without any variable:
+`--bundle DIR` copies the closure beside DIR's `cicada` binary (Windows:
+beside `cicada.exe`, which the loader searches first; macOS: `DIR/lib`, and
+the binary's rpath rewritten to `@executable_path/lib` with
+`install_name_tool`, then re-signed ad hoc). It is idempotent and verified by
+size like the prefix, and refuses a binary whose own imports the bundle does
+not satisfy. Linux is refused (its bundle is an rpath set at link time).
 
 Why the run-time packages: conda-forge builds OCCT with USE_FREETYPE and
 USE_FREEIMAGE on, so `TKDESTEP -> TKXCAF -> TKV3d -> TKService ->
@@ -71,7 +82,7 @@ import tarfile
 import urllib.error
 import urllib.request
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable
 
 HERE = Path(__file__).resolve().parent
@@ -629,7 +640,9 @@ def parse_occt_version(standard_version_hxx_text: str) -> str:
 # ---------------------------------------------------------------------------
 
 WINDOWS_SYSTEM_DLLS = {
-    "advapi32.dll", "bcrypt.dll", "bcryptprimitives.dll", "comdlg32.dll", "crypt32.dll", "dbghelp.dll",
+    # combase.dll: COM's base, imported by the cicada binary itself (Rust's std
+    # and the known-folder lookup) — found by the first `--bundle` run 2026-08-24.
+    "advapi32.dll", "bcrypt.dll", "bcryptprimitives.dll", "combase.dll", "comdlg32.dll", "crypt32.dll", "dbghelp.dll",
     "gdi32.dll", "kernel32.dll", "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll", "ntdll.dll", "ole32.dll",
     "oleaut32.dll", "opengl32.dll", "psapi.dll", "rpcrt4.dll", "secur32.dll", "shell32.dll", "shlwapi.dll",
     "user32.dll", "userenv.dll", "vcomp140.dll", "vcruntime140.dll", "vcruntime140_1.dll", "version.dll",
@@ -1044,6 +1057,246 @@ def regenerate_manifest(subdirs: Iterable[str], listing_dir: Path | None, log, p
 
 
 # ---------------------------------------------------------------------------
+# --bundle: the run-time closure beside a cicada binary (docs/17 wave 4, L2)
+# ---------------------------------------------------------------------------
+#
+# The env `--print-env` emits is for BUILDING and for dev shells. A binary that
+# ships — or just gets double-clicked — must find the kernel's shared libraries
+# without it. Windows searches the executable's own directory before PATH, so
+# the DLLs go BESIDE `cicada.exe`. A macOS binary finds dylibs through its
+# rpath: the build env set one on the prefix's `lib` (CI's RUSTFLAGS, the
+# `github_env_entries` note), and the bundle rewrites it to
+# `@executable_path/lib` with `install_name_tool`, then re-signs ad hoc (an
+# edited load command invalidates the linker's signature, and Apple silicon
+# kills an invalidly signed binary at exec). Linux is refused: its binaries
+# carry no rpath from the build env and `patchelf` is not a given, so a Linux
+# bundle is an rpath set at LINK time (`$ORIGIN/lib`), not this script's.
+
+BUNDLE_STAMP_NAME = ".cicada-occt-bundle.json"
+BUNDLE_RPATH = "@executable_path/lib"
+LC_RPATH = 0x8000001C
+
+
+class BundlePlan:
+    """Where a bundle's pieces go for one platform's binary."""
+
+    def __init__(self, layout: Layout, directory: Path):
+        if not (layout.is_windows or layout.is_macos):
+            raise FetchError(
+                f"--bundle supports win-64 and osx-* prefixes; {layout.subdir} is not one of them. A Linux binary "
+                "finds its libraries through LD_LIBRARY_PATH (the env) or an rpath set at LINK time "
+                "(RUSTFLAGS='-C link-arg=-Wl,-rpath,$ORIGIN/lib' plus the libraries in lib/); neither is this "
+                "bundle's to write"
+            )
+        self.layout = layout
+        self.directory = directory
+        self.binary = directory / ("cicada.exe" if layout.is_windows else "cicada")
+        # Windows: beside the exe (searched first). macOS: lib/, through the rpath.
+        self.library_dir = directory if layout.is_windows else directory / "lib"
+        self.stamp = directory / BUNDLE_STAMP_NAME
+
+
+def read_bundle_stamp(plan: BundlePlan) -> dict | None:
+    try:
+        return json.loads(plan.stamp.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return {}
+
+
+def macho_rpaths(data: bytes) -> list[str]:
+    """LC_RPATH paths of a Mach-O file (thin, or the first slice of a fat one)."""
+    magic = struct.unpack_from(">I", data, 0)[0]
+    if magic in (0xCAFEBABE, 0xCAFEBABF):
+        count = struct.unpack_from(">I", data, 4)[0]
+        if count == 0:
+            return []
+        if magic == 0xCAFEBABE:
+            _, _, offset, size, _ = struct.unpack_from(">IIIII", data, 8)
+        else:
+            _, _, offset, size, _, _ = struct.unpack_from(">IIQQII", data, 8)
+        return macho_rpaths(data[offset : offset + size])
+    if magic in (0xCFFAEDFE, 0xCEFAEDFE):
+        endian = "<"
+    elif magic in (0xFEEDFACF, 0xFEEDFACE):
+        endian = ">"
+    else:
+        raise FetchError("not a Mach-O file")
+    is_64 = magic in (0xCFFAEDFE, 0xFEEDFACF)
+    ncmds = struct.unpack_from(endian + "I", data, 16)[0]
+    at = 32 if is_64 else 28
+    rpaths = []
+    for _ in range(ncmds):
+        cmd, cmdsize = struct.unpack_from(endian + "II", data, at)
+        if cmd == LC_RPATH:
+            path_offset = struct.unpack_from(endian + "I", data, at + 8)[0]
+            start = at + path_offset
+            end = data.index(b"\0", start)
+            rpaths.append(data[start:end].decode("utf-8", errors="replace"))
+        at += cmdsize
+    return rpaths
+
+
+def is_prefix_rpath(rpath: str, layout: Layout) -> bool:
+    """An rpath naming a fetch prefix's library dir — this machine's, or any
+    machine's (`.../occt-<version>-<subdir>/lib`, the layout's own naming):
+    what the build env set and a shipped binary must not carry."""
+    if rpath.startswith("@"):
+        return False
+    if rpath == str(layout.library_dir):
+        return True
+    posix = PurePosixPath(rpath.replace("\\", "/"))
+    return posix.name == "lib" and posix.parent.name == layout.prefix.name
+
+
+def rpath_edits(rpaths: list[str], layout: Layout) -> list[list[str]]:
+    """The `install_name_tool` argument lists (the binary's path excluded)
+    that leave exactly one bundle rpath (`@executable_path/lib`) and no
+    prefix rpath. Empty when the binary already is so — the idempotent case."""
+    stale = [rpath for rpath in rpaths if is_prefix_rpath(rpath, layout)]
+    edits: list[list[str]] = []
+    if BUNDLE_RPATH in rpaths:
+        edits.extend(["-delete_rpath", rpath] for rpath in stale)
+    elif stale:
+        edits.append(["-rpath", stale[0], BUNDLE_RPATH])
+        edits.extend(["-delete_rpath", rpath] for rpath in stale[1:])
+    else:
+        edits.append(["-add_rpath", BUNDLE_RPATH])
+    return edits
+
+
+def run_tool(argv: list[str]) -> None:
+    """Run one external tool; any failure is a FetchError carrying its stderr."""
+    import subprocess
+
+    try:
+        subprocess.run(argv, check=True, capture_output=True, text=True)
+    except FileNotFoundError as error:
+        raise FetchError(f"{argv[0]}: not found") from error
+    except subprocess.CalledProcessError as error:
+        raise FetchError(f"{' '.join(argv)} failed ({error.returncode}): {error.stderr.strip()}") from error
+
+
+def rewrite_macos_rpath(plan: BundlePlan, log, run, which) -> bool:
+    """Point the binary's rpath at the bundle's `lib/` and re-sign it. `run`
+    and `which` are injectable so the branch is testable where the tools are
+    not (this suite runs on Windows and Linux too). Returns True when the
+    binary was edited."""
+    data = plan.binary.read_bytes()
+    if data[:4] not in MACHO_MAGICS:
+        raise FetchError(f"{plan.binary} is not a Mach-O binary")
+    edits = rpath_edits(macho_rpaths(data), plan.layout)
+    if not edits:
+        log(f"{plan.binary.name}: rpath is already {BUNDLE_RPATH}")
+        return False
+    for tool in ("install_name_tool", "codesign"):
+        if which(tool) is None:
+            raise FetchError(
+                f"{tool} is not on PATH; rewriting the binary's rpath needs the Xcode command line tools "
+                "(xcode-select --install)"
+            )
+    for edit in edits:
+        log(f"install_name_tool {' '.join(edit)} {plan.binary.name}")
+        run(["install_name_tool", *edit, str(plan.binary)])
+    log(f"codesign --force --sign - {plan.binary.name}  (the edit invalidated the linker's ad-hoc signature)")
+    run(["codesign", "--force", "--sign", "-", str(plan.binary)])
+    return True
+
+
+def bundle_unresolved_imports(plan: BundlePlan, available: Iterable[str]) -> list[str]:
+    """The shared libraries the binary ITSELF imports that neither the bundle
+    (`available`: the names the prefix will put beside it) nor the OS
+    provides — `--check-closure`'s reading, made of the binary BEFORE anything
+    is copied. Empty = the binary will load from the bundle."""
+    data = plan.binary.read_bytes()
+    present = {name.lower() for name in available}
+    unresolved = []
+    try:
+        imports = pe_imports(data) if plan.layout.is_windows else macho_dylibs(data)
+    except FetchError as error:
+        raise FetchError(f"{plan.binary}: {error}") from error
+    if plan.layout.is_windows:
+        for name in imports:
+            lower = name.lower()
+            if not (lower in present or lower in WINDOWS_SYSTEM_DLLS or lower.startswith("api-ms-win-")):
+                unresolved.append(name)
+    else:
+        for name in imports:
+            base = name.rsplit("/", 1)[-1].lower()
+            if name.startswith(("/usr/lib/", "/System/Library/")):
+                continue
+            if name.startswith("@rpath/") and base in present:
+                continue
+            unresolved.append(name)
+    return sorted(set(unresolved))
+
+
+def bundle(manifest: dict, layout: Layout, directory: Path, log, run=run_tool, which=shutil.which) -> bool:
+    """Put the prefix's run-time closure beside the `cicada` binary in
+    `directory`. Idempotent and verified by size like the prefix: a library
+    already present at its source's size is left alone, anything missing or
+    resized is copied again, and a library a previous bundle put there that
+    the prefix no longer carries is removed (only what the stamp recorded —
+    nothing else in the directory is touched). Refuses BEFORE copying a
+    prefix whose import closure is open and a binary whose own imports the
+    bundle cannot satisfy — a refusal leaves the directory as it was.
+    Returns True when anything changed."""
+    plan = BundlePlan(layout, directory)
+    if not plan.binary.is_file():
+        raise FetchError(
+            f"no {plan.binary.name} in {directory}: build it (cargo build --release -p cicada-cli "
+            "[--features embed]) and copy it there first, then bundle"
+        )
+    unresolved = check_closure(layout, log)
+    if unresolved:
+        raise FetchError(f"{layout.subdir}: the prefix's import closure is not closed: {', '.join(unresolved)}")
+    sources = shared_library_files(layout)
+    missing = bundle_unresolved_imports(plan, (source.name for source in sources))
+    if missing:
+        raise FetchError(
+            f"{plan.binary.name} imports {', '.join(missing)}, which neither the bundle nor the OS provides"
+        )
+    previous = read_bundle_stamp(plan)
+    plan.library_dir.mkdir(parents=True, exist_ok=True)
+    copied: list[str] = []
+    kept = 0
+    for source in sources:
+        destination = plan.library_dir / source.name
+        if destination.is_file() and destination.stat().st_size == source.stat().st_size:
+            kept += 1
+            continue
+        shutil.copyfile(source, destination)
+        shutil.copymode(source, destination)
+        copied.append(source.name)
+    removed: list[str] = []
+    current = {source.name for source in sources}
+    if previous and isinstance(previous.get("libraries"), dict):
+        for name in sorted(previous["libraries"]):
+            stale = plan.library_dir / name
+            if name not in current and stale.is_file():
+                stale.unlink()
+                removed.append(name)
+    relinked = layout.is_macos and rewrite_macos_rpath(plan, log, run, which)
+    stamp = {
+        "subdir": layout.subdir,
+        "occt_version": manifest["occt_version"],
+        "manifest_sha256": manifest["_sha256"],
+        "library_dir": "." if layout.is_windows else "lib",
+        "libraries": {source.name: source.stat().st_size for source in sources},
+        "written": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+    }
+    plan.stamp.write_text(json.dumps(stamp, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    where = "beside the binary" if layout.is_windows else f"in {plan.library_dir.name}/ (rpath {BUNDLE_RPATH})"
+    summary = f"bundle {directory}: {len(copied)} libraries copied, {kept} present at their sizes, {where}"
+    if removed:
+        summary += f"; removed {len(removed)} the prefix no longer carries ({', '.join(removed)})"
+    log(summary)
+    log(f"{plan.binary.name} needs no loader path: its imports resolve inside the bundle")
+    return bool(copied or removed or relinked)
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1058,6 +1311,13 @@ def main(argv: list[str]) -> int:
     )
     parser.add_argument("--github-env", action="store_true", help="append to $GITHUB_ENV and $GITHUB_PATH")
     parser.add_argument("--check-closure", action="store_true", help="after fetching, verify the import closure")
+    parser.add_argument(
+        "--bundle",
+        type=Path,
+        metavar="DIR",
+        help="after fetching, copy the run-time closure beside DIR's cicada binary (Windows: beside cicada.exe; "
+        "macOS: DIR/lib + the rpath rewritten to @executable_path/lib) so it needs no loader path",
+    )
     parser.add_argument("--manifest-hash", action="store_true", help="print the manifest sha256 and exit")
     parser.add_argument("--listing-dir", type=Path, help="regenerate-manifest: cache anaconda.org listings here")
     parser.add_argument("--quiet", action="store_true")
@@ -1077,6 +1337,8 @@ def main(argv: list[str]) -> int:
             return 0
         cache_root = args.dest or default_cache_root()
         subdirs = args.subdir or [detect_subdir()]
+        if args.bundle is not None and len(subdirs) != 1:
+            raise FetchError("--bundle takes exactly one platform: the binary's")
         for subdir in subdirs:
             layout = Layout(cache_root, subdir, manifest["occt_version"])
             fetch(manifest, layout, log)
@@ -1085,6 +1347,8 @@ def main(argv: list[str]) -> int:
                 if unresolved:
                     raise FetchError(f"{subdir}: import closure is not closed: {', '.join(unresolved)}")
                 log(f"{subdir}: import closure is closed")
+            if args.bundle is not None:
+                bundle(manifest, layout, args.bundle, log)
             if args.print_env:
                 print("\n".join(env_lines(layout, args.print_env)))
             elif args.github_env:
@@ -1102,7 +1366,8 @@ def main(argv: list[str]) -> int:
                 with open(path_file, "a", encoding="utf-8") as handle:
                     handle.write("".join(line + "\n" for line in path))
                 log("wrote " + ", ".join(env + path))
-            else:
+            elif args.bundle is None:
+                # A bundle needs no env; its own summary said so.
                 print(f"DEP_OCCT_ROOT={layout.dep_occt_root}")
                 print(f"{layout.loader_variable}+={layout.library_dir}")
                 print(f"CMAKE_POLICY_VERSION_MINIMUM={CMAKE_POLICY_VERSION_MINIMUM}")

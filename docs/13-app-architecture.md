@@ -838,6 +838,12 @@ initial load path; there is exactly one client-hydration code path.
   server because a window failed. The windows the browser opens are its
   own: stopping the server leaves them showing a disconnected app, as
   closing a tab would.
+- **No loader path at launch** (L2): a built `cicada` needs the kernel's
+  shared libraries; `tools/fetch_occt.py --bundle <dir>` copies the
+  run-time closure beside the binary (Windows) or into `<dir>/lib` with the
+  binary's rpath rewritten to `@executable_path/lib` (macOS), so the binary
+  starts from any shell, launcher or double-click without the env the build
+  needs (AGENTS.md palette).
 
 ## Latency targets (measured, not vibed — spike criteria feed here)
 

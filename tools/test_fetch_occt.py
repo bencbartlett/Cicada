@@ -1,7 +1,8 @@
 """Unit tests for tools/fetch_occt.py — the pure parts: manifest shape,
 platform + layout detection, environment rendering, sha256 verification,
 archive-path safety, the version-constraint matcher the manifest generator
-uses, and the PE / ELF / Mach-O import readers on synthetic files. Offline,
+uses, the PE / ELF / Mach-O import readers on synthetic files, and `--bundle`
+(the closure beside a binary; the macOS tools mocked). Offline,
 deterministic; nothing here touches the network or the real cache dir."""
 
 import hashlib
@@ -497,15 +498,22 @@ def fake_elf(needed_names):
     return bytes(header + strtab + dynamic + null_section + strtab_section + dynamic_section)
 
 
-def fake_macho(dylibs):
-    """A 64-bit little-endian Mach-O with LC_LOAD_DYLIB commands."""
+def fake_macho(dylibs, rpaths=()):
+    """A 64-bit little-endian Mach-O with LC_LOAD_DYLIB commands (and LC_RPATH
+    ones for `rpaths` -- what a linked executable carries)."""
     commands = bytearray()
     for name in dylibs:
         name_bytes = name.encode() + b"\0"
         size = 24 + len(name_bytes)
         size += (-size) % 8
         commands += struct.pack("<IIIIII", 0xC, size, 24, 0, 0, 0) + name_bytes.ljust(size - 24, b"\0")
-    header = struct.pack("<IIIIIIII", 0xFEEDFACF, 0x0100000C, 0, 6, len(dylibs), len(commands), 0, 0)
+    for rpath in rpaths:
+        path_bytes = rpath.encode() + b"\0"
+        size = 12 + len(path_bytes)
+        size += (-size) % 8
+        commands += struct.pack("<III", 0x8000001C, size, 12) + path_bytes.ljust(size - 12, b"\0")
+    ncmds = len(dylibs) + len(rpaths)
+    header = struct.pack("<IIIIIIII", 0xFEEDFACF, 0x0100000C, 0, 6, ncmds, len(commands), 0, 0)
     return bytes(header + commands)
 
 
@@ -542,6 +550,239 @@ class ImportReaderTest(unittest.TestCase):
             self.assertTrue(any("skipping libgcc_s.so" in m for m in messages))
         finally:
             shutil.rmtree(root, ignore_errors=True)
+
+
+class BundleTest(unittest.TestCase):
+    """`--bundle` (docs/17 L2): the run-time closure beside the binary —
+    Windows beside the exe, macOS in lib/ with the rpath rewritten — idempotent
+    and verified by size like the prefix, the binary's own imports checked,
+    the macOS tools driven through injected `run` / `which` so the branch is
+    exercised on every host this suite runs on."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="cicada-occt-bundle-"))
+        self.manifest = minimal_manifest()
+        self.manifest["_sha256"] = "m" * 64
+        self.messages = []
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def log(self, message):
+        self.messages.append(message)
+
+    # -- Windows ------------------------------------------------------------
+
+    def windows_prefix(self):
+        layout = fo.Layout(self.root / "cache", "win-64", "7.8.1")
+        layout.library_dir.mkdir(parents=True)
+        (layout.library_dir / "TKernel.dll").write_bytes(fake_pe(["KERNEL32.dll", "MSVCP140.dll"]))
+        (layout.library_dir / "TKBO.dll").write_bytes(fake_pe(["TKernel.dll", "KERNEL32.dll"]) + b"\0" * 100)
+        (layout.library_dir / "zlib.dll").write_bytes(fake_pe([]) + b"\0" * 7)
+        return layout
+
+    # combase.dll: what the real release cicada.exe imports beyond the prefix
+    # and the CRT (the first --bundle run refused it, 2026-08-24).
+    def windows_bundle_dir(
+        self,
+        name="dist",
+        imports=("TKernel.dll", "TKBO.dll", "KERNEL32.dll", "combase.dll", "api-ms-win-crt-runtime-l1-1-0.dll"),
+    ):
+        directory = self.root / name
+        directory.mkdir()
+        (directory / "cicada.exe").write_bytes(fake_pe(list(imports)))
+        return directory
+
+    def test_windows_libraries_land_beside_the_exe(self):
+        layout = self.windows_prefix()
+        directory = self.windows_bundle_dir()
+        self.assertTrue(fo.bundle(self.manifest, layout, directory, self.log))
+        for name in ("TKernel.dll", "TKBO.dll", "zlib.dll"):
+            self.assertEqual((directory / name).stat().st_size, (layout.library_dir / name).stat().st_size, name)
+        stamp = json.loads((directory / fo.BUNDLE_STAMP_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(stamp["libraries"], fo.library_inventory(layout))
+        self.assertEqual(stamp["library_dir"], ".")
+        self.assertEqual(stamp["subdir"], "win-64")
+        self.assertEqual(stamp["manifest_sha256"], "m" * 64)
+        self.assertTrue(any("3 libraries copied, 0 present at their sizes, beside the binary" in m for m in self.messages))
+        self.assertTrue(any("needs no loader path" in m for m in self.messages), self.messages)
+
+    def test_bundle_is_idempotent_and_verified_by_size(self):
+        layout = self.windows_prefix()
+        directory = self.windows_bundle_dir()
+        fo.bundle(self.manifest, layout, directory, self.log)
+        self.messages.clear()
+        self.assertFalse(fo.bundle(self.manifest, layout, directory, self.log), "warm: nothing to do")
+        self.assertTrue(any("0 libraries copied, 3 present at their sizes" in m for m in self.messages), self.messages)
+        # A library that lost bytes is copied again; the intact ones are left alone.
+        (directory / "TKBO.dll").write_bytes(b"x")
+        copied = []
+        original = fo.shutil.copyfile
+
+        def recording_copyfile(source, destination):
+            copied.append(Path(destination).name)
+            return original(source, destination)
+
+        fo.shutil.copyfile = recording_copyfile
+        try:
+            self.assertTrue(fo.bundle(self.manifest, layout, directory, self.log), "tampered: re-copied")
+        finally:
+            fo.shutil.copyfile = original
+        self.assertEqual(copied, ["TKBO.dll"])
+        self.assertEqual((directory / "TKBO.dll").stat().st_size, (layout.library_dir / "TKBO.dll").stat().st_size)
+
+    def test_bundle_removes_only_the_libraries_it_recorded(self):
+        layout = self.windows_prefix()
+        directory = self.windows_bundle_dir()
+        # A previous bundle recorded old.dll, which the prefix no longer has;
+        # stranger.dll is somebody else's and stays.
+        (directory / "old.dll").write_bytes(b"old")
+        (directory / "stranger.dll").write_bytes(b"??")
+        (directory / fo.BUNDLE_STAMP_NAME).write_text(
+            json.dumps({"libraries": {"old.dll": 3, "TKernel.dll": 1}}), encoding="utf-8"
+        )
+        self.assertTrue(fo.bundle(self.manifest, layout, directory, self.log))
+        self.assertFalse((directory / "old.dll").exists())
+        self.assertTrue((directory / "stranger.dll").exists())
+        self.assertTrue(any("removed 1 the prefix no longer carries (old.dll)" in m for m in self.messages), self.messages)
+
+    def test_bundle_refusals_are_loud_and_early(self):
+        layout = self.windows_prefix()
+        empty = self.root / "empty"
+        empty.mkdir()
+        with self.assertRaisesRegex(fo.FetchError, r"no cicada\.exe in .*build it"):
+            fo.bundle(self.manifest, layout, empty, self.log)
+        # The binary imports a library neither the bundle nor Windows provides:
+        # refused before a single file is copied.
+        wants_missing = self.windows_bundle_dir("wants-missing", imports=("TKernel.dll", "missing.dll"))
+        with self.assertRaisesRegex(fo.FetchError, r"cicada\.exe imports missing\.dll"):
+            fo.bundle(self.manifest, layout, wants_missing, self.log)
+        self.assertEqual(sorted(p.name for p in wants_missing.iterdir()), ["cicada.exe"])
+        # A prefix whose closure is open is refused BEFORE anything is copied.
+        (layout.library_dir / "TKBO.dll").write_bytes(fake_pe(["libnowhere.dll"]))
+        fresh = self.windows_bundle_dir("fresh")
+        with self.assertRaisesRegex(fo.FetchError, r"not closed: libnowhere\.dll"):
+            fo.bundle(self.manifest, layout, fresh, self.log)
+        self.assertFalse((fresh / "TKernel.dll").exists())
+        # No prefix: the fetch comes first.
+        nowhere = fo.Layout(self.root / "none", "win-64", "7.8.1")
+        with self.assertRaisesRegex(fo.FetchError, "fetch first"):
+            fo.bundle(self.manifest, nowhere, fresh, self.log)
+        # Linux: refused with the reason (an rpath is set at link time, not here).
+        linux = fo.Layout(self.root / "cache", "linux-64", "7.8.1")
+        with self.assertRaisesRegex(fo.FetchError, r"linux-64 is not one of them.*ORIGIN"):
+            fo.BundlePlan(linux, fresh)
+        # The CLI refuses two platforms for one binary before fetching anything.
+        self.assertEqual(fo.main(["--subdir", "win-64", "--subdir", "linux-64", "--bundle", str(fresh), "--quiet"]), 1)
+
+    # -- macOS --------------------------------------------------------------
+
+    def macos_prefix(self):
+        layout = fo.Layout(self.root / "cache", "osx-arm64", "7.8.1")
+        layout.library_dir.mkdir(parents=True)
+        (layout.library_dir / "libTKernel.7.8.dylib").write_bytes(fake_macho(["/usr/lib/libSystem.B.dylib"]))
+        (layout.library_dir / "libTKBO.7.8.dylib").write_bytes(
+            fake_macho(["@rpath/libTKernel.7.8.dylib", "/usr/lib/libSystem.B.dylib"])
+        )
+        return layout
+
+    @staticmethod
+    def write_macos_binary(directory, rpaths):
+        (directory / "cicada").write_bytes(
+            fake_macho(["@rpath/libTKernel.7.8.dylib", "/usr/lib/libSystem.B.dylib"], rpaths=rpaths)
+        )
+
+    def test_macos_libraries_go_to_lib_and_the_rpath_is_rewritten_once(self):
+        layout = self.macos_prefix()
+        directory = self.root / "Cicada"
+        directory.mkdir()
+        prefix_lib = str(layout.library_dir)
+        self.write_macos_binary(directory, [prefix_lib])
+        calls = []
+
+        def run(argv):
+            calls.append(argv)
+            if argv[0] == "install_name_tool":
+                # What the real tool does: the binary now carries the bundle's rpath.
+                self.write_macos_binary(directory, [fo.BUNDLE_RPATH])
+
+        def which(tool):
+            return f"/usr/bin/{tool}"
+
+        self.assertTrue(fo.bundle(self.manifest, layout, directory, self.log, run=run, which=which))
+        self.assertTrue((directory / "lib" / "libTKernel.7.8.dylib").is_file())
+        self.assertTrue((directory / "lib" / "libTKBO.7.8.dylib").is_file())
+        self.assertFalse((directory / "libTKernel.7.8.dylib").exists(), "macOS libraries live in lib/, not beside")
+        binary = str(directory / "cicada")
+        self.assertEqual(
+            calls,
+            [
+                ["install_name_tool", "-rpath", prefix_lib, "@executable_path/lib", binary],
+                ["codesign", "--force", "--sign", "-", binary],
+            ],
+        )
+        stamp = json.loads((directory / fo.BUNDLE_STAMP_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(stamp["library_dir"], "lib")
+        self.assertEqual(set(stamp["libraries"]), {"libTKernel.7.8.dylib", "libTKBO.7.8.dylib"})
+        self.assertTrue(any("in lib/ (rpath @executable_path/lib)" in m for m in self.messages), self.messages)
+        # Idempotent: the rpath is the bundle's already — no tool runs, nothing copied.
+        calls.clear()
+        self.messages.clear()
+        self.assertFalse(fo.bundle(self.manifest, layout, directory, self.log, run=run, which=which))
+        self.assertEqual(calls, [])
+        self.assertTrue(any("rpath is already @executable_path/lib" in m for m in self.messages), self.messages)
+
+    def test_macos_tools_must_exist_and_their_failures_are_loud(self):
+        layout = self.macos_prefix()
+        directory = self.root / "Cicada"
+        directory.mkdir()
+        self.write_macos_binary(directory, [str(layout.library_dir)])
+        with self.assertRaisesRegex(fo.FetchError, "install_name_tool is not on PATH.*xcode-select"):
+            fo.bundle(self.manifest, layout, directory, self.log, run=lambda argv: None, which=lambda tool: None)
+
+        def failing(argv):
+            raise fo.FetchError(f"{argv[0]} failed (1): boom")
+
+        with self.assertRaisesRegex(fo.FetchError, "install_name_tool failed .*boom"):
+            fo.bundle(self.manifest, layout, directory, self.log, run=failing, which=lambda tool: "/usr/bin/x")
+        (directory / "cicada").write_bytes(b"#!/bin/sh\nexec something\n")
+        with self.assertRaisesRegex(fo.FetchError, r"cicada: not a Mach-O file"):
+            fo.bundle(self.manifest, layout, directory, self.log, run=lambda argv: None, which=lambda tool: "/usr/bin/x")
+        # A binary that references a dylib outside the bundle and the OS is refused.
+        directory2 = self.root / "Cicada2"
+        directory2.mkdir()
+        (directory2 / "cicada").write_bytes(
+            fake_macho(["/opt/homebrew/lib/libfoo.dylib", "@rpath/libTKernel.7.8.dylib"], rpaths=[fo.BUNDLE_RPATH])
+        )
+        with self.assertRaisesRegex(fo.FetchError, r"cicada imports /opt/homebrew/lib/libfoo\.dylib"):
+            fo.bundle(self.manifest, layout, directory2, self.log, run=lambda argv: None, which=lambda tool: "/usr/bin/x")
+
+    def test_rpath_edits_leave_exactly_the_bundle_rpath(self):
+        layout = fo.Layout(Path("/c"), "osx-arm64", "7.8.1")
+        mine = str(layout.library_dir)
+        theirs = "/opt/ci/.cache/cicada-occt/occt-7.8.1-osx-arm64/lib"  # another machine's prefix
+        bundle_rpath = fo.BUNDLE_RPATH
+        self.assertEqual(fo.rpath_edits([mine], layout), [["-rpath", mine, bundle_rpath]])
+        self.assertEqual(fo.rpath_edits([theirs], layout), [["-rpath", theirs, bundle_rpath]])
+        self.assertEqual(
+            fo.rpath_edits([mine, theirs], layout), [["-rpath", mine, bundle_rpath], ["-delete_rpath", theirs]]
+        )
+        self.assertEqual(fo.rpath_edits([bundle_rpath], layout), [])
+        self.assertEqual(fo.rpath_edits([bundle_rpath, mine], layout), [["-delete_rpath", mine]])
+        self.assertEqual(fo.rpath_edits([], layout), [["-add_rpath", bundle_rpath]])
+        # Rpaths that are not a fetch prefix's are not ours to touch.
+        self.assertEqual(fo.rpath_edits(["/usr/local/lib", "@loader_path/../lib"], layout), [["-add_rpath", bundle_rpath]])
+        self.assertFalse(fo.is_prefix_rpath("@executable_path/lib", layout))
+        self.assertFalse(fo.is_prefix_rpath("/opt/occt-7.8.1-osx-arm64/include", layout))
+        self.assertTrue(fo.is_prefix_rpath(theirs, layout))
+
+    def test_macho_rpaths_reads_lc_rpath_only(self):
+        data = fake_macho(["@rpath/libTKernel.7.8.dylib"], rpaths=["/a/lib", "@executable_path/lib"])
+        self.assertEqual(fo.macho_rpaths(data), ["/a/lib", "@executable_path/lib"])
+        self.assertEqual(fo.macho_dylibs(data), ["@rpath/libTKernel.7.8.dylib"])
+        self.assertEqual(fo.macho_rpaths(fake_macho([])), [])
+        with self.assertRaises(fo.FetchError):
+            fo.macho_rpaths(b"\0" * 32)
 
 
 if __name__ == "__main__":

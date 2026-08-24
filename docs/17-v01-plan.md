@@ -1081,6 +1081,26 @@ canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
   idempotent and verified by size like the prefix. AGENTS.md's palette
   states the rule: the env is for BUILDING and for dev shells; a bundled
   binary needs none.
+  **Done 2026-08-24 (`wt/launch`)**: `bundle()` + `BundlePlan`,
+  `macho_rpaths`, `rpath_edits`, `bundle_unresolved_imports` in
+  `tools/fetch_occt.py`; `tools/test_fetch_occt.py::BundleTest` (8 tests,
+  the macOS `install_name_tool` / `codesign` calls through injected
+  `run` / `which`). Proved on Windows: the unbundled release `cicada.exe`
+  exits 127 from a shell without the env; after `--bundle` (88 DLLs
+  copied, 0 on the second run) `--help` and `run examples/02-solids.cic`
+  work from the bundle directory with no loader path. Recorded
+  deviations: the macOS bundle also re-signs ad hoc (`codesign --force
+  --sign -`) because `install_name_tool` invalidates the linker's
+  signature and Apple silicon kills an invalidly signed binary at exec;
+  beyond the size check the bundle refuses, BEFORE copying, a prefix
+  whose import closure is open and a binary whose own imports it cannot
+  satisfy (the first real run found `combase.dll` missing from the
+  script's Windows system-DLL set — added); Linux is refused loudly (no
+  rpath comes from the build env there; `$ORIGIN/lib` is set at link
+  time, L3's or later); a stamp `<dir>/.cicada-occt-bundle.json` records
+  names + sizes for L3's `--check`; the macOS branch has run only against
+  mocked tools (no Mac here) — the first macOS bundle is the evidence
+  that remains.
 - **L3 — launchers and the bundle.** `tools/launch/Cicada.cmd` (Windows)
   and `tools/launch/Cicada.command` (macOS): a visible terminal that (1)
   builds `cicada` in release with the SPA embedded when it is missing or
