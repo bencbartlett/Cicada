@@ -14,7 +14,7 @@ runs in parallel from day 1:
 
 | # | Item | Track | Size | Status |
 |---|---|---|---|---|
-| 0 | Fold `corpus/` into `examples/wall/` + `tools/`; this plan | foreground | hours | **done** 2026-08-20 (every nightly step passes locally from the new paths); the first Nightly runs from the new layout (2026-08-22..24, run 32562121114 first) carve the wall on the runner and compare it to production — `overall NOISE` all three nights — and the 3-OS matrix's tests pass; two jobs were red all three nights for reasons outside the engine, fixed 2026-08-24 (§Follow-ups, "The first Nightlies") |
+| 0 | Fold `corpus/` into `examples/wall/` + `tools/`; this plan | foreground | hours | **done** 2026-08-20 (every nightly step passes locally from the new paths); the first Nightly runs from the new layout (2026-08-22..24, run 32562121114 first) carve the wall on the runner and compare it to production — `overall NOISE` all three nights — and the 3-OS matrix's tests pass; two jobs were red all three nights for reasons outside the engine — addressed 2026-08-24, the heavy job's green run still owed once the account's Actions budget is back (§Follow-ups, "The first Nightlies") |
 | 1 | Undo/redo — snapshot op log + atomic `batch`/`apply_text` path; riders `#off`, Backspace-no-delete | foreground (server/web) | days | **done** 2026-08-20 (merged) |
 | 2 | Git panel slice 1 — status strip, per-node change markers, commit, revert-to-HEAD | foreground (server/web) | ~1 week | **done** 2026-08-20 (wt/git-panel): `GET /api/git/status` + writer-gated `POST /api/git/commit` / `POST /api/git/revert` (docs/13), the web chip / Git tab / canvas badges / `Ctrl+S` commit dialog (docs/16); measured, debug builds: revert POST → barrier snapshot ≤ 35 ms (route test), Revert click → reloaded text in the store 69–81 ms across runs (Playwright) |
 | P | OCCT probe — prebuilt 7.8.x build/link on win/mac/linux, determinism, timings, license, CI shape | parallel worktree | hours, cap 1 day | **done** 2026-08-20 — GREEN on win-64 with one rename patch, byte-deterministic, ~3 ms/boolean; Linux/macOS measured by item 3 WP-A's CI job; memo `docs/probes/occt-2026-08.md` |
@@ -1003,14 +1003,40 @@ same commit (skill `add-stdlib-node`).
   12.8 s, 9 ticks withheld, the release solved once in 14.2 s, writer
   hint 1.5 s / observer hint 7.5 s after the grab (23 of 26 frames in),
   28 more ticks withheld across the no-write releases — 1.4 min, green.
-  Named, not scheduled: where the writer's 1.5 s goes is unmeasured (the
-  policy is decided per tick on the session task — a lowering of the
-  tick's graph plus the hash-only dry run — while the observer's
-  restream encodes; on the debug runner it passed 15 s) — measure
-  before fixing; coalescing a burst of ticks before prediction
-  (latest-wins, as the preview loop already does) is the likely shape.
-  Also seen: the account's artifact storage quota is full again, so the
-  jobs' failure reports do not upload (non-blocking by design).
+  **The release-engine Nightly (32763474657, 2026-08-24) still failed**,
+  at a different line: after the release, the spec's `expect.poll` on
+  the store timed out with NO received value — the shape of a
+  `page.evaluate` that never got a turn in 15 s (Playwright evaluates
+  the generator outside its retry, so a thrown error or a non-null value
+  would have been printed). The page, not the protocol: at wall scale
+  the writer page redraws ~13 M triangles in software GL on every state
+  change, and pinned to 4 cores locally (engine + node + Chromium) the
+  writer's own hint took 6 s against 1.5 s unpinned while everything
+  passed — a runner's cores are slower again. The spec now keeps two
+  oracles apart: the ORDER of intents and answers is asserted off the
+  page's own WebSocket frames (tapped, stamped, written to the test's
+  output dir, printed into the log on failure — the runner's artifacts
+  do not upload), and every wait on the page gets one bound
+  (`PAGE_BOUND_MS`, 60 s) — a sanity net, never a clock. Not reproduced
+  locally in five runs (unpinned; the engine on 2 cores; the whole tree
+  on 4 cores, three times), and the instrumented 4-core run's wire puts
+  numbers on the split: tick → `preview_policy` 1–17 ms, `set_param` →
+  `delta` 16 ms, `end_drag` → `drag_ended` 1 ms, no tick after the write
+  — while the page took 4.46 s from the grab to its FIRST tick (the
+  drag's own event handling under a software-GL viewport) of a 4.66 s
+  hint; the next green Nightly is the evidence. Also seen
+  the same day: `playback_never_writes_the_file` flaked on macOS twice
+  (the play's frame-0 generation raced the first tick's on the one-slot
+  queue — the test now waits after play, 97dced0), and **the account's
+  Actions budget ran out**: from 18:49 UTC every job failed at start
+  with "The job was not started because … your spending limit needs to
+  be increased" — Cicada is private, and its 30-day usage tallies to
+  ~1,840 billed minutes (Linux 349, Windows 221 × 2, macOS 105 × 10)
+  against the free plan's 2,000; no live artifacts exist in any of Ben's
+  repos, so the earlier "artifact storage quota" message was the same
+  budget speaking. Ben's call: raise the limit, make the repo public
+  (Actions are free there), or thin the per-PR matrix (macOS is 57 % of
+  the bill at 10×; the Nightly matrix already lints all three OSes).
 - **Control-plane priority over the display restream** — **done on the
   server and the socket, 2026-08-20** (`wt/hardening`; docs/13 §Two
   lanes, one socket); **the status cadence at wall scale is NOT reached

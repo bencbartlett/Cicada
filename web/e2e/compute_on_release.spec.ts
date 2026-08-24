@@ -33,8 +33,17 @@
  * MEASURED here (logged, attached, bounded by a sanity net) — the socket's
  * ordering is the server tests' and the wire probe's to assert (docs/13
  * §Two lanes, one socket).
+ *
+ * Two oracles, kept apart (2026-08-24): the ORDER of intents and answers
+ * is read off this page's own WebSocket frames (`wire` — tapped, stamped,
+ * attached, printed on failure), where it is exact; the PAGE — DOM, store
+ * — is waited on under one generous bound (`PAGE_BOUND_MS`), because at
+ * wall scale it redraws ~13 M triangles in software GL on every state
+ * change and on a starved runner its main thread is away for seconds.
  */
 import { expect, test, type Page } from "@playwright/test";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import config from "../playwright.config";
 
 const meta = config.metadata as { token: string };
@@ -67,6 +76,64 @@ const SOLVE_TIMEOUT_MS = 5 * 60_000;
 // Reaching the status cadence here is the display plane's follow-up
 // (docs/17): frame handling off the main thread.
 const OBSERVER_POLICY_BOUND_MS = 60_000;
+// Every wait on the WRITER page at wall scale is bounded the same way: the
+// page renders the wall's ~13 M triangles in software GL on every state
+// change, so under CPU starvation its main thread is away for seconds at a
+// time — the 2026-08-24 Nightly's `expect.poll` on the store timed out with
+// no received value at all, which is what a `page.evaluate` that never got
+// a turn in 15 s looks like, and pinned to 4 cores locally the writer's
+// own hint took 6 s. The contract those waits used to carry is read off
+// the wire below (`wire`), where the order is exact; the page gets a sanity
+// net, never a clock.
+const PAGE_BOUND_MS = 60_000;
+
+// The wire as each page saw it: every text frame out (`param_preview`,
+// `set_param`, `end_drag`) and in (`preview_policy`, `delta`, `drag_ended`,
+// `status`, …), stamped on arrival. The order of those frames IS the
+// contract under test (docs/13 §Slider drags), and when this spec fails on
+// the nightly runner it is the one thing worth reading — attached on every
+// run and printed into the log on failure, because the runner's artifacts
+// may not upload (the account's storage quota) while its log always does.
+const wire: string[] = [];
+function tapWire(page: Page, who: string): void {
+  page.on("websocket", (socket) => {
+    const note = (direction: string, payload: string | Buffer) => {
+      if (typeof payload !== "string") return; // a binary display frame
+      let summary = payload.slice(0, 160);
+      try {
+        const parsed = JSON.parse(payload) as { type?: string; seq?: number; payload?: Record<string, unknown> };
+        const p = parsed.payload ?? {};
+        const source = p.source as { label?: string } | undefined;
+        summary = `${parsed.type ?? "?"}${parsed.seq === undefined ? "" : `#${parsed.seq}`} ${JSON.stringify({
+          node: p.node,
+          port: p.port,
+          value: p.value ?? p.pending_value,
+          mode: p.mode,
+          label: source?.label,
+          kind: p.kind,
+        })}`;
+      } catch {
+        // not JSON: keep the raw head
+      }
+      wire.push(`${new Date().toISOString()} ${who} ${direction} ${summary}`);
+    };
+    socket.on("framesent", (frame) => note("→", frame.payload));
+    socket.on("framereceived", (frame) => note("←", frame.payload));
+  });
+}
+// eslint-disable-next-line no-empty-pattern -- Playwright's fixture signature
+test.afterEach(async ({}, testInfo) => {
+  // A file in the test's output dir (kept for passed runs too), not a body
+  // attachment — the list reporter keeps those in memory only.
+  const path = testInfo.outputPath("wire.log");
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, wire.join("\n"));
+  await testInfo.attach("wire.log", { path, contentType: "text/plain" });
+  if (testInfo.status !== testInfo.expectedStatus) {
+    console.log(`[compute-on-release] wire, last 80 of ${wire.length} frames:\n${wire.slice(-80).join("\n")}`);
+  }
+  wire.length = 0;
+});
 
 interface Timing {
   generation: number;
@@ -216,6 +283,7 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
     if (message.type() === "error") errors.push(`console: ${message.text()}`);
   });
 
+  tapWire(page, "writer");
   await page.goto(`/?token=${TOKEN}&pipeline=${PIPELINE}`);
   await expect(page.getByTestId("app")).toBeVisible();
 
@@ -259,16 +327,16 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
   // While the pointer is held: the hint is up, the store has the verdict,
   // the thumb and the number follow the drag (not the committed 1.0).
   const hint = page.getByTestId("param-pending-deboss");
-  await expect(hint).toBeVisible();
+  await expect(hint).toBeVisible({ timeout: PAGE_BOUND_MS });
   await expect(hint).toHaveText(/^pending · ~?\d+(\.\d+)? (ms|s)$/);
   const pending = await storePending(page);
   expect(pending).not.toBeNull();
   expect(pending).toMatchObject({ node: "deboss", port: "value", mode: "compute_on_release" });
   expect(pending!.estimateMs, "the bar is 1 s — the wall's deboss cone is far over it").toBeGreaterThanOrEqual(1000);
-  await expect(page.getByTestId("number-deboss")).toHaveClass(/pending/);
+  await expect(page.getByTestId("number-deboss")).toHaveClass(/pending/, { timeout: PAGE_BOUND_MS });
   const shown = Number(await page.getByTestId("number-deboss").inputValue());
   expect(shown).toBeGreaterThan(1.0);
-  await expect(row).toHaveClass(/pending/);
+  await expect(row).toHaveClass(/pending/, { timeout: PAGE_BOUND_MS });
   // The canvas twin reads the same store entry; the value it would show
   // is the pending one (its chip is hidden by LOD when the wall's canvas
   // is zoomed out, so the DOM check is the panel's).
@@ -287,8 +355,8 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
   // value solves once.
   const t1 = Date.now();
   await page.mouse.up();
-  await expect(hint).toHaveCount(0);
-  await expect.poll(async () => storePending(page)).toBeNull();
+  await expect(hint).toHaveCount(0, { timeout: PAGE_BOUND_MS });
+  await expect.poll(async () => storePending(page), { timeout: PAGE_BOUND_MS }).toBeNull();
   await expect.poll(async () => debossValue((await debugState(page, false)).text)).toBeGreaterThan(1.0);
   const settled = await debugState(page, true);
   const releaseMs = Date.now() - t1;
@@ -303,6 +371,23 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
   for (const t of previews) expect(t.computed, `preview gen ${t.generation} computed nodes`).toBe(0);
   expect(["done", "cached"]).toContain(settled.statuses["carved"]?.state);
   expect(settled.summary.red).toBe(0);
+  // The same contract read off the wire, where order is exact (the page's
+  // clock above is a sanity net): the release's `set_param` is the last
+  // thing the writer sent for this drag — the widget cancels its queued
+  // tick on commit, so no `param_preview` follows it — its `delta` came
+  // back, and no `preview_policy` followed that delta (the write ended the
+  // drag server-side; a tick after it would be a fresh drag with a badge
+  // nothing takes down — the failure shape this guards).
+  const writeAt = wire.findIndex((line) => line.includes("writer → set_param") && line.includes('"node":"deboss"'));
+  expect(writeAt, "the release sent set_param").toBeGreaterThanOrEqual(0);
+  const afterWrite = wire.slice(writeAt + 1);
+  expect(afterWrite.filter((line) => line.includes("writer → param_preview")), "no tick after the write").toEqual([]);
+  const deltaAt = afterWrite.findIndex((line) => line.includes("writer ← delta") && line.includes("set deboss.value"));
+  expect(deltaAt, `the write's delta arrived:\n${afterWrite.join("\n")}`).toBeGreaterThanOrEqual(0);
+  expect(
+    afterWrite.slice(deltaAt + 1).filter((line) => line.includes("writer ← preview_policy")),
+    "no policy after the write's delta",
+  ).toEqual([]);
 
   await testInfo.attach("compute-on-release.json", {
     body: JSON.stringify(
@@ -343,6 +428,7 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
   const observer = await observerContext.newPage();
   const observerErrors: string[] = [];
   observer.on("pageerror", (error) => observerErrors.push(`pageerror: ${error.message}`));
+  tapWire(observer, "observer");
   await observer.goto(`/?token=${TOKEN}&pipeline=${PIPELINE}`);
   await expect(observer.getByTestId("app")).toBeVisible();
   // The observer, too, receives the whole display set — and the drag below
@@ -377,15 +463,26 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
   const tGrab = Date.now();
   await page.mouse.down();
   await dragTo(page, slider, xFor(box2, 1.1, min, max), y2, "1.1");
-  await expect(hint).toBeVisible();
+  await expect(hint).toBeVisible({ timeout: PAGE_BOUND_MS });
   const writerHintMs = Date.now() - tGrab;
+  // Where the writer's wait went, from the wire's own stamps: the first
+  // tick out after the grab and the first `preview_policy` back separate
+  // the server's share (tick → policy on the socket) from the page's (the
+  // rest of `writerHintMs`: the drag's own event handling and the render).
+  const grabIso = new Date(tGrab).toISOString();
+  const sinceGrab = (what: string) => wire.filter((line) => line > grabIso && line.includes(`writer ${what}`));
+  const stampOf = (line: string | undefined) => (line === undefined ? NaN : Date.parse(line.slice(0, 24)));
+  const ticksSent = sinceGrab("→ param_preview");
+  const firstPolicyAt = stampOf(sinceGrab("← preview_policy")[0]);
+  const writerTickToPolicyMs = firstPolicyAt - stampOf(ticksSent[0]);
+  const writerFirstTickMs = stampOf(ticksSent[0]) - tGrab;
   const pending2 = await storePending(page);
   expect(pending2).toMatchObject({ node: "deboss", port: "value", mode: "compute_on_release", value: "1.1" });
   // The canvas twin renders the same entry (hidden by LOD, present in the
   // DOM): the chip and the value label.
-  await expect(page.getByTestId("pending-deboss")).toHaveCount(1);
-  await expect(page.getByTestId("pending-deboss")).toHaveText(await hint.innerText());
-  await expect(page.getByTestId("slider-value-deboss")).toHaveText("1.1");
+  await expect(page.getByTestId("pending-deboss")).toHaveCount(1, { timeout: PAGE_BOUND_MS });
+  await expect(page.getByTestId("pending-deboss")).toHaveText(await hint.innerText(), { timeout: PAGE_BOUND_MS });
+  await expect(page.getByTestId("slider-value-deboss")).toHaveText("1.1", { timeout: PAGE_BOUND_MS });
   // The observer hears the broadcast: the hint, the class, the entry —
   // while its display set is still streaming. Before the lanes (one
   // channel per client) the wall's ~350 MB of frames stood between the
@@ -399,10 +496,12 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
   await expect(observerHint).toBeVisible({ timeout: OBSERVER_POLICY_BOUND_MS });
   const observerHintMs = Date.now() - tGrab;
   const observerFramesAtHint = await observerFrames(observer);
-  await expect(observer.getByTestId("param-deboss")).toHaveClass(/pending/);
+  await expect(observer.getByTestId("param-deboss")).toHaveClass(/pending/, { timeout: PAGE_BOUND_MS });
   expect(await storePending(observer)).toMatchObject({ node: "deboss", port: "value", mode: "compute_on_release" });
   console.log(
-    `[compute-on-release] observer preview_policy: writer hint ${writerHintMs} ms, observer hint ${observerHintMs} ms after the grab · ` +
+    `[compute-on-release] observer preview_policy: writer hint ${writerHintMs} ms ` +
+      `(first tick ${writerFirstTickMs} ms after the grab, tick → policy on the wire ${writerTickToPolicyMs} ms, ${ticksSent.length} ticks sent), ` +
+      `observer hint ${observerHintMs} ms after the grab · ` +
       `observer frames at grab ${observerFramesAtGrab.received} (${(observerFramesAtGrab.bytes / 1e6).toFixed(0)} MB), ` +
       `at hint ${observerFramesAtHint.received} (${(observerFramesAtHint.bytes / 1e6).toFixed(0)} MB) ` +
       `of a ${(observerRestreamBytes / 1e6).toFixed(0)} MB restream`,
@@ -411,6 +510,9 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
     body: JSON.stringify(
       {
         writer_hint_ms: writerHintMs,
+        writer_first_tick_ms: writerFirstTickMs,
+        writer_tick_to_policy_ms: writerTickToPolicyMs,
+        writer_ticks_sent: ticksSent.length,
         observer_hint_ms: observerHintMs,
         observer_frames_at_grab: observerFramesAtGrab,
         observer_frames_at_hint: observerFramesAtHint,
@@ -427,29 +529,29 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
   // Chrome for a drag that returns to its start.
   await dragTo(page, slider, xCommitted, y2, committed);
   await page.mouse.up();
-  await expect(hint).toHaveCount(0);
-  await expect.poll(async () => storePending(page)).toBeNull();
-  await expect(page.getByTestId("number-deboss")).toHaveValue(committed);
-  await expect(page.getByTestId("number-deboss")).not.toHaveClass(/pending/);
-  await expect(page.getByTestId("pending-deboss")).toHaveCount(0);
-  await expect(page.getByTestId("slider-value-deboss")).toHaveText(committed);
+  await expect(hint).toHaveCount(0, { timeout: PAGE_BOUND_MS });
+  await expect.poll(async () => storePending(page), { timeout: PAGE_BOUND_MS }).toBeNull();
+  await expect(page.getByTestId("number-deboss")).toHaveValue(committed, { timeout: PAGE_BOUND_MS });
+  await expect(page.getByTestId("number-deboss")).not.toHaveClass(/pending/, { timeout: PAGE_BOUND_MS });
+  await expect(page.getByTestId("pending-deboss")).toHaveCount(0, { timeout: PAGE_BOUND_MS });
+  await expect(page.getByTestId("slider-value-deboss")).toHaveText(committed, { timeout: PAGE_BOUND_MS });
   // … and the observer's badge goes down with it (`drag_ended`), its
   // number back on the committed value.
-  await expect(observerHint).toHaveCount(0);
-  await expect.poll(async () => storePending(observer)).toBeNull();
-  await expect(observer.getByTestId("number-deboss")).toHaveValue(committed);
-  await expect(observer.getByTestId("param-deboss")).not.toHaveClass(/pending/);
+  await expect(observerHint).toHaveCount(0, { timeout: PAGE_BOUND_MS });
+  await expect.poll(async () => storePending(observer), { timeout: PAGE_BOUND_MS }).toBeNull();
+  await expect(observer.getByTestId("number-deboss")).toHaveValue(committed, { timeout: PAGE_BOUND_MS });
+  await expect(observer.getByTestId("param-deboss")).not.toHaveClass(/pending/, { timeout: PAGE_BOUND_MS });
 
   // The re-grab: a fresh drag, announced again — whether inside the gap
   // (the release ended the server's drag) or after it (the gap rule).
   await page.mouse.down();
   await dragTo(page, slider, xFor(box2, 1.2, min, max), y2, "1.2");
-  await expect(hint, "the re-grab is announced").toBeVisible();
-  await expect(observerHint).toBeVisible();
+  await expect(hint, "the re-grab is announced").toBeVisible({ timeout: PAGE_BOUND_MS });
+  await expect(observerHint).toBeVisible({ timeout: PAGE_BOUND_MS });
   await dragTo(page, slider, xCommitted, y2, committed);
   await page.mouse.up();
-  await expect(hint).toHaveCount(0);
-  await expect(observerHint).toHaveCount(0);
+  await expect(hint).toHaveCount(0, { timeout: PAGE_BOUND_MS });
+  await expect(observerHint).toHaveCount(0, { timeout: PAGE_BOUND_MS });
 
   // Nothing was written, nothing solved: the text is as released, the
   // server's drag is gone, no structural generation ran, and every preview
@@ -462,6 +564,16 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
     expect(t.computed, `preview gen ${t.generation} computed nodes during the no-write drags`).toBe(0);
   }
   expect(after.solve.previews_deferred).toBeGreaterThan(settled.solve.previews_deferred);
+  // Off the wire: both no-write releases went out as `end_drag`, nothing
+  // was written after the first, and the observer heard an end for each.
+  const endDragAt = wire.findIndex((line) => line.includes("writer → end_drag"));
+  expect(endDragAt, "the no-write release is the end_drag intent").toBeGreaterThanOrEqual(0);
+  expect(wire.slice(endDragAt + 1).filter((line) => line.includes("writer → set_param")), "nothing written").toEqual([]);
+  expect(wire.filter((line) => line.includes("writer → end_drag")).length, "one end_drag per no-write release").toBe(2);
+  expect(
+    wire.filter((line) => line.includes("observer ← drag_ended")).length,
+    "the observer hears the end of every announced drag",
+  ).toBeGreaterThanOrEqual(2);
   console.log(
     `[compute-on-release] no-write releases: ${after.solve.previews_deferred - settled.solve.previews_deferred} more ticks withheld · ` +
       `drag ${after.solve.drag === null ? "ended" : "STANDING"} · text ${debossValue(after.text)} · observer cleared`,
