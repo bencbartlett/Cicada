@@ -420,6 +420,57 @@
   max-width: 7em;
 }
 
+.cn .cn-literal.faint {
+  color: var(--fg-faint);
+  font-style: italic;
+}
+
+/* the typed-literal chip (LiteralChip; docs/16 §Canvas conventions, wave 4
+   B3): the kwarg's literal as written, the default greyed and dashed, an
+   empty required slot dashed — double-click (canvas) / click (inspector)
+   opens the editor in its place */
+.lit-chip {
+  display: inline-block;
+  max-width: 8em;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-elev);
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: text;
+}
+
+.lit-chip.default {
+  color: var(--fg-faint);
+  border-style: dashed;
+  font-style: italic;
+}
+
+.lit-chip.unset {
+  color: var(--fg-faint);
+  border-style: dashed;
+  min-width: 2.2em;
+  text-align: center;
+}
+
+.lit-chip:hover,
+.lit-chip:focus-visible {
+  border-color: var(--accent);
+  color: var(--fg);
+  outline: none;
+}
+
+.cicada-canvas[data-lod="far"] .cn-literal-chip,
+.cicada-canvas[data-lod="mid"] .cn-literal-chip {
+  visibility: hidden;
+}
+
 /* inline literal kwarg editor (shared LiteralWidgets, compact variant) */
 .cn-literal-edit {
   display: inline-flex;

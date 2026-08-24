@@ -630,6 +630,19 @@ aside.inspector {
   font-size: 11px;
 }
 
+/* the typed-literal chip in the inspector (LiteralChip): a click opens it */
+.port-src .lit-chip {
+  max-width: 16em;
+  font-size: 11px;
+  line-height: 17px;
+  cursor: pointer;
+}
+
+.insp-literal-edit {
+  display: inline-flex;
+  align-items: center;
+}
+
 .lift-badge {
   display: inline-block;
   padding: 0 5px;

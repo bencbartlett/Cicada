@@ -69,3 +69,34 @@ export function literalKindOf(
   if (typeof value === "string") return "text";
   return null;
 }
+
+/**
+ * The chip kind of an UNWIRED input port (wave 4 B3, finding U9): a port
+ * whose type takes a literal — `Number`, `Integer`, `Text`, `Boolean` and
+ * their `?` forms, never a list — is typed into whether or not the text
+ * carries a kwarg for it yet (the chip shows the literal, else the catalog
+ * default greyed, else an empty required slot); the PORT's base decides
+ * the spelling, as `literalKindOf` does. Any other base (`T`, `E`, `Any`,
+ * `?`) keeps that rule: a present scalar literal's own spelling, else no
+ * chip. Wired ports and transport-driven ports never reach this function
+ * (the callers show the wire / the transport row).
+ */
+export function literalPortKind(
+  input: Pick<InputView, "base" | "depth" | "literal" | "literal_value">,
+): Exclude<LiteralKind, "slider" | "toggle" | "list"> | null {
+  if (input.depth === 0) {
+    switch (input.base) {
+      case "Integer":
+        return "integer";
+      case "Number":
+        return "number";
+      case "Boolean":
+        return "boolean";
+      case "Text":
+        return "text";
+      default:
+        break;
+    }
+  }
+  return literalKindOf(input);
+}

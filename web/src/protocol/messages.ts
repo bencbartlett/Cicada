@@ -178,6 +178,15 @@ export interface InputView {
   optional: boolean;
   required: boolean;
   default?: string;
+  /**
+   * The catalog default parsed to a scalar of the port's kind (numbers,
+   * booleans, text) — what a typed-literal chip starts from when the text
+   * carries no kwarg (wave 4 B3). Absent without a default, and for a
+   * default that is no scalar literal (`plane = xy_plane`); the server
+   * parses its own rendering (`viewmodel.rs::default_json`), the client
+   * never re-derives it from `default`.
+   */
+  default_value?: number | boolean | string;
   doc?: string;
   dimension?: "length" | "angle";
   wired?: WireEnd;

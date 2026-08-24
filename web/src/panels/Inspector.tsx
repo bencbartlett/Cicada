@@ -16,8 +16,9 @@ import type {
   WireView,
 } from "../protocol/messages";
 import { drivenTitle, outputDoc, portTitle, transportDrivenSignal } from "../canvas/grid";
-import { LiteralWidget } from "../canvas/LiteralWidgets";
-import { literalKindOf } from "../state/literals";
+import { LiteralChip } from "../canvas/LiteralChip";
+import { chipFace } from "../canvas/literalFace";
+import { literalPortKind } from "../state/literals";
 import { canWrite, nodeByName, useCicada } from "../state/store";
 import { drivenEntry, fedValue } from "../state/transport";
 import { viewportApi } from "../viewport/api";
@@ -389,9 +390,10 @@ function InputRow({
   onSelect: (node: string) => void;
 }) {
   const color = kindColor(input.base === "?" ? "" : baseOfType(input.base));
-  // Unwired scalar literals are edited in place (the same widgets as the
-  // canvas); observers see the literal text.
-  const literalKind = writer && input.wired === undefined ? literalKindOf(input) : null;
+  // An unwired literal-typed port wears the typed-literal chip (the same
+  // one as the canvas; a click opens it here); observers and `#off` ghosts
+  // see the literal text, or the default the text omits.
+  const chipKind = input.wired === undefined ? literalPortKind(input) : null;
   return (
     <div className="port-row" data-testid={`in-${input.name}`}>
       <span
@@ -423,14 +425,16 @@ function InputRow({
               {input.wired.node}.{input.wired.port}
             </button>
           </>
-        ) : literalKind !== null && input.literal_value !== undefined ? (
-          <LiteralWidget
+        ) : chipKind !== null && writer ? (
+          <LiteralChip
             node={node}
             port={input.name}
-            kind={literalKind}
+            kind={chipKind}
+            literal={input.literal}
             value={input.literal_value}
-            writable={writer}
-            compact
+            defaultText={input.default}
+            defaultValue={input.default_value}
+            surface="inspector"
             testId={`insp-lit-${node}-${input.name}`}
             label={`${node}.${input.name}`}
           />
@@ -438,7 +442,12 @@ function InputRow({
           <code>{input.literal}</code>
         ) : input.default !== undefined ? (
           <span className="faint">
-            default <code>{input.default}</code>
+            default{" "}
+            <code>
+              {chipKind !== null
+                ? chipFace({ kind: chipKind, defaultText: input.default, defaultValue: input.default_value }).text
+                : input.default}
+            </code>
           </span>
         ) : (
           <span className="faint">unset</span>

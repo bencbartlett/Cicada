@@ -426,15 +426,20 @@ test.describe("git panel", () => {
     // let this one chord through to the window, or the browser's own save
     // dialog opens over them. Real DOM events here: a unit test that drives
     // the router directly cannot see a stopped event.
-    const literal = page.getByTestId("lit-span-start");
-    await literal.click();
+    // (Wave 4 B3: the literal is a chip; double-click opens its editor.)
+    await page.getByTestId("lit-span-start").dblclick();
+    const literal = page.getByTestId("lit-span-start-input");
     await expect(literal).toBeFocused();
     await literal.press("Control+s");
     await expect(dialog).toHaveCount(1);
     await expect(message).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(dialog).toHaveCount(0);
-    await expect(literal).toHaveValue("0");
+    // The editor lost its focus to the dialog, which commits its UNCHANGED
+    // value — and an unchanged value writes nothing: the chip is back with
+    // the text's literal, and the file is as it was.
+    await expect(literal).toHaveCount(0);
+    await expect(page.getByTestId("lit-span-start")).toHaveText("0.0");
     expect((await store(page)).commitDialog).toBe(false);
 
     const pane = page.locator(".react-flow__pane");

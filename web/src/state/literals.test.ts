@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { literalKindOf, paramValueText } from "./literals";
+import { literalKindOf, literalPortKind, paramValueText } from "./literals";
 
 describe("literalKindOf (inline kwarg widgets)", () => {
   it("lets the port's base type decide for the scalar kinds", () => {
@@ -27,5 +27,30 @@ describe("literalKindOf (inline kwarg widgets)", () => {
     expect(paramValueText(literalKindOf(radius)!, 1.25)).toBe("1.25");
     expect(paramValueText(literalKindOf(radius)!, 1)).toBe("1.0");
     expect(paramValueText(literalKindOf(segments)!, 16)).toBe("16");
+  });
+});
+
+describe("literalPortKind (the typed-literal chip, wave 4 B3)", () => {
+  it("a port whose type takes a literal has a chip whether or not the text carries a kwarg", () => {
+    expect(literalPortKind({ base: "Number", depth: 0 })).toBe("number");
+    expect(literalPortKind({ base: "Integer", depth: 0 })).toBe("integer");
+    expect(literalPortKind({ base: "Boolean", depth: 0 })).toBe("boolean");
+    expect(literalPortKind({ base: "Text", depth: 0 })).toBe("text");
+    // The `?` forms are the same base at depth 0.
+    expect(literalPortKind({ base: "Number", depth: 0, literal: "1.0", literal_value: 1 })).toBe("number");
+    // The PORT decides the spelling even when the literal disagrees.
+    expect(literalPortKind({ base: "Number", depth: 0, literal: "3", literal_value: 3 })).toBe("number");
+    expect(literalPortKind({ base: "Number", depth: 0, literal: '"x"', literal_value: "x" })).toBe("number");
+  });
+  it("a list port has no chip, whatever its element kind", () => {
+    expect(literalPortKind({ base: "Number", depth: 1 })).toBeNull();
+    expect(literalPortKind({ base: "Text", depth: 2 })).toBeNull();
+  });
+  it("other bases keep the present-literal rule: a scalar literal's own spelling, else nothing", () => {
+    expect(literalPortKind({ base: "T", depth: 0, literal: "3", literal_value: 3 })).toBe("integer");
+    expect(literalPortKind({ base: "Any", depth: 0, literal: "True", literal_value: true })).toBe("boolean");
+    expect(literalPortKind({ base: "T", depth: 0 })).toBeNull();
+    expect(literalPortKind({ base: "Plane", depth: 0 })).toBeNull();
+    expect(literalPortKind({ base: "?", depth: 0, literal: "1" })).toBeNull();
   });
 });

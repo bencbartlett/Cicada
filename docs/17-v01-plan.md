@@ -1153,6 +1153,33 @@ packages in sequence, each reviewed.
   `dialect-change`, fixtures both ways). `web/e2e`: place
   `construct_domain`, type `40` into `end`, the text reads `end=40.0`
   and the node is green.
+  *Implemented 2026-08-24 (`web/src/canvas/LiteralChip.tsx` +
+  `literalFace.ts`, the canvas row and the inspector row, vitest on
+  both surfaces, `web/e2e/literals.spec.ts` — U9 verbatim plus a Text,
+  an Integer and a Boolean port; docs/16, docs/10, docs/13). Verified
+  first: the writer could already ADD a kwarg a call lacks
+  (`set_kwarg` appends into `fn()`), so no grammar change; what it
+  lacked was the ORDER — `set_param` appended where a wire inserts in
+  spec order — so `writer::set_param` now takes the spec order
+  (`apply_param` passes it; fixture `gestures/set_param_insert`) and a
+  typed `start` lands before an earlier-typed `end`. What the contract
+  did not foresee, settled the small way: (1) the server parses its
+  own default rendering into `InputView.default_value` (additive) —
+  the macro spells a Boolean default `true`, the chip must say `True`
+  and never re-derive the catalog's spelling client-side; (2) the
+  chip is ONE mechanism for a present literal, a default and an empty
+  required slot, so it replaces the spike's always-open inline inputs
+  on present literals (the two specs that typed into them updated:
+  `git.spec.ts`, `disable.spec.ts` unchanged in meaning); (3) leaving
+  the field commits like Enter — a click elsewhere after typing must
+  not discard — and an unchanged value writes nothing (no no-op op);
+  (4) the typed editor streams no `param_preview`: Enter is the one
+  write, so Esc leaves no preview behind (the sliders keep theirs);
+  (5) an unspellable value (`2.5` on an Integer port) is a warning
+  notice, an empty number field a cancel; a Boolean's editor is a
+  checkbox (Space toggles, Enter commits); (6) ports of other bases
+  (`T`, `Any`) with a present scalar literal keep their chip — the
+  spike's rule, unchanged; a `[Number]` list port has none.*
 - **B4 — sliders.** (a) Search-to-place parses `A<B` and `A<B<C` (GH's
   grammar; negatives allowed): min A, max B (or C), value A (or B); step
   = 10^-(the most decimals typed), integers → step 1 and an `Integer`

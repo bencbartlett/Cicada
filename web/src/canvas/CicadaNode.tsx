@@ -2,9 +2,10 @@
  * The node face (docs/16 §Canvas conventions): header row (name bold ·
  * function dim · state badge · eye · effectful hint), one port row per unit
  * (inputs left, outputs right, handles colored by kind family; required
- * filled, optional hollow, refinement double-ringed; lift badges; inline
- * literals — a transport-driven port shows the transport in its row
- * instead: no handle, no literal), an optional param widget row, comment note above, excluded
+ * filled, optional hollow, refinement double-ringed; lift badges; the
+ * typed-literal chip on every unwired literal-typed port — a
+ * transport-driven port shows the transport in its row instead: no handle,
+ * no chip), an optional param widget row, comment note above, excluded
  * outline, a git change badge when the binding differs from HEAD (docs/16
  * canvas badges; doc 10's status strip markers — added / modified /
  * renamed; removed nodes live only in the Git tab), and — from the near
@@ -18,7 +19,7 @@ import { memo, useEffect, useState } from "react";
 import { kindColor } from "../kinds";
 import { markerBadge } from "../panels/gitFormat";
 import type { DrivenSignal, InputView, NodeView, OutputView, ProbeVerdict, ValueSummary } from "../protocol/messages";
-import { literalKindOf } from "../state/literals";
+import { literalPortKind } from "../state/literals";
 import { canWrite, useCicada } from "../state/store";
 import { sendWrite, type CanvasNode } from "./flow";
 import {
@@ -31,7 +32,8 @@ import {
   statusBadge,
   transportDrivenSignal,
 } from "./grid";
-import { LiteralWidget } from "./LiteralWidgets";
+import { LiteralChip } from "./LiteralChip";
+import { chipFace } from "./literalFace";
 import { useLodTier } from "./lod";
 import { ParamWidget } from "./ParamWidget";
 
@@ -93,12 +95,15 @@ function InputRow({
     }
   }
   const blocked = verdict?.verdict === "blocked";
-  // Inline literal editor (docs/16): an unwired scalar kwarg is edited in
-  // place when this client may write — never for the param node's own
-  // widget port (the widget row has it), never for non-scalars; observers
-  // (and a dropped connection) see the literal text.
-  const literalKind =
-    writer && input.wired === undefined && node.param?.port !== input.name ? literalKindOf(input) : null;
+  // The typed-literal chip (docs/16 §Canvas conventions, wave 4 B3): an
+  // unwired port whose type takes a literal wears its value — the kwarg's
+  // literal, else the catalog default greyed, else an empty required slot
+  // — and double-click opens an editor when this client may write; never
+  // for the param node's own widget port (the widget row has it), never
+  // for an expression's free variables (the wire IS the name). Observers
+  // (and a dropped connection, and a `#off` ghost) see the text, no chip.
+  const chipKind =
+    input.wired === undefined && node.param?.port !== input.name && !freeVar ? literalPortKind(input) : null;
   // During a wire drag the browser shows no title tooltips (a button is
   // held), so the verdict reason is rendered as a label via CSS.
   const reason = probing && !freeVar && verdict?.verdict === "blocked" ? (verdict.reason ?? "blocked") : undefined;
@@ -125,24 +130,28 @@ function InputRow({
           map
         </span>
       )}
-      {literalKind !== null && input.literal_value !== undefined ? (
-        <span className="cn-literal-edit" title={`${input.name} = ${input.literal ?? ""}`}>
-          <LiteralWidget
-            node={node.name}
-            port={input.name}
-            kind={literalKind}
-            value={input.literal_value}
-            writable={writer}
-            compact
-            testId={`lit-${node.name}-${input.name}`}
-            label={`${node.name}.${input.name}`}
-          />
+      {chipKind !== null && writer ? (
+        <LiteralChip
+          node={node.name}
+          port={input.name}
+          kind={chipKind}
+          literal={input.literal}
+          value={input.literal_value}
+          defaultText={input.default}
+          defaultValue={input.default_value}
+          surface="canvas"
+          testId={`lit-${node.name}-${input.name}`}
+          label={`${node.name}.${input.name}`}
+        />
+      ) : input.literal !== undefined && input.wired === undefined ? (
+        <span className="cn-literal mono" title={input.literal}>
+          {input.literal}
         </span>
       ) : (
-        input.literal !== undefined &&
-        input.wired === undefined && (
-          <span className="cn-literal mono" title={input.literal}>
-            {input.literal}
+        chipKind !== null &&
+        input.default !== undefined && (
+          <span className="cn-literal mono faint" title={`${input.name}: default (not in the text)`}>
+            {chipFace({ kind: chipKind, defaultText: input.default, defaultValue: input.default_value }).text}
           </span>
         )
       )}
