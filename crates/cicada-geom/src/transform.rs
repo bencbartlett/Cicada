@@ -1072,6 +1072,56 @@ mod tests {
         assert!(tol::coincident(out.b, Point::new(3.0, 2.0, 0.0), 1e-12));
     }
 
+    // A plane whose stored `y` leans off `x` denotes the frame `orthonormal`
+    // makes of it (y's component rejected from x), and that frame is what a
+    // non-similarity carries: the axes come back perpendicular — the
+    // frame's directions at the stored lengths — while the similarity path
+    // moves the stored axes as typed. Pinned so the repair is a contract,
+    // not an accident (C2b review).
+    #[test]
+    fn affine_carries_a_leaning_plane_as_the_frame_it_denotes() {
+        let leaning = Plane {
+            origin: Point::new(1.0, 2.0, 3.0),
+            x: Vector::new(2.0, 0.0, 0.0),
+            // Past a right angle from x (cos < 0): rejected, y is +world y.
+            y: Vector::new(-0.5, 3.0, 0.0),
+        };
+        let y_len = leaning.y.0.length();
+        let world = orthonormal(&world_xy(), TOL).expect("frame");
+        let stretch = Affine::scale_in_frame(&world, DVec3::new(1.0, 1.0, 4.0));
+        let Transformable::Plane(out) = stretch
+            .try_apply(&Transformable::Plane(leaning), TOL)
+            .expect("a z-stretch carries an XY plane")
+        else {
+            panic!("kind preserved")
+        };
+        assert!(out.x.0.dot(out.y.0).abs() < 1e-12, "perpendicular: {out:?}");
+        assert!((out.x.0.length() - 2.0).abs() < 1e-12, "{out:?}");
+        assert!((out.y.0.length() - y_len).abs() < 1e-12, "{out:?}");
+        assert!(
+            tol::coincident(Point(out.y.0), Point::new(0.0, y_len, 0.0), 1e-12),
+            "y is the rejected direction at its stored length: {out:?}"
+        );
+        assert!(tol::coincident(
+            out.origin,
+            Point::new(1.0, 2.0, 12.0),
+            1e-12
+        ));
+        // The similarity path moves the stored axes as typed: still leaning.
+        let shift =
+            Affine::from_xform(&Similarity::translation(Vector::new(1.0, 0.0, 0.0)).xform());
+        let Transformable::Plane(moved) = shift
+            .try_apply(&Transformable::Plane(leaning), TOL)
+            .expect("a translation carries every plane")
+        else {
+            panic!("kind preserved")
+        };
+        assert!(
+            tol::coincident(Point(moved.y.0), Point(leaning.y.0), 1e-12),
+            "a similarity keeps the axes as typed: {moved:?}"
+        );
+    }
+
     #[test]
     fn affine_mesh_winding_follows_the_determinant() {
         let mesh = box_mesh(

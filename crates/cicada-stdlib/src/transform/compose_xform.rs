@@ -35,7 +35,7 @@ pub struct ComposeXformIn {
 /// corner = construct_point(x=1.0, y=0.0, z=0.0)
 /// placed = transform(geometry=corner, xform=shift_then_double)
 /// ```
-#[node(category = "Transform", tier = "1", version = 1, gh = "Compose")]
+#[node(category = "Transform", tier = "1", version = 1, gh = "Compound")]
 #[must_use]
 pub fn compose_xform(input: ComposeXformIn) -> Xform {
     input
@@ -124,6 +124,19 @@ mod tests {
                 "{once:?} vs {p:?}"
             );
         }
+    }
+
+    // The Grasshopper name feeds search-to-place for GH migrants: the GH
+    // component that multiplies transforms is Transform > Util > Compound.
+    // `Compose` — the name C2b first shipped — is no GH component, so a GH
+    // user typing `compound` found nothing (the C2b review's finding).
+    #[test]
+    fn compose_xform_answers_to_grasshoppers_compound() {
+        let spec = crate::registry()
+            .iter()
+            .find(|s| s.name == "compose_xform")
+            .expect("compose_xform registered");
+        assert_eq!(spec.gh, Some("Compound"));
     }
 
     #[test]

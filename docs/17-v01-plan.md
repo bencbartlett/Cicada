@@ -1839,8 +1839,12 @@ review).**
   "exactness, not similarity" (cicada-geom `transform.rs` module doc).
   (4) `polar_array`'s fence posts: a full turn divides the circle (`k ×
   angle / count`), a shorter sweep is filled to its end (`k × angle /
-  (count − 1)`) — Rhino's and Grasshopper's rule, spelled out in the node
-  doc because docs/08 said nothing; beyond a full turn is red. (5)
+  (count − 1)`) — Rhino's `ArrayPolar` rule, spelled out in the node doc
+  because docs/08 said nothing; NOT Grasshopper's, whose component divides
+  every sweep by `count` (McNeel RH-81087), so a `.gh` importer translates
+  the angle; the full turn is recognised within the angular tolerance
+  only (a typed `6.28` fills — the review closure below says why no wider
+  band); a zero sweep stacks the copies; beyond a full turn is red. (5)
   `rectangular_array`'s spacing is ONE `cell: Vector` (GH's Cell box
   reduced to its three extents) rather than three step ports; `mesh_plane`
   takes `mesh_box`'s plane + domains rather than GH's rectangle, so it is
@@ -1852,6 +1856,40 @@ review).**
   importer will want the GH Value List's label/value pairing (`choice`
   makes the option the value); `deconstruct_xform`; the Params tab does
   not yet group by canvas groups (unchanged).
+  *Review closure (2026-08-24, the package's adversarial review — verdict
+  ship, three minors, no majors):* `compose_xform` answers to `gh =
+  "Compound"` — GH's Transform > Util component that multiplies
+  transforms; `Compose`, the name first shipped, is no GH component, so
+  search-to-place under the GH name found nothing (a spec pin in the
+  node's tests keeps the name). `rectangular_array`'s count product is
+  formed by the new `checked_product` (stdlib `lib.rs`: `checked_mul`
+  over the factors, then `checked_size`): three counts the dialect admits
+  (each under 2^53) multiply past `u128::MAX`, and the bare `x × y × z`
+  was rustc's "attempt to multiply with overflow" — red, but not the
+  node's text; now it is the typed ceiling refusal naming the counts
+  (`rectangular_array_product_past_u128_is_refused_with_the_ceiling_text`;
+  `mesh_plane` takes the same door, its behaviour unchanged — two `i64`s
+  cannot overflow it). `polar_array` keeps its rule and its band — the
+  angular tolerance — because every wider band is either an arbitrary
+  constant (none admits a typed `6.28` without admitting a deliberate
+  359.8° fill) or, scaled to the step, a count-dependent cliff at an
+  unremarkable angle (three copies: 5.0 rad fills to 5.0, 5.1 rad would
+  divide to 3.4); the cliff is now a stated contract instead — the node
+  doc names it, the table pins both sides of the band and the zero
+  sweep, and a second property covers the full-turn branch the sweep
+  property never reached. The parity claim was wrong and is corrected in
+  the node doc, docs/08 §10 and deviation (4): the rule is Rhino's
+  `ArrayPolar`; GH's component divides every sweep by `count` (McNeel
+  RH-81087). Notes recorded, not changed: `Affine::as_similarity` reads
+  `tol` as a relative deviation of the column lengths and dot products
+  (the method doc says so); `Affine::plane` carries a plane whose stored
+  `y` leans off `x` as the frame `orthonormal` denotes — perpendicular
+  axes, the stored lengths — while a similarity moves the axes as typed
+  (now a unit test in cicada-geom,
+  `affine_carries_a_leaning_plane_as_the_frame_it_denotes`, so the repair
+  is a contract, not an accident); the zero-angle goldens pin the identity
+  path only, the tables catch handedness and fence posts; `choice` and
+  `construct_xform` stand as deviations (1) and (2).
 - Every name is checked against the catalog AND the phantom list of
   `crates/cicada-cli/tests/diagnostic_vocabulary.rs`; consumers: a new
   `examples/09-vectors.cic` (C2a), additions to `06-lists` / `02-solids`

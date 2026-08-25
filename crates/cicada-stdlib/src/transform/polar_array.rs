@@ -35,12 +35,20 @@ pub struct PolarArrayIn {
 /// a sweep.
 ///
 /// The fence-post rule, spelled out: over a full turn (`|angle|` within
-/// angular tolerance of 2π) the copies sit at `k × angle / count`, so the
-/// last one does not land on the first; over any shorter sweep they sit at
-/// `k × angle / (count − 1)` — the first at the original, the last exactly
-/// on the sweep's end, as Rhino's and Grasshopper's polar arrays fill an
-/// angle. One copy is the original alone. A Solid moves through the kernel
-/// like every similarity.
+/// angular tolerance of 2π — the default sweep exactly) the copies sit at
+/// `k × angle / count`, so the last one does not land on the first; over
+/// any shorter sweep they sit at `k × angle / (count − 1)` — the first at
+/// the original, the last exactly on the sweep's end. That is Rhino's
+/// `ArrayPolar` rule (its "angle to fill"); Grasshopper's Polar Array
+/// component divides EVERY sweep by `count` instead (RH-81087: ten copies
+/// over 90° end at 81°), so a `.gh` import translates the angle. The
+/// switch sits at the tolerance, not at a looser band: a typed
+/// approximation of the full turn (`angle=6.28`) is a shorter sweep and
+/// fills, its last copy a hair before the first — omit `angle` for the
+/// full turn (a wider band would be an arbitrary constant, or, scaled to
+/// the step, a count-dependent cliff at an unremarkable angle). A zero
+/// sweep stacks every copy on the original; one copy is the original
+/// alone. A Solid moves through the kernel like every similarity.
 ///
 /// # Returns
 ///
@@ -122,6 +130,11 @@ mod tests {
     use super::*;
     use crate::transform::support::{config, expect_point, point};
 
+    /// A hand-typed approximation of the full turn — 3.2e-3 rad short of
+    /// 2π, far outside the 1e-9 angular tolerance: the band's OUTSIDE.
+    #[allow(clippy::approx_constant)] // the typed approximation IS the case
+    const TYPED: f64 = 6.28;
+
     fn ring(count: i64, angle: f64) -> Vec<Transformable> {
         polar_array(
             &config(),
@@ -183,6 +196,42 @@ mod tests {
             Point::new(0.0, -2.0, 0.0),
             1e-12
         ));
+        // The full-turn band is the angular tolerance, pinned on both sides:
+        // a hair inside (1e-10 rad short of 2π) divides the circle; a typed
+        // approximation (6.28, 3.2e-3 rad short) is a shorter sweep and
+        // FILLS — its second copy a third of the way, its last a hair before
+        // the first. The cliff is the contract, not an accident (C2b review).
+        let inside = ring(4, TAU - 1e-10);
+        assert!(tol::coincident(
+            expect_point(&inside[1]),
+            Point::new(0.0, 2.0, 0.0),
+            1e-9
+        ));
+        let typed = ring(4, TYPED);
+        let third = TYPED / 3.0;
+        assert!(tol::coincident(
+            expect_point(&typed[1]),
+            Point::new(2.0 * third.cos(), 2.0 * third.sin(), 0.0),
+            1e-12
+        ));
+        assert!(tol::coincident(
+            expect_point(&typed[3]),
+            Point::new(2.0 * TYPED.cos(), 2.0 * TYPED.sin(), 0.0),
+            1e-12
+        ));
+        assert!(
+            (expect_point(&typed[3]).0 - expect_point(&typed[0]).0).length() < 0.01,
+            "the typed approximation's last copy lands a hair before the first"
+        );
+        // A zero sweep stacks every copy on the original.
+        let stacked = ring(3, 0.0);
+        assert_eq!(stacked.len(), 3);
+        for copy in &stacked {
+            assert!(
+                tol::coincident(expect_point(copy), Point::new(2.0, 0.0, 0.0), 1e-12),
+                "{copy:?}"
+            );
+        }
         // About an offset frame with a turned normal: the copies keep their
         // distance to the frame's origin.
         let tilted = Plane {
@@ -230,8 +279,9 @@ mod tests {
 
     proptest::proptest! {
         // Every copy keeps the original's distance to the axis and its
-        // height along it; over a full turn consecutive copies are the same
-        // angle apart and the last is one step short of the first.
+        // height along it; over a shorter sweep (these never reach the
+        // full-turn band) the copies FILL it: the second one step in, the
+        // last exactly on the sweep's end.
         #[test]
         fn property_polar_array_spacing(
             count in 1i64..24, radius in 0.5..50.0_f64, z in -5.0..5.0_f64,
@@ -261,6 +311,38 @@ mod tests {
                 let second = expect_point(&copies[1]);
                 let want = Point::new(radius * step.cos(), radius * step.sin(), z);
                 proptest::prop_assert!(tol::coincident(second, want, 1e-9 * radius.max(1.0)));
+            }
+        }
+
+        // The band's inside, which the filled-sweep property never reaches:
+        // over a full turn either way round, copy k sits at k × angle /
+        // count — the last one step short of the first, never on it.
+        #[test]
+        fn property_polar_array_full_turn_divides_the_circle(
+            count in 1i64..24, radius in 0.5..50.0_f64, z in -5.0..5.0_f64,
+            backwards in proptest::bool::ANY,
+        ) {
+            let angle = if backwards { -TAU } else { TAU };
+            let copies = polar_array(
+                &config(),
+                PolarArrayIn {
+                    geometry: point(radius, 0.0, z),
+                    plane: Plane::world_xy(),
+                    count,
+                    angle,
+                },
+            );
+            proptest::prop_assert_eq!(copies.len(), usize::try_from(count).unwrap());
+            #[allow(clippy::cast_precision_loss)] // test counts are tiny
+            let step = angle / count as f64;
+            for (k, copy) in copies.iter().enumerate() {
+                #[allow(clippy::cast_precision_loss)] // test counts are tiny
+                let turn = step * k as f64;
+                let want = Point::new(radius * turn.cos(), radius * turn.sin(), z);
+                proptest::prop_assert!(
+                    tol::coincident(expect_point(copy), want, 1e-9 * radius.max(1.0)),
+                    "{:?} vs {:?}", copy, want
+                );
             }
         }
     }

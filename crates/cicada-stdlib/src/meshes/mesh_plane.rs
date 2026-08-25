@@ -8,7 +8,7 @@ use cicada_geom::frame::orthonormal;
 use cicada_geom::tol;
 use cicada_macros::{Ports, node};
 
-use crate::{checked_floor, checked_size, red};
+use crate::{checked_floor, checked_product, red};
 
 /// Inputs for [`mesh_plane`].
 #[derive(Ports, Clone, Copy, Debug)]
@@ -66,13 +66,13 @@ pub fn mesh_plane(config: &ProjectConfig, input: MeshPlaneIn) -> Mesh {
     // emits (a product), before any buffer is sized.
     let cells_x = checked_floor("mesh_plane", "x_count", input.x_count, 1);
     let cells_y = checked_floor("mesh_plane", "y_count", input.y_count, 1);
-    let vertices = checked_size(
+    let vertices = checked_product(
         "mesh_plane",
         &format!(
             "vertices at {}={}, {}={} ((x + 1) × (y + 1))",
             "x_count", input.x_count, "y_count", input.y_count
         ),
-        (cells_x + 1) * (cells_y + 1),
+        &[cells_x + 1, cells_y + 1],
         // A position (three f64) and two triangles per cell, about two per
         // vertex (three u32 each).
         3 * 8 + 2 * 3 * 4,
@@ -89,7 +89,7 @@ pub fn mesh_plane(config: &ProjectConfig, input: MeshPlaneIn) -> Mesh {
     };
     let (x0, x1) = span(&input.x, "x");
     let (y0, y1) = span(&input.y, "y");
-    #[allow(clippy::cast_possible_truncation)] // checked_size bounded the product to 2^22
+    #[allow(clippy::cast_possible_truncation)] // checked_product bounded the product to 2^22
     let (cells_x, cells_y) = (cells_x as usize, cells_y as usize);
     #[allow(clippy::cast_precision_loss)] // counts stay below 2^22
     let (nx, ny) = (cells_x as f64, cells_y as f64);

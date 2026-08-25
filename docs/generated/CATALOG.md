@@ -175,7 +175,7 @@ one `.cic` snippet per node, solved by CI).
 
 ## Transform
 
-- `compose_xform(xforms: [Xform]) → Xform` — Compose Xform · GH: Compose — one transform equal to applying a list of transforms in order.
+- `compose_xform(xforms: [Xform]) → Xform` — Compose Xform · GH: Compound — one transform equal to applying a list of transforms in order.
 - `construct_xform(rows: [Number]) → Xform` — Construct Xform · GH: Construct Matrix — an affine transform from its 3×4 matrix, row by row. Red when: `rows` has not exactly twelve numbers, or one of them is not finite.
 - `linear_array(geometry: T, direction: Vector, count: Integer) → [T]` — Linear Array · GH: Linear Array — `count` copies stepped along a direction, the first at the original position. Red when: `count < 1`, or when `count` is above the shared ceilings (2^22 slots, or 1 GiB of copies — each copy costed as its slot PLUS the mesh or polyline it transforms, since every copy is a distinct geometry: a million-vertex mesh, 36 MB, is refused at 30 copies; the message names the count, the bytes and the ceiling that bit), or for a `Solid` the OCCT kernel refuses to transform (a `Solid` moves through the kernel — its B-rep geometry is rewritten, never a mesh in disguise).
 - `mirror(geometry: T, plane: Plane = xy_plane) → T` — Mirror · GH: Mirror — reflect geometry across a plane. Red when: the plane is degenerate (zero-length or parallel axes), or for a `Solid` the OCCT kernel refuses to transform (a `Solid` moves through the kernel — its B-rep geometry is rewritten, never a mesh in disguise).

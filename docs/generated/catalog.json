@@ -5903,7 +5903,7 @@
       "pure": true,
       "volatile": false,
       "uses_tolerance": false,
-      "gh": "Compose",
+      "gh": "Compound",
       "examples": [
         "shift = construct_xform(rows=[1.0, 0.0, 0.0, 5.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0])\ndouble = construct_xform(rows=[2.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0])\nfirst = duplicate(item=shift, count=1)\nsecond = duplicate(item=double, count=1)\nboth = concat(a=first, b=second)\nshift_then_double = compose_xform(xforms=both)\ncorner = construct_point(x=1.0, y=0.0, z=0.0)\nplaced = transform(geometry=corner, xform=shift_then_double)"
       ],

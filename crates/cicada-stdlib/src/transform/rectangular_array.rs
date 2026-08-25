@@ -8,7 +8,7 @@ use cicada_geom::transform::Similarity;
 use cicada_macros::{Ports, node};
 
 use super::support::payload_bytes;
-use crate::{checked_floor, checked_size, red};
+use crate::{checked_floor, checked_product, red};
 
 /// Inputs for [`rectangular_array`].
 #[derive(Ports, Clone, Debug)]
@@ -70,17 +70,19 @@ pub fn rectangular_array(config: &ProjectConfig, input: RectangularArrayIn) -> V
     // The floors per count, then the ceiling on the PRODUCT the node emits
     // (docs/08 rule 7: charged on what the value model will hash), every
     // copy costed with its payload like `linear_array`'s — before any copy
-    // is built.
+    // is built. The product is formed by `checked_product`: three counts
+    // the dialect admits can multiply past u128::MAX, and that too is the
+    // node's refusal, never rustc's overflow panic.
     let x = checked_floor("rectangular_array", "x_count", input.x_count, 1);
     let y = checked_floor("rectangular_array", "y_count", input.y_count, 1);
     let z = checked_floor("rectangular_array", "z_count", input.z_count, 1);
-    let total = checked_size(
+    let total = checked_product(
         "rectangular_array",
         &format!(
             "copies at {}={}, {}={}, {}={} (x × y × z)",
             "x_count", input.x_count, "y_count", input.y_count, "z_count", input.z_count
         ),
-        x * y * z,
+        &[x, y, z],
         size_of::<Transformable>() + payload_bytes(&input.geometry),
     );
     let frame = red(orthonormal(&input.plane, config.tol()));
@@ -224,6 +226,21 @@ mod tests {
     )]
     fn rectangular_array_absurd_product_of_modest_counts_is_refused() {
         let _ = grid(Vector::new(1.0, 1.0, 1.0), 100_000, 100_000, 10);
+    }
+
+    // Three counts each under the dialect's 2^53 literal ceiling whose
+    // product is past u128::MAX ((4 × 10^15)^3 = 6.4 × 10^46): the refusal
+    // is the node's typed ceiling naming the counts — before this guard the
+    // bare `x * y * z` was rustc's "attempt to multiply with overflow" (the
+    // C2b review reproduced it on the engine; red either way, but the text
+    // is the contract).
+    #[test]
+    #[should_panic(
+        expected = "rectangular_array: copies at x_count=4000000000000000, y_count=4000000000000000, z_count=4000000000000000 (x × y × z) would be beyond 2^128 — above the 4194304 (2^22) slot ceiling"
+    )]
+    fn rectangular_array_product_past_u128_is_refused_with_the_ceiling_text() {
+        let four_e15 = 4_000_000_000_000_000;
+        let _ = grid(Vector::new(1.0, 1.0, 1.0), four_e15, four_e15, four_e15);
     }
 
     // A fat copy is charged its payload: a million-vertex strip is refused
