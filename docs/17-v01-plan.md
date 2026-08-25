@@ -1205,6 +1205,31 @@ packages in sequence, each reviewed.
   value on one row, GH-like — refused with a notice while any of `min`
   / `max` / `step` is wired; toggled from the node's context menu and
   the inspector. docs/16; `search.spec.ts` and a slider spec.
+  *Implemented 2026-08-24 (`web/src/canvas/sliderShortcut.ts` + the
+  search row, `CicadaNode.tsx`'s `CollapsedSlider`, `collapse.ts`; the
+  server's `set_collapsed` gesture, `NodeView.collapsed`,
+  `viewmodel::collapse_refusal`, `Sidecar::set_collapsed`; docs/13,
+  docs/16, docs/10; vitest on the grammar, the mirror, the collapsed
+  face and the inspector action; session + view-model + protocol +
+  sidecar tests; `search.spec.ts`'s shortcut test and `slider.spec.ts`).
+  What the contract did not foresee, settled the small way: (1) there is
+  no Integer-typed slider node — the `slider` node's ports and output are
+  `Number`, and the checker widens Integer → Number only — so "an
+  `Integer` slider" is GH's integer slider, `step=1.0` on whole-number
+  literals spelled as the canvas spells every Number literal (`1<20` →
+  `slider(value=1.0, min=1.0, max=20.0, step=1.0)`); an `Integer`-output
+  slider is a catalog question for C2, not a canvas one. (2) ONE op
+  needed `place_node` to carry the literals (`params`, additive,
+  docs/13): a `batch` of `place_node` + `set_param`s cannot name the
+  node, since the server assigns the auto-name. (3) The shortcut is not
+  offered in the wire-dropped search — that search wires the new node
+  and the grammar names no port for the wire. (4) `set_collapsed`
+  refuses every non-slider (only sliders collapse in v0.1) and a node
+  placed earlier in the same batch (the view lags the document there);
+  a sidecar-collapsed slider whose bound a later text edit wires is
+  drawn expanded while the wire stands, the flag kept. (5) The
+  collapsed row wears the state badge only for a problem state (red /
+  blocked / off); `data-state` carries the rest.*
 
 Merge: open → launch → canvas (the two CLI tracks both touch `main.rs`
 and AGENTS.md; canvas and open both touch `Viewport.tsx`'s header —

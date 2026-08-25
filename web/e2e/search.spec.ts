@@ -153,3 +153,124 @@ test("a Grasshopper name finds the node that replaces it first, the row says whi
 
   expect(errors, errors.join("\n")).toEqual([]);
 });
+
+// ---- Grasshopper's slider shortcut (wave 4 B4, finding U10: "slider
+// shortcuts like GH's `1<20` and `0.0<0.5<1.0`"). Its own pipeline file:
+// the test above writes START into `search.cic` and the session holds it.
+const SLIDER_PIPELINE = "search_slider.cic";
+const SLIDER_FILE = join(meta.scratch, "examples", SLIDER_PIPELINE);
+
+interface SliderDebugState extends DebugState {
+  history: { depth: number; undo_label: string | null };
+  statuses: Record<string, { state: string; message?: string }>;
+}
+
+async function sliderDebugState(page: Page): Promise<SliderDebugState> {
+  const response = await page.request.get(`/debug/state?token=${TOKEN}&pipeline=${SLIDER_PIPELINE}&wait=true`);
+  expect(response.ok(), await response.text()).toBeTruthy();
+  return (await response.json()) as SliderDebugState;
+}
+
+test("`1<20` and `0.0<0.5<1.0` preview and place a slider as ONE op (the typed precision is the step, whole numbers the integer slider); an impossible range is a notice, not a node", async ({
+  page,
+}) => {
+  writeFileSync(SLIDER_FILE, START);
+
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`);
+  });
+
+  await page.goto(`/?token=${TOKEN}&pipeline=${SLIDER_PIPELINE}`);
+  await expect(page.getByTestId("app")).toBeVisible();
+  await expect(page.locator(".react-flow__node")).toHaveCount(1);
+
+  const pane = page.locator(".react-flow__pane");
+  const box = await pane.boundingBox();
+  if (box === null) throw new Error("no canvas pane");
+  // Each placement lands on the cell double-clicked, so every search opens
+  // on a different empty spot (a double-click on a placed node is not the
+  // pane's).
+  const openSearch = async (at: { x: number; y: number }) => {
+    await pane.dblclick({ position: { x: box.width * at.x, y: box.height * at.y } });
+    const search = page.getByTestId("search-input");
+    await expect(search).toBeVisible();
+    return search;
+  };
+
+  // ---- `1<20`: the row previews the integer slider (step 1); no catalog
+  // rows compete with it. Enter places `slider_1` with the four literals in
+  // port order — ONE op, labelled by the server as a placement.
+  let search = await openSearch({ x: 0.6, y: 0.7 });
+  await search.fill("1<20");
+  const row = page.getByTestId("search-slider");
+  await expect(row).toBeVisible();
+  await expect(row).toHaveAttribute("data-valid", "true");
+  await expect(row).toContainText("integer slider 1.0 … 20.0");
+  await expect(row).toContainText("value 1.0 · step 1.0");
+  await expect(page.getByTestId("search-item")).toHaveCount(0);
+  await search.press("Enter");
+  await expect(page.getByTestId("search-box")).toHaveCount(0);
+  await expect(page.locator(".react-flow__node[data-id='slider_1']")).toBeVisible();
+  let state = await sliderDebugState(page);
+  expect(state.text.split("\n")).toContain("slider_1 = slider(value=1.0, min=1.0, max=20.0, step=1.0)");
+  expect(state.history).toMatchObject({ depth: 1, undo_label: "place slider" });
+  // The placed slider is green, with the step the widget snaps by.
+  await expect.poll(async () => (await sliderDebugState(page)).statuses["slider_1"]?.state).toMatch(/^(done|cached)$/);
+  await expect(page.getByTestId("slider-slider_1")).toHaveAttribute("step", "1");
+  await expect(page.getByTestId("slider-slider_1")).toHaveAttribute("min", "1");
+  await expect(page.getByTestId("slider-slider_1")).toHaveAttribute("max", "20");
+
+  // ---- ONE op: a single Ctrl+Z removes the whole slider, literals and all.
+  await pane.click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("Control+z");
+  await expect(page.locator(".react-flow__node[data-id='slider_1']")).toHaveCount(0);
+  await expect.poll(async () => (await sliderDebugState(page)).text).toBe(START);
+  expect((await sliderDebugState(page)).history.depth).toBe(0);
+
+  // ---- `0.0<0.5<1.0`: min A, value B, max C; one decimal typed → step 0.1.
+  search = await openSearch({ x: 0.6, y: 0.7 });
+  await search.fill("0.0<0.5<1.0");
+  await expect(row).toContainText("slider 0.0 … 1.0");
+  await expect(row).toContainText("value 0.5 · step 0.1");
+  await search.press("Enter");
+  await expect.poll(async () => (await sliderDebugState(page)).text.split("\n")).toContain(
+    "slider_1 = slider(value=0.5, min=0.0, max=1.0, step=0.1)",
+  );
+
+  // ---- negatives, whitespace, and the most decimals typed: `-1.5<0<1.5`.
+  search = await openSearch({ x: 0.3, y: 0.75 });
+  await search.fill(" -1.5 < 0 < 1.5 ");
+  await expect(row).toContainText("slider -1.5 … 1.5");
+  await search.press("Enter");
+  await expect.poll(async () => (await sliderDebugState(page)).text.split("\n")).toContain(
+    "slider_2 = slider(value=0.0, min=-1.5, max=1.5, step=0.1)",
+  );
+  state = await sliderDebugState(page);
+  expect(state.history.depth).toBe(2);
+  await expect.poll(async () => (await sliderDebugState(page)).statuses["slider_2"]?.state).toMatch(/^(done|cached)$/);
+
+  // ---- an impossible range: the row says why in place of the preview,
+  // Enter is a notice and the box stays open; nothing is placed.
+  search = await openSearch({ x: 0.85, y: 0.25 });
+  await search.fill("5<2");
+  await expect(row).toHaveAttribute("data-valid", "false");
+  await expect(row).toContainText("min 5 must be below max 2");
+  await search.press("Enter");
+  await expect(page.getByTestId("notices")).toContainText("slider shortcut: min 5 must be below max 2");
+  await expect(page.getByTestId("search-box")).toBeVisible();
+  await search.fill("0<7<5");
+  await expect(row).toContainText("value 7 is outside 0 … 5");
+  // A partial shortcut is an ordinary (empty) search again.
+  await search.fill("1<");
+  await expect(row).toHaveCount(0);
+  await expect(page.locator(".cv-search-empty")).toContainText('no node matches "1<"');
+  await search.press("Escape");
+  await expect(page.getByTestId("search-box")).toHaveCount(0);
+  state = await sliderDebugState(page);
+  expect(state.history.depth, "refusals place nothing").toBe(2);
+  expect(state.graph.nodes.map((n) => n.name).sort()).toEqual(["size", "slider_1", "slider_2"]);
+
+  expect(errors, errors.join("\n")).toEqual([]);
+});

@@ -50,7 +50,8 @@ The edit flow is **intent → authoritative delta**:
    round-trip table: `place_node`, `connect`, `disconnect`,
    `accept_lift`, `set_param`, `rename`, `delete_node`,
    `toggle_disable` (the `#off` prefix; the delta says `disable x` /
-   `enable x`), `move_node` (layout), `set_preview`, `undo`, `redo`,
+   `enable x`), `move_node` (layout), `set_preview`, `set_collapsed`
+   (layout too — the collapsed slider, wave 4 B4), `undo`, `redo`,
    `batch` (several gestures as one op), `apply_text` (whole files,
    agents) — see §Undo/redo for the last four. The transport controls
    (`transport_play` … `transport_reset`, §Animation transport) are
@@ -79,6 +80,34 @@ written and parsed), `default` (the catalog rendering) and, since B3,
 server (`viewmodel.rs::default_json`; the macro spells a Boolean
 default `true`, the chip says `True`), so no client re-derives the
 catalog's spelling. Additive; the protocol version is unchanged.
+
+Two additive pieces for the sliders (wave 4 B4, 2026-08-24; docs/16
+§Canvas conventions — the GH slider shortcut and the collapsed slider):
+
+- **`place_node` carries `params`** — `[{port, value}]`, absent = none:
+  literals the placement writes into the new node as it lands, each
+  applied exactly as a `set_param` on that port (one literal token, the
+  spec-order insertion, transport-driven ports refused) BEFORE any
+  `connect`, so the search's `1<20` is ONE op — `place slider` — and one
+  undo removes the slider whole. The `batch` path could not do this: the
+  server assigns the auto-name (`slider_1`) that the later `set_param`s
+  would have to name. A param naming a port the node lacks, or a value
+  that is not one literal, refuses the whole placement (`unknown` /
+  `refused`; no node, no cell, no op).
+- **`set_collapsed {node, collapsed}`** writes the sidecar's existing
+  `collapsed` override as an op like a move (`collapse x` / `expand x`;
+  sidecar only, no solve; `false` clears the override, so an expanded
+  slider has no entry). The view-model carries it as `NodeView.collapsed`
+  (omitted when false) with `size` already `[w, 1]`. THE rule is the
+  view-model's `collapse_refusal`: only a slider, and only while `min`,
+  `max` and `step` are literals — the server refuses (`refused`) a
+  non-slider and a slider with a wired bound ("`bound`: max is wired — a
+  slider collapses only while min, max and step are literals (the
+  collapsed row has no port for a wire)"), and a node placed earlier in
+  the same `batch` (the view lags the document there); the client only
+  MIRRORS the reason as a hint (`collapseHint`). A slider whose bound a
+  later text edit wires is drawn expanded while the wire stands — the
+  flag stays in the sidecar and takes effect again when the wire goes.
 
 **Slider drags get a dedicated ephemeral path**: during the drag, the
 client streams `param_preview` messages (not ops, not undoable); the

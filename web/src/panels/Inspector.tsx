@@ -15,6 +15,7 @@ import type {
   ValueSummary,
   WireView,
 } from "../protocol/messages";
+import { collapseHint } from "../canvas/collapse";
 import { drivenTitle, outputDoc, portTitle, transportDrivenSignal } from "../canvas/grid";
 import { LiteralChip } from "../canvas/LiteralChip";
 import { chipFace } from "../canvas/literalFace";
@@ -170,6 +171,11 @@ function NodeInspect({ name, extra }: { name: string; extra: number }) {
   const remove = () => send({ type: "delete_node", payload: { node: name } });
   const togglePreview = () => send({ type: "set_preview", payload: { node: name, on: !node.preview } });
   const toggleDisable = () => send({ type: "toggle_disable", payload: { node: name } });
+  // Collapse / expand a slider (wave 4 B4): the server decides and refuses
+  // (a wired bound is a notice); the title mirrors its reason beforehand.
+  const collapsed = node.collapsed === true;
+  const collapseBlock = node.param?.kind === "slider" && !collapsed ? collapseHint(node) : null;
+  const toggleCollapsed = () => send({ type: "set_collapsed", payload: { node: name, collapsed: !collapsed } });
   const run = async () => {
     setRunBusy(true);
     useCicada.getState().clearRunNotice();
@@ -356,6 +362,23 @@ function NodeInspect({ name, extra }: { name: string; extra: number }) {
           >
             {off ? "enable" : "disable"}
           </button>
+          {node.param?.kind === "slider" && (
+            <button
+              disabled={!writer}
+              title={
+                collapsed
+                  ? "expand to the full node — header and one row per port"
+                  : collapseBlock === null
+                    ? "one grid unit: name, track and value on one row (GH-like)"
+                    : `${collapseBlock} — a slider collapses only while min, max and step are literals`
+              }
+              onClick={toggleCollapsed}
+              data-testid="action-collapse"
+              data-blocked={collapseBlock ?? undefined}
+            >
+              {collapsed ? "expand" : "collapse"}
+            </button>
+          )}
           <button disabled={!writer} onClick={rename} data-testid="action-rename">
             rename
           </button>

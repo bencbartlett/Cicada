@@ -9,7 +9,11 @@
  * outline, a git change badge when the binding differs from HEAD (docs/16
  * canvas badges; doc 10's status strip markers — added / modified /
  * renamed; removed nodes live only in the Git tab), and — from the near
- * zoom tier up (`showsPortValues`) — output value summaries below.
+ * zoom tier up (`showsPortValues`) — output value summaries below. A
+ * slider the sidecar collapses (`NodeView.collapsed`, wave 4 B4) is ONE
+ * row instead — name · track · value · its output handle, GH-like
+ * (`CollapsedSlider`): no header, no port rows, since the server collapses
+ * only a slider whose bounds are literals.
  *
  * Everything dynamic (status, probe verdicts, values, dirty flash, picks) is
  * read from the store per node so a status tick never rebuilds the graph.
@@ -18,7 +22,15 @@ import { Handle, Position, useConnection, type NodeProps } from "@xyflow/react";
 import { memo, useEffect, useState } from "react";
 import { kindColor } from "../kinds";
 import { markerBadge } from "../panels/gitFormat";
-import type { DrivenSignal, InputView, NodeView, OutputView, ProbeVerdict, ValueSummary } from "../protocol/messages";
+import type {
+  DrivenSignal,
+  InputView,
+  NodeView,
+  OutputView,
+  ParamView,
+  ProbeVerdict,
+  ValueSummary,
+} from "../protocol/messages";
 import { literalPortKind } from "../state/literals";
 import { canWrite, useCicada } from "../state/store";
 import { sendWrite, type CanvasNode } from "./flow";
@@ -298,6 +310,76 @@ function GhostNode({ view, unit }: { view: NodeView; unit: number }) {
   );
 }
 
+/**
+ * The collapsed slider (docs/16 §Canvas conventions, wave 4 B4 — finding
+ * U11): one grid unit tall, GH-like — the name, the same slider widget as
+ * the expanded face (drag protocol, pending chip and all), and the output
+ * handle at the right edge. No header and no port rows: the server
+ * collapses only a slider whose `min` / `max` / `step` are literals, so
+ * nothing is wired INTO it and no input handle is owed. The state badge is
+ * shown only for a problem (red, blocked, off) — the value says the rest —
+ * and `data-state` carries it always.
+ */
+function CollapsedSlider({
+  view,
+  param,
+  classes,
+  badge,
+  writer,
+  unit,
+  gitChange,
+  status,
+  title,
+}: {
+  view: NodeView;
+  param: ParamView;
+  classes: string[];
+  badge: { label: string; className: string; title: string };
+  writer: boolean;
+  unit: number;
+  gitChange: string | undefined;
+  status: string;
+  title: string;
+}) {
+  const out = view.outputs[0];
+  const problem = badge.className === "state-red" || badge.className === "state-blocked" || badge.className === "state-off";
+  return (
+    <div
+      className={[...classes, "cn-collapsed"].join(" ")}
+      style={{ width: view.size[0] * unit, height: view.size[1] * unit, ["--unit" as string]: `${unit}px` }}
+      title={title}
+      data-node={view.name}
+      data-state={status}
+      data-git={gitChange}
+      data-collapsed="true"
+    >
+      <div className="cn-collapsed-row">
+        <span className="cn-collapsed-name" data-testid={`collapsed-${view.name}`}>
+          {view.name}
+        </span>
+        <ParamWidget view={view} param={param} writer={writer} />
+        <span className="cn-badges">
+          <GitBadge name={view.name} />
+          {problem && (
+            <span className={`cn-state ${badge.className}`} title={badge.title} data-testid={`state-${view.name}`}>
+              {badge.label}
+            </span>
+          )}
+        </span>
+        {out !== undefined && (
+          <Handle
+            type="source"
+            position={Position.Right}
+            id={out.name}
+            className={handleClass(out.base, true, false)}
+            style={{ ["--port-color" as string]: kindColor(out.base) }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
   const view = data.view;
   const name = view.name;
@@ -392,6 +474,24 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
     event.stopPropagation();
     sendWrite({ type: "set_preview", payload: { node: name, on: !view.preview } });
   };
+
+  // The collapsed slider: the server says so only for a slider it can
+  // collapse (`NodeView.collapsed`; its `size` is already one unit).
+  if (view.collapsed === true && view.param?.kind === "slider") {
+    return (
+      <CollapsedSlider
+        view={view}
+        param={view.param}
+        classes={classes}
+        badge={badge}
+        writer={editable}
+        unit={unit}
+        gitChange={gitChange}
+        status={disabled ? "off" : (status?.state ?? "idle")}
+        title={headerTitle}
+      />
+    );
+  }
 
   return (
     <div

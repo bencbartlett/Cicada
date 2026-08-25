@@ -227,7 +227,8 @@ Every canvas gesture is specified as a text edit:
 | Delete node | Delete its statement; downstream references become red unknown-name errors — **never cascade deletion** |
 | Toggle disable | Prefix / unprefix the statement with `#off ` |
 | Rename node | Rename binding + all references + sidecar key, atomically |
-| Reorder ports / move / group / recolor / toggle preview | Sidecar only; text untouched |
+| Reorder ports / move / group / recolor / toggle preview / collapse or expand a slider (the `collapsed` override, wave 4 B4) | Sidecar only; text untouched |
+| The GH slider shortcut `1<20` / `0.0<0.5<1.0` in search-to-place (wave 4 B4) | Place node + its four literals in spec order, as ONE op: `slider_1 = slider(value=1.0, min=1.0, max=20.0, step=1.0)` |
 
 Writer discipline:
 

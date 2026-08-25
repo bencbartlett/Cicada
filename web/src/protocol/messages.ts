@@ -245,6 +245,14 @@ export interface NodeView {
   /** Size [w, h] in units. */
   size: [number, number];
   manual: boolean;
+  /**
+   * Drawn collapsed (wave 4 B4): one grid unit tall — name, track and value
+   * on one row, GH-like. The sidecar's `collapsed` override as the server
+   * honours it: only a slider, and only while `min` / `max` / `step` are
+   * literals (`viewmodel::collapse_refusal`); `size` already reads `[w, 1]`
+   * then. Omitted when false.
+   */
+  collapsed?: boolean;
 }
 
 export interface WireView {
@@ -754,6 +762,19 @@ export interface ConnectSpec {
 }
 
 /**
+ * One literal a `place_node` writes into the new node as it lands (wave 4
+ * B4 — the slider shortcut `1<20` is `slider(value=1.0, min=1.0, max=20.0,
+ * step=1.0)` as ONE op; a `batch` of place + `set_param`s cannot be, since
+ * the server assigns the auto-name the later ops would have to know).
+ * Applied as a `set_param` on that port: one literal token, spec-order
+ * insertion; a refused one refuses the whole placement.
+ */
+export interface ParamSpec {
+  port: string;
+  value: string;
+}
+
+/**
  * A canvas write gesture — one that edits the text or sidecar in place and
  * may be an element of a `batch` (mirrors `protocol::is_gesture`). The
  * server validates this at runtime; the type narrows it at compile time so
@@ -763,7 +784,13 @@ export interface ConnectSpec {
 export type GestureMessage =
   | {
       type: "place_node";
-      payload: { func: string; cell?: [number, number] | null; connect?: ConnectSpec | null };
+      payload: {
+        func: string;
+        cell?: [number, number] | null;
+        connect?: ConnectSpec | null;
+        /** Literals written into the new node in the same op (absent = none). */
+        params?: ParamSpec[];
+      };
     }
   | { type: "connect"; payload: { from: WireEnd; to: WireEnd; lift?: boolean } }
   | { type: "disconnect"; payload: { to: WireEnd } }
@@ -779,7 +806,15 @@ export type GestureMessage =
    */
   | { type: "toggle_disable"; payload: { node: string } }
   | { type: "move_node"; payload: { node: string; cell?: [number, number] | null } }
-  | { type: "set_preview"; payload: { node: string; on?: boolean | null } };
+  | { type: "set_preview"; payload: { node: string; on?: boolean | null } }
+  /**
+   * Collapse or expand a slider (sidecar only — the `collapsed` override;
+   * wave 4 B4): an op like a move, labelled `collapse x` / `expand x`.
+   * Refused (kind `refused`) for a node that is not a slider and for a
+   * slider any of whose `min` / `max` / `step` is wired — the server
+   * decides; the client mirrors the reason as a hint (`collapseHint`).
+   */
+  | { type: "set_collapsed"; payload: { node: string; collapsed: boolean } };
 
 export type ClientMessage =
   | { type: "hello"; payload: { v: number } }
@@ -899,6 +934,7 @@ export function isGesture(message: ClientMessage): message is GestureMessage {
     case "toggle_disable":
     case "move_node":
     case "set_preview":
+    case "set_collapsed":
       return true;
     default:
       return false;

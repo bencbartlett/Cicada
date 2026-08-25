@@ -42,6 +42,7 @@ import { canWrite, useCicada, writeBlockReason } from "../state/store";
 import "./canvas.css";
 import { CicadaEdge } from "./CicadaEdge";
 import { CicadaNode } from "./CicadaNode";
+import { collapseHint } from "./collapse";
 import { ConnectionLine } from "./ConnectionLine";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
 import {
@@ -522,6 +523,22 @@ function CanvasInner() {
             hint: displayable ? "P" : "no displayable output",
             onClick: () => sendWrite({ type: "set_preview", payload: { node: view.name, on: !view.preview } }),
           },
+          // A slider collapses to one row (wave 4 B4; docs/16). The server
+          // decides and refuses — a wired min / max / step is a notice —
+          // and the hint mirrors its reason, so the user reads why first.
+          ...(view.param?.kind === "slider"
+            ? [
+                {
+                  label: view.collapsed === true ? "expand" : "collapse",
+                  hint: view.collapsed === true ? "full node" : (collapseHint(view) ?? "one row"),
+                  onClick: () =>
+                    sendWrite({
+                      type: "set_collapsed",
+                      payload: { node: view.name, collapsed: view.collapsed !== true },
+                    }),
+                },
+              ]
+            : []),
           {
             label: "rename…",
             onClick: () => {

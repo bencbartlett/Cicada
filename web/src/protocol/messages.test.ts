@@ -19,6 +19,13 @@ import {
 
 const gestures: GestureMessage[] = [
   { type: "place_node", payload: { func: "box" } },
+  // Wave 4 B4: a placement that writes literals as it lands (the slider
+  // shortcut), and the collapse toggle — both gestures, both batch elements.
+  {
+    type: "place_node",
+    payload: { func: "slider", cell: [2, 3], params: [{ port: "value", value: "1.0" }, { port: "max", value: "20.0" }] },
+  },
+  { type: "set_collapsed", payload: { node: "size", collapsed: true } },
   { type: "connect", payload: { from: { node: "a", port: "out" }, to: { node: "b", port: "x" } } },
   { type: "disconnect", payload: { to: { node: "b", port: "x" } } },
   { type: "accept_lift", payload: { node: "b", port: "x" } },

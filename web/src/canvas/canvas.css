@@ -729,6 +729,50 @@
   margin: 0;
 }
 
+/* the collapsed slider (wave 4 B4, docs/16 §Canvas conventions): one grid
+   unit tall — name · track · value · the output handle on one row, GH-like;
+   no header, no port rows (its bounds are literals by the server's rule, so
+   nothing is wired into it) */
+.cn.cn-collapsed {
+  justify-content: center;
+}
+
+.cn-collapsed-row {
+  position: relative;
+  height: var(--unit);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px 0 8px;
+  min-width: 0;
+}
+
+.cn-collapsed-name {
+  font-weight: 700;
+  font-size: 11px;
+  flex: 0 1 auto;
+  min-width: 2em;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cn-collapsed .cn-widget {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: auto;
+  border-top: none;
+  padding: 0;
+}
+
+.cn-collapsed .cn-badges {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 /* progress bar (running nodes) */
 .cn-progress {
   position: absolute;
@@ -1099,6 +1143,18 @@
 .cv-search-empty {
   padding: 6px 10px;
   font-size: 11px;
+}
+
+/* the slider shortcut's row (wave 4 B4): `1<20` previews the slider it
+   makes; an impossible range says why in the error color */
+.cv-search-slider .cv-search-detail {
+  font-size: 10px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.cv-search-slider.invalid .cv-search-detail {
+  color: var(--error);
 }
 
 .cv-menu {
