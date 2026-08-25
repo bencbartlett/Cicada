@@ -1979,7 +1979,8 @@ impl Session {
                         source: Box::new(IntentError::Protocol(
                             "not a canvas write gesture — a batch holds place_node / connect / \
                              disconnect / accept_lift / set_param / rename / delete_node / \
-                             toggle_disable / move_node / set_preview / set_collapsed only"
+                             toggle_disable / move_node / set_preview / set_collapsed / \
+                             set_scrub only"
                                 .to_owned(),
                         )),
                     });
@@ -3058,9 +3059,16 @@ impl Session {
                 },
             );
         }
-        // Esc also reached the worker through the loop's cancel (its idle
-        // token); it re-decides — and parks if a position was cut short.
-        self.core.wake_scrub();
+        // "Stop solving" includes the warming, whatever the worker was doing
+        // at that instant: a position mid-solve was cut short by the loop's
+        // cancel (its idle token) and parks through `scrub_settle`; one
+        // decided but not yet submitted is withheld before its solve; one
+        // between positions (a dry run, a decision) takes nothing next. All
+        // three park the worker here, explicitly, until a real generation
+        // newer than anything issued so far completes — the user's next
+        // action. (The first cut parked only the mid-solve case and let the
+        // other two take the next position — review finding, 2026-08-24.)
+        self.core.park_scrub(self.solve.last_generation());
     }
 
     // ------------------------------------------------------- transport --
@@ -3526,11 +3534,12 @@ enum ScrubWorker {
     /// its last tick — any slider's, not only a scrubbed one's) or the
     /// transport is playing.
     Blocked,
-    /// A position came back pre-empted — by a real generation, or by Esc
-    /// — and the worker waits for a real generation newer than the
-    /// pre-empted solve to complete. After an edit or a drag that is the
-    /// next moment; after Esc it is the user's next action: "stop solving"
-    /// includes the warming.
+    /// The worker waits for a real generation newer than a given one to
+    /// complete: a position came back pre-empted by a real generation
+    /// (newer than the pre-empted solve — after an edit or a drag that is
+    /// the next moment), or Esc landed ([`Session::cancel`] parks it
+    /// outright, a position mid-solve or not: "stop solving" includes the
+    /// warming, and the next real generation is the user's next action).
     Parked,
 }
 
@@ -3608,6 +3617,10 @@ enum Settled {
     Red,
     /// Pre-empted; `generation` is the cancelled hypothetical's number.
     Preempted { generation: u64 },
+    /// Withheld: the worker found itself parked (Esc) between the
+    /// position's decision and its solve — nothing ran, nothing is
+    /// recorded, the position is next again when the worker resumes.
+    Withheld,
 }
 
 /// The scrub worker (`cicada-scrub`; docs/12 §Speculative warming —
@@ -3669,6 +3682,17 @@ impl Core {
     /// queues, a drag's end, a pause, a completed generation, shutdown).
     fn wake_scrub(&self) {
         let mut shared = self.lock_scrub();
+        shared.wakes += 1;
+        self.scrub_wake.notify_all();
+    }
+
+    /// Park the scrub worker until a real generation numbered above
+    /// `until` completes (Esc: `until` is the newest generation issued, so
+    /// the unparking one is the user's next action), and wake it so its
+    /// next decision reads "parked". Never lowers an existing park.
+    fn park_scrub(&self, until: u64) {
+        let mut shared = self.lock_scrub();
+        shared.parked_until = Some(shared.parked_until.map_or(until, |u| u.max(until)));
         shared.wakes += 1;
         self.scrub_wake.notify_all();
     }
@@ -3829,7 +3853,16 @@ impl Core {
         if let Some(gate) = &self.config.scrub_gate {
             gate(node, index);
         }
-        // 3. The idle-class solve — pre-empted by any real generation or Esc.
+        // 3. Esc may have landed since this position was decided: the worker
+        //    is parked and submits nothing — the position is next again
+        //    when a real generation unparks it (`Settled::Withheld`). The
+        //    scrub guard drops before `scrub_settle` takes `inner` (lock
+        //    order: `inner`, then `scrub`).
+        let parked = self.lock_scrub().parked_until.is_some();
+        if parked {
+            return self.scrub_settle(id, index, Settled::Withheld);
+        }
+        // 4. The idle-class solve — pre-empted by any real generation or Esc.
         let solve = self
             .solve
             .lock()
@@ -3902,8 +3935,14 @@ impl Core {
         {
             // Parked until a real generation newer than the pre-empted solve
             // completes — unless one already has: a tiny real generation can
-            // finish before the cancelled solve returns from its chunk.
-            shared.parked_until = Some(generation);
+            // finish before the cancelled solve returns from its chunk. An
+            // Esc that already parked the worker further out (the newest
+            // issued generation) is never lowered.
+            shared.parked_until = Some(
+                shared
+                    .parked_until
+                    .map_or(generation, |until| until.max(generation)),
+            );
         }
         let name = inner
             .scrub
@@ -3916,13 +3955,13 @@ impl Core {
                         queue.record_warm(index, bytes, self.config.scrub_byte_cap);
                     }
                     Settled::Red => queue.record_red(index),
-                    Settled::Preempted { .. } => queue.record_preempted(),
+                    Settled::Preempted { .. } | Settled::Withheld => queue.record_preempted(),
                 }
                 queue.node.clone()
             });
         if let Some(name) = name {
             Self::overlay_scrub(&mut inner, &name);
-            if !matches!(outcome, Settled::Preempted { .. }) {
+            if !matches!(outcome, Settled::Preempted { .. } | Settled::Withheld) {
                 shared.dirty.insert(name);
             }
         }

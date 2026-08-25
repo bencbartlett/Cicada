@@ -1262,8 +1262,9 @@ pub enum ClientMessage {
     /// new view and the warming starts from it. Refused (kind `refused`)
     /// with the reason for a node that is not a slider, and — when `on` —
     /// for an ineligible slider: `too many positions (51 > 32)`, `min is
-    /// wired — …`, `step is 0 — …` (`crate::scrub::eligibility`, read off
-    /// the DOCUMENT so a `batch` sees what it wired earlier). The client
+    /// wired — …`, `step is 0 — …`, `value is wired — a wired slider has
+    /// no widget to scrub` (`crate::scrub::eligibility`, read off the
+    /// DOCUMENT so a `batch` sees what it wired earlier). The client
     /// computes nothing: the view's `scrub.ineligible` is the same reason.
     SetScrub {
         /// The slider's binding.

@@ -170,17 +170,8 @@ step positions. The TEXT carries the opt-in, never the sidecar — it is
 part of the model, diffable and reviewable like any kwarg — and the
 canvas toggle (`set_scrub`) writes or removes that one kwarg. A slider
 is eligible only while `min`, `max` and `step` are literals, `step > 0`
-and the range has at most 32 positions; a hand-written `scrub=True` on
-any other slider is legal text that warms nothing (the canvas says why).
-
-**Scrub caching is a kwarg too** (v0.1 item 5, 2026-08-24; docs/12
-§Speculative warming): `amps = slider(value=12.0, min=0.0, max=30.0,
-step=0.5, scrub=True)` opts the slider into idle-time warming of its
-step positions. The TEXT carries the opt-in, never the sidecar — it is
-part of the model, diffable and reviewable like any kwarg — and the
-canvas toggle (`set_scrub`) writes or removes that one kwarg. A slider
-is eligible only while `min`, `max` and `step` are literals, `step > 0`
-and the range has at most 32 positions; a hand-written `scrub=True` on
+and the range has at most `SCRUB_MAX_POSITIONS` positions (32 at v0.1;
+DECISIONS.md row 39 owns the number); a hand-written `scrub=True` on
 any other slider is legal text that warms nothing (the canvas says why).
 
 ### 4 · Expressions — operator RHS is an Expression node
@@ -248,7 +239,6 @@ Every canvas gesture is specified as a text edit:
 | Toggle disable | Prefix / unprefix the statement with `#off ` |
 | Rename node | Rename binding + all references + sidecar key, atomically |
 | Reorder ports / move / group / recolor / toggle preview / collapse or expand a slider (the `collapsed` override, wave 4 B4) | Sidecar only; text untouched |
-| Scrub-cache a slider / stop (`set_scrub`, v0.1 item 5) | Insert `scrub=True` at its spec-order position (after `step`), or rewrite it; off REMOVES the kwarg with one adjacent separator — the default says the same thing and the file stays as it was written. One token either way, one op, undoable |
 | Scrub-cache a slider / stop (`set_scrub`, v0.1 item 5) | Insert `scrub=True` at its spec-order position (after `step`), or rewrite it; off REMOVES the kwarg with one adjacent separator — the default says the same thing and the file stays as it was written. One token either way, one op, undoable |
 | The GH slider shortcut `1<20` / `0.0<0.5<1.0` in search-to-place (wave 4 B4) | Place node + its four literals in spec order, as ONE op: `slider_1 = slider(value=1.0, min=1.0, max=20.0, step=1.0)` |
 

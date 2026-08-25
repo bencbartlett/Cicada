@@ -459,12 +459,27 @@ No UI rides it yet; items 4 and 5 are its consumers.)*
   — hits confirm in the dry run, nothing re-solves); a sidecar-only
   change keeps the queues. Idle time is when nothing real is happening:
   a live drag on any slider (within `DRAG_GAP_MS`) or transport playback
-  blocks the worker; a position pre-empted by a real generation or Esc
-  (its idle token cancelled) PARKS it until a real generation newer than
-  the pre-empted solve completes — after an edit or a drag that is the
-  next moment, after Esc it is the user's next action ("stop solving"
-  includes the warming). A position whose solve goes red is visited once
-  and not retried within the queue's life. Protocol (docs/13): every
+  blocks the worker; a position pre-empted by a real generation (its idle
+  token cancelled) PARKS it until a real generation newer than the
+  pre-empted solve completes — after an edit or a drag that is the next
+  moment; Esc parks it OUTRIGHT, whatever it was doing — a position
+  mid-solve is cut short, one decided but not yet submitted is withheld
+  (next again on resume), one between positions takes nothing next —
+  until a real generation newer than anything issued at the Esc
+  completes: the user's next action ("stop solving" includes the
+  warming). A position whose solve goes red is visited once and not
+  retried within the queue's life. `warmed` means the position's
+  MEMOIZABLE cone is stored: a `volatile` node (`clock`) recomputes in
+  every generation by design — it is never memoized — while everything
+  downstream of its unchanged value stays a hit, so a drag across warm
+  positions computes the volatile node alone. Beside the slider's cone
+  (feeding the same `add`) it leaves the dry run exact — the committed
+  value is a hit as ever; inside the cone (`clock(speed=size)`) it is a
+  miss in every dry run, so no position is confirmed without a solve and
+  each solves once. Either way `slider_loop.mjs --expect warm`, which
+  counts every computed node, fails on such a pipeline by construction
+  (the session test `a_volatile_node_in_the_cone_keeps_the_rest_warm`
+  pins both shapes). Protocol (docs/13): every
   slider's `ParamView.scrub`, the coalesced `scrub_progress` (≤ 10 Hz),
   `set_scrub` with typed refusals, `/debug/state.scrub`. Measured on
   `examples/02-solids.cic` (`size` 0.5…5.0 by 0.25 = 19 positions, the

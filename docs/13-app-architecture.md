@@ -197,9 +197,11 @@ warming; DECISIONS.md row 39) — additive, `PROTOCOL_VERSION` unchanged:
   the call at its spec-order position, `off` removes the kwarg. Refused
   (`refused`) for a non-slider ("`x` is not a slider — only sliders
   scrub-cache") and, when `on`, for an ineligible slider with the reason
-  above ("`x`: too many positions (51 > 32)"); `unknown` for a name
-  nobody bound; the rule is `scrub::eligibility`, read off the DOCUMENT
-  so a batch sees what it wired earlier. Turning an ineligible slider's
+  above ("`x`: too many positions (51 > 32)"; a slider whose `value` is
+  wired has no widget and says so — "`x`: value is wired — a wired
+  slider has no widget to scrub"); `unknown` for a name nobody bound;
+  the rule is `scrub::eligibility`, read off the DOCUMENT so a batch
+  sees what it wired earlier. Turning an ineligible slider's
   hand-written `scrub=True` off is always allowed.
 - `/debug/state.scrub` = `{state: idle | working | blocked | parked,
   parked_until, byte_cap, max_positions, queues: [{node, port, id,

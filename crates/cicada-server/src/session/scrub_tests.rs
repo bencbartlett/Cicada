@@ -227,6 +227,7 @@ fn set_scrub_writes_the_kwarg_refuses_the_ineligible_and_undoes() {
          b = slider(value=0.5, min=0.0, max=1.0, step=0.02)\n\
          c = slider(value=0.5, min=0.0, max=n, step=0.1)\n\
          d = slider(value=0.5)\n\
+         w = slider(value=n, min=0.0, max=5.0, step=0.5)\n\
          span = construct_domain(start=0.0, end=a)\n",
     );
     let pipeline = config.pipeline.clone();
@@ -277,6 +278,7 @@ fn set_scrub_writes_the_kwarg_refuses_the_ineligible_and_undoes() {
     set_scrub(&session, id, "b", true);
     set_scrub(&session, id, "c", true);
     set_scrub(&session, id, "d", true);
+    set_scrub(&session, id, "w", true);
     set_scrub(&session, id, "n", true);
     set_scrub(&session, id, "n", false);
     set_scrub(&session, id, "nope", true);
@@ -296,6 +298,12 @@ fn set_scrub_writes_the_kwarg_refuses_the_ineligible_and_undoes() {
             (
                 "refused".to_owned(),
                 "`d`: step is 0 — a continuous slider has no positions to warm".to_owned()
+            ),
+            // A wired `value` IS a slider — one with no widget; not "is not
+            // a slider" (review finding, 2026-08-24).
+            (
+                "refused".to_owned(),
+                "`w`: value is wired — a wired slider has no widget to scrub".to_owned()
             ),
             (
                 "refused".to_owned(),
@@ -775,4 +783,318 @@ fn several_sliders_warm_round_robin_and_all_finish() {
     );
     // 3 + 4 positions, two of them (the committed values) hits from the load.
     assert_eq!(hypothetical_solves(&session), 5);
+}
+
+// Esc parks the warming OUTRIGHT — "stop solving" includes it — whether or
+// not a position was mid-solve. Here the worker is held on the gate with a
+// position decided but not yet submitted when Esc lands: released, it
+// submits nothing (the position is withheld and next again), the worker
+// parks on the newest generation issued, a second Esc changes nothing, and
+// the user's next action — a tick, a real generation above that number —
+// unparks it; the queue then finishes. (The first cut parked only a solve
+// cut short, so an Esc between positions let the worker take the next one
+// at once — review finding, 2026-08-24.)
+#[test]
+fn esc_parks_the_warming_until_the_next_real_generation() {
+    let (_dir, config) = project(PIPELINE);
+    let (session, entered, release) = open_gated(config);
+    session.wait_idle();
+    let (node, index) = entered.recv().unwrap();
+    assert_eq!((node.as_str(), index), ("size", 4), "2.5 is the first miss");
+    let (tx, mut rx) = unbounded_channel();
+    let (id, _) = session.connect(ClientLanes::merged(tx));
+    let _ = drain(&mut rx);
+    let newest = session.solve.last_generation();
+    assert!(newest >= 1, "the load's generation was issued");
+    // Esc lands while the worker stands between its decision and its solve.
+    session.handle(id, None, ClientMessage::Cancel {});
+    // Released, the held position is withheld — no solve — and the worker
+    // parks instead of taking the next position.
+    release.send(()).unwrap();
+    session.wait_scrub();
+    let state = session.debug_state(false);
+    assert_eq!(state["scrub"]["state"], "parked", "{}", state["scrub"]);
+    assert_eq!(state["scrub"]["parked_until"], newest);
+    let q = queue_of(&state, "size");
+    assert_eq!(q["warmed"], serde_json::json!([3]), "only the load's hit");
+    assert_eq!(q["in_flight"], serde_json::Value::Null);
+    assert_eq!(q["next"], 4, "the withheld position is next again");
+    assert_eq!(q["warming"], true, "work remains — the bar keeps pulsing");
+    assert_eq!(
+        hypothetical_solves(&session),
+        0,
+        "nothing was submitted after Esc"
+    );
+    // A second Esc: still parked, on the same number.
+    session.handle(id, None, ClientMessage::Cancel {});
+    session.wait_scrub();
+    let state = session.debug_state(false);
+    assert_eq!(state["scrub"]["state"], "parked");
+    assert_eq!(state["scrub"]["parked_until"], newest);
+    // The user's next action — a tick on a cold value — is a real
+    // generation numbered above the Esc's: it unparks the worker; the
+    // pointer coming up ends the drag that would otherwise block it.
+    session.handle(
+        id,
+        None,
+        ClientMessage::ParamPreview {
+            node: "size".into(),
+            port: Some("value".into()),
+            value: "1.0".into(),
+        },
+    );
+    session.wait_idle();
+    assert!(max_generation(&session) > newest);
+    session.handle(
+        id,
+        None,
+        ClientMessage::EndDrag {
+            node: "size".into(),
+            port: Some("value".into()),
+        },
+    );
+    for _ in 0..20 {
+        let _ = release.send(());
+    }
+    session.wait_scrub();
+    let state = session.debug_state(false);
+    assert_eq!(state["scrub"]["state"], "idle", "{}", state["scrub"]);
+    assert_eq!(state["scrub"]["parked_until"], serde_json::Value::Null);
+    assert_eq!(
+        queue_of(&state, "size")["warmed"],
+        serde_json::json!([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+    );
+    // Eight solves: ten positions, 2.0 (the load) and 1.0 (the tick) hits.
+    assert_eq!(hypothetical_solves(&session), 8);
+}
+
+// `set_scrub` rides a `batch` like any gesture: one op, one delta, the
+// queue built from the result; all or nothing — a batch whose second
+// element is an ineligible slider's `on` changes nothing and the refusal
+// names the element; undo takes the whole batch back, the queue with it.
+#[test]
+#[allow(clippy::too_many_lines)] // one story: the batch, its refusal, its undo
+fn set_scrub_rides_a_batch_as_one_op() {
+    let (_dir, config) = project(
+        "# cicada 1\n\
+         k = 1.0\n\
+         a = slider(value=2.0, min=0.5, max=5.0, step=0.5)\n\
+         b = slider(value=0.5, min=0.0, max=1.0, step=0.02)\n\
+         span = construct_domain(start=0.0, end=a)\n",
+    );
+    let pipeline = config.pipeline.clone();
+    let session = Session::open(config).unwrap();
+    session.wait_idle();
+    session.wait_scrub();
+    let (tx, mut rx) = unbounded_channel();
+    let (id, _) = session.connect(ClientLanes::merged(tx));
+    let _ = drain(&mut rx);
+    session.handle(
+        id,
+        Some("b1".into()),
+        ClientMessage::Batch {
+            label: "set k, scrub a".into(),
+            ops: vec![
+                ClientMessage::SetParam {
+                    node: "k".into(),
+                    port: None,
+                    value: "2.0".into(),
+                },
+                ClientMessage::SetScrub {
+                    node: "a".into(),
+                    on: true,
+                },
+            ],
+        },
+    );
+    session.wait_idle();
+    let msgs = texts(&drain(&mut rx));
+    let deltas: Vec<_> = msgs.iter().filter(|m| m["type"] == "delta").collect();
+    assert_eq!(deltas.len(), 1, "one delta for the batch: {msgs:?}");
+    assert_eq!(deltas[0]["payload"]["source"]["intent_id"], "b1");
+    assert_eq!(deltas[0]["payload"]["source"]["label"], "set k, scrub a");
+    assert_eq!(deltas[0]["payload"]["history"]["depth"], 1);
+    let text = std::fs::read_to_string(&pipeline).unwrap();
+    assert!(text.contains("k = 2.0\n"), "{text}");
+    assert!(
+        text.contains("a = slider(value=2.0, min=0.5, max=5.0, step=0.5, scrub=True)\n"),
+        "{text}"
+    );
+    let view = deltas[0]["payload"]["graph"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["name"] == "a")
+        .unwrap()["param"]["scrub"]
+        .clone();
+    assert_eq!(view["on"], true);
+    assert_eq!(view["positions"], 10);
+    session.wait_scrub();
+    assert_eq!(
+        queue_of(&session.debug_state(false), "a")["warmed"]
+            .as_array()
+            .unwrap()
+            .len(),
+        10
+    );
+
+    // All or nothing: the second element's refusal takes the first (a valid
+    // `off`) with it — text, disk and the queue are exactly as before.
+    let _ = drain(&mut rx);
+    session.handle(
+        id,
+        Some("b2".into()),
+        ClientMessage::Batch {
+            label: "doomed".into(),
+            ops: vec![
+                ClientMessage::SetScrub {
+                    node: "a".into(),
+                    on: false,
+                },
+                ClientMessage::SetScrub {
+                    node: "b".into(),
+                    on: true,
+                },
+            ],
+        },
+    );
+    session.wait_idle();
+    let msgs = texts(&drain(&mut rx));
+    assert!(
+        !msgs.iter().any(|m| m["type"] == "delta"),
+        "a failed batch broadcasts no delta: {msgs:?}"
+    );
+    let error = msgs.iter().find(|m| m["type"] == "error").unwrap();
+    assert_eq!(error["payload"]["intent_id"], "b2");
+    assert_eq!(error["payload"]["kind"], "refused");
+    assert_eq!(error["payload"]["index"], 1, "names the failing element");
+    assert_eq!(
+        error["payload"]["message"],
+        "batch `doomed` failed at op 1 (set_scrub): `b`: too many positions (51 > 32)"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&pipeline).unwrap(),
+        text,
+        "the rolled-back batch changed nothing"
+    );
+    assert_eq!(session.history().depth, 1, "no op recorded");
+    session.wait_scrub();
+    assert_eq!(
+        queue_of(&session.debug_state(false), "a")["warmed"]
+            .as_array()
+            .unwrap()
+            .len(),
+        10,
+        "the queue survived the rolled-back batch"
+    );
+
+    // Undo takes both gestures back at once; the queue goes with the kwarg.
+    gesture(&session, id, "undo", ClientMessage::Undo {});
+    let undone = std::fs::read_to_string(&pipeline).unwrap();
+    assert!(undone.contains("k = 1.0\n"), "{undone}");
+    assert!(
+        undone.contains("a = slider(value=2.0, min=0.5, max=5.0, step=0.5)\n"),
+        "{undone}"
+    );
+    session.wait_scrub();
+    let state = session.debug_state(false);
+    assert!(queue_of(&state, "a").is_null(), "{}", state["scrub"]);
+    assert_eq!(scrub_of(&state, "a")["on"], false);
+}
+
+// `warmed` means the position's MEMOIZABLE cone is stored (docs/12). A
+// volatile node (`clock`) recomputes in every generation by design, so a
+// tick on a warm position computes it alone — everything downstream of
+// its unchanged value is the hit the warming stored. Two shapes: the clock
+// BESIDE the slider's cone (feeding the same `add` — the review's
+// pipeline) leaves the dry run exact, the committed value a hit as ever;
+// the clock INSIDE the cone (`clock(speed=size)`) is a miss in every dry
+// run, so no position is ever confirmed without a solve — each solves
+// once, the committed value too. Either way `slider_loop.mjs --expect
+// warm`, which counts every computed node, fails by construction on such
+// a pipeline (the review's note, recorded 2026-08-24).
+#[test]
+fn a_volatile_node_in_the_cone_keeps_the_rest_warm() {
+    let tick_computes_the_clock_alone = |session: &Session| {
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        let _ = drain(&mut rx);
+        session.handle(
+            id,
+            None,
+            ClientMessage::ParamPreview {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "3.5".into(),
+            },
+        );
+        session.wait_idle();
+        let last = session.debug_state(false)["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .rfind(|t| t["kind"] == "preview")
+            .cloned()
+            .expect("the tick was a live preview generation");
+        assert_eq!(last["computed"], 1, "the clock alone: {last}");
+        assert_eq!(last["cached"], 3, "slider, add, domain: {last}");
+    };
+
+    // Beside the cone: `t` is upstream of `add`, not downstream of `size`,
+    // so the dry run takes its hash from the last complete generation and
+    // the load's 2.0 is a hit — nine solves for ten positions, as without
+    // the clock.
+    let (_dir, config) = project(
+        "# cicada 1\n\
+         size = slider(value=2.0, min=0.5, max=5.0, step=0.5, scrub=True)\n\
+         t = clock(speed=1.0)\n\
+         r = add(a=size, b=t)\n\
+         span = construct_domain(start=0.0, end=r)\n",
+    );
+    let session = Session::open(config).unwrap();
+    session.wait_idle();
+    session.wait_scrub();
+    let state = session.debug_state(false);
+    assert_eq!(state["scrub"]["state"], "idle", "{}", state["scrub"]);
+    assert_eq!(
+        queue_of(&state, "size")["warmed"],
+        serde_json::json!([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+    );
+    assert_eq!(scrub_of(&state, "size")["warming"], false);
+    assert_eq!(hypothetical_solves(&session), 9);
+    tick_computes_the_clock_alone(&session);
+    drop(session);
+
+    // Inside the cone: every dry run meets the volatile miss, so every
+    // position solves once — the load's 2.0 too, computing the clock alone
+    // (its add and domain are the load's hits).
+    let (_dir, config) = project(
+        "# cicada 1\n\
+         size = slider(value=2.0, min=0.5, max=5.0, step=0.5, scrub=True)\n\
+         t = clock(speed=size)\n\
+         r = add(a=size, b=t)\n\
+         span = construct_domain(start=0.0, end=r)\n",
+    );
+    let session = Session::open(config).unwrap();
+    session.wait_idle();
+    session.wait_scrub();
+    let state = session.debug_state(false);
+    assert_eq!(state["scrub"]["state"], "idle", "{}", state["scrub"]);
+    assert_eq!(
+        queue_of(&state, "size")["warmed"],
+        serde_json::json!([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+    );
+    assert_eq!(hypothetical_solves(&session), 10, "no dry-run hit possible");
+    let committed = state["timings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["kind"] == "hypothetical")
+        .cloned()
+        .unwrap();
+    assert_eq!(
+        committed["computed"], 1,
+        "the load's own value: the clock alone recomputed: {committed}"
+    );
+    tick_computes_the_clock_alone(&session);
 }

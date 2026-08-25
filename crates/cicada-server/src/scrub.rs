@@ -48,6 +48,12 @@ const RANGE_PORTS: [&str; 3] = ["min", "max", "step"];
 pub enum Ineligible {
     /// The binding is not a `slider` call (or not a binding at all).
     NotASlider,
+    /// `value` is fed by a wire: a wired slider is a `slider` call still,
+    /// but it has no widget — nothing to drag, nothing to scrub.
+    ValueWired,
+    /// `value` is absent or not a number literal: the call is red (the
+    /// checker's missing or mistyped kwarg) and has no widget.
+    ValueNotANumber,
     /// `min` / `max` / `step` are fed by wires: the positions are not a
     /// function of the text.
     Wired(Vec<String>),
@@ -66,6 +72,12 @@ impl fmt::Display for Ineligible {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotASlider => f.write_str("not a slider — only sliders scrub-cache"),
+            Self::ValueWired => {
+                f.write_str("value is wired — a wired slider has no widget to scrub")
+            }
+            Self::ValueNotANumber => f.write_str(
+                "value is not a number literal — a slider without one has no widget to scrub",
+            ),
             Self::Wired(ports) => {
                 let verb = if ports.len() == 1 { "is" } else { "are" };
                 write!(
@@ -152,7 +164,16 @@ impl Positions {
         #[allow(clippy::cast_precision_loss)] // index ≤ 32
         let raw = self.min + index as f64 * self.step;
         let snapped = format!("{raw:.prec$}", prec = self.decimals);
-        snapped.parse().unwrap_or(raw)
+        match snapped.parse() {
+            Ok(value) => value,
+            // Unreachable: every `{:.N}` spelling of an f64 — `inf` and
+            // `NaN` included — is valid `FromStr` input (the test
+            // `the_snap_round_trips_every_f64_spelling` pins it at the
+            // extremes). Not a fallback: the arm exists because `parse`
+            // returns a `Result`, and the raw value is the exact product
+            // the snap would have reproduced.
+            Err(_) => raw,
+        }
     }
 
     /// The value at `index` as a dialect literal — always with a decimal
@@ -194,12 +215,12 @@ pub fn number_literal(value: f64) -> String {
 
 /// Decimal places a literal needs (`0.25` → 2, `1` → 0, `1e-4` → 4) —
 /// `web/src/canvas/grid.ts::stepDecimals`, read off the shortest
-/// round-trip spelling as the widget reads it off `String(step)`.
+/// round-trip spelling as the widget reads it off `String(step)`. Rust's
+/// `Display` for f64 never uses an exponent (`1e-7` prints `0.0000001`),
+/// so the fraction's length IS the count; the widget's `String(1e-7)` is
+/// `"1e-7"`, which `stepDecimals` reads on its side — the two agree (7).
 fn decimals_of(value: f64) -> usize {
     let text = format!("{value}");
-    if let Some((_, exponent)) = text.split_once("e-") {
-        return exponent.parse().unwrap_or(0);
-    }
     text.split_once('.').map_or(0, |(_, frac)| frac.len())
 }
 
@@ -219,7 +240,9 @@ pub struct SliderLiterals {
 /// the document): the binding's call must be a `slider`, `min`/`max`/
 /// `step` literals (an absent kwarg is its default), `step > 0`, and the
 /// range at most [`SCRUB_MAX_POSITIONS`] positions. `value` must be a
-/// number literal too (a wired `value` is no param widget at all).
+/// number literal too — a wired `value` is a slider with no widget
+/// ([`Ineligible::ValueWired`]), its own reason rather than "not a
+/// slider".
 ///
 /// # Errors
 ///
@@ -255,8 +278,15 @@ pub fn eligibility_of_call(call: &Call) -> Result<SliderLiterals, Ineligible> {
     if !wired.is_empty() {
         return Err(Ineligible::Wired(wired));
     }
-    let Some(value) = number_kwarg(call, "value") else {
-        return Err(Ineligible::NotASlider);
+    let value = match call.kwargs.iter().find(|k| k.name.name == "value") {
+        Some(kwarg) => match kwarg.value.unlifted() {
+            ValueExpr::Literal(lit) => match lit.lit {
+                Lit::Number { value, .. } => value,
+                _ => return Err(Ineligible::ValueNotANumber),
+            },
+            _ => return Err(Ineligible::ValueWired),
+        },
+        None => return Err(Ineligible::ValueNotANumber),
     };
     let min = number_kwarg(call, "min").unwrap_or(0.0);
     let max = number_kwarg(call, "max").unwrap_or(10.0);
@@ -643,7 +673,10 @@ mod tests {
              c = slider(value=0.5, min=0.0, max=n, step=0.1)\n\
              d = slider(value=0.5)\n\
              e = slider(value=0.5, min=n, max=n, step=0.1)\n\
-             f = box(x=n, y=n, z=n)\n");
+             f = box(x=n, y=n, z=n)\n\
+             w = slider(value=n, min=0.0, max=5.0, step=0.5)\n\
+             x = slider(value=True, min=0.0, max=5.0, step=0.5)\n\
+             y = slider(min=0.0, max=5.0, step=0.5)\n");
         let a = eligibility(&d, "a").unwrap();
         assert_eq!((a.value, a.scrub, a.positions.count), (2.0, true, 19));
         let b = eligibility(&d, "b").unwrap_err();
@@ -663,8 +696,68 @@ mod tests {
         assert_eq!(eligibility(&d, "f"), Err(Ineligible::NotASlider));
         assert_eq!(eligibility(&d, "nope"), Err(Ineligible::NotASlider));
         assert_eq!(eligibility(&d, "n"), Err(Ineligible::NotASlider));
+        // A wired `value` IS a slider — with no widget; its own reason, not
+        // "not a slider" (review finding, 2026-08-24). A missing or
+        // mistyped `value` is the checker's red and has no widget either.
+        let wired = eligibility(&d, "w").unwrap_err();
+        assert_eq!(wired, Ineligible::ValueWired);
+        assert_eq!(
+            wired.to_string(),
+            "value is wired — a wired slider has no widget to scrub"
+        );
+        assert_eq!(eligibility(&d, "x"), Err(Ineligible::ValueNotANumber));
+        assert_eq!(
+            eligibility(&d, "y").unwrap_err().to_string(),
+            "value is not a number literal — a slider without one has no widget to scrub"
+        );
         assert!(has_scrub_kwarg(&d, "a"));
         assert!(!has_scrub_kwarg(&d, "b"));
+    }
+
+    // `decimals_of` reads the shortest round-trip spelling, which never
+    // carries an exponent in Rust (`1e-7` prints `0.0000001`), so the
+    // count agrees with the widget's `stepDecimals` of `String(step)`.
+    #[test]
+    fn decimals_follow_the_shortest_spelling() {
+        assert_eq!(decimals_of(0.25), 2);
+        assert_eq!(decimals_of(1.0), 0);
+        assert_eq!(decimals_of(1.0e-4), 4);
+        assert_eq!(decimals_of(1.0e-7), 7);
+        assert_eq!(decimals_of(0.1), 1);
+        assert_eq!(decimals_of(12.5), 1);
+    }
+
+    // The snap's string round trip never fails: every `{:.N}` spelling of
+    // an f64 parses back — finite values at both ends of the range, the
+    // overflowed sum (`inf`) and a NaN included. `Positions::value`'s
+    // `Err` arm is unreachable; this pins the fact it rests on.
+    #[test]
+    fn the_snap_round_trips_every_f64_spelling() {
+        for decimals in [0_usize, 2, 20] {
+            for raw in [
+                0.0,
+                -0.0,
+                0.1,
+                1.0e308,
+                -1.0e308,
+                5.0e-324,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NAN,
+            ] {
+                let spelled = format!("{raw:.decimals$}");
+                let back: f64 = spelled
+                    .parse()
+                    .unwrap_or_else(|e| panic!("{spelled:?} ({raw}, {decimals} places): {e}"));
+                assert_eq!(back.is_nan(), raw.is_nan(), "{spelled}");
+            }
+        }
+        // Beyond the contract's literals: a range whose sum overflows still
+        // spells a value (the parser refuses non-finite literals, so the
+        // warming never meets one — but the snap is total either way).
+        let p = Positions::for_range(1.0e308, 1.5e308, 1.0e308).unwrap();
+        assert_eq!(p.count, 1);
+        assert!(p.value(1).is_infinite());
     }
 
     #[test]

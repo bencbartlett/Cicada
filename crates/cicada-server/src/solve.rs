@@ -324,6 +324,15 @@ impl SolveLoop {
         self.shared.generation.fetch_add(1, Ordering::SeqCst) + 1
     }
 
+    /// The newest generation number issued so far — real, idle or
+    /// explicit; 0 before the first. Every generation that starts after
+    /// this call is numbered above it (the scrub worker parks on it at
+    /// Esc: "until a real generation newer than now completes").
+    #[must_use]
+    pub fn last_generation(&self) -> u64 {
+        self.shared.generation.load(Ordering::SeqCst)
+    }
+
     /// The scheduler.
     #[must_use]
     pub fn scheduler(&self) -> &Arc<Scheduler> {

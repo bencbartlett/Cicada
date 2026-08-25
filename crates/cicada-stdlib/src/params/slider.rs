@@ -24,8 +24,9 @@ pub struct SliderIn {
     /// current value first, so dragging later is a cache read (the buffer
     /// bar under the slider shows the warm span). Canvas metadata only —
     /// the output is `value` regardless; offered only while `step > 0`,
-    /// the range has at most 32 positions, and `min`, `max` and `step` are
-    /// literals (the session refuses the toggle otherwise, and warms
+    /// the range has at most `SCRUB_MAX_POSITIONS` positions (32 at v0.1;
+    /// DECISIONS.md row 39 owns the number), and `min`, `max` and `step`
+    /// are literals (the session refuses the toggle otherwise, and warms
     /// nothing for a hand-written `scrub=True` on such a slider).
     #[port(default = false)]
     pub scrub: bool,

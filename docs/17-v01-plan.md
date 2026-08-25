@@ -1771,8 +1771,13 @@ first, so dragging it later is instant — a video-style buffer bar.
   warming, not only the scrubbed slider's own drag — idle time is when
   nothing real is happening. (5) The resume rule after a pre-emption: the
   worker parks until a real generation NEWER than the pre-empted solve
-  completes — after an edit or a drag that is the next moment; after Esc
-  it is the user's next action. (6) `ParamView.scrub` rides EVERY slider
+  completes — after an edit or a drag that is the next moment; Esc parks
+  it outright (`Session::cancel` → `Core::park_scrub` at the newest
+  generation issued), a position mid-solve or not — the review found the
+  first cut parking only when a solve was cut short, so between positions
+  Esc changed nothing; fixed 2026-08-24 with the session test
+  `esc_parks_the_warming_until_the_next_real_generation` — and the user's
+  next action unparks it. (6) `ParamView.scrub` rides EVERY slider
   (an ineligible one with `ineligible: <reason>`, so the toggle's greyed
   state needs no second intent) and carries `capped`; `scrub_progress`
   carries `capped` too. (7) `set_scrub off` REMOVES the kwarg rather than
@@ -1782,7 +1787,32 @@ first, so dragging it later is instant — a video-style buffer bar.
   `slider_loop.mjs` gained `--snap` (the canvas's step snap) and `--expect
   warm` for the DoD sweep; the "MEASURED warm-restream floor" comparison
   of §Item 5's DoD is reported as the sweep's client round-trip beside
-  the warm tick's server time, not a separate harness.
+  the warm tick's server time, not a separate harness. **The review's
+  closure (2026-08-24)** added: (10) a slider whose `value` is wired is a
+  slider with no widget and refuses with its own reason (`value is wired
+  — a wired slider has no widget to scrub`; `Ineligible::ValueWired`),
+  not "is not a slider". (11) `warmed` means the position's MEMOIZABLE
+  cone is stored: a `volatile` node (`clock`) recomputes in every
+  generation by design and everything downstream of its unchanged value
+  stays a hit — a drag across warm positions computes the volatile node
+  alone. Beside the slider's cone (the review's pipeline: the clock feeds
+  the same `add`) the dry run stays exact and the committed value is a
+  hit; inside the cone (`clock(speed=size)`) every dry run meets the
+  volatile miss, so each position solves once. `slider_loop.mjs --expect
+  warm` (every computed node counts) fails on such a pipeline by
+  construction — the review's "`warmed: 10/10` while every tick computes"
+  is this, not an overstatement; the session test
+  `a_volatile_node_in_the_cone_keeps_the_rest_warm` pins both shapes and
+  docs/12 records it. (12) `scrub` is
+  an ordinary input port on the canvas (a Boolean chip; the slider node is
+  one grid row taller — `web/e2e/slider.spec.ts` reads 7) — whether S2
+  hides it behind the toggle, as the transport-driven ports are hidden, is
+  S2's call, to be recorded in docs/16. (13) Every text change still drops
+  and rebuilds every queue (deviation 2): the rebuilt queue re-verifies
+  each position with one dry run under the `inner` lock — a wall-sized
+  cone pays 19 cone walks per release and the S2 bar will empty and
+  refill; keeping a queue whose slider line is the only change (re-centring
+  its order rather than dropping it) is S2's to weigh.
 - **S2 — the web half.** The toggle (the inspector's param row + the node
   context menu: "Scrub-cache this slider", greyed with the server's reason
   when ineligible — the client computes nothing itself); the buffer bar

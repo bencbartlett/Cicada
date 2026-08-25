@@ -105,6 +105,7 @@ const VOCABULARY: &[&str] = &[
     "move_node",
     "set_preview",
     "set_collapsed",
+    "set_scrub",
     "apply_text",
     "insert_between",
 ];
