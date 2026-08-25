@@ -25,12 +25,14 @@ circle	1	circle(plane: Plane = xy_plane, radius: Number) → Closed<Curve>	uses_
 clock	1	clock(speed: Number = 1.0, t: Number = 0.0) → Number	volatile
 closest_point	1	closest_point(point: Point, cloud: [Point]) → (closest: Point, index: Integer, distance: Number)	
 compact	1	compact(list: [E?]) → (values: [E], map: IndexMap)	
+compose_xform	1	compose_xform(xforms: [Xform]) → Xform	
 concat	1	concat(a: [E], b: [E]) → [E]	
 cone	1	cone(plane: Plane = xy_plane, radius: Number, height: Number) → Solid	uses_tolerance
 construct_domain	1	construct_domain(start: Number, end: Number) → Domain	
 construct_plane	1	construct_plane(origin: Point = origin, x: Vector = unit_x, y: Vector = unit_y) → Plane	uses_tolerance
 construct_point	1	construct_point(x: Number = 0.0, y: Number = 0.0, z: Number = 0.0) → Point	
 construct_vector	1	construct_vector(x: Number = 0.0, y: Number = 0.0, z: Number = 0.0) → Vector	
+construct_xform	1	construct_xform(rows: [Number]) → Xform	
 cos	1	cos(x: Number) → Number	
 cross_product	1	cross_product(a: Vector, b: Vector) → Vector	
 cull	1	cull(list: [E], pattern: [Boolean]) → (kept: [E], map: IndexMap)	
@@ -100,6 +102,7 @@ partition	1	partition(list: [E], sizes: [Integer]) → [[E]]
 pick	1	pick(pattern: Boolean, true: E, false: E) → E	
 pipe	1	pipe(rail: Curve, radius: Number) → Solid	uses_tolerance
 plane_normal	1	plane_normal(origin: Point, z: Vector) → Plane	uses_tolerance
+polar_array	1	polar_array(geometry: T, plane: Plane = xy_plane, count: Integer, angle: Number = 2π) → [T]	uses_tolerance
 polyline	1	polyline(vertices: [Point], closed: Boolean = false) → Curve	
 power	1	power(a: Number, b: Number) → Number	
 radians	1	radians(degrees: Number) → Number	
@@ -108,15 +111,18 @@ random	2	random(domain: Domain, count: Integer, seed: Integer) → [Number]
 range	1	range(domain: Domain, steps: Integer) → [Number]	
 range	3	range(domain: Domain, steps: Integer) → [Number]	
 rectangle	1	rectangle(plane: Plane = xy_plane, x: Domain, y: Domain) → Closed<Curve>	uses_tolerance
+rectangular_array	1	rectangular_array(geometry: T, plane: Plane = xy_plane, cell: Vector, x_count: Integer, y_count: Integer, z_count: Integer = 1) → [T]	uses_tolerance
 remap	1	remap(value: Number, source: Domain, target: Domain) → Number	
 repeat	1	repeat(pattern: [E], count: Integer) → [E]	
 repeat	2	repeat(pattern: [E], count: Integer) → [E]	
 reverse	1	reverse(list: [E]) → [E]	
 revolve	1	revolve(profile: Closed<Curve>, axis: Curve, angle: Domain = full turn) → Solid	uses_tolerance
 rotate	1	rotate(geometry: T, angle: Number, plane: Plane = xy_plane) → T	uses_tolerance
+rotate_axis	1	rotate_axis(geometry: T, angle: Number, axis: Curve) → T	uses_tolerance
 rotate_vector	1	rotate_vector(vector: Vector, angle: Number, axis: Vector) → Vector	uses_tolerance
 round	1	round(x: Number) → Number	
 scale	1	scale(geometry: T, center: Point = origin, factor: Number) → T	uses_tolerance
+scale_nu	1	scale_nu(geometry: T, plane: Plane = xy_plane, x: Number = 1.0, y: Number = 1.0, z: Number = 1.0) → T	uses_tolerance
 section	1	section(solid: Solid, plane: Plane = xy_plane, deflection: Number = 0.01) → [Closed<Curve>]	uses_tolerance
 section	2	section(solid: Solid, plane: Plane = xy_plane, deflection: Number = 0.01) → [Closed<Curve>]	uses_tolerance
 series	1	series(start: Number = 0.0, step: Number = 1.0, count: Integer) → [Number]	
@@ -144,6 +150,7 @@ text_solids	1	text_solids(text: Text, size: Number, depth: Number, plane: Plane 
 text_solids	2	text_solids(text: Text, size: Number, depth: Number, plane: Plane = xy_plane, font: Text = "DejaVu Sans Bold", segments: Integer = 8, line_gap: Number = 1.35) → [Watertight<Mesh>]	uses_tolerance
 text_tag	1	text_tag(location: Plane, text: Text, size: Number = 1.0) → ()	
 toggle	1	toggle(value: Boolean) → Boolean	
+transform	1	transform(geometry: T, xform: Xform) → T	uses_tolerance
 transpose	1	transpose(list: [[E]]) → [[E]]	
 truncate	1	truncate(list: [E], count: Integer) → [E]	
 unit_x	1	unit_x(factor: Number = 1.0) → Vector	

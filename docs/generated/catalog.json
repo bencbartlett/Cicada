@@ -5712,6 +5712,77 @@
       ]
     },
     {
+      "name": "compose_xform",
+      "title": "Compose Xform",
+      "description": "one transform equal to applying a list of transforms in order.",
+      "category": "Transform",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": false,
+      "gh": "Compose",
+      "examples": [
+        "shift = construct_xform(rows=[1.0, 0.0, 0.0, 5.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0])\ndouble = construct_xform(rows=[2.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0])\nfirst = duplicate(item=shift, count=1)\nsecond = duplicate(item=double, count=1)\nboth = concat(a=first, b=second)\nshift_then_double = compose_xform(xforms=both)\ncorner = construct_point(x=1.0, y=0.0, z=0.0)\nplaced = transform(geometry=corner, xform=shift_then_double)"
+      ],
+      "inputs": [
+        {
+          "name": "xforms",
+          "type": "[Xform]",
+          "base": "Xform",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The transforms, applied in list order: the first acts first, the last acts last."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Xform",
+          "base": "Xform",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The product of the transforms, the first applied first."
+        }
+      ]
+    },
+    {
+      "name": "construct_xform",
+      "title": "Construct Xform",
+      "description": "an affine transform from its 3×4 matrix, row by row.",
+      "category": "Transform",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": false,
+      "panics": "`rows` has not exactly twelve numbers, or one of them is not finite.",
+      "gh": "Construct Matrix",
+      "examples": [
+        "shift = construct_xform(rows=[1.0, 0.0, 0.0, 5.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0])\ncorner = construct_point(x=1.0, y=0.0, z=0.0)\nmoved = transform(geometry=corner, xform=shift)"
+      ],
+      "inputs": [
+        {
+          "name": "rows",
+          "type": "[Number]",
+          "base": "Number",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "Twelve numbers: the 3×4 affine matrix row by row, `[a, b, c, tx, d, e, f, ty, g, h, i, tz]`, mapping `(x, y, z)` to `(ax + by + cz + tx, dx + ey + fz + ty, gx + hy + iz + tz)` — the identity is `[1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0]`."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Xform",
+          "base": "Xform",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The transform the twelve numbers spell."
+        }
+      ]
+    },
+    {
       "name": "linear_array",
       "title": "Linear Array",
       "description": "`count` copies stepped along a direction, the first at the original position.",
@@ -5905,6 +5976,147 @@
       ]
     },
     {
+      "name": "polar_array",
+      "title": "Polar Array",
+      "description": "`count` copies turned about a plane's normal, spread over a sweep.",
+      "category": "Transform",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "`count < 1`, or when `count` is above the shared ceilings (2^22 slots, or 1 GiB of copies — each copy costed as its slot PLUS the mesh, polyline or solid it transforms, since every copy is a distinct geometry), when `|angle|` is beyond a full turn, when the plane is degenerate, or for a `Solid` the OCCT kernel refuses to transform (a `Solid` moves through the kernel — its B-rep geometry is rewritten, never a mesh in disguise).",
+      "gh": "Polar Array",
+      "examples": [
+        "post = construct_point(x=3.0, y=0.0, z=0.0)\nring = polar_array(geometry=post, count=8)"
+      ],
+      "inputs": [
+        {
+          "name": "geometry",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The geometry to repeat."
+        },
+        {
+          "name": "plane",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "default": "xy_plane",
+          "doc": "The array's frame: copies turn about its normal through its origin."
+        },
+        {
+          "name": "count",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Number of copies (the first sits at the original position)."
+        },
+        {
+          "name": "angle",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "2π",
+          "doc": "The sweep in radians, right-handed about the plane's normal: a full turn (the default) spaces the copies evenly around the circle; any other sweep is filled from the original to its end, the last copy on the end. Negative turns the other way.",
+          "dimension": "angle"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[T]",
+          "base": "T",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The `count` copies, the original first, in turning order."
+        }
+      ]
+    },
+    {
+      "name": "rectangular_array",
+      "title": "Rectangular Array",
+      "description": "a grid of copies stepped along a plane's axes.",
+      "category": "Transform",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "a count is below 1, when the total is above the shared ceilings (2^22 slots, or 1 GiB of copies — each copy costed as its slot PLUS the mesh, polyline or solid it transforms, since every copy is a distinct geometry), when the plane is degenerate, or for a `Solid` the OCCT kernel refuses to transform (a `Solid` moves through the kernel — its B-rep geometry is rewritten, never a mesh in disguise).",
+      "gh": "Rectangular Array",
+      "examples": [
+        "peg = construct_point(x=0.0, y=0.0, z=0.0)\npitch = construct_vector(x=3.0, y=2.0, z=1.0)\ngrid = rectangular_array(geometry=peg, cell=pitch, x_count=4, y_count=3)"
+      ],
+      "inputs": [
+        {
+          "name": "geometry",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The geometry to repeat."
+        },
+        {
+          "name": "plane",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "default": "xy_plane",
+          "doc": "The array's frame: the copies step along its x, y and z axes."
+        },
+        {
+          "name": "cell",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The cell: its x, y and z components are the steps between copies along the plane's x, y and z axes (Grasshopper's Cell box, reduced to its three extents; a negative step runs the other way)."
+        },
+        {
+          "name": "x_count",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Copies along the plane's x axis (the first at the original)."
+        },
+        {
+          "name": "y_count",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Copies along the plane's y axis."
+        },
+        {
+          "name": "z_count",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "default": "1",
+          "doc": "Copies along the plane's z axis (layers)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "[T]",
+          "base": "T",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The copies, x fastest, then y, then z — the original first."
+        }
+      ]
+    },
+    {
       "name": "rotate",
       "title": "Rotate",
       "description": "rotate geometry about a plane's normal through its origin.",
@@ -5959,6 +6171,59 @@
       ]
     },
     {
+      "name": "rotate_axis",
+      "title": "Rotate Axis",
+      "description": "rotate geometry about an arbitrary axis line.",
+      "category": "Transform",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "`axis` is not a `line`, or has no length at tolerance (a zero-length axis has no direction), or for a `Solid` the OCCT kernel refuses to transform (a `Solid` moves through the kernel — its B-rep geometry is rewritten, never a mesh in disguise).",
+      "gh": "Rotate Axis",
+      "examples": [
+        "foot = construct_point(x=0.0, y=0.0, z=0.0)\ntip = construct_point(x=1.0, y=1.0, z=0.0)\nhinge = line(a=foot, b=tip)\ncorner = construct_point(x=2.0, y=0.0, z=0.0)\nlifted = rotate_axis(geometry=corner, angle=1.5707963267948966, axis=hinge)"
+      ],
+      "inputs": [
+        {
+          "name": "geometry",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The geometry to rotate."
+        },
+        {
+          "name": "angle",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Rotation angle in radians, right-handed about the axis: counter- clockwise when the axis points at you.",
+          "dimension": "angle"
+        },
+        {
+          "name": "axis",
+          "type": "Curve",
+          "base": "Curve",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The axis: a `line` (the `line` node) — the rotation is about the line through its start along its direction; any other curve kind is red."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The geometry rotated by `angle` about the axis line."
+        }
+      ]
+    },
+    {
       "name": "scale",
       "title": "Scale",
       "description": "uniform scale about a center. Negative factors point-reflect (mesh orientation is preserved by winding correction).",
@@ -6008,6 +6273,122 @@
           "list_depth": 0,
           "optional": false,
           "doc": "The geometry scaled by `factor` about `center`."
+        }
+      ]
+    },
+    {
+      "name": "scale_nu",
+      "title": "Scale NU",
+      "description": "non-uniform scale about a plane's origin, a factor per axis.",
+      "category": "Transform",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "a factor is within tolerance of zero (geometry would collapse), the plane is degenerate, or the stretch cannot carry the kind exactly — a `Circle` whose plane it stretches unevenly (an ellipse), a `Plane` or `Rectangle` it skews, any `Solid` under unequal factors (tessellate it and scale the mesh) — or, under equal factors, for a `Solid` the OCCT kernel refuses to transform.",
+      "gh": "Scale NU",
+      "examples": [
+        "ring = circle(radius=2.0)\ntall = scale_nu(geometry=ring, x=1.0, y=1.0, z=3.0)"
+      ],
+      "inputs": [
+        {
+          "name": "geometry",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The geometry to scale."
+        },
+        {
+          "name": "plane",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "default": "xy_plane",
+          "doc": "The scaling frame: about its origin, along its axes."
+        },
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "1.0",
+          "doc": "Factor along the frame's x axis (negative = mirrored across the frame's yz plane)."
+        },
+        {
+          "name": "y",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "1.0",
+          "doc": "Factor along the frame's y axis."
+        },
+        {
+          "name": "z",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "1.0",
+          "doc": "Factor along the frame's z axis."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The geometry scaled by `x`, `y`, `z` along the frame's axes about its origin."
+        }
+      ]
+    },
+    {
+      "name": "transform",
+      "title": "Transform",
+      "description": "apply an `Xform` to geometry.",
+      "category": "Transform",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "the transform cannot carry the kind exactly — a `Circle` whose plane it stretches unevenly (an ellipse), a `Plane` or `Rectangle` it skews or flattens, any `Solid` under a stretch or shear (tessellate it and transform the mesh) — or for a `Solid` the OCCT kernel refuses to transform (a `Solid` moves through the kernel — its B-rep geometry is rewritten, never a mesh in disguise).",
+      "gh": "Transform",
+      "examples": [
+        "shift = construct_xform(rows=[1.0, 0.0, 0.0, 5.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0])\nring = circle(radius=2.0)\nmoved = transform(geometry=ring, xform=shift)"
+      ],
+      "inputs": [
+        {
+          "name": "geometry",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The geometry to transform."
+        },
+        {
+          "name": "xform",
+          "type": "Xform",
+          "base": "Xform",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The transform to apply (`construct_xform`, `compose_xform`)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "T",
+          "base": "T",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The geometry under `xform`."
         }
       ]
     },
