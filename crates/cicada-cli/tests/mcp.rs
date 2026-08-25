@@ -343,11 +343,11 @@ fn assert_node_doc(client: &mut Client) {
     assert_eq!(doc["tier"], "S");
     assert_eq!(
         doc["signature"],
-        "slider(value: Number, min: Number = 0.0, max: Number = 10.0, step: Number = 0.0) → Number"
+        "slider(value: Number, min: Number = 0.0, max: Number = 10.0, step: Number = 0.0, scrub: Boolean = false) → Number"
     );
     let inputs = doc["inputs"].as_array().unwrap();
     let port_names: Vec<&str> = inputs.iter().map(|p| p["name"].as_str().unwrap()).collect();
-    assert_eq!(port_names, ["value", "min", "max", "step"]);
+    assert_eq!(port_names, ["value", "min", "max", "step", "scrub"]);
     assert_eq!(inputs[0]["type"], "Number");
     assert!(inputs[0].get("default").is_none(), "value is required");
     assert_eq!(inputs[1]["default"], "0.0");

@@ -18,6 +18,8 @@ use serde::Serialize;
 
 use crate::layout::{LayoutNode, NODE_WIDTH, auto_layout};
 use crate::lower::{Exclusion, Lowered};
+use crate::protocol::ScrubView;
+use crate::scrub;
 use crate::sidecar::Sidecar;
 
 /// Stable per-session node identifiers: a binding name maps to one `u32`
@@ -182,6 +184,14 @@ pub struct ParamView {
     /// Slider step (0 = continuous).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step: Option<f64>,
+    /// Scrub caching (v0.1 item 5; additive): on every slider — eligible
+    /// or not (then with `ineligible`, the reason the toggle is greyed
+    /// with). The view-model fills what the TEXT decides (`on`,
+    /// `positions`, `ineligible`); the session overlays the warm state of
+    /// its queue (`warmed`, `warming`, `bytes`, `capped`) whenever it
+    /// rebuilds the view or records progress.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scrub: Option<ScrubView>,
 }
 
 /// Why a node is out of the solve (mirrors the scheduler's status words).
@@ -661,6 +671,21 @@ fn default_json(base: &str, list_depth: u8, text: &str) -> Option<serde_json::Va
     fits.then_some(value)
 }
 
+/// The slider's `scrub` literal when written (the `on` an ineligible
+/// slider's view reports — the text's word, warmed or not).
+fn scrub_flag(call: &cicada_lang::ast::Call) -> Option<bool> {
+    call.kwargs
+        .iter()
+        .find(|k| k.name.name == "scrub")
+        .and_then(|k| match k.value.unlifted() {
+            ValueExpr::Literal(lit) => match lit.lit {
+                Lit::Boolean(flag) => Some(flag),
+                _ => None,
+            },
+            _ => None,
+        })
+}
+
 fn number_kwarg(call: &cicada_lang::ast::Call, name: &str) -> Option<f64> {
     call.kwargs
         .iter()
@@ -786,6 +811,7 @@ fn statement_node(
                 min: None,
                 max: None,
                 step: None,
+                scrub: None,
             });
         }
         Rhs::Expression(expr) => {
@@ -993,6 +1019,16 @@ fn statement_node(
                             min: Some(number_kwarg(call, "min").unwrap_or(0.0)),
                             max: Some(number_kwarg(call, "max").unwrap_or(10.0)),
                             step: Some(number_kwarg(call, "step").unwrap_or(0.0)),
+                            // What the text decides; the session overlays
+                            // its queue's warm state (`Core::overlay_scrub`).
+                            scrub: Some(match scrub::eligibility_of_call(call) {
+                                Ok(literals) => {
+                                    scrub::idle_view(literals.positions.count, literals.scrub)
+                                }
+                                Err(why) => {
+                                    scrub::ineligible_view(scrub_flag(call).unwrap_or(false), &why)
+                                }
+                            }),
                         }),
                         "toggle" => call
                             .kwargs
@@ -1012,6 +1048,7 @@ fn statement_node(
                                 min: None,
                                 max: None,
                                 step: None,
+                                scrub: None,
                             }),
                         _ => None,
                     };
@@ -1148,6 +1185,50 @@ mod tests {
         assert!(displayable_kind("Geometry"));
         assert!(!displayable_kind("Number"));
         assert!(!displayable_kind("Xform"));
+    }
+
+    // v0.1 item 5 (S1): every slider's ParamView carries `scrub` — what the
+    // TEXT decides. Eligible: the position count and the `on` flag, warm
+    // state empty (the session overlays its queue). Ineligible: positions 0
+    // and the reason the toggle is greyed with; a hand-written `scrub=True`
+    // on such a slider still reads `on: true` (the text's word).
+    #[test]
+    fn every_slider_carries_its_scrub_view() {
+        let g = view(
+            "# cicada 1\n\
+             n = 4.0\n\
+             a = slider(value=2.0, min=0.5, max=5.0, step=0.25, scrub=True)\n\
+             b = slider(value=0.5, min=0.0, max=1.0, step=0.1)\n\
+             c = slider(value=0.5, min=0.0, max=1.0, step=0.02, scrub=True)\n\
+             d = slider(value=0.5, min=0.0, max=n, step=0.1)\n\
+             e = slider(value=0.5)\n\
+             t = toggle(value=True)\n",
+        );
+        let scrub_of = |name: &str| g.node(name).unwrap().param.as_ref().unwrap().scrub.clone();
+        assert_eq!(
+            serde_json::to_value(scrub_of("a").unwrap()).unwrap(),
+            serde_json::json!({"on": true, "positions": 19, "warmed": [], "warming": false, "bytes": 0})
+        );
+        assert_eq!(
+            serde_json::to_value(scrub_of("b").unwrap()).unwrap(),
+            serde_json::json!({"on": false, "positions": 11, "warmed": [], "warming": false, "bytes": 0})
+        );
+        let c = scrub_of("c").unwrap();
+        assert!(c.on && c.positions == 0);
+        assert_eq!(
+            c.ineligible.as_deref(),
+            Some("too many positions (51 > 32)")
+        );
+        assert_eq!(
+            scrub_of("d").unwrap().ineligible.as_deref(),
+            Some("max is wired — the positions are a function of literal min, max and step")
+        );
+        assert_eq!(
+            scrub_of("e").unwrap().ineligible.as_deref(),
+            Some("step is 0 — a continuous slider has no positions to warm")
+        );
+        assert!(scrub_of("t").is_none(), "a toggle has no scrub view");
+        assert!(g.node("n").unwrap().param.as_ref().unwrap().scrub.is_none());
     }
 
     #[test]
@@ -1442,7 +1523,10 @@ mod tests {
         let plain = view_with_sidecar(source, &Sidecar::default());
         let size = plain.node("size").unwrap();
         assert!(!size.collapsed);
-        assert_eq!(size.size[1], 6, "header + four port rows + the widget row");
+        assert_eq!(
+            size.size[1], 7,
+            "header + five port rows (scrub since item 5) + the widget row"
+        );
         assert_eq!(
             collapse_refusal(&document, "size"),
             None,

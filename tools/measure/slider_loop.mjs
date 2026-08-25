@@ -35,6 +35,17 @@
  * mismatch a nonzero exit: "the policy engaged" is then asserted, not
  * observed.
  *
+ * Scrub caching (v0.1 item 5, DECISIONS.md row 39 — the DoD sweep):
+ * `--snap` streams the ramp SNAPPED to the slider's step grid, exactly as
+ * the canvas widget snaps a drag (`web/src/canvas/grid.ts::snapToStep`:
+ * `min + k·step` rounded to the step's decimals), so every tick is one of
+ * the slider's positions and a warmed position is a memo hit; `--expect
+ * warm` then asserts the mode is live AND every preview generation of the
+ * stream computed nothing (`nodes_computed` 0 — all cache reads), and
+ * reports `scrub` (the slider's `param.scrub` before the stream) in the
+ * result. Wait for `/debug/state.scrub` to show the queue finished (or
+ * `param.scrub.warming: false`) before running it.
+ *
  * How the client round-trip is paired with a generation: the first preview
  * (sent while the loop is idle) calibrates the session clock — its timing's
  * `started_ms − queued_ms` is the server's acceptance time of that very
@@ -105,16 +116,38 @@ const preview = (value) =>
   session.send({ type: "param_preview", payload: { node: param, port, value: numberLiteral(value) } });
 const policyFor = (m) =>
   m.envelope.type === "preview_policy" && m.envelope.payload.node === param && (m.envelope.payload.port ?? null) === port;
-const expect = args.expect;
+const snap = args.snap === true;
+// `--expect warm` = `--expect live` plus "every preview generation cached".
+const expectWarm = args.expect === "warm";
+const expect = expectWarm ? "live" : args.expect;
 if (expect !== undefined && expect !== "live" && expect !== "compute_on_release") {
-  die(`--expect takes live or compute_on_release, not ${JSON.stringify(expect)}`);
+  die(`--expect takes live, compute_on_release or warm, not ${JSON.stringify(expect)}`);
 }
+if (expectWarm && !snap) die("--expect warm needs --snap (off the step grid nothing is warm by construction)");
+if (snap && !(step > 0)) die(`--snap needs a slider with a step > 0 (\`${param}\` has step ${step})`);
+// The canvas widget's snap (grid.ts): `min + k·step` rounded to the larger
+// of step's and min's decimal places — bit-identical to what the server
+// warms for that notch (`crates/cicada-server/src/scrub.rs::Positions`).
+const decimalsOf = (x) => {
+  const text = String(x);
+  const exp = text.match(/e-(\d+)$/);
+  if (exp) return Number(exp[1]);
+  const dot = text.indexOf(".");
+  return dot < 0 ? 0 : text.length - dot - 1;
+};
+const snapLikeTheCanvas = (x) => {
+  const k = Math.round((x - min) / step);
+  const decimals = Math.min(20, Math.max(decimalsOf(step), decimalsOf(min)));
+  return Number((min + k * step).toFixed(decimals));
+};
+const rampValue = (raw) => (snap ? snapLikeTheCanvas(raw) : raw);
+const scrubBefore = node.param?.scrub ?? null;
 
 // ---- calibration: one preview from idle → EITHER a preview generation
 // (live mode: it anchors the session epoch in client time) OR the server's
 // `preview_policy` for this param (compute-on-release: no generation will
 // ever come for a preview, so the drag is measured by its release).
-const calibration = preview(min + (max - min) * 0.25);
+const calibration = preview(rampValue(min + (max - min) * 0.25));
 const calibrationDeadline = performance.now() + 60_000;
 let calibrationTiming = null;
 let policy = null;
@@ -156,7 +189,7 @@ for (let i = 0; i < total; i += 1) {
   const due = streamStart + i * intervalMs;
   const now = performance.now();
   if (due > now) await sleep(due - now);
-  const value = min + ((max - min) * (i + 0.5)) / total;
+  const value = rampValue(min + ((max - min) * (i + 0.5)) / total);
   sends.push({ ...preview(value), value, i });
   if (performance.now() >= pollAt) {
     // Responsiveness while streaming: the oracle must keep answering.
@@ -233,6 +266,9 @@ const TARGET = { p50_ms: 16, p95_ms: 33 };
 const server = stats(serverTotal);
 const client = stats(roundTrips);
 const passes = (s) => s.count > 0 && s.p50 <= TARGET.p50_ms && s.p95 <= TARGET.p95_ms;
+const nodesComputed = timings.reduce((n, t) => n + (t.computed ?? 0), 0);
+// The scrub DoD: a step-snapped sweep after idle warming is all cache reads.
+const allCached = timings.length > 0 && nodesComputed === 0;
 const result = {
   harness: "slider_loop",
   mode,
@@ -242,6 +278,10 @@ const result = {
   param,
   port,
   range: [min, max],
+  snap,
+  step: snap ? step : undefined,
+  distinct_values: snap ? new Set(sends.map((s) => s.value)).size : undefined,
+  scrub: scrubBefore,
   seconds,
   hz,
   sends: sends.length,
@@ -251,8 +291,9 @@ const result = {
   superseded: sends.length - timings.length,
   generations_per_second: Math.round((timings.length / ((settledAt - streamStart) / 1000)) * 10) / 10,
   cancelled_generations: timings.filter((t) => t.cancelled).length,
-  nodes_computed: timings.reduce((n, t) => n + (t.computed ?? 0), 0),
+  nodes_computed: nodesComputed,
   nodes_cached: timings.reduce((n, t) => n + (t.cached ?? 0), 0),
+  generations_that_computed: timings.filter((t) => (t.computed ?? 0) > 0).length,
   timings_ring_overflow: ringOverflow,
   frames: session.frames.filter((f) => f.at >= streamStart).length,
   frame_bytes: timings.reduce((n, t) => n + (t.frame_bytes ?? 0), 0),
@@ -271,12 +312,17 @@ const result = {
   },
   errors: session.errors,
   target: TARGET,
-  pass: { server_queued_plus_elapsed: passes(server), client_round_trip: passes(client) },
+  pass: {
+    server_queued_plus_elapsed: passes(server),
+    client_round_trip: passes(client),
+    ...(snap ? { all_cached: allCached } : {}),
+  },
 };
 console.log(JSON.stringify(result, null, 2));
 if (args.json) writeFileSync(args.json, JSON.stringify(result, null, 2));
 console.log(
   `slider_loop ${pipeline} ${param}: ${sends.length} sends/${seconds}s → ${timings.length} preview generations` +
+    (snap ? ` (step-snapped, ${result.distinct_values} distinct positions; computed ${nodesComputed} nodes, all cached: ${allCached ? "PASS" : "FAIL"})` : "") +
     ` (${result.generations_per_second}/s); server queued+elapsed p50 ${server.p50} ms p95 ${server.p95} ms` +
     ` (elapsed p50 ${result.server.elapsed_ms.p50}, queued p50 ${result.server.queued_ms.p50});` +
     ` client round-trip p50 ${client.p50} ms p95 ${client.p95} ms (${roundTrips.length} paired);` +
@@ -284,6 +330,13 @@ console.log(
     ` target p50≤${TARGET.p50_ms}/p95≤${TARGET.p95_ms}: server ${result.pass.server_queued_plus_elapsed ? "PASS" : "FAIL"}, client ${result.pass.client_round_trip ? "PASS" : "FAIL"}`,
 );
 session.close();
+if (expectWarm && !allCached) {
+  console.error(
+    `error: --expect warm: ${result.generations_that_computed} of ${timings.length} preview generations computed ` +
+      `${nodesComputed} node(s) — the sweep was not all cache reads (scrub before the stream: ${JSON.stringify(scrubBefore)})`,
+  );
+  process.exit(1);
+}
 process.exit(session.errors.length === 0 ? 0 : 1);
 
 /**

@@ -181,6 +181,40 @@ pub enum Actor {
     },
 }
 
+/// Scrub caching on one slider (docs/12 §Speculative warming; DECISIONS.md
+/// row 39; v0.1 item 5 S1, additive) — carried by every slider's
+/// `ParamView` as `scrub`, and by the `scrub_progress` broadcast. The
+/// server computes everything: eligibility is a pure function of the
+/// slider's literals (`crate::scrub`), the warm set is the session's queue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScrubView {
+    /// The text says `scrub=True` (the opt-in is the kwarg, never the
+    /// sidecar). `true` on an ineligible slider is a hand-written kwarg the
+    /// session warms nothing for.
+    pub on: bool,
+    /// Step-quantized positions, `floor((max − min) / step) + 1`; 0 when
+    /// ineligible.
+    pub positions: usize,
+    /// Position indices verified warm (a memo hit, or solved by the
+    /// warming), ascending.
+    pub warmed: Vec<usize>,
+    /// Work remains for this slider: not every position is warm and the
+    /// cap has not stopped it — the worker will get to it (it may be
+    /// waiting for the app to go idle right now).
+    pub warming: bool,
+    /// Bytes of memo entries the warming stored for this slider, deep.
+    pub bytes: u64,
+    /// The per-slider byte cap (256 MiB) stopped the warming; the
+    /// positions warmed before it stay warm. Omitted when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub capped: bool,
+    /// Why this slider cannot scrub-cache — the reason `set_scrub` refuses
+    /// with (`too many positions (51 > 32)`, `min is wired — …`, `step is
+    /// 0 — …`). Absent when eligible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ineligible: Option<String>,
+}
+
 /// The undo/redo state carried on every `delta` and `snapshot` (additive —
 /// v0.1 op log, docs/13 §Undo/redo).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1000,6 +1034,29 @@ pub enum ServerMessage {
     /// [`TransportView`] — the same object every `snapshot` carries; the
     /// client replaces its transport state with it.
     Transport(TransportView),
+    /// Scrub caching made progress on one slider (docs/12 §Speculative
+    /// warming; v0.1 item 5; additive): broadcast coalesced at the
+    /// statuses' cadence (≤ 10 Hz) while a queue warms — a position
+    /// verified warm, the cap reached, the queue finished. The fields are
+    /// the slider's [`ScrubView`] minus what only a text change moves
+    /// (`on`, `positions`, `ineligible`), which the delta carries; the
+    /// client updates that slider's `param.scrub` in place. Never sent for
+    /// a slider without a queue.
+    ScrubProgress {
+        /// The slider's binding.
+        node: String,
+        /// Its kwarg (`value`).
+        port: String,
+        /// Position indices verified warm, ascending.
+        warmed: Vec<usize>,
+        /// Work remains (see [`ScrubView::warming`]).
+        warming: bool,
+        /// Bytes of memo entries the warming stored for this slider.
+        bytes: u64,
+        /// The byte cap stopped it. Omitted when false.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        capped: bool,
+    },
 }
 
 /// How a drag's previews are handled (`preview_policy.mode`).
@@ -1196,6 +1253,24 @@ pub enum ClientMessage {
         /// Collapsed (`true`) or expanded (`false`, the default).
         collapsed: bool,
     },
+    /// Scrub-cache a slider, or stop (docs/12 §Speculative warming; v0.1
+    /// item 5): a write gesture that edits the TEXT — `on` writes
+    /// `scrub=True` into the slider's call (inserted at its spec-order
+    /// position, or rewritten), `off` removes the kwarg (the default says
+    /// the same thing) — an op like any literal edit (`scrub x on` /
+    /// `scrub x off`, undoable, a `batch` element); the delta carries the
+    /// new view and the warming starts from it. Refused (kind `refused`)
+    /// with the reason for a node that is not a slider, and — when `on` —
+    /// for an ineligible slider: `too many positions (51 > 32)`, `min is
+    /// wired — …`, `step is 0 — …` (`crate::scrub::eligibility`, read off
+    /// the DOCUMENT so a `batch` sees what it wired earlier). The client
+    /// computes nothing: the view's `scrub.ineligible` is the same reason.
+    SetScrub {
+        /// The slider's binding.
+        node: String,
+        /// Warm it (`true`) or stop and forget its queue (`false`).
+        on: bool,
+    },
     /// Cancel the running generation (Esc). Also pauses the transport.
     Cancel {},
     /// Start the transport (docs/13 §Animation transport): the playhead
@@ -1308,6 +1383,7 @@ pub fn is_write(message: &ClientMessage) -> bool {
             | ClientMessage::MoveNode { .. }
             | ClientMessage::SetPreview { .. }
             | ClientMessage::SetCollapsed { .. }
+            | ClientMessage::SetScrub { .. }
             | ClientMessage::Cancel {}
             | ClientMessage::Undo {}
             | ClientMessage::Redo {}
@@ -1354,6 +1430,7 @@ pub fn is_gesture(message: &ClientMessage) -> bool {
             | ClientMessage::MoveNode { .. }
             | ClientMessage::SetPreview { .. }
             | ClientMessage::SetCollapsed { .. }
+            | ClientMessage::SetScrub { .. }
     )
 }
 
@@ -1671,6 +1748,80 @@ mod tests {
         );
         assert!(!is_transport(&collapse.message));
         assert_eq!(type_tag(&collapse.message), "set_collapsed");
+    }
+
+    // v0.1 item 5 (S1): `set_scrub` is a write gesture (a batch element,
+    // an op) with the documented shape; `scrub_progress` carries the warm
+    // state a delta does not — `capped` omitted when false, present when
+    // true; a slider's `ScrubView` omits `capped`/`ineligible` when
+    // false/absent. The web client mirrors exactly these in messages.ts.
+    #[test]
+    fn set_scrub_is_a_gesture_and_scrub_progress_has_the_documented_shape() {
+        let on: IntentEnvelope = serde_json::from_str(
+            r#"{"v":1,"id":"s","type":"set_scrub","payload":{"node":"size","on":true}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            on.message,
+            ClientMessage::SetScrub {
+                node: "size".into(),
+                on: true
+            }
+        );
+        assert!(is_write(&on.message));
+        assert!(is_gesture(&on.message), "an op: a batch element");
+        assert!(!is_transport(&on.message));
+        assert_eq!(type_tag(&on.message), "set_scrub");
+
+        let progress = encode(
+            4,
+            &ServerMessage::ScrubProgress {
+                node: "size".into(),
+                port: "value".into(),
+                warmed: vec![5, 6, 7],
+                warming: true,
+                bytes: 4096,
+                capped: false,
+            },
+        );
+        let value: serde_json::Value = serde_json::from_str(&progress).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "v": PROTOCOL_VERSION, "seq": 4, "type": "scrub_progress",
+                "payload": {"node": "size", "port": "value", "warmed": [5, 6, 7], "warming": true, "bytes": 4096}
+            })
+        );
+        let capped = encode(
+            5,
+            &ServerMessage::ScrubProgress {
+                node: "size".into(),
+                port: "value".into(),
+                warmed: vec![6],
+                warming: false,
+                bytes: 300_000_000,
+                capped: true,
+            },
+        );
+        let value: serde_json::Value = serde_json::from_str(&capped).unwrap();
+        assert_eq!(value["payload"]["capped"], true);
+        assert_eq!(value["payload"]["warming"], false);
+
+        let view = ScrubView {
+            on: true,
+            positions: 19,
+            warmed: vec![6],
+            warming: true,
+            bytes: 12,
+            capped: false,
+            ineligible: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&view).unwrap(),
+            serde_json::json!({"on": true, "positions": 19, "warmed": [6], "warming": true, "bytes": 12})
+        );
+        let back: ScrubView = serde_json::from_value(serde_json::to_value(&view).unwrap()).unwrap();
+        assert_eq!(back, view, "the omitted flags read back as false / absent");
     }
 
     // The join hint (v0.1 wave 4 O3): an old client's hello has no `role`

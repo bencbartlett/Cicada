@@ -226,6 +226,33 @@ export interface ParamView {
   min?: number;
   max?: number;
   step?: number;
+  /** Scrub caching (v0.1 item 5; additive): on every slider, eligible or not. */
+  scrub?: ScrubView;
+}
+
+/**
+ * Scrub caching on one slider (`protocol::ScrubView`; docs/12 §Speculative
+ * warming, DECISIONS.md row 39, v0.1 item 5). The server computes
+ * everything — eligibility off the slider's literals, the warm set off its
+ * queue; the client renders the buffer bar and greys the toggle with
+ * `ineligible`. Carried by the slider's `ParamView.scrub` (every snapshot
+ * and delta) and moved between deltas by `scrub_progress`.
+ */
+export interface ScrubView {
+  /** The text says `scrub=True`. On an ineligible slider: a hand-written kwarg the server warms nothing for. */
+  on: boolean;
+  /** Step-quantized positions, `floor((max − min) / step) + 1`; 0 when ineligible. */
+  positions: number;
+  /** Position indices verified warm (a memo hit, or solved by the warming), ascending. */
+  warmed: number[];
+  /** Work remains: not every position warm and the cap not reached — the worker gets to it when the app is idle (the bar's pulse). */
+  warming: boolean;
+  /** Bytes of memo entries the warming stored for this slider. */
+  bytes: number;
+  /** The per-slider byte cap (256 MiB) stopped the warming; the warm positions stay. Absent when false. */
+  capped?: boolean;
+  /** Why the slider cannot scrub-cache — the reason `set_scrub` refuses with. Absent when eligible. */
+  ineligible?: string;
 }
 
 export interface ExcludedView {
@@ -809,7 +836,26 @@ export type ServerMessage =
   | { type: "preview_policy"; payload: PreviewPolicyPayload }
   | { type: "drag_ended"; payload: DragEndedPayload }
   /** The transport changed (docs/13 §Animation transport): the same view every snapshot carries — replace, never stack. */
-  | { type: "transport"; payload: TransportView };
+  | { type: "transport"; payload: TransportView }
+  /**
+   * Scrub caching progressed on one slider (v0.1 item 5; additive):
+   * coalesced at the statuses' cadence (≤ 10 Hz) while its queue warms —
+   * the fields of the slider's `ScrubView` that move between deltas (`on`,
+   * `positions`, `ineligible` only move with the text, which the delta
+   * carries). Update that slider's `param.scrub` in place; never sent for a
+   * slider without a queue.
+   */
+  | { type: "scrub_progress"; payload: ScrubProgressPayload };
+
+/** The `scrub_progress` payload (`protocol::ServerMessage::ScrubProgress`). */
+export interface ScrubProgressPayload {
+  node: string;
+  port: string;
+  warmed: number[];
+  warming: boolean;
+  bytes: number;
+  capped?: boolean;
+}
 
 export type ServerEnvelope = { v: number; seq: number } & ServerMessage;
 
@@ -874,7 +920,18 @@ export type GestureMessage =
    * slider any of whose `min` / `max` / `step` is wired — the server
    * decides; the client mirrors the reason as a hint (`collapseHint`).
    */
-  | { type: "set_collapsed"; payload: { node: string; collapsed: boolean } };
+  | { type: "set_collapsed"; payload: { node: string; collapsed: boolean } }
+  /**
+   * Scrub-cache a slider, or stop (v0.1 item 5; docs/12 §Speculative
+   * warming): a write gesture that edits the TEXT — `on` writes
+   * `scrub=True` into the slider's call, `off` removes the kwarg — an op
+   * (`scrub x on` / `scrub x off`, undoable, a batch element); the delta
+   * carries the new `param.scrub` and the warming starts from it. Refused
+   * (kind `refused`) with the server's reason for a non-slider and, when
+   * `on`, for an ineligible slider — the same text the view's
+   * `scrub.ineligible` carries; the client computes nothing itself.
+   */
+  | { type: "set_scrub"; payload: { node: string; on: boolean } };
 
 export type ClientMessage =
   /**
@@ -1005,6 +1062,7 @@ export function isGesture(message: ClientMessage): message is GestureMessage {
     case "move_node":
     case "set_preview":
     case "set_collapsed":
+    case "set_scrub":
       return true;
     default:
       return false;

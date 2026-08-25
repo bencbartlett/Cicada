@@ -21,7 +21,7 @@ one `.cic` snippet per node, solved by CI).
 - `clock(speed: Number = 1.0, t: Number = 0.0) → Number` — Clock · volatile · transport-driven `t` (time) — unbounded time `0 → ∞` in seconds, driven by the transport and uncached by design (Grasshopper's Timer has no counterpart: a Clock is a value, not a re-solve trigger). Red when: `t` or `speed` is not finite.
 - `cycle(period: Number = 4.0, frames: Integer = 120, frame: Integer = 0) → Number` — Cycle · transport-driven `frame` (frame) — looping time `0 → 1`, frame-quantized and driven by the transport, never by an ambient clock (Grasshopper's Timer has no counterpart: a Cycle is a value, not a re-solve trigger). Red when: `frames` or `period` is not positive, or when `frames` does not convert to a Number exactly (beyond 2^53 — the position would drift).
 - `panel(data: Any) → ()` — Panel · GH: Panel — display sink; shows counts and samples on the canvas.
-- `slider(value: Number, min: Number = 0.0, max: Number = 10.0, step: Number = 0.0) → Number` — Number Slider · GH: Number Slider — a bounded numeric parameter. Red when: `value` lies outside `min..=max` or the bounds are inverted — a drifted literal is a loud red, never a silent clamp.
+- `slider(value: Number, min: Number = 0.0, max: Number = 10.0, step: Number = 0.0, scrub: Boolean = false) → Number` — Number Slider · GH: Number Slider — a bounded numeric parameter. Red when: `value` lies outside `min..=max` or the bounds are inverted — a drifted literal is a loud red, never a silent clamp.
 - `toggle(value: Boolean) → Boolean` — Boolean Toggle · GH: Boolean Toggle — an on/off parameter.
 
 ## Sequences & random

@@ -45,7 +45,7 @@
 //! `inner` → `picks` (the live frame emission holds `inner` and takes
 //! `picks` per value) — nothing takes `inner` while holding `picks`.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -81,6 +81,7 @@ use crate::protocol::{
     type_tag,
 };
 use crate::scripts::ScriptCancel;
+use crate::scrub::{self, SCRUB_PORT, WarmQueue};
 use crate::sidecar::Sidecar;
 use crate::solve::{IdleError, Job, JobKind, SolveLoop, SolveSink};
 use crate::viewmodel::{self, GraphView, NodeRefs, WireEnd};
@@ -194,10 +195,24 @@ pub struct SessionConfig {
     /// restream proceeds when it returns. `None` (production) = no hold.
     /// A test seam in the shape of `op_clock`.
     pub restream_hold: Option<RestreamHold>,
+    /// Scrub caching's per-slider byte cap (docs/12 §Speculative warming;
+    /// v0.1 item 5): bytes of memo entries one slider's warming may store
+    /// before its queue stops. [`SCRUB_BYTE_CAP`] (256 MiB) in production;
+    /// tests lower it to see the cap bite.
+    pub scrub_byte_cap: u64,
+    /// A gate on the scrub worker — the deterministic seam the warming
+    /// tests hold a position on (no sleeps, no wall clock): called with
+    /// the slider and the position index after the hash-only dry run said
+    /// "miss" and BEFORE the idle-class solve is submitted; the solve
+    /// proceeds when it returns. `None` (production) = no gate.
+    pub scrub_gate: Option<ScrubGate>,
 }
 
 /// See [`SessionConfig::restream_hold`].
 pub type RestreamHold = Arc<dyn Fn(u32) + Send + Sync>;
+
+/// See [`SessionConfig::scrub_gate`].
+pub type ScrubGate = Arc<dyn Fn(&str, usize) + Send + Sync>;
 
 impl std::fmt::Debug for SessionConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -214,6 +229,11 @@ impl std::fmt::Debug for SessionConfig {
             .field(
                 "restream_hold",
                 &self.restream_hold.as_ref().map_or("none", |_| "injected"),
+            )
+            .field("scrub_byte_cap", &self.scrub_byte_cap)
+            .field(
+                "scrub_gate",
+                &self.scrub_gate.as_ref().map_or("none", |_| "injected"),
             )
             .finish()
     }
@@ -762,6 +782,10 @@ struct Inner {
     /// is lowered with; the ticker thread reads `Core::transport_playing`
     /// without the lock to know whether to tick at all.
     transport: Transport,
+    /// Scrub caching's warm queues ([`ScrubState`]; docs/12 §Speculative
+    /// warming, v0.1 item 5) — rebuilt by [`Core::refresh_scrub`] at every
+    /// text change, driven by the `cicada-scrub` worker ([`scrub_loop`]).
+    scrub: ScrubState,
 }
 
 /// The session's transport state ([`Inner::transport`]). The playhead is
@@ -993,6 +1017,22 @@ struct ConeCost {
     misses: usize,
 }
 
+/// What [`Core::dry_run`] found walking a param's cone against the memo.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct DryRun {
+    /// Σ predicted CPU nanos ÷ parallelism over the predicted-to-compute
+    /// nodes with evidence.
+    total_nanos: f64,
+    /// Some predicted-to-compute node had no evidence.
+    rough: bool,
+    /// Predicted-to-compute nodes WITH evidence.
+    evidence: usize,
+    /// Nodes in the cone (exporters excluded).
+    nodes: usize,
+    /// Memo misses (nodes predicted to compute). Zero = a pure cache read.
+    misses: usize,
+}
+
 /// The per-node status board — written by observer events on worker
 /// threads, flushed to clients at ≤ 10 Hz and on generation boundaries.
 struct StatusBoard {
@@ -1058,6 +1098,13 @@ struct Core {
     /// keyed by value hash; its counters are in `/debug/state` →
     /// `display_cache`.
     solids: SolidCache,
+    /// The scrub worker's shared state ([`ScrubShared`]). Lock order:
+    /// `inner` → `scrub` — the worker decides under both; everything else
+    /// takes `scrub` alone or under `inner`.
+    scrub: Mutex<ScrubShared>,
+    /// Woken by every [`Core::wake_scrub`] and by the worker's own
+    /// decisions ([`Session::wait_scrub`] waits on it too).
+    scrub_wake: Condvar,
 }
 
 /// One generation's timing record (docs/15 measurement protocol; read
@@ -1138,6 +1185,8 @@ pub struct Session {
     ticker: Option<std::thread::JoinHandle<()>>,
     /// The transport's ticker ([`transport_loop`]).
     transport_ticker: Option<std::thread::JoinHandle<()>>,
+    /// The scrub-caching worker ([`scrub_loop`]).
+    scrub_worker: Option<std::thread::JoinHandle<()>>,
 }
 
 /// The session's writes held off ([`Session::hold_writes`]): the document
@@ -1273,6 +1322,7 @@ impl Session {
                 drag: None,
                 previews_deferred: 0,
                 transport: Transport::new(),
+                scrub: ScrubState::default(),
             }),
             status: Mutex::new(StatusBoard {
                 nodes: BTreeMap::new(),
@@ -1299,6 +1349,8 @@ impl Session {
             transport_gate: Mutex::new(Instant::now()),
             transport_wake: Condvar::new(),
             solids: SolidCache::default(),
+            scrub: Mutex::new(ScrubShared::new()),
+            scrub_wake: Condvar::new(),
             config,
         });
         let sink: Arc<dyn SolveSink> = core.clone();
@@ -1308,6 +1360,12 @@ impl Session {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::downgrade(&solve));
         core.seed_statuses();
+        {
+            // The scrub queues of the loaded text (docs/12 §Speculative
+            // warming): built here so the worker below finds them.
+            let mut inner = core.lock_inner();
+            core.refresh_scrub(&mut inner);
+        }
 
         // The debounce thread: sleeps until the deadline, then submits.
         let debounce_core = Arc::clone(&core);
@@ -1323,6 +1381,8 @@ impl Session {
                 while !ticker_core.shutdown.load(Ordering::SeqCst) {
                     std::thread::sleep(STATUS_PERIOD);
                     ticker_core.flush_status(false);
+                    // Scrub progress rides the same cadence (≤ 10 Hz).
+                    ticker_core.flush_scrub_progress();
                 }
             })
             .ok();
@@ -1333,14 +1393,23 @@ impl Session {
             .name("cicada-transport".to_owned())
             .spawn(move || transport_loop(&transport_core))
             .ok();
+        // The first generation is submitted BEFORE the scrub worker starts:
+        // its idle-class solves wait for the loop to go idle, so they queue
+        // behind the load instead of racing it (and being pre-empted).
+        core.submit_structural();
+        let scrub_core = Arc::clone(&core);
+        let scrub_worker = std::thread::Builder::new()
+            .name("cicada-scrub".to_owned())
+            .spawn(move || scrub_loop(&scrub_core))
+            .ok();
         let session = Arc::new(Self {
             core,
             solve,
             debouncer,
             ticker,
             transport_ticker,
+            scrub_worker,
         });
-        session.submit_structural_now();
         Ok(session)
     }
 
@@ -1431,6 +1500,8 @@ impl Session {
             self.core.pause_transport(&mut inner);
         }
         broadcast_lease(&inner);
+        // A departed writer's drag ended: the warming may resume.
+        self.core.wake_scrub();
     }
 
     /// After the writer's grace period: if no writer, promote the oldest
@@ -1684,6 +1755,10 @@ impl Session {
         if let Some(drag) = ended {
             announce_drag_ended(&inner, &drag);
         }
+        // Whatever the intent did — ended a drag, toggled scrub, paused
+        // playback — the scrub worker re-decides (a wake is a counter bump;
+        // a drag's ticks wake it into the same "blocked" verdict).
+        self.core.wake_scrub();
     }
 
     #[allow(clippy::too_many_lines)] // the intent table, one arm per message
@@ -2320,6 +2395,59 @@ impl Session {
                     refresh_display: false,
                 })
             }
+            ClientMessage::SetScrub { node, on } => {
+                // THE rule is `scrub::eligibility`, read off the DOCUMENT
+                // (as `set_collapsed` reads `collapse_refusal`): inside a
+                // batch the view lags the document. The view is asked only
+                // to tell a line that does not parse from a name nobody
+                // bound.
+                let document = &inner.loaded.document;
+                if document.find_binding(&node).is_none()
+                    && document.find_disabled(&node).is_none()
+                    && inner.graph.node(&node).is_none()
+                {
+                    return Err(IntentError::Unknown(format!("no node named `{node}`")));
+                }
+                match scrub::eligibility(document, &node) {
+                    Err(why @ scrub::Ineligible::NotASlider) => {
+                        return Err(IntentError::Refused(format!("`{node}` is {why}")));
+                    }
+                    // Turning it OFF is always allowed — a hand-written
+                    // `scrub=True` on a slider that cannot scrub is removable.
+                    Err(why) if on => {
+                        return Err(IntentError::Refused(format!("`{node}`: {why}")));
+                    }
+                    Err(_) | Ok(_) => {}
+                }
+                // The opt-in is the TEXT (never the sidecar): `on` writes
+                // `scrub=True` — rewritten in place, or inserted at its
+                // spec-order position as a typed literal is; `off` removes
+                // the kwarg (the default says the same thing), a no-op when
+                // the call never carried it.
+                let text_changed = if on {
+                    let order = spec_order_doc(document, &inner.loaded.specs, &node);
+                    writer::set_param(
+                        &mut inner.loaded.document,
+                        &node,
+                        "scrub",
+                        "True",
+                        order.as_deref(),
+                    )?;
+                    true
+                } else if scrub::has_scrub_kwarg(document, &node) {
+                    writer::remove_kwarg(&mut inner.loaded.document, &node, "scrub")?;
+                    true
+                } else {
+                    false
+                };
+                let verb = if on { "on" } else { "off" };
+                Ok(Applied {
+                    label: format!("scrub {node} {verb}"),
+                    dirty: vec![node],
+                    text_changed,
+                    refresh_display: false,
+                })
+            }
             other => Err(IntentError::Protocol(format!(
                 "`{}` is not a canvas write gesture",
                 type_tag(&other)
@@ -2930,6 +3058,9 @@ impl Session {
                 },
             );
         }
+        // Esc also reached the worker through the loop's cancel (its idle
+        // token); it re-decides — and parks if a position was cut short.
+        self.core.wake_scrub();
     }
 
     // ------------------------------------------------------- transport --
@@ -3137,59 +3268,32 @@ impl Session {
         port: Option<&str>,
         value: &str,
     ) -> Result<HypotheticalReport, HypotheticalError> {
-        let (lowered, targets) = {
-            let inner = self.core.lock_inner();
-            let mut scratch = inner.loaded.document.clone();
-            apply_param(&mut scratch, &inner.loaded.specs, node, port, value)?;
-            let resolution = resolve(&scratch, &Catalog::new(&inner.loaded.specs));
-            let playhead = self.core.playhead(&inner);
-            let lowered = lower_partial_with_playhead(
-                &scratch,
-                &resolution,
-                &inner.loaded.specs,
-                &self.core.config.project,
-                &inner.loaded.scripts,
-                Some(playhead),
-            )
-            .map_err(|e| IntentError::Protocol(e.to_string()))?;
-            let targets = all_targets(&lowered);
-            (lowered, targets)
-        };
-        let started = Instant::now();
-        let run = self.solve.run_idle(&lowered, &targets, &NoopObserver)?;
-        let elapsed = started.elapsed();
-        let computed = run
-            .report
-            .outcomes
-            .iter()
-            .filter(|o| matches!(o, NodeOutcome::Computed { .. }))
-            .count();
-        let cached = run
-            .report
-            .outcomes
-            .iter()
-            .filter(|o| matches!(o, NodeOutcome::CacheHit { .. }))
-            .count();
-        self.core.record_timing(GenerationTiming {
-            generation: run.generation,
-            kind: "hypothetical",
-            started_ms: (started - self.core.epoch).as_secs_f64() * 1000.0,
-            queued_ms: 0.0,
-            elapsed_ms: Some(elapsed.as_secs_f64() * 1000.0),
-            cancelled: run.report.cancelled,
-            cancel_to_idle_ms: None,
-            computed,
-            cached,
-            frame_bytes: 0,
-        });
-        Ok(HypotheticalReport {
-            generation: run.generation,
-            cancelled: run.report.cancelled,
-            computed,
-            cached,
-            failed: run.report.failures().len(),
-            elapsed,
-        })
+        self.core
+            .solve_hypothetical(&self.solve, node, port, value)
+            .map(|(report, _)| report)
+    }
+
+    /// Block until the scrub worker has nothing it can do right now: every
+    /// queue finished or capped, or the worker parked (a pre-emption) or
+    /// blocked (a live drag, playback) — and it has processed the latest
+    /// wake. Tests and diagnostics; `/debug/state.scrub` says which.
+    pub fn wait_scrub(&self) {
+        let shared = self.core.lock_scrub();
+        let _quiet = self
+            .core
+            .scrub_wake
+            .wait_while(shared, |shared| {
+                (shared.state == ScrubWorker::Working || shared.seen != shared.wakes)
+                    && !self.core.shutdown.load(Ordering::SeqCst)
+            })
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    }
+
+    /// Broadcast the pending `scrub_progress` messages now (the status
+    /// ticker does this at ≤ 10 Hz; tests call it to read the wire shape
+    /// without waiting on the ticker).
+    pub fn flush_scrub_progress(&self) {
+        self.core.flush_scrub_progress();
     }
 
     // ------------------------------------------------------ screenshots --
@@ -3340,6 +3444,7 @@ impl Session {
             "display_cache": self.core.solids.stats(),
             "lease": lease_view(&inner),
             "transport": self.core.transport_view(&inner),
+            "scrub": self.core.scrub_debug(&inner),
             "values": values,
             "timings": *self.core.timings.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
         })
@@ -3377,6 +3482,608 @@ impl Drop for Session {
         if let Some(handle) = self.transport_ticker.take() {
             let _ = handle.join();
         }
+        // The scrub worker: pre-empt a position in flight (the loop's
+        // cancel reaches its idle token), wake it, join it.
+        let _dropped = self.solve.cancel();
+        self.core.wake_scrub();
+        if let Some(handle) = self.scrub_worker.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+// ---------------------------------------------------------- scrub caching --
+
+/// The session's scrub-caching state ([`Inner::scrub`]; docs/12
+/// §Speculative warming, DECISIONS.md row 39, v0.1 item 5 S1): one warm
+/// queue per slider whose text says `scrub=True` and whose literals make it
+/// eligible ([`scrub::eligibility`]). Rebuilt from the document by
+/// [`Core::refresh_scrub`] whenever the TEXT changes: a slider's own
+/// literals moving (min/max/step/value, `scrub` toggled off) drops its
+/// queue, as the contract says — and so does any other text change, since
+/// the memo keys the warm set was verified against are the old graph's;
+/// every position is then re-verified (a hit confirms in a hash-only dry
+/// run, a cone that changed re-solves). A sidecar-only change keeps the
+/// queues and their progress.
+#[derive(Debug, Default)]
+struct ScrubState {
+    /// The text the queues were built for ([`Inner::text_hash`]).
+    text_hash: [u8; 32],
+    /// Queues by slider name.
+    queues: BTreeMap<String, WarmQueue>,
+    /// The last queue id handed out ([`WarmQueue::id`]).
+    next_id: u64,
+}
+
+/// Where the scrub worker stands — `/debug/state.scrub.state`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScrubWorker {
+    /// No queue has work.
+    Idle,
+    /// A position's dry run or idle-class solve is under way.
+    Working,
+    /// Idle time this is not: a drag is live (within [`DRAG_GAP_MS`] of
+    /// its last tick — any slider's, not only a scrubbed one's) or the
+    /// transport is playing.
+    Blocked,
+    /// A position came back pre-empted — by a real generation, or by Esc
+    /// — and the worker waits for a real generation newer than the
+    /// pre-empted solve to complete. After an edit or a drag that is the
+    /// next moment; after Esc it is the user's next action: "stop solving"
+    /// includes the warming.
+    Parked,
+}
+
+impl ScrubWorker {
+    fn word(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Working => "working",
+            Self::Blocked => "blocked",
+            Self::Parked => "parked",
+        }
+    }
+}
+
+/// The scrub worker's shared state ([`Core::scrub`]).
+struct ScrubShared {
+    state: ScrubWorker,
+    /// Bumped by every [`Core::wake_scrub`]; the worker sleeps while it
+    /// equals the count its last decision saw.
+    wakes: u64,
+    /// The wake count the worker's last decision saw.
+    seen: u64,
+    /// Parked until a real generation numbered above this completes.
+    parked_until: Option<u64>,
+    /// The newest real generation that completed (so a pre-emption whose
+    /// pre-empting generation already finished does not park forever).
+    last_real_generation: u64,
+    /// The slider the last position was taken from (round robin across
+    /// sliders with work).
+    last_node: Option<String>,
+    /// Sliders whose progress changed since the last `scrub_progress`
+    /// flush.
+    dirty: BTreeSet<String>,
+}
+
+impl ScrubShared {
+    /// Before the worker's first decision: one wake owed, so
+    /// [`Session::wait_scrub`] waits for that decision.
+    fn new() -> Self {
+        Self {
+            state: ScrubWorker::Idle,
+            wakes: 1,
+            seen: 0,
+            parked_until: None,
+            last_real_generation: 0,
+            last_node: None,
+            dirty: BTreeSet::new(),
+        }
+    }
+}
+
+/// The worker's decision ([`Core::scrub_step`]).
+enum ScrubStep {
+    /// Warm position `index` of queue `id` (slider `node`) at `literal`.
+    Warm {
+        id: u64,
+        node: String,
+        index: usize,
+        literal: String,
+    },
+    /// Sleep until woken: nothing to do, parked, or playback running.
+    Sleep,
+    /// A drag is live: re-check after the drag gap (the gap rule is lazy —
+    /// a client that died mid-drag never sends `end_drag`).
+    Blocked,
+}
+
+/// How a warming position ended ([`Core::scrub_settle`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Settled {
+    /// Warm: a dry-run hit (0 bytes) or a completed solve (the bytes of
+    /// the memo entries it stored).
+    Warm { bytes: u64 },
+    /// Red, or refused: done with, not warm.
+    Red,
+    /// Pre-empted; `generation` is the cancelled hypothetical's number.
+    Preempted { generation: u64 },
+}
+
+/// The scrub worker (`cicada-scrub`; docs/12 §Speculative warming —
+/// "always at the lowest priority, preempted by any real work"): one
+/// position at a time, through the idle class, for as long as any queue
+/// has work and the app is idle; otherwise asleep on the wake counter.
+fn scrub_loop(core: &Core) {
+    loop {
+        if core.shutdown.load(Ordering::SeqCst) {
+            return;
+        }
+        let (step, seen) = {
+            let mut inner = core.lock_inner();
+            let mut shared = core.lock_scrub();
+            let seen = shared.wakes;
+            let step = core.scrub_step(&mut inner, &mut shared);
+            shared.seen = seen;
+            // Waiters (`wait_scrub`) re-check: the latest wake is decided.
+            core.scrub_wake.notify_all();
+            (step, seen)
+        };
+        match step {
+            ScrubStep::Warm {
+                id,
+                node,
+                index,
+                literal,
+            } => core.warm_position(id, &node, index, &literal),
+            ScrubStep::Sleep => {
+                let shared = core.lock_scrub();
+                let _asleep = core
+                    .scrub_wake
+                    .wait_while(shared, |shared| {
+                        shared.wakes == seen && !core.shutdown.load(Ordering::SeqCst)
+                    })
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+            ScrubStep::Blocked => {
+                let shared = core.lock_scrub();
+                let _asleep = core
+                    .scrub_wake
+                    .wait_timeout_while(shared, Duration::from_millis(DRAG_GAP_MS + 1), |shared| {
+                        shared.wakes == seen && !core.shutdown.load(Ordering::SeqCst)
+                    })
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+        }
+    }
+}
+
+impl Core {
+    fn lock_scrub(&self) -> std::sync::MutexGuard<'_, ScrubShared> {
+        self.scrub
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Wake the scrub worker: something it may be waiting on changed (the
+    /// queues, a drag's end, a pause, a completed generation, shutdown).
+    fn wake_scrub(&self) {
+        let mut shared = self.lock_scrub();
+        shared.wakes += 1;
+        self.scrub_wake.notify_all();
+    }
+
+    /// Is a drag live — within [`DRAG_GAP_MS`] of its last tick? The gap
+    /// rule is decided lazily at the next tick ([`Self::preview_is_live`]);
+    /// the worker applies it itself so a drag nobody released stops
+    /// blocking the warming after the gap.
+    fn drag_live(&self, inner: &Inner) -> bool {
+        inner
+            .drag
+            .as_ref()
+            .is_some_and(|drag| self.now_ms().saturating_sub(drag.last_tick_ms) <= DRAG_GAP_MS)
+    }
+
+    /// Rebuild the warm queues from the document when the text changed
+    /// (see [`ScrubState`]), overlay every queue's warm state on the graph
+    /// view (just rebuilt from scratch, so it carries none), and wake the
+    /// worker. Under the caller's `inner` hold.
+    fn refresh_scrub(&self, inner: &mut Inner) {
+        if inner.scrub.text_hash != inner.text_hash {
+            let sliders: Vec<String> = inner
+                .graph
+                .nodes
+                .iter()
+                .filter(|node| {
+                    node.param
+                        .as_ref()
+                        .and_then(|param| param.scrub.as_ref())
+                        .is_some_and(|scrub| scrub.on && scrub.ineligible.is_none())
+                })
+                .map(|node| node.name.clone())
+                .collect();
+            let mut queues = BTreeMap::new();
+            for name in sliders {
+                let Ok(literals) = scrub::eligibility(&inner.loaded.document, &name) else {
+                    continue;
+                };
+                if !literals.scrub {
+                    continue;
+                }
+                let positions = &literals.positions;
+                let values: Vec<String> =
+                    (0..positions.count).map(|i| positions.literal(i)).collect();
+                let order =
+                    scrub::nearest_first(positions.count, positions.nearest(literals.value));
+                inner.scrub.next_id += 1;
+                let id = inner.scrub.next_id;
+                queues.insert(
+                    name.clone(),
+                    WarmQueue::new(id, &name, SCRUB_PORT, values, order),
+                );
+            }
+            inner.scrub.queues = queues;
+            inner.scrub.text_hash = inner.text_hash;
+        }
+        let names: Vec<String> = inner.scrub.queues.keys().cloned().collect();
+        for name in names {
+            Self::overlay_scrub(inner, &name);
+        }
+        self.wake_scrub();
+    }
+
+    /// Write a queue's warm state into its slider's `ParamView.scrub` — the
+    /// graph view every delta and snapshot clones, so they carry the
+    /// current warm set without a second message.
+    fn overlay_scrub(inner: &mut Inner, node: &str) {
+        let Some(queue) = inner.scrub.queues.get(node) else {
+            return;
+        };
+        let view = queue.view(true);
+        if let Some(param) = inner
+            .graph
+            .nodes
+            .iter_mut()
+            .find(|n| n.name == node)
+            .and_then(|n| n.param.as_mut())
+            && let Some(scrub) = param.scrub.as_mut()
+        {
+            *scrub = view;
+        }
+    }
+
+    /// The worker's decision, under `inner` and `scrub`: nothing real
+    /// completed yet (the load) → sleep; parked → sleep; playback or a live
+    /// drag → blocked (idle time this is not); else the next position of
+    /// the next slider with work, round robin across sliders; none → idle.
+    fn scrub_step(&self, inner: &mut Inner, shared: &mut ScrubShared) -> ScrubStep {
+        if shared.last_real_generation == 0 {
+            // Nothing real has completed yet — the load is in flight. Idle
+            // time starts after it: a dry run now would miss the keys the
+            // load is about to store and solve them a second time.
+            shared.state = ScrubWorker::Idle;
+            return ScrubStep::Sleep;
+        }
+        if shared.parked_until.is_some() {
+            shared.state = ScrubWorker::Parked;
+            return ScrubStep::Sleep;
+        }
+        if inner.transport.playing {
+            shared.state = ScrubWorker::Blocked;
+            return ScrubStep::Sleep;
+        }
+        if self.drag_live(inner) {
+            shared.state = ScrubWorker::Blocked;
+            return ScrubStep::Blocked;
+        }
+        let names: Vec<String> = inner.scrub.queues.keys().cloned().collect();
+        if !names.is_empty() {
+            let start = shared
+                .last_node
+                .as_ref()
+                .and_then(|last| names.iter().position(|n| n == last))
+                .map_or(0, |p| p + 1);
+            for offset in 0..names.len() {
+                let name = &names[(start + offset) % names.len()];
+                let Some(queue) = inner.scrub.queues.get_mut(name) else {
+                    continue;
+                };
+                if let Some(index) = queue.next() {
+                    queue.in_flight = Some(index);
+                    shared.last_node = Some(name.clone());
+                    shared.state = ScrubWorker::Working;
+                    return ScrubStep::Warm {
+                        id: queue.id,
+                        node: name.clone(),
+                        index,
+                        literal: queue.values[index].clone(),
+                    };
+                }
+            }
+        }
+        shared.state = ScrubWorker::Idle;
+        ScrubStep::Sleep
+    }
+
+    /// Warm one position: a hash-only dry run first (a memo hit needs no
+    /// solve — "skip-if-stored", docs/12), else the idle-class hypothetical
+    /// solve; then settle the result on the queue.
+    fn warm_position(&self, id: u64, node: &str, index: usize, literal: &str) {
+        // 1. The dry run: `None` means the literal was refused (red).
+        let warm = {
+            let inner = self.lock_inner();
+            self.scratch_lowering(&inner, node, Some(SCRUB_PORT), literal)
+                .ok()
+                .map(|scratch| {
+                    // No cone at all (the slider feeds nothing) is vacuously warm.
+                    self.dry_run(&inner, &scratch, node, Some(SCRUB_PORT))
+                        .is_none_or(|run| run.misses == 0)
+                })
+        };
+        match warm {
+            None => return self.scrub_settle(id, index, Settled::Red),
+            Some(true) => return self.scrub_settle(id, index, Settled::Warm { bytes: 0 }),
+            Some(false) => {}
+        }
+        // 2. The test seam: hold here, before the solve is submitted.
+        if let Some(gate) = &self.config.scrub_gate {
+            gate(node, index);
+        }
+        // 3. The idle-class solve — pre-empted by any real generation or Esc.
+        let solve = self
+            .solve
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade);
+        let Some(solve) = solve else {
+            return;
+        };
+        match self.solve_hypothetical(&solve, node, Some(SCRUB_PORT), literal) {
+            Ok((report, _)) if report.cancelled => self.scrub_settle(
+                id,
+                index,
+                Settled::Preempted {
+                    generation: report.generation,
+                },
+            ),
+            Ok((report, _)) if report.failed > 0 => self.scrub_settle(id, index, Settled::Red),
+            Ok((_, outcomes)) => {
+                // The bytes attributed to this position: what its computed
+                // nodes' outputs take in the store, deep (the cost records
+                // carry elements and nanos, not bytes).
+                let store = self.scheduler.store();
+                let mut bytes = 0_u64;
+                for outcome in &outcomes.outcomes {
+                    let NodeOutcome::Computed { outputs, .. } = outcome else {
+                        continue;
+                    };
+                    for hash in outputs {
+                        match store.stored_bytes(hash) {
+                            Ok(n) => bytes = bytes.saturating_add(n),
+                            Err(error) => self.warn(format!(
+                                "scrub caching: `{node}` at {literal}: the store could not size \
+                                 value {hash}: {error}"
+                            )),
+                        }
+                    }
+                }
+                self.scrub_settle(id, index, Settled::Warm { bytes });
+            }
+            Err(HypotheticalError::Idle(IdleError::Shutdown)) => {}
+            Err(error) => {
+                self.warn(format!("scrub caching: `{node}` at {literal}: {error}"));
+                self.scrub_settle(id, index, Settled::Red);
+            }
+        }
+    }
+
+    /// A `warning` notice to every client, from the worker.
+    fn warn(&self, message: String) {
+        let inner = self.lock_inner();
+        broadcast(
+            &inner,
+            &ServerMessage::Notice {
+                level: "warning".to_owned(),
+                message,
+            },
+        );
+    }
+
+    /// Record how a position ended on its queue — if the queue still
+    /// exists (a text change meanwhile dropped it: the result belongs to
+    /// nothing and is discarded); overlay the view; mark the slider for
+    /// the next progress flush; park the worker on a pre-emption.
+    fn scrub_settle(&self, id: u64, index: usize, outcome: Settled) {
+        let mut inner = self.lock_inner();
+        let mut shared = self.lock_scrub();
+        if let Settled::Preempted { generation } = outcome
+            && shared.last_real_generation <= generation
+        {
+            // Parked until a real generation newer than the pre-empted solve
+            // completes — unless one already has: a tiny real generation can
+            // finish before the cancelled solve returns from its chunk.
+            shared.parked_until = Some(generation);
+        }
+        let name = inner
+            .scrub
+            .queues
+            .values_mut()
+            .find(|queue| queue.id == id)
+            .map(|queue| {
+                match outcome {
+                    Settled::Warm { bytes } => {
+                        queue.record_warm(index, bytes, self.config.scrub_byte_cap);
+                    }
+                    Settled::Red => queue.record_red(index),
+                    Settled::Preempted { .. } => queue.record_preempted(),
+                }
+                queue.node.clone()
+            });
+        if let Some(name) = name {
+            Self::overlay_scrub(&mut inner, &name);
+            if !matches!(outcome, Settled::Preempted { .. }) {
+                shared.dirty.insert(name);
+            }
+        }
+        // The state word stays `Working` until the worker's next decision
+        // sets it: a waiter (`wait_scrub`) must not read "idle" in the gap.
+    }
+
+    /// A real generation completed ([`SolveSink::on_complete`]): un-park
+    /// the worker if it was parked on an older solve, and wake it.
+    fn scrub_generation_completed(&self, generation: u64) {
+        let mut shared = self.lock_scrub();
+        shared.last_real_generation = shared.last_real_generation.max(generation);
+        if shared.parked_until.is_some_and(|until| generation > until) {
+            shared.parked_until = None;
+        }
+        shared.wakes += 1;
+        self.scrub_wake.notify_all();
+    }
+
+    /// Broadcast `scrub_progress` for every slider whose queue moved since
+    /// the last flush — the status ticker's cadence (≤ 10 Hz), one message
+    /// per slider however many positions landed in between.
+    fn flush_scrub_progress(&self) {
+        let dirty = {
+            let mut shared = self.lock_scrub();
+            std::mem::take(&mut shared.dirty)
+        };
+        if dirty.is_empty() {
+            return;
+        }
+        let inner = self.lock_inner();
+        for node in dirty {
+            if let Some(queue) = inner.scrub.queues.get(&node) {
+                broadcast(
+                    &inner,
+                    &ServerMessage::ScrubProgress {
+                        node,
+                        port: queue.port.clone(),
+                        warmed: queue.warmed.iter().copied().collect(),
+                        warming: queue.warming(),
+                        bytes: queue.bytes,
+                        capped: queue.capped,
+                    },
+                );
+            }
+        }
+    }
+
+    /// `/debug/state.scrub`: the worker's state and every warming queue.
+    fn scrub_debug(&self, inner: &Inner) -> serde_json::Value {
+        let shared = self.lock_scrub();
+        let queues: Vec<serde_json::Value> = inner
+            .scrub
+            .queues
+            .values()
+            .map(|queue| {
+                serde_json::json!({
+                    "node": queue.node,
+                    "port": queue.port,
+                    "id": queue.id,
+                    "positions": queue.values.len(),
+                    "values": queue.values,
+                    "order": queue.order,
+                    "warmed": queue.warmed,
+                    "visited": queue.visited,
+                    "in_flight": queue.in_flight,
+                    "next": queue.next(),
+                    "bytes": queue.bytes,
+                    "capped": queue.capped,
+                    "warming": queue.warming(),
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "state": shared.state.word(),
+            "parked_until": shared.parked_until,
+            "byte_cap": self.config.scrub_byte_cap,
+            "max_positions": scrub::SCRUB_MAX_POSITIONS,
+            "queues": queues,
+        })
+    }
+
+    /// The scratch lowering a hypothetical (or a preview tick's dry run)
+    /// runs on: the document with ONE param overridden — spelled as
+    /// `param_preview` spells it — at the transport's playhead.
+    fn scratch_lowering(
+        &self,
+        inner: &Inner,
+        node: &str,
+        port: Option<&str>,
+        value: &str,
+    ) -> Result<Lowered, IntentError> {
+        let mut scratch = inner.loaded.document.clone();
+        apply_param(&mut scratch, &inner.loaded.specs, node, port, value)?;
+        let resolution = resolve(&scratch, &Catalog::new(&inner.loaded.specs));
+        let playhead = self.playhead(inner);
+        lower_partial_with_playhead(
+            &scratch,
+            &resolution,
+            &inner.loaded.specs,
+            &self.config.project,
+            &inner.loaded.scripts,
+            Some(playhead),
+        )
+        .map_err(|e| IntentError::Protocol(e.to_string()))
+    }
+
+    /// [`Session::solve_hypothetical`]'s body, reachable from the scrub
+    /// worker (which holds the `Core`, not the `Session`): the idle-class
+    /// solve of the pipeline with one param overridden, its report and the
+    /// scheduler's per-node outcomes (the warming sizes its computed
+    /// outputs from them).
+    fn solve_hypothetical(
+        &self,
+        solve: &SolveLoop,
+        node: &str,
+        port: Option<&str>,
+        value: &str,
+    ) -> Result<(HypotheticalReport, SolveReport), HypotheticalError> {
+        let (lowered, targets) = {
+            let inner = self.lock_inner();
+            let lowered = self.scratch_lowering(&inner, node, port, value)?;
+            let targets = all_targets(&lowered);
+            (lowered, targets)
+        };
+        let started = Instant::now();
+        let run = solve.run_idle(&lowered, &targets, &NoopObserver)?;
+        let elapsed = started.elapsed();
+        let computed = run
+            .report
+            .outcomes
+            .iter()
+            .filter(|o| matches!(o, NodeOutcome::Computed { .. }))
+            .count();
+        let cached = run
+            .report
+            .outcomes
+            .iter()
+            .filter(|o| matches!(o, NodeOutcome::CacheHit { .. }))
+            .count();
+        self.record_timing(GenerationTiming {
+            generation: run.generation,
+            kind: "hypothetical",
+            started_ms: (started - self.epoch).as_secs_f64() * 1000.0,
+            queued_ms: 0.0,
+            elapsed_ms: Some(elapsed.as_secs_f64() * 1000.0),
+            cancelled: run.report.cancelled,
+            cancel_to_idle_ms: None,
+            computed,
+            cached,
+            frame_bytes: 0,
+        });
+        let report = HypotheticalReport {
+            generation: run.generation,
+            cancelled: run.report.cancelled,
+            computed,
+            cached,
+            failed: run.report.failures().len(),
+            elapsed,
+        };
+        Ok((report, run.report))
     }
 }
 
@@ -4366,6 +5073,9 @@ impl Core {
         if after.driven != before.driven || loop_changed {
             broadcast(inner, &ServerMessage::Transport(after));
         }
+        // The scrub queues follow the text; the rebuilt view gets their
+        // warm state back.
+        self.refresh_scrub(inner);
     }
 
     // ------------------------------------------------------- transport --
@@ -4434,6 +5144,8 @@ impl Core {
         inner.transport.playing = false;
         self.set_ticker_playing(false);
         broadcast(inner, &ServerMessage::Transport(self.transport_view(inner)));
+        // Playback blocked the warming; it may resume.
+        self.wake_scrub();
     }
 
     /// Hand the ticker the playing state after a control: under the gate,
@@ -4681,7 +5393,6 @@ impl Core {
     /// evidence — then there is nothing to predict from (a cone of pure
     /// hits is `Some(0 ms)`). Same evidence as the ETA; the
     /// regression estimator of docs/12 replaces the mean when it lands.
-    #[allow(clippy::too_many_lines)] // the dry run IS the executor's key phase, in one place
     fn predict_cone(
         &self,
         inner: &Inner,
@@ -4689,6 +5400,31 @@ impl Core {
         node: &str,
         port: Option<&str>,
     ) -> Option<ConeCost> {
+        let run = self.dry_run(inner, scratch, node, port)?;
+        if run.misses > 0 && run.evidence == 0 {
+            return None;
+        }
+        // Every node a memo hit: a cache read, predicted as exactly that.
+        Some(ConeCost {
+            ms: run.total_nanos / 1_000_000.0,
+            rough: run.rough,
+            nodes: run.nodes,
+            misses: run.misses,
+        })
+    }
+
+    /// The hash-only dry run behind [`Self::predict_cone`] — and behind
+    /// scrub caching's "is this position already warm?" (`misses == 0`),
+    /// which needs the miss count without the cost verdict. `None` when
+    /// the param feeds no node of the graph.
+    #[allow(clippy::too_many_lines)] // the dry run IS the executor's key phase, in one place
+    fn dry_run(
+        &self,
+        inner: &Inner,
+        scratch: &Lowered,
+        node: &str,
+        port: Option<&str>,
+    ) -> Option<DryRun> {
         let graph = &scratch.graph;
         let seeds: Vec<NodeId> = match port {
             Some(_) => graph.find(node).into_iter().collect(),
@@ -4783,13 +5519,10 @@ impl Core {
                 _ => rough = true,
             }
         }
-        if misses > 0 && evidence == 0 {
-            return None;
-        }
-        // Every node a memo hit: a cache read, predicted as exactly that.
-        Some(ConeCost {
-            ms: total_nanos / 1_000_000.0,
+        Some(DryRun {
+            total_nanos,
             rough,
+            evidence,
             nodes,
             misses,
         })
@@ -5599,6 +6332,8 @@ impl Core {
             frame_bytes,
         });
         self.flush_status(true);
+        // A real generation completed: a parked scrub worker may resume.
+        self.scrub_generation_completed(generation);
     }
 
     fn on_error_impl(&self, generation: u64, error: &SolveError) {
@@ -5623,6 +6358,9 @@ impl Core {
 }
 
 #[cfg(test)]
+mod scrub_tests;
+
+#[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
@@ -5630,9 +6368,10 @@ mod tests {
 
     use super::*;
     use crate::frames::{Frame, FrameKind, decode};
+    use crate::scrub::SCRUB_BYTE_CAP;
     use tokio::sync::mpsc::unbounded_channel;
 
-    fn project(source: &str) -> (tempfile::TempDir, SessionConfig) {
+    pub(super) fn project(source: &str) -> (tempfile::TempDir, SessionConfig) {
         let dir = tempfile::tempdir().unwrap();
         let pipeline = dir.path().join("p.cic");
         std::fs::write(&pipeline, source).unwrap();
@@ -5644,11 +6383,13 @@ mod tests {
             project: ProjectConfig::default(),
             op_clock: None,
             restream_hold: None,
+            scrub_byte_cap: SCRUB_BYTE_CAP,
+            scrub_gate: None,
         };
         (dir, config)
     }
 
-    fn drain(rx: &mut tokio::sync::mpsc::UnboundedReceiver<Outgoing>) -> Vec<Outgoing> {
+    pub(super) fn drain(rx: &mut tokio::sync::mpsc::UnboundedReceiver<Outgoing>) -> Vec<Outgoing> {
         let mut out = Vec::new();
         while let Ok(message) = rx.try_recv() {
             out.push(message);
@@ -5656,7 +6397,7 @@ mod tests {
         out
     }
 
-    fn texts(messages: &[Outgoing]) -> Vec<serde_json::Value> {
+    pub(super) fn texts(messages: &[Outgoing]) -> Vec<serde_json::Value> {
         messages
             .iter()
             .filter_map(|m| match m {
@@ -7165,7 +7906,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         serde_json::to_value(session.history()).unwrap()
     }
 
-    fn project_with_clock(
+    pub(super) fn project_with_clock(
         source: &str,
     ) -> (
         tempfile::TempDir,
@@ -7488,6 +8229,8 @@ size = slider(value=4.0, min=0.5, max=5.0)
             project: ProjectConfig::default(),
             op_clock: None,
             restream_hold: None,
+            scrub_byte_cap: SCRUB_BYTE_CAP,
+            scrub_gate: None,
         };
         let session = Session::open(config).unwrap();
         session.wait_idle();
@@ -7603,6 +8346,8 @@ size = slider(value=4.0, min=0.5, max=5.0)
             project: ProjectConfig::default(),
             op_clock: None,
             restream_hold: None,
+            scrub_byte_cap: SCRUB_BYTE_CAP,
+            scrub_gate: None,
         };
         // Python startup included: generous, and only ever waited in full
         // when the bridge is broken — then every hold is released so the
@@ -7835,7 +8580,12 @@ size = slider(value=4.0, min=0.5, max=5.0)
     // ------------------------------------------------ compute-on-release --
 
     /// The tick's scratch graph, exactly as the preview path lowers it.
-    fn scratch_lowered(inner: &Inner, node: &str, port: Option<&str>, value: &str) -> Lowered {
+    pub(super) fn scratch_lowered(
+        inner: &Inner,
+        node: &str,
+        port: Option<&str>,
+        value: &str,
+    ) -> Lowered {
         let mut scratch = inner.loaded.document.clone();
         apply_param(&mut scratch, &inner.loaded.specs, node, port, value).unwrap();
         let resolution = resolve(&scratch, &Catalog::new(&inner.loaded.specs));
@@ -7851,7 +8601,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
     }
 
     /// Preview generations recorded so far (the harness's currency).
-    fn preview_generations(session: &Session) -> usize {
+    pub(super) fn preview_generations(session: &Session) -> usize {
         session.debug_state(false)["timings"]
             .as_array()
             .unwrap()

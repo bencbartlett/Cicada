@@ -26,6 +26,8 @@ const gestures: GestureMessage[] = [
     payload: { func: "slider", cell: [2, 3], params: [{ port: "value", value: "1.0" }, { port: "max", value: "20.0" }] },
   },
   { type: "set_collapsed", payload: { node: "size", collapsed: true } },
+  // v0.1 item 5 (S1): the scrub-cache toggle — a text-editing gesture, a batch element.
+  { type: "set_scrub", payload: { node: "size", on: true } },
   { type: "connect", payload: { from: { node: "a", port: "out" }, to: { node: "b", port: "x" } } },
   { type: "disconnect", payload: { to: { node: "b", port: "x" } } },
   { type: "accept_lift", payload: { node: "b", port: "x" } },

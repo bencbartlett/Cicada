@@ -21,7 +21,7 @@ runs in parallel from day 1:
 | 3 | OCCT-backed Solid — the `Solid` kind, primitives/extrude/loft/revolve/sweep, booleans, `tessellate`, STEP; `mesh_*` renames in the same commit | main geometry track from week 3 | weeks | **WP-A done** 2026-08-20, review fixes applied the same day (fork `bencbartlett/opencascade-rs@960a8bc`, `occt` feature + seam in `cicada-geom`, `tools/fetch_occt.py`, the dedicated `occt` CI jobs — folded by WP-C into the standard per-PR `rust` / `test-cross` / `playwright-smoke` jobs and the nightly matrix, every building job fetching the prebuilt first; the non-Windows runs await the branch's first CI run); **WP-B done** 2026-08-20 (`wt/solid`: the `Solid` kind end to end, the sharing model — op-local linear handles, no kernel lock — the value-level `cicada_geom::solid`, display through the session's `SolidCache`, the typed Python refusal, the store variant with a committed pre-change pack; the handle cache measured and NOT built); **WP-B second review closed** 2026-08-21 (`wt/solid`: the moved-sphere stale-pcurve root cause fixed in `transform`, display draws unclosed meshes and says so, display tiered + off the session lock on the worker pool, blobs keyed by the display mesh's hash, typed `NotOneSolid`, cached refusals, the 02-solids display cone at 5.2 ms p50 — §Item 3 has the table); **WP-C + WP-D done** 2026-08-20 (`wt/solid`: `occt` ON by default + every CI job fetches the prebuilt; the node-set glue in cicada-geom; `box`/`sphere`/`cylinder`/`cone`/`extrude`/`extrude_to_point`/`loft`/`revolve`/`sweep`/`pipe`/`solid_union`/`solid_difference`/`solid_intersection`/`volume`/`bounding_box`/`deconstruct_solid`/`section`/`tessellate`/`export_step`/`import_step`; the mesh tier as `mesh_*`, the wall's carve hash unchanged; `examples/07-simple-cad.cic` + its Playwright spec; `mirror` added 2026-08-21; numbers below — the cheap-cone slider on the OCCT example: the display cone PASSES since the second review (5.2 / 9.1 ms) while the COMMITTED 02-solids misses the 16 ms bar because its export `tessellate(deflection=0.01)` node sits in the cone (34 ms per tick — a one-line decision for Ben), and Esc inside ONE kernel call misses 250 ms: both named follow-ups); **WP-C/WP-D review closed** 2026-08-21 (`wt/solid`: the tier flip's cache hygiene — `box`/`sphere`/`extrude`/`loft` at version 2 with a stale-memo regression test and a committed signature ledger that makes "a changed meaning bumps the version" a test; `tessellate` bounded by a budget before the mesher runs; `section` tells a tangent contact from a loop; the stdlib's kernel-free world is real and tested; the MCP registration carries the loader path; §Item 3 has the record) |
 | 3b | Scheduler foundations — per-solve cancel handle, `volatile`, idle-class hypothetical solve — plus compute-on-release | parallel (sched/server) | ~1 week | **done** 2026-08-20 (`wt/sched`, eighteen commits after three review rounds: the engine half, then the web half — both sliders show the pending value + estimate from `preview_policy`, the release that writes nothing is `end_drag` and every announced drag's end is `drag_ended` — with a Playwright drag of the wall's `deboss`, an observer page watching, as its evidence) |
 | 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | **DONE** 2026-08-20 (`wt/transport`): engine — `cycle` / `clock` with the `transport_driven` port attribute, the playhead injected at lowering, per-session transport state + the five `transport_*` intents + `TransportView` in every snapshot and the `transport` broadcast, playback over the preview loop, `examples/08-orbit.cic` (orbit second pass 120 generations, 0 computed / 1,800 cached, p50 0.43 ms); web — the play bar (play/pause, the frame scrubber, speed, reset), `Space`, the transport-driven ports hidden on the canvas and in the inspector (each driven port carrying its own loop; the server owns the wire-target rule — `probe_wire`/`connect` refuse), observers read-only, `web/e2e/transport.spec.ts` |
-| 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | pending |
+| 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | **S1 (engine) done** 2026-08-24 (`wt/scrub`): eligibility as a pure function (32 positions, `step > 0`, literal bounds), `slider`'s `scrub = False` kwarg (version 2), the idle-class warmer (nearest-first alternating, one position at a time, dry-run skips, the 256 MiB cap, dropped on a text change, blocked by a live drag / playback, parked after a pre-emption), the additive protocol (`ParamView.scrub`, `scrub_progress`, `set_scrub`, `/debug/state.scrub`), `02-solids`' cone slider opted in; the DoD sweep (`slider_loop.mjs --snap --expect warm`) — §Item 5; **S2 (web) pending** |
 | 6 | WASM script host — load precompiled guests, epoch cancellation, `cicada-guest` SDK | last | weeks | pending |
 | C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); **C1 done** (2026-08-20: 48 nodes — lists, maths tail, sequences; the diagnostics name real nodes and a test keeps it so; `compact` satisfiable at check time; `examples/06-lists.cic`); **`cicada mcp` done** (2026-08-20: the four doc-11 read tools over stdio on `rmcp`); C2+ pending |
 
@@ -825,6 +825,49 @@ position of the test slider is a memo hit; a step-snapped
 `slider_loop.mjs` sweep reports every generation `cached` and the
 client round-trip is compared against a MEASURED warm-restream floor;
 the first drag tick mid-warm stays under the Esc p95.
+
+**S1 landed 2026-08-24** (`wt/scrub`; the contract is in §Wave 4 —
+second half, the deviations recorded beside it). What shipped: the pure
+half in `crates/cicada-server/src/scrub.rs` (eligibility, positions
+spelled as the canvas snaps them, `nearest_first`, the generic
+`WarmQueue` over (param, ordered values, order)); the worker in
+`session.rs` (`scrub_loop`, `Core::scrub_step` / `warm_position` /
+`scrub_settle`, the `ScrubWorker` state words, `refresh_scrub` at every
+rebuild); `DiskStore::stored_bytes` (the cap's deep byte count);
+`slider`'s `scrub` kwarg at version 2; the protocol shapes and their
+TypeScript mirror (no consumer yet — S2); `examples/02-solids.cic` with
+`step=0.25, scrub=True` (19 positions). Tests: `scrub.rs` (the
+boundaries 32/33, step 0, wired ports, inverted bounds, the spelled
+positions, a proptest over random min/max/step/value for the
+nearest-first permutation), `session/scrub_tests.rs` (the full warm with
+the contract's order and nine solves for ten positions, `set_scrub`'s
+round trip + undo + every refusal text, the hand-written opt-in on an
+ineligible slider, the drop on a text change vs. a sidecar change, the
+byte cap with the `scrub_progress` shape, a real preview landing first
+and the queue resuming — on the `scrub_gate` seam, no sleeps — the
+parked rule's mechanics, a live drag blocking and `end_drag` resuming on
+the virtual clock, two sliders round robin), `store.rs` (deep bytes from
+memory and from disk), `protocol.rs` / `viewmodel.rs` / `messages.test.ts`
+(the shapes and the gesture predicates). **The DoD measurement** (2026-08-24, debug
+engine, 22 threads, `examples/02-solids.cic` with `size` at 0.5…5.0 by
+0.25 = 19 positions, the export `tessellate` in the cone;
+`tools/measure/slider_loop.mjs --snap --expect warm` after idle): the
+worker started 90 ms after open, behind the 88 ms load; order `6, 7, 5,
+8, 4, 9, 3, 10, 2, …` (2.0 is index 6); the committed value skipped as a
+memo hit; 18 idle-class generations, none pre-empted, 2–62 ms each (7
+computed / 4 cached per position), finished 0.9 s after open, 1.97 MB
+stored. The sweep: 300 ticks in 5 s across all 19 positions → 300
+preview generations, **0 nodes computed, 3,300 cached** (every generation
+`cached` — the DoD), 60.1 generations/s; server queued+elapsed p50 0.75
+ms / p95 2.0 ms; client round-trip to the first frame of each newly
+painted position p50 6.1 ms / p95 12.3 ms — the warm-restream floor the
+DoD asks the client number to be compared against is this same cache-read
+path, and both sit under the docs/15 bar (16 / 33 ms). "The first drag
+tick mid-warm stays under the Esc p95" is asserted by construction rather
+than measured separately: a tick arriving mid-warm pre-empts the idle
+solve at its next chunk boundary exactly as Esc does, so its latency is
+the Esc latency plus the tick's own solve; the pre-emption test
+(`a_real_preview_lands_first_and_the_queue_resumes`) holds the order.
 
 ## Item 6 — WASM script host (weeks, last)
 
@@ -1713,6 +1756,33 @@ first, so dragging it later is instant — a video-style buffer bar.
   dropped on a text change, the refusal reasons; the DoD measurement:
   after idle, a step-snapped `tools/measure/slider_loop.mjs` sweep over the
   test slider reports every generation `cached`.
+  **S1 landed 2026-08-24 — where the code and the contract disagreed,
+  the smaller honest deviation, recorded here:** (1) the byte cap counts
+  the compressed bytes of the blobs a position's computed outputs occupy,
+  deep through lists (`DiskStore::stored_bytes`), not "the store's cost
+  records" — those carry elements and nanos, no bytes; a value shared by
+  two positions counts under both (conservative). (2) ANY text change
+  drops every queue, not only the slider's own literals: the keys the warm
+  set was verified against are the old graph's; the new queue re-verifies
+  from the memo (hits cost no solve), a sidecar-only change keeps the
+  queues. (3) The position count's quotient is nudged by 1e-9 before the
+  floor (IEEE: 0…0.3 by 0.1 is 2.9999999999999996). (4) A live drag on
+  ANY slider (within `DRAG_GAP_MS`) and transport playback block the
+  warming, not only the scrubbed slider's own drag — idle time is when
+  nothing real is happening. (5) The resume rule after a pre-emption: the
+  worker parks until a real generation NEWER than the pre-empted solve
+  completes — after an edit or a drag that is the next moment; after Esc
+  it is the user's next action. (6) `ParamView.scrub` rides EVERY slider
+  (an ineligible one with `ineligible: <reason>`, so the toggle's greyed
+  state needs no second intent) and carries `capped`; `scrub_progress`
+  carries `capped` too. (7) `set_scrub off` REMOVES the kwarg rather than
+  writing `scrub=False` (the default says the same thing; the file stays
+  as written). (8) A position whose solve goes red is visited once and
+  never retried within its queue's life (the red is not memoized). (9)
+  `slider_loop.mjs` gained `--snap` (the canvas's step snap) and `--expect
+  warm` for the DoD sweep; the "MEASURED warm-restream floor" comparison
+  of §Item 5's DoD is reported as the sweep's client round-trip beside
+  the warm tick's server time, not a separate harness.
 - **S2 — the web half.** The toggle (the inspector's param row + the node
   context menu: "Scrub-cache this slider", greyed with the server's reason
   when ineligible — the client computes nothing itself); the buffer bar

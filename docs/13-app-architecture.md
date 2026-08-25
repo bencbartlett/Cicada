@@ -96,7 +96,8 @@ The edit flow is **intent → authoritative delta**:
    `accept_lift`, `set_param`, `rename`, `delete_node`,
    `toggle_disable` (the `#off` prefix; the delta says `disable x` /
    `enable x`), `move_node` (layout), `set_preview`, `set_collapsed`
-   (layout too — the collapsed slider, wave 4 B4), `undo`, `redo`,
+   (layout too — the collapsed slider, wave 4 B4), `set_scrub` (the
+   scrub-caching kwarg, v0.1 item 5), `undo`, `redo`,
    `batch` (several gestures as one op), `apply_text` (whole files,
    agents) — see §Undo/redo for the last four. The transport controls
    (`transport_play` … `transport_reset`, §Animation transport) are
@@ -168,6 +169,44 @@ Two additive pieces for the sliders (wave 4 B4, 2026-08-24; docs/16
   whose bound a later text edit wires is drawn expanded while the wire
   stands — the flag stays in the sidecar and takes effect again when the
   wire goes.
+
+**Scrub caching** (v0.1 item 5 S1, 2026-08-24; docs/12 §Speculative
+warming; DECISIONS.md row 39) — additive, `PROTOCOL_VERSION` unchanged:
+
+- Every slider's `ParamView` carries `scrub: {on, positions, warmed,
+  warming, bytes, capped?, ineligible?}` (`protocol::ScrubView`): `on` is
+  what the TEXT says (`scrub=True`), `positions` the step-quantized count
+  (0 when ineligible), `warmed` the position indices verified warm
+  (ascending), `warming` whether work remains (the bar's pulse), `bytes`
+  what the warming stored for this slider, `capped` (omitted when false)
+  that the 256 MiB cap stopped it, and `ineligible` (absent when
+  eligible) the server's reason — `too many positions (51 > 32)`, `max is
+  wired — the positions are a function of literal min, max and step`,
+  `step is 0 — a continuous slider has no positions to warm` — which the
+  toggle is greyed with; the client computes nothing. The session
+  overlays its queue's state on the view at every rebuild and every
+  position, so each `snapshot`/`delta` carries the current warm set.
+- `scrub_progress {node, port, warmed, warming, bytes, capped?}` is
+  broadcast coalesced at the statuses' cadence (≤ 10 Hz, one per slider
+  however many positions landed in between) while a queue moves; it
+  updates that slider's `param.scrub` in place and is never sent for a
+  slider without a queue.
+- `set_scrub {node, on}` is a write gesture (a `batch` element, an op
+  labelled `scrub x on` / `scrub x off`, undoable; the delta carries the
+  new view and the warming starts from it): `on` writes `scrub=True` into
+  the call at its spec-order position, `off` removes the kwarg. Refused
+  (`refused`) for a non-slider ("`x` is not a slider — only sliders
+  scrub-cache") and, when `on`, for an ineligible slider with the reason
+  above ("`x`: too many positions (51 > 32)"); `unknown` for a name
+  nobody bound; the rule is `scrub::eligibility`, read off the DOCUMENT
+  so a batch sees what it wired earlier. Turning an ineligible slider's
+  hand-written `scrub=True` off is always allowed.
+- `/debug/state.scrub` = `{state: idle | working | blocked | parked,
+  parked_until, byte_cap, max_positions, queues: [{node, port, id,
+  positions, values, order, warmed, visited, in_flight, next, bytes,
+  capped, warming}]}` — every warming queue with its visiting order (the
+  harness and the tests read it; `wait=true` does not wait for the
+  warming, which is invisible to `wait_idle`).
 
 **Slider drags get a dedicated ephemeral path**: during the drag, the
 client streams `param_preview` messages (not ops, not undoable); the

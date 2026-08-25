@@ -249,7 +249,7 @@ variants ("/") compress sibling nodes.
 
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
-| Number Slider | `slider(value: Number, min = 0, max = 10, step = 0) → Number` | S | the GH workhorse; out-of-range value = red, never a silent clamp; scrub caching (doc 12) is a per-slider opt-in offered only when the step-quantized range has a bounded position count (2026-08-19) |
+| Number Slider | `slider(value: Number, min = 0, max = 10, step = 0, scrub = False) → Number` | S | the GH workhorse; out-of-range value = red, never a silent clamp; scrub caching (doc 12) is a per-slider opt-in offered only when the step-quantized range has a bounded position count (2026-08-19) — **shipped 2026-08-24 (v0.1 item 5 S1, `version` 2)**: the opt-in is the `scrub=True` kwarg in the text (never the sidecar; `scrub` is canvas metadata, the output is `value` regardless), eligible iff `min`, `max` and `step` are literals, `step > 0` and `floor((max − min) / step) + 1 ≤ 32` (`SCRUB_MAX_POSITIONS`, DECISIONS.md row 39); the session's `set_scrub` gesture writes or removes the kwarg and refuses an ineligible slider with the reason |
 | Boolean Toggle | `toggle(value: Boolean) → Boolean` | S | |
 | Literals: Number, Integer, Boolean, Text, Color, Point, Vector, Plane | `() → T` | S | bare literal bindings in the dialect ARE the constant params (doc 10 §3); no zero-input literal nodes exist |
 | Value List | `() → T` | 1 | dropdown enum param |

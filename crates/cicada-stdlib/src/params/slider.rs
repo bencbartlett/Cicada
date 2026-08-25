@@ -19,6 +19,16 @@ pub struct SliderIn {
     /// IEEE doubles would refuse honest values).
     #[port(default = 0.0)]
     pub step: f64,
+    /// Scrub caching (doc 12 §Speculative warming, v0.1 item 5): pre-solve
+    /// the step-quantized positions while the app is idle, nearest the
+    /// current value first, so dragging later is a cache read (the buffer
+    /// bar under the slider shows the warm span). Canvas metadata only —
+    /// the output is `value` regardless; offered only while `step > 0`,
+    /// the range has at most 32 positions, and `min`, `max` and `step` are
+    /// literals (the session refuses the toggle otherwise, and warms
+    /// nothing for a hand-written `scrub=True` on such a slider).
+    #[port(default = false)]
+    pub scrub: bool,
 }
 
 /// Number Slider — a bounded numeric parameter.
@@ -40,7 +50,7 @@ pub struct SliderIn {
 #[node(
     category = "Params & input",
     tier = "S",
-    version = 1,
+    version = 2,
     gh = "Number Slider"
 )]
 #[must_use]
@@ -70,19 +80,23 @@ mod tests {
 
     #[test]
     fn slider_table_cases() {
-        let cases: &[(f64, f64, f64, f64)] = &[
-            (5.0, 0.0, 10.0, 0.0),
-            (0.0, 0.0, 10.0, 0.5),
-            (10.0, 0.0, 10.0, 0.0),
-            (-3.0, -5.0, -1.0, 0.0),
+        // (value, min, max, step, scrub): `scrub` is canvas metadata and
+        // never touches the output.
+        let cases: &[(f64, f64, f64, f64, bool)] = &[
+            (5.0, 0.0, 10.0, 0.0, false),
+            (0.0, 0.0, 10.0, 0.5, false),
+            (10.0, 0.0, 10.0, 0.0, false),
+            (-3.0, -5.0, -1.0, 0.0, false),
+            (2.0, 0.5, 5.0, 0.25, true),
         ];
-        for &(value, min, max, step) in cases {
+        for &(value, min, max, step, scrub) in cases {
             assert_eq!(
                 slider(SliderIn {
                     value,
                     min,
                     max,
-                    step
+                    step,
+                    scrub,
                 }),
                 value
             );
@@ -97,6 +111,7 @@ mod tests {
             min: 0.0,
             max: 10.0,
             step: 0.0,
+            scrub: false,
         });
     }
 
@@ -108,6 +123,7 @@ mod tests {
             min: 10.0,
             max: 0.0,
             step: 0.0,
+            scrub: false,
         });
     }
 
@@ -120,6 +136,7 @@ mod tests {
                 min: -1.0e6,
                 max: 1.0e6,
                 step: 0.0,
+                scrub: false,
             });
             proptest::prop_assert_eq!(out, value);
         }
@@ -133,6 +150,7 @@ mod tests {
             min: 0.0,
             max: 30.0,
             step: 0.5,
+            scrub: true,
         });
         assert_eq!(
             HashedValue::new(ValueData::Number(out))

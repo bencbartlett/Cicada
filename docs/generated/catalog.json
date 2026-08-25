@@ -136,7 +136,7 @@
       "description": "a bounded numeric parameter.",
       "category": "Params & input",
       "tier": "S",
-      "version": 1,
+      "version": 2,
       "pure": true,
       "volatile": false,
       "uses_tolerance": false,
@@ -180,6 +180,15 @@
           "optional": false,
           "default": "0.0",
           "doc": "Snap increment for the canvas widget and scrub caching (doc 12); 0 = continuous. Canvas metadata only — NOT validated at solve time (an off-step value is legal; exact multiple-of checks on IEEE doubles would refuse honest values)."
+        },
+        {
+          "name": "scrub",
+          "type": "Boolean",
+          "base": "Boolean",
+          "list_depth": 0,
+          "optional": false,
+          "default": "false",
+          "doc": "Scrub caching (doc 12 §Speculative warming, v0.1 item 5): pre-solve the step-quantized positions while the app is idle, nearest the current value first, so dragging later is a cache read (the buffer bar under the slider shows the warm span). Canvas metadata only — the output is `value` regardless; offered only while `step > 0`, the range has at most 32 positions, and `min`, `max` and `step` are literals (the session refuses the toggle otherwise, and warms nothing for a hand-written `scrub=True` on such a slider)."
         }
       ],
       "outputs": [

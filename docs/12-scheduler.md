@@ -427,6 +427,60 @@ No UI rides it yet; items 4 and 5 are its consumers.)*
   entries are ordinary cache entries — evictable, budget-bounded. The
   slider renders a **buffer bar** (video-player style) showing the
   warmed span.
+
+  *(Live, v0.1 item 5 S1 — the engine half, 2026-08-24;
+  `crates/cicada-server/src/scrub.rs` + the worker in `session.rs`;
+  DECISIONS.md row 39 revised the same day.)* **Eligibility is a pure
+  function of the slider's literals**: `positions = floor((max − min) /
+  step) + 1` (the quotient nudged by 1e-9 before the floor — IEEE puts
+  0…0.3 by 0.1 at 2.9999999999999996), eligible iff `step > 0`, `min`/
+  `max`/`step` are literals and `positions ≤ SCRUB_MAX_POSITIONS` = 32
+  (0…1 by 0.1 is 11, 0…10 by 0.5 is 21, 0…1 by 0.02 is 51 and refused).
+  **The opt-in is the text**: `slider`'s `scrub = False` kwarg (version
+  2; docs/08, docs/10) — the `set_scrub` gesture writes `scrub=True` or
+  removes the kwarg, an op like any literal edit. **The positions are
+  spelled as the canvas snaps them** (`min + k × step` rounded to the
+  step's decimals, `web/src/canvas/grid.ts`), so a warmed literal and
+  the widget's later tick build the same `NodeKey`. **The warmer** (the
+  `cicada-scrub` thread) is generic over (param, ordered value list,
+  visiting order): for every opted-in eligible slider it walks the
+  positions nearest the committed value first, alternating sides (above
+  first), ONE position at a time — a hash-only dry run of the position's
+  cone first (`Core::dry_run`, the cost model's walk: a memo hit is
+  recorded warm without a solve — skip-if-stored), else an idle-class
+  `solve_hypothetical` — and stops at a **per-slider cap of 256 MiB**
+  attributed to the warming, counted DEEP from the compressed blobs the
+  position's computed outputs occupy (`DiskStore::stored_bytes`; the
+  cost records carry elements and nanos, not bytes — a value shared
+  between positions counts under each, so the cap is conservative). Any
+  TEXT change drops every queue (the contract names the slider's own
+  literals and `scrub` toggled off; every other text change changes the
+  keys the warm set was verified against, so the new queue re-verifies
+  — hits confirm in the dry run, nothing re-solves); a sidecar-only
+  change keeps the queues. Idle time is when nothing real is happening:
+  a live drag on any slider (within `DRAG_GAP_MS`) or transport playback
+  blocks the worker; a position pre-empted by a real generation or Esc
+  (its idle token cancelled) PARKS it until a real generation newer than
+  the pre-empted solve completes — after an edit or a drag that is the
+  next moment, after Esc it is the user's next action ("stop solving"
+  includes the warming). A position whose solve goes red is visited once
+  and not retried within the queue's life. Protocol (docs/13): every
+  slider's `ParamView.scrub`, the coalesced `scrub_progress` (≤ 10 Hz),
+  `set_scrub` with typed refusals, `/debug/state.scrub`. Measured on
+  `examples/02-solids.cic` (`size` 0.5…5.0 by 0.25 = 19 positions, the
+  export `tessellate` in the cone): the
+  worker started 90 ms after open (right behind the 88 ms load), walked
+  the order `6, 7, 5, 8, 4, 9, 3, …` (2.0 is index 6), skipped the
+  committed value as the memo hit it was, solved the other 18 positions
+  in 18 idle-class generations (0 pre-empted; 2–62 ms each, 7 nodes
+  computed / 4 cached per position) and was finished 0.9 s after open
+  having stored 1.97 MB; a step-snapped `slider_loop.mjs --snap --expect
+  warm` sweep afterwards (300 ticks over 5 s across all 19 positions)
+  produced 300 preview generations — **0 nodes computed, 3,300 cached** —
+  at 60.1 generations/s, server queued+elapsed p50 0.75 ms / p95 2.0 ms,
+  client round-trip to the first frame of each newly painted position
+  p50 6.1 ms / p95 12.3 ms (debug engine, 22 threads). The S2 web half
+  renders the buffer bar and the toggle.
 - **Cycle loops**: a `cycle` time param (docs/08) is a scrub over a
   fixed range by construction; its frames warm the same way,
   playhead-ahead first, so a loop becomes pure cache playback after

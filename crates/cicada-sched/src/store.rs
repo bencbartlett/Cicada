@@ -675,6 +675,16 @@ impl MemCache {
         })
     }
 
+    /// [`Self::get`] with the entry's compressed size (what it costs in
+    /// the pack or its file) — [`DiskStore::stored_bytes`] counts from it
+    /// without re-reading a blob that is still in memory.
+    fn peek(&mut self, hash: &ValueHash, tick: u64) -> Option<(Arc<HashedValue>, usize)> {
+        self.entries.get_mut(hash).map(|entry| {
+            entry.last_use = tick;
+            (Arc::clone(&entry.value), entry.bytes)
+        })
+    }
+
     fn insert(&mut self, value: Arc<HashedValue>, bytes: usize, tick: u64) {
         let hash = value.hash();
         if let Some(existing) = self.entries.get_mut(&hash) {
@@ -1264,6 +1274,111 @@ impl DiskStore {
         self.known_stored(hash) || self.blob_path(hash).exists()
     }
 
+    /// The compressed bytes this store holds for `hash`, DEEP: the blob
+    /// itself plus, for a list, every child's — the Merkle children are
+    /// separate blobs (a 1,200-mesh list's own blob is 38 KB of hashes;
+    /// its meshes are the megabytes). What scrub caching's per-slider byte
+    /// cap counts after a warming solve stored a position's outputs
+    /// (docs/12 §Speculative warming): the cost records carry elements and
+    /// nanos, not bytes, so the bytes are read off the blobs. Answered
+    /// without I/O where the store already knows — the in-memory layer
+    /// holds a value just stored with its compressed size, and a list's
+    /// children are walked in memory — and from the bytes on disk
+    /// otherwise (a list not in memory is read to find its children; a
+    /// leaf's size is its frame's length). A value shared between two
+    /// lists is counted under each: the answer is an attribution, an
+    /// upper bound on what the blobs take, never less.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::MissingValue`] when no blob exists for `hash` or a
+    /// child (a memo entry promised it); [`StoreError::Decode`] on
+    /// undecodable bytes; [`StoreError::Io`].
+    pub fn stored_bytes(&self, hash: &ValueHash) -> Result<u64, StoreError> {
+        let mut visiting = Vec::new();
+        self.stored_bytes_inner(hash, &mut visiting)
+    }
+
+    fn stored_bytes_inner(
+        &self,
+        hash: &ValueHash,
+        visiting: &mut Vec<ValueHash>,
+    ) -> Result<u64, StoreError> {
+        if visiting.contains(hash) {
+            return Err(StoreError::CorruptValue {
+                expected: hash.to_hex(),
+                got: "a reference cycle".to_owned(),
+            });
+        }
+        visiting.push(*hash);
+        let tick = self.tick.fetch_add(1, Ordering::Relaxed);
+        let in_memory = self
+            .mem
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .peek(hash, tick);
+        let mut total = if let Some((value, bytes)) = in_memory {
+            let mut total = bytes as u64;
+            if let ValueData::List(list) = value.data() {
+                for child in list.slots.iter().flatten() {
+                    total = total.saturating_add(self.stored_bytes_inner(&child.hash(), visiting)?);
+                }
+            }
+            total
+        } else {
+            // Not in memory: the bytes on disk — the pack frame or the file.
+            let path = self.blob_path(hash);
+            let packed = {
+                let pack_path = self.pack_path();
+                self.pack
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .read(&pack_path, hash)?
+            };
+            let compressed = match packed {
+                Some(bytes) => bytes,
+                None => fs::read(&path).map_err(|source| {
+                    if source.kind() == std::io::ErrorKind::NotFound {
+                        StoreError::MissingValue {
+                            hash: hash.to_hex(),
+                        }
+                    } else {
+                        StoreError::Io {
+                            path: path.clone(),
+                            source,
+                        }
+                    }
+                })?,
+            };
+            let mut total = compressed.len() as u64;
+            // Only a list has children; the bytes say which it is.
+            let encoded = decompress(&compressed).map_err(|_| StoreError::Decode {
+                path: path.clone(),
+                message: "zstd decode failed".to_owned(),
+            })?;
+            let stored: StoredValue =
+                postcard::from_bytes(&encoded).map_err(|error| StoreError::Decode {
+                    path: path.clone(),
+                    message: error.to_string(),
+                })?;
+            if let StoredValue::List { slots, .. } = stored {
+                for child in slots.into_iter().flatten() {
+                    total = total.saturating_add(
+                        self.stored_bytes_inner(&ValueHash::from_bytes(child), visiting)?,
+                    );
+                }
+            }
+            total
+        };
+        visiting.pop();
+        if total == 0 {
+            // A blob is never empty (a zstd frame has a header): zero means
+            // a bookkeeping hole, and the cap must not count it as free.
+            total = 1;
+        }
+        Ok(total)
+    }
+
     fn pack_path(&self) -> PathBuf {
         self.root.join("values").join("pack.bin")
     }
@@ -1662,6 +1777,69 @@ impl DiskStore {
             }
             StoredValue::Nothing => ValueData::Nothing,
         })
+    }
+}
+
+#[cfg(test)]
+mod stored_bytes_tests {
+    use std::sync::Arc;
+
+    use cicada_core::value::{HashedValue, List, ValueData};
+
+    use super::{BlobLocation, DiskStore, StoreError};
+
+    fn number(x: f64) -> Arc<HashedValue> {
+        HashedValue::new(ValueData::Number(x)).unwrap()
+    }
+
+    fn list(items: &[Arc<HashedValue>]) -> Arc<HashedValue> {
+        HashedValue::new(ValueData::List(List {
+            axis: None,
+            slots: items.iter().cloned().map(Some).collect(),
+        }))
+        .unwrap()
+    }
+
+    // The deep count is the list's own frame plus every child's, whether
+    // answered from memory (the store that just wrote them) or read back
+    // off the pack by a fresh store on the same root.
+    #[test]
+    fn stored_bytes_counts_a_list_and_its_children_deep_from_memory_and_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = DiskStore::open(dir.path()).unwrap();
+        let a = number(1.0);
+        let b = number(2.5);
+        let inner = list(&[a.clone(), b.clone()]);
+        let outer = list(&[inner.clone(), number(-3.0)]);
+        store.store_value(&outer).unwrap();
+        // `Packed::len` is the payload's length (the slot starts after the
+        // frame's hash), a file blob's is its size.
+        let frame_len = |hash| match store.locate_value(&hash).unwrap() {
+            BlobLocation::Packed { len, .. } => u64::from(len),
+            BlobLocation::File(path) => std::fs::metadata(path).unwrap().len(),
+        };
+        let expected = frame_len(outer.hash())
+            + frame_len(inner.hash())
+            + frame_len(a.hash())
+            + frame_len(b.hash())
+            + frame_len(number(-3.0).hash());
+        assert!(expected > 0);
+        let warm = store.stored_bytes(&outer.hash()).unwrap();
+        assert_eq!(warm, expected, "from the in-memory layer");
+        assert_eq!(store.stored_bytes(&a.hash()).unwrap(), frame_len(a.hash()));
+        drop(store);
+        let (cold, _) = DiskStore::open(dir.path()).unwrap();
+        assert_eq!(
+            cold.stored_bytes(&outer.hash()).unwrap(),
+            expected,
+            "read back off the pack, nothing in memory"
+        );
+        // A hash nobody stored is a loud refusal, not zero.
+        let missing = cold.stored_bytes(&number(99.0).hash());
+        assert!(
+            matches!(missing, Err(StoreError::MissingValue { .. })),
+            "{missing:?}"
+        );
     }
 }
 

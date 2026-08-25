@@ -1243,7 +1243,7 @@ mod tests {
         assert_eq!(doc["gh"], "Number Slider");
         assert_eq!(
             doc["signature"],
-            "slider(value: Number, min: Number = 0.0, max: Number = 10.0, step: Number = 0.0) → Number"
+            "slider(value: Number, min: Number = 0.0, max: Number = 10.0, step: Number = 0.0, scrub: Boolean = false) → Number"
         );
         assert_eq!(doc["effectful"], false);
         assert_eq!(doc["pure"], true);

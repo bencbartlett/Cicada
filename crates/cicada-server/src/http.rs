@@ -356,6 +356,8 @@ fn open_session(state: &AppState, relative: &str) -> Result<Arc<Session>, ServeE
         project: state.config.project,
         op_clock: None,
         restream_hold: None,
+        scrub_byte_cap: crate::scrub::SCRUB_BYTE_CAP,
+        scrub_gate: None,
     })?;
     // Two clients racing to open the same pipeline: the second finds the
     // first's session already inserted and drops its own.
@@ -1985,6 +1987,8 @@ mod tests {
             project: ProjectConfig::default(),
             op_clock: None,
             restream_hold: hold,
+            scrub_byte_cap: crate::scrub::SCRUB_BYTE_CAP,
+            scrub_gate: None,
         })
         .unwrap();
         session.wait_idle();

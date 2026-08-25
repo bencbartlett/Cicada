@@ -86,8 +86,9 @@ test("a slider collapses to one grid unit from the menu and expands from the ins
   expect((await debugState(page)).history.depth).toBe(0);
   expect(existsSync(SIDECAR), "nothing moved yet: no sidecar").toBe(false);
 
-  // ---- the expanded slider: header + four port rows + the widget row.
-  expect(await heightUnits(page, "size")).toBe(6);
+  // ---- the expanded slider: header + five port rows (value, min, max,
+  // step and — since item 5 — scrub) + the widget row.
+  expect(await heightUnits(page, "size")).toBe(7);
   await expect(face(page, "size")).not.toHaveAttribute("data-collapsed", "true");
 
   // ---- collapse from the node's context menu: ONE op `collapse size`.
@@ -139,8 +140,8 @@ test("a slider collapses to one grid unit from the menu and expands from the ins
   await expect(face(page, "size")).not.toHaveAttribute("data-collapsed", "true");
   const expandedState = await debugState(page);
   expect(expandedState.history).toMatchObject({ depth: 3, undo_label: "expand size" });
-  expect(expandedState.graph.nodes.find((n) => n.name === "size")?.size[1]).toBe(6);
-  expect(await heightUnits(page, "size")).toBe(6);
+  expect(expandedState.graph.nodes.find((n) => n.name === "size")?.size[1]).toBe(7);
+  expect(await heightUnits(page, "size")).toBe(7);
   await expect.poll(() => existsSync(SIDECAR), "no override left → no file").toBe(false);
   await expect(action).toHaveText("collapse");
 

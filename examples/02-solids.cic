@@ -8,7 +8,9 @@
 # The mesh tier (Manifold) is still here under mesh_* names — see
 # 03-voronoi.cic for a carve that stays on meshes.
 
-size = slider(value=2.0, min=0.5, max=5.0)
+# Scrub-cached (v0.1 item 5): the 19 positions of 0.5…5.0 by 0.25 are
+# pre-solved while the app is idle, so dragging `size` later is a cache read.
+size = slider(value=2.0, min=0.5, max=5.0, step=0.25, scrub=True)
 span = construct_domain(start=0.0, end=size)
 
 # Solids are exact: the box is six planar faces, the ball one spherical one.

@@ -35,6 +35,7 @@ pub mod layout;
 pub mod lower;
 pub mod protocol;
 pub mod scripts;
+pub mod scrub;
 pub mod session;
 pub mod sidecar;
 pub mod solve;

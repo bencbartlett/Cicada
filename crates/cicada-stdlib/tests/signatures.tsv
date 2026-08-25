@@ -113,6 +113,7 @@ series	2	series(start: Number = 0.0, step: Number = 1.0, count: Integer) → [Nu
 shift_list	1	shift_list(list: [E], offset: Integer, wrap: Boolean = true) → [E]	
 sin	1	sin(x: Number) → Number	
 slider	1	slider(value: Number, min: Number = 0.0, max: Number = 10.0, step: Number = 0.0) → Number	
+slider	2	slider(value: Number, min: Number = 0.0, max: Number = 10.0, step: Number = 0.0, scrub: Boolean = false) → Number	
 smaller	1	smaller(a: Number, b: Number) → Boolean	
 solid_difference	1	solid_difference(solid: Solid, cutters: [Solid]) → Solid	
 solid_intersection	1	solid_intersection(a: Solid, b: Solid) → Solid	
