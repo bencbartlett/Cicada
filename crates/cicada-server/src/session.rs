@@ -1870,7 +1870,7 @@ impl Session {
                         source: Box::new(IntentError::Protocol(
                             "not a canvas write gesture — a batch holds place_node / connect / \
                              disconnect / accept_lift / set_param / rename / delete_node / \
-                             toggle_disable / move_node / set_preview only"
+                             toggle_disable / move_node / set_preview / set_collapsed only"
                                 .to_owned(),
                         )),
                     });
@@ -2051,10 +2051,24 @@ impl Session {
                 func,
                 cell,
                 connect,
+                params,
             } => {
-                if !inner.loaded.specs.iter().any(|spec| spec.name == func) {
+                let Some(spec) = inner.loaded.specs.iter().find(|spec| spec.name == func) else {
                     return Err(IntentError::Unknown(format!(
                         "no node named `{func}` in the catalog"
+                    )));
+                };
+                // The literals the placement writes (wave 4 B4, the slider
+                // shortcut): each must name a port of the node — an unknown
+                // one would land as an unknown kwarg, a red the user never
+                // typed — and every other rule is `set_param`'s.
+                if let Some(bad) = params
+                    .iter()
+                    .find(|param| !spec.inputs.iter().any(|port| port.name == param.port))
+                {
+                    return Err(IntentError::Unknown(format!(
+                        "`{func}` has no port `{}` to place a literal into",
+                        bad.port
                     )));
                 }
                 let deps: Vec<&str> = connect
@@ -2064,6 +2078,15 @@ impl Session {
                 let name = writer::place(&mut inner.loaded.document, &func, &deps)?;
                 if let Some(cell) = cell {
                     inner.sidecar.set_cell(&name, Some(cell));
+                }
+                for param in &params {
+                    apply_param(
+                        &mut inner.loaded.document,
+                        &inner.loaded.specs,
+                        &name,
+                        Some(&param.port),
+                        &param.value,
+                    )?;
                 }
                 if let Some(spec) = connect {
                     connect_checked(inner, &spec.from, &name, &spec.to_port, spec.lift)?;
@@ -2209,6 +2232,36 @@ impl Session {
                     dirty: Vec::new(),
                     text_changed: false,
                     refresh_display: true,
+                })
+            }
+            ClientMessage::SetCollapsed { node, collapsed } => {
+                // The rule is the view-model's (`collapse_refusal`): only a
+                // slider, and only while min / max / step are literals. The
+                // view is the authority on wiring here; a node placed
+                // earlier in this batch is not in it yet and is refused by
+                // name rather than guessed at.
+                let Some(view) = inner.graph.node(&node) else {
+                    if inner.loaded.document.find_binding(&node).is_some() {
+                        return Err(IntentError::Refused(format!(
+                            "`{node}` was placed in this same batch — collapse it in a later op"
+                        )));
+                    }
+                    return Err(IntentError::Unknown(format!("no node named `{node}`")));
+                };
+                if collapsed && let Some(reason) = viewmodel::collapse_refusal(view) {
+                    return Err(IntentError::Refused(reason));
+                }
+                // Expanded is the default: `false` clears the override (the
+                // sidecar stays near-empty by construction).
+                inner
+                    .sidecar
+                    .set_collapsed(&node, collapsed.then_some(true));
+                let verb = if collapsed { "collapse" } else { "expand" };
+                Ok(Applied {
+                    label: format!("{verb} {node}"),
+                    dirty: Vec::new(),
+                    text_changed: false,
+                    refresh_display: false,
                 })
             }
             other => Err(IntentError::Protocol(format!(
@@ -5670,6 +5723,7 @@ mod tests {
                     to_port: "radius".into(),
                     lift: false,
                 }),
+                params: Vec::new(),
             },
         );
         session.wait_idle();
@@ -6066,6 +6120,7 @@ mod tests {
                     func: (*func).into(),
                     cell: None,
                     connect: None,
+                    params: Vec::new(),
                 },
             );
         }
@@ -6920,6 +6975,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
                     func: "sphere".into(),
                     cell: Some([40, 2]),
                     connect: None,
+                    params: Vec::new(),
                 },
                 "place sphere",
             ),
@@ -8996,6 +9052,313 @@ size = slider(value=4.0, min=0.5, max=5.0)
         );
     }
 
+    // ------------------------------------------------ collapsed sliders --
+
+    // Wave 4 B4 (docs/16 §Canvas conventions, DECISIONS.md undo row:
+    // sidecar-only ops are undo steps): `set_collapsed` writes the sidecar's
+    // `collapsed` override as ONE op — text untouched, no solve — and the
+    // view says collapsed and one unit tall; it is refused, kind `refused`,
+    // for a slider with a wired bound and for a node that is not a slider,
+    // with nothing written and no op; expanding clears the override (no
+    // overrides → no file); undo walks both ways.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one story: collapse, three refusals, expand, no-op, undo
+    fn set_collapsed_is_a_sidecar_op_refused_for_wired_bounds_and_non_sliders() {
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             bound = slider(value=1.0, min=0.0, max=size)\n\
+             span = construct_domain(start=0.0, end=size)\n",
+        );
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        drain(&mut rx);
+        let before = on_disk(&pipeline);
+        let generations_before = session.debug_state(false)["timings"]
+            .as_array()
+            .map_or(0, Vec::len);
+
+        session.handle(
+            id,
+            Some("c1".into()),
+            ClientMessage::SetCollapsed {
+                node: "size".into(),
+                collapsed: true,
+            },
+        );
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        let deltas: Vec<_> = msgs.iter().filter(|m| m["type"] == "delta").collect();
+        assert_eq!(deltas.len(), 1, "one delta: {msgs:?}");
+        assert_eq!(deltas[0]["payload"]["source"]["label"], "collapse size");
+        assert_eq!(deltas[0]["payload"]["source"]["intent_id"], "c1");
+        assert_eq!(
+            deltas[0]["payload"]["history"]["depth"], 1,
+            "an op like a move"
+        );
+        let nodes = deltas[0]["payload"]["graph"]["nodes"].as_array().unwrap();
+        let size = nodes.iter().find(|n| n["name"] == "size").unwrap();
+        assert_eq!(size["collapsed"], true);
+        assert_eq!(size["size"][1], 1, "one grid unit tall");
+        assert!(
+            nodes
+                .iter()
+                .find(|n| n["name"] == "bound")
+                .unwrap()
+                .get("collapsed")
+                .is_none(),
+            "the others are untouched"
+        );
+        let (text, sidecar) = on_disk(&pipeline);
+        assert_eq!(text, before.0, "sidecar only — the text is untouched");
+        assert!(
+            sidecar.as_deref().unwrap().contains("\"collapsed\": true"),
+            "{sidecar:?}"
+        );
+        assert_eq!(
+            session.debug_state(false)["timings"]
+                .as_array()
+                .map_or(0, Vec::len),
+            generations_before,
+            "a sidecar-only op schedules no solve"
+        );
+
+        // Three refusals: a wired `max`, a non-slider, an unknown node. No
+        // delta, nothing written, no op; the kind says which.
+        for (node, kind, needle) in [
+            ("bound", "refused", "max is wired"),
+            ("span", "refused", "not a slider"),
+            ("nope", "unknown", "no node named"),
+        ] {
+            session.handle(
+                id,
+                Some(format!("r-{node}")),
+                ClientMessage::SetCollapsed {
+                    node: node.into(),
+                    collapsed: true,
+                },
+            );
+            session.wait_idle();
+            let msgs = texts(&drain(&mut rx));
+            assert!(
+                !msgs.iter().any(|m| m["type"] == "delta"),
+                "{node}: a refusal broadcasts no delta: {msgs:?}"
+            );
+            let error = msgs.iter().find(|m| m["type"] == "error").unwrap();
+            assert_eq!(error["payload"]["intent_id"], format!("r-{node}"));
+            assert_eq!(error["payload"]["kind"], kind, "{error}");
+            assert!(
+                error["payload"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains(needle),
+                "{error}"
+            );
+        }
+        assert_eq!(history_of(&session)["depth"], 1, "refusals push no op");
+        let (text, sidecar) = on_disk(&pipeline);
+        assert_eq!(text, before.0);
+        assert!(
+            !sidecar.as_deref().unwrap().contains("bound"),
+            "a refused collapse leaves no override: {sidecar:?}"
+        );
+
+        // Expanding is always allowed and CLEARS the override: this was the
+        // only one, so the sidecar file goes (near-empty by construction).
+        session.handle(
+            id,
+            Some("e1".into()),
+            ClientMessage::SetCollapsed {
+                node: "size".into(),
+                collapsed: false,
+            },
+        );
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        let delta = msgs.iter().find(|m| m["type"] == "delta").unwrap();
+        assert_eq!(delta["payload"]["source"]["label"], "expand size");
+        assert!(
+            on_disk(&pipeline).1.is_none(),
+            "no override → no sidecar file"
+        );
+        assert_eq!(history_of(&session)["depth"], 2);
+
+        // Expanding an expanded slider leaves text and sidecar identical:
+        // answered, but not an op (DECISIONS.md undo row).
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetCollapsed {
+                node: "size".into(),
+                collapsed: false,
+            },
+        );
+        session.wait_idle();
+        drain(&mut rx);
+        assert_eq!(
+            history_of(&session)["depth"],
+            2,
+            "a no-op write is not an undo step"
+        );
+
+        // Undo walks both ways: the expand undone is collapsed again …
+        session.handle(id, None, ClientMessage::Undo {});
+        session.wait_idle();
+        drain(&mut rx);
+        assert_eq!(
+            session.core.lock_inner().sidecar.overrides["size"].collapsed,
+            Some(true)
+        );
+        let state = session.debug_state(false);
+        let size = state["graph"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["name"] == "size")
+            .unwrap();
+        assert_eq!(size["collapsed"], true);
+        assert_eq!(size["size"][1], 1);
+        // … and the collapse undone is expanded, with no sidecar at all.
+        session.handle(id, None, ClientMessage::Undo {});
+        session.wait_idle();
+        drain(&mut rx);
+        assert!(session.core.lock_inner().sidecar.overrides.is_empty());
+        assert!(on_disk(&pipeline).1.is_none());
+    }
+
+    // Wave 4 B4 (the slider shortcut `1<20`): `place_node` with `params`
+    // places the node AND writes its literals as ONE op — the kwargs land
+    // in spec order whatever order the client listed them — so one undo
+    // removes the whole node; a param that is not a literal, or names a
+    // port the node lacks, refuses the WHOLE placement: no node, no cell,
+    // no op.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one story: place + params, undo, two refusals
+    fn place_node_with_params_is_one_op_in_spec_order_all_or_nothing() {
+        let (_dir, config) = project("# cicada 1\nn = 3.0\n");
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        drain(&mut rx);
+        let before = on_disk(&pipeline);
+        let param = |port: &str, value: &str| crate::protocol::ParamSpec {
+            port: port.into(),
+            value: value.into(),
+        };
+
+        session.handle(
+            id,
+            Some("p1".into()),
+            ClientMessage::PlaceNode {
+                func: "slider".into(),
+                cell: Some([2, 2]),
+                connect: None,
+                params: vec![
+                    param("max", "20.0"),
+                    param("step", "1.0"),
+                    param("value", "1.0"),
+                    param("min", "1.0"),
+                ],
+            },
+        );
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        let deltas: Vec<_> = msgs.iter().filter(|m| m["type"] == "delta").collect();
+        assert_eq!(deltas.len(), 1, "one delta for place + params: {msgs:?}");
+        assert_eq!(deltas[0]["payload"]["source"]["label"], "place slider");
+        assert_eq!(deltas[0]["payload"]["history"]["depth"], 1, "ONE op");
+        let (text, sidecar) = on_disk(&pipeline);
+        assert!(
+            text.contains("slider_1 = slider(value=1.0, min=1.0, max=20.0, step=1.0)"),
+            "spec order, whatever order the client listed: {text}"
+        );
+        assert!(sidecar.as_deref().unwrap().contains("\"slider_1\""));
+        let state = session.debug_state(false);
+        assert_ne!(state["statuses"]["slider_1"]["state"], "red", "{state}");
+        let node = state["graph"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["name"] == "slider_1")
+            .unwrap();
+        assert_eq!(node["param"]["min"], 1.0);
+        assert_eq!(node["param"]["max"], 20.0);
+        assert_eq!(node["param"]["step"], 1.0);
+        assert_eq!(node["param"]["value"], 1.0);
+
+        // One undo removes the whole node, its cell with it.
+        session.handle(id, None, ClientMessage::Undo {});
+        session.wait_idle();
+        drain(&mut rx);
+        assert_eq!(
+            on_disk(&pipeline),
+            before,
+            "undo removes the placement whole"
+        );
+        assert_eq!(history_of(&session)["depth"], 0);
+
+        // A param that is not a literal refuses the whole placement …
+        session.handle(
+            id,
+            Some("p2".into()),
+            ClientMessage::PlaceNode {
+                func: "slider".into(),
+                cell: Some([2, 2]),
+                connect: None,
+                params: vec![param("value", "n")],
+            },
+        );
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        assert!(!msgs.iter().any(|m| m["type"] == "delta"), "{msgs:?}");
+        let error = msgs.iter().find(|m| m["type"] == "error").unwrap();
+        assert_eq!(error["payload"]["intent_id"], "p2");
+        assert_eq!(error["payload"]["kind"], "refused", "{error}");
+        assert!(
+            error["payload"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("not a literal"),
+            "{error}"
+        );
+        assert_eq!(on_disk(&pipeline), before, "no node, no cell");
+        // … and so does a port the node does not have — before anything
+        // is touched (an unknown kwarg would be a red the user never typed).
+        session.handle(
+            id,
+            Some("p3".into()),
+            ClientMessage::PlaceNode {
+                func: "slider".into(),
+                cell: None,
+                connect: None,
+                params: vec![param("maximum", "2.0")],
+            },
+        );
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        let error = msgs.iter().find(|m| m["type"] == "error").unwrap();
+        assert_eq!(error["payload"]["kind"], "unknown", "{error}");
+        assert!(
+            error["payload"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("no port `maximum`"),
+            "{error}"
+        );
+        assert_eq!(on_disk(&pipeline), before);
+        assert_eq!(history_of(&session)["depth"], 0, "refusals push no op");
+        assert_eq!(
+            session.debug_state(false)["text"].as_str().unwrap(),
+            before.0,
+            "memory untouched"
+        );
+    }
+
     // ---------------------------------------------------------- batch --
 
     #[test]
@@ -9175,6 +9538,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
                         func: "sphere".into(),
                         cell: None,
                         connect: None,
+                        params: Vec::new(),
                     },
                     ClientMessage::Connect {
                         from: WireEnd {
@@ -9853,6 +10217,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
                 func: "sphere".into(),
                 cell: Some([3, 3]),
                 connect: None,
+                params: Vec::new(),
             },
         );
         session.wait_idle();
@@ -9879,6 +10244,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
                 func: "sphere".into(),
                 cell: Some([3, 3]),
                 connect: None,
+                params: Vec::new(),
             },
         );
         session.wait_idle();
@@ -9923,6 +10289,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
                         to_port: "nope".into(),
                         lift: false,
                     }),
+                    params: Vec::new(),
                 },
             )
             .unwrap_err();

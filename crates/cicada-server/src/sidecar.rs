@@ -214,6 +214,15 @@ impl Sidecar {
         self.prune(node);
     }
 
+    /// Set (or clear with `None`) a node's collapsed rendering (wave 4 B4:
+    /// the collapsed slider — docs/16 §Canvas conventions). Expanded is the
+    /// default, so an override of `false` is no override: callers pass
+    /// `None` for it and the entry is pruned (near-empty by construction).
+    pub fn set_collapsed(&mut self, node: &str, collapsed: Option<bool>) {
+        self.entry(node).collapsed = collapsed;
+        self.prune(node);
+    }
+
     /// Rename a node's key (rename is atomic across text + sidecar,
     /// docs/10). A missing entry is a no-op.
     pub fn rename(&mut self, old: &str, new: &str) {
@@ -312,6 +321,28 @@ mod tests {
         assert!(sidecar.overrides.is_empty(), "empty entries are pruned");
         sidecar.save(&path).unwrap();
         assert!(!path.exists(), "no state → no file");
+    }
+
+    // Wave 4 B4: the collapsed flag rides the same entry as the cell, and
+    // clearing it prunes the entry like every other override.
+    #[test]
+    fn collapsed_is_an_override_that_prunes_when_cleared() {
+        let mut sidecar = Sidecar::default();
+        sidecar.set_collapsed("size", Some(true));
+        assert_eq!(sidecar.overrides["size"].collapsed, Some(true));
+        assert!(sidecar.render().contains("\"collapsed\": true"));
+        sidecar.set_cell("size", Some([3, 4]));
+        sidecar.set_collapsed("size", None);
+        assert_eq!(
+            sidecar.overrides["size"],
+            Override {
+                cell: Some([3, 4]),
+                ..Override::default()
+            },
+            "the cell survives the flag's clearing"
+        );
+        sidecar.set_cell("size", None);
+        assert!(sidecar.overrides.is_empty(), "no overrides → no entry");
     }
 
     #[test]

@@ -194,6 +194,11 @@ pub struct ExcludedView {
 }
 
 /// One node of the canvas.
+// A serialized record the client mirrors field for field: `effectful`,
+// `preview`, `manual` and (B4) `collapsed` are four independent wire flags,
+// not a state machine — folding them into enums would change the JSON the
+// client reads for no gain in meaning.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize)]
 pub struct NodeView {
     /// Stable per-session ref (frames name nodes by this).
@@ -248,6 +253,52 @@ pub struct NodeView {
     pub size: [u32; 2],
     /// The cell is a manual sidecar override.
     pub manual: bool,
+    /// Drawn collapsed — one grid unit tall, name · track · value on one
+    /// row (wave 4 B4, a slider's GH-like compact form): the sidecar's
+    /// `collapsed` override, honoured only while the node CAN collapse
+    /// ([`collapse_refusal`] is `None`); `size` already says `[w, 1]` then.
+    /// Omitted when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub collapsed: bool,
+}
+
+/// Why a node cannot be drawn collapsed (wave 4 B4): `None` when it can.
+/// THE rule — the session's `set_collapsed` refuses with this text, the
+/// view-model draws a sidecar-collapsed node expanded while it holds, and
+/// the client mirrors the same three facts for its menu hint. Only a
+/// slider collapses (its compact row is name · track · value · output),
+/// and only while `min`, `max` and `step` are literals: the collapsed row
+/// has no port a wire into them could reach.
+#[must_use]
+pub fn collapse_refusal(node: &NodeView) -> Option<String> {
+    if node
+        .param
+        .as_ref()
+        .is_none_or(|param| param.kind != "slider")
+    {
+        return Some(format!(
+            "`{}` is not a slider — only sliders collapse (one row: name, track, value)",
+            node.name
+        ));
+    }
+    let wired: Vec<&str> = node
+        .inputs
+        .iter()
+        .filter(|input| {
+            matches!(input.name.as_str(), "min" | "max" | "step") && input.wired.is_some()
+        })
+        .map(|input| input.name.as_str())
+        .collect();
+    if wired.is_empty() {
+        return None;
+    }
+    let verb = if wired.len() == 1 { "is" } else { "are" };
+    Some(format!(
+        "`{}`: {} {verb} wired — a slider collapses only while min, max and step are literals \
+         (the collapsed row has no port for a wire)",
+        node.name,
+        wired.join(" and "),
+    ))
 }
 
 /// One wire.
@@ -399,6 +450,7 @@ pub fn build(
                     cell: [0, 0],
                     size: [NODE_WIDTH, 2],
                     manual: false,
+                    collapsed: false,
                 });
             }
             Line::Broken { raw, node, .. } => {
@@ -432,6 +484,7 @@ pub fn build(
                     cell: [0, 0],
                     size: [NODE_WIDTH, 2],
                     manual: false,
+                    collapsed: false,
                 });
             }
         }
@@ -452,6 +505,20 @@ pub fn build(
             .cloned()
             .collect();
         node.node_ref = refs.get_or_assign(&node.name);
+        // Collapsed (wave 4 B4): the sidecar's flag, honoured while the
+        // node can collapse — a slider whose bound got wired by a text edit
+        // is drawn expanded (the wire must reach a port) until the wire
+        // goes; the flag stays in the sidecar. Decided BEFORE the layout,
+        // which packs by size: a collapsed node is one unit tall.
+        node.collapsed = sidecar
+            .overrides
+            .get(&node.name)
+            .and_then(|entry| entry.collapsed)
+            .unwrap_or(false)
+            && collapse_refusal(node).is_none();
+        if node.collapsed {
+            node.size[1] = 1;
+        }
     }
 
     // Layout: sidecar overrides + auto cells for the rest.
@@ -629,6 +696,7 @@ fn statement_node(
         cell: [0, 0],
         size: [NODE_WIDTH, 2],
         manual: false,
+        collapsed: false,
     };
     // A wire from a kwarg / free-var reference; red when a diagnostic
     // sits on it.
@@ -1312,5 +1380,80 @@ mod tests {
         assert!(!wire.red);
         let first = g.node("first").unwrap();
         assert_eq!(first.outputs[0].resolved.as_deref(), Some("Point"));
+    }
+
+    fn view_with_sidecar(source: &str, sidecar: &Sidecar) -> GraphView {
+        let loaded = compile::load(Path::new("v.cic"), source, &ScriptCancel::new()).unwrap();
+        let lowered = lower_partial(
+            &loaded.document,
+            &loaded.resolution,
+            &loaded.specs,
+            &ProjectConfig::default(),
+            &loaded.scripts,
+        )
+        .unwrap();
+        build(
+            &loaded.document,
+            &loaded.resolution,
+            &loaded.specs,
+            &lowered,
+            sidecar,
+            &mut NodeRefs::default(),
+        )
+    }
+
+    // Wave 4 B4: the sidecar's `collapsed` reaches the view — one unit
+    // tall — for a slider whose bounds are literals; a slider with a wired
+    // bound, and any other node, are drawn expanded whatever the sidecar
+    // says, and `collapse_refusal` names why (the one rule the session's
+    // `set_collapsed` refuses with).
+    #[test]
+    fn collapsed_reaches_the_view_only_where_a_slider_can_collapse() {
+        let source = "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             bound = slider(value=1.0, min=0.0, max=size)\n\
+             span = construct_domain(start=0.0, end=size)\n";
+        let plain = view_with_sidecar(source, &Sidecar::default());
+        let size = plain.node("size").unwrap();
+        assert!(!size.collapsed);
+        assert_eq!(size.size[1], 6, "header + four port rows + the widget row");
+        assert_eq!(collapse_refusal(size), None, "a slider with literal bounds");
+        let bound = plain.node("bound").unwrap();
+        let reason = collapse_refusal(bound).unwrap();
+        assert!(
+            reason.contains("max is wired") && reason.contains("min, max and step are literals"),
+            "{reason}"
+        );
+        let span = plain.node("span").unwrap();
+        assert!(
+            collapse_refusal(span).unwrap().contains("not a slider"),
+            "{:?}",
+            collapse_refusal(span)
+        );
+        let json = serde_json::to_value(size).unwrap();
+        assert!(json.get("collapsed").is_none(), "false is omitted: {json}");
+
+        let mut sidecar = Sidecar::default();
+        sidecar.set_collapsed("size", Some(true));
+        sidecar.set_collapsed("bound", Some(true));
+        sidecar.set_collapsed("span", Some(true));
+        let g = view_with_sidecar(source, &sidecar);
+        let size = g.node("size").unwrap();
+        assert!(size.collapsed);
+        assert_eq!(
+            size.size,
+            [plain.node("size").unwrap().size[0], 1],
+            "one grid unit tall, same width"
+        );
+        assert_eq!(serde_json::to_value(size).unwrap()["collapsed"], true);
+        assert!(
+            !g.node("bound").unwrap().collapsed,
+            "a wired max: drawn expanded"
+        );
+        assert_eq!(g.node("bound").unwrap().size[1], 6);
+        assert!(
+            !g.node("span").unwrap().collapsed,
+            "not a slider: drawn expanded"
+        );
     }
 }

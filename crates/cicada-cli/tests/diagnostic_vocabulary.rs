@@ -104,6 +104,7 @@ const VOCABULARY: &[&str] = &[
     "toggle_disable",
     "move_node",
     "set_preview",
+    "set_collapsed",
     "apply_text",
     "insert_between",
 ];

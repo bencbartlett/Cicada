@@ -925,6 +925,20 @@ pub struct ConnectSpec {
     pub lift: bool,
 }
 
+/// One literal a `place_node` writes into the new node as it lands (wave 4
+/// B4 — the slider shortcut `1<20` places `slider(value=1.0, min=1.0,
+/// max=20.0, step=1.0)` as ONE op; the batch path cannot, because the
+/// server assigns the auto-name the later `set_param`s would have to know).
+/// Applied exactly as a `set_param` on that port would be: one literal
+/// token, spec-order insertion, transport-driven ports refused.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct ParamSpec {
+    /// The new node's input port.
+    pub port: String,
+    /// The literal's source text (`12.5`, `True`, `"x"`).
+    pub value: String,
+}
+
 /// Client → server intents (docs/10 round-trip table + reads).
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
@@ -944,6 +958,12 @@ pub enum ClientMessage {
         /// Also wire it from a source.
         #[serde(default)]
         connect: Option<ConnectSpec>,
+        /// Literals to write into the new node's ports in the same op
+        /// (additive, wave 4 B4; absent = none). Every one is applied as
+        /// a `set_param` on the new node before `connect`, and a refused
+        /// one refuses the whole placement.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        params: Vec<ParamSpec>,
     },
     /// Draw a wire (rewrite one kwarg).
     Connect {
@@ -1041,6 +1061,20 @@ pub enum ClientMessage {
         /// On/off/default.
         #[serde(default)]
         on: Option<bool>,
+    },
+    /// Collapse or expand a slider (sidecar only — the `collapsed`
+    /// override; wave 4 B4, docs/16 §Canvas conventions): a collapsed
+    /// slider is one grid unit tall — name, track and value on one row.
+    /// An op like a move (`collapse x` / `expand x`). Refused (kind
+    /// `refused`) for a node that is not a slider, and for a slider any of
+    /// whose `min` / `max` / `step` is wired — the collapsed row has no
+    /// port for the wire; the server decides, the client mirrors the
+    /// reason.
+    SetCollapsed {
+        /// Node.
+        node: String,
+        /// Collapsed (`true`) or expanded (`false`, the default).
+        collapsed: bool,
     },
     /// Cancel the running generation (Esc). Also pauses the transport.
     Cancel {},
@@ -1153,6 +1187,7 @@ pub fn is_write(message: &ClientMessage) -> bool {
             | ClientMessage::ToggleDisable { .. }
             | ClientMessage::MoveNode { .. }
             | ClientMessage::SetPreview { .. }
+            | ClientMessage::SetCollapsed { .. }
             | ClientMessage::Cancel {}
             | ClientMessage::Undo {}
             | ClientMessage::Redo {}
@@ -1198,6 +1233,7 @@ pub fn is_gesture(message: &ClientMessage) -> bool {
             | ClientMessage::ToggleDisable { .. }
             | ClientMessage::MoveNode { .. }
             | ClientMessage::SetPreview { .. }
+            | ClientMessage::SetCollapsed { .. }
     )
 }
 
@@ -1450,6 +1486,71 @@ mod tests {
         let read: IntentEnvelope =
             serde_json::from_str(r#"{"v":1,"type":"inspect","payload":{"node":"a"}}"#).unwrap();
         assert!(!is_write(&read.message));
+    }
+
+    // Wave 4 B4: `place_node` carries optional `params` (absent = none, so
+    // a client that never heard of them still places), and `set_collapsed`
+    // is a write gesture — a batch element — with the documented shape.
+    #[test]
+    fn place_node_params_default_empty_and_set_collapsed_is_a_gesture() {
+        let bare: IntentEnvelope = serde_json::from_str(
+            r#"{"v":1,"type":"place_node","payload":{"func":"slider","cell":[2,3]}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            bare.message,
+            ClientMessage::PlaceNode {
+                func: "slider".into(),
+                cell: Some([2, 3]),
+                connect: None,
+                params: Vec::new(),
+            }
+        );
+        let with_params: IntentEnvelope = serde_json::from_str(
+            r#"{"v":1,"type":"place_node","payload":{"func":"slider","cell":null,
+                "params":[{"port":"value","value":"1.0"},{"port":"max","value":"20.0"}]}}"#,
+        )
+        .unwrap();
+        let ClientMessage::PlaceNode { params, .. } = &with_params.message else {
+            panic!("{:?}", with_params.message);
+        };
+        assert_eq!(
+            params,
+            &[
+                ParamSpec {
+                    port: "value".into(),
+                    value: "1.0".into()
+                },
+                ParamSpec {
+                    port: "max".into(),
+                    value: "20.0".into()
+                }
+            ]
+        );
+        assert!(is_gesture(&with_params.message));
+        // Re-encoded, an empty list is omitted (the wire shape stays the
+        // pre-B4 one for every placement without params).
+        let encoded = serde_json::to_value(&bare.message).unwrap();
+        assert!(encoded["payload"].get("params").is_none(), "{encoded}");
+
+        let collapse: IntentEnvelope = serde_json::from_str(
+            r#"{"v":1,"id":"c","type":"set_collapsed","payload":{"node":"size","collapsed":true}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            collapse.message,
+            ClientMessage::SetCollapsed {
+                node: "size".into(),
+                collapsed: true
+            }
+        );
+        assert!(is_write(&collapse.message));
+        assert!(
+            is_gesture(&collapse.message),
+            "an op like a move: a batch element"
+        );
+        assert!(!is_transport(&collapse.message));
+        assert_eq!(type_tag(&collapse.message), "set_collapsed");
     }
 
     #[test]
