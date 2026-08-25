@@ -524,9 +524,10 @@ function CanvasInner() {
             onClick: () => sendWrite({ type: "set_preview", payload: { node: view.name, on: !view.preview } }),
           },
           // A slider collapses to one row (wave 4 B4; docs/16). The server
-          // decides and refuses — a wired min / max / step is a notice —
-          // and the hint mirrors its reason, so the user reads why first.
-          ...(view.param?.kind === "slider"
+          // decides and refuses — a wired value / min / max / step is a
+          // notice — and the hint mirrors its reason, so the user reads why
+          // first. Offered for every slider (the called node), widget or not.
+          ...(view.func === "slider"
             ? [
                 {
                   label: view.collapsed === true ? "expand" : "collapse",

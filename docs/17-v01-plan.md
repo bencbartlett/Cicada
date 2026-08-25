@@ -1221,15 +1221,28 @@ packages in sequence, each reviewed.
   slider is a catalog question for C2, not a canvas one. (2) ONE op
   needed `place_node` to carry the literals (`params`, additive,
   docs/13): a `batch` of `place_node` + `set_param`s cannot name the
-  node, since the server assigns the auto-name. (3) The shortcut is not
+  node, since the server assigns the auto-name; a port named by both a
+  param and the `connect` is refused as a contradiction, never
+  tie-broken. (3) The shortcut is not
   offered in the wire-dropped search — that search wires the new node
   and the grammar names no port for the wire. (4) `set_collapsed`
-  refuses every non-slider (only sliders collapse in v0.1) and a node
-  placed earlier in the same batch (the view lags the document there);
-  a sidecar-collapsed slider whose bound a later text edit wires is
-  drawn expanded while the wire stands, the flag kept. (5) The
+  refuses every non-slider (only sliders collapse in v0.1) and a slider
+  any of whose `value` / `min` / `max` / `step` is wired — the track IS
+  `value`; a sidecar-collapsed slider whose bound a later text edit
+  wires is drawn expanded while the wire stands, the flag kept. (5) The
   collapsed row wears the state badge only for a problem state (red /
-  blocked / off); `data-state` carries the rest.*
+  blocked / off); `data-state` carries the rest. Review closure
+  (2026-08-24): the first cut decided the rule off the graph VIEW, which
+  inside a `batch` lags the document — `batch[connect n.out → size.max,
+  set_collapsed size]` was accepted, the flag landed in the sidecar and
+  the slider was drawn expanded, a silent divergence; the rule now reads
+  the document (`collapse_refusal(document, name)`, the one function
+  `viewmodel::build` and the session share), that batch is refused whole,
+  its inverse lands, and a slider placed and collapsed in one batch lands
+  too (the old "placed in this same batch" refusal is gone). The server
+  tests pin a wired `min`+`step` and a wired `value` (the client mirror
+  keys on `func` like the rule, and the e2e asserts the notice carries
+  the hint verbatim); the sidecar prune test pins its own prune.*
 
 Merge: open → launch → canvas (the two CLI tracks both touch `main.rs`
 and AGENTS.md; canvas and open both touch `Viewport.tsx`'s header —

@@ -27,7 +27,8 @@ const SIDECAR = `${FILE}.layout.json`;
 const START =
   "# cicada 1\n" +
   "size = slider(value=2.0, min=0.5, max=5.0)\n" +
-  "bound = slider(value=1.0, min=0.0, max=size)\n";
+  "bound = slider(value=1.0, min=0.0, max=size)\n" +
+  "driven = slider(value=size, min=0.0, max=10.0)\n";
 
 interface DebugState {
   text: string;
@@ -80,8 +81,8 @@ test("a slider collapses to one grid unit from the menu and expands from the ins
 
   await page.goto(`/?token=${TOKEN}&pipeline=${PIPELINE}`);
   await expect(page.getByTestId("app")).toBeVisible();
-  await expect(page.locator(".react-flow__node")).toHaveCount(2);
-  for (const name of ["size", "bound"]) await solvedState(page, name);
+  await expect(page.locator(".react-flow__node")).toHaveCount(3);
+  for (const name of ["size", "bound", "driven"]) await solvedState(page, name);
   expect((await debugState(page)).history.depth).toBe(0);
   expect(existsSync(SIDECAR), "nothing moved yet: no sidecar").toBe(false);
 
@@ -157,23 +158,35 @@ test("a slider collapses to one grid unit from the menu and expands from the ins
   expect((await debugState(page)).history.depth).toBe(0);
   await expect.poll(() => existsSync(SIDECAR)).toBe(false);
 
-  // ---- `bound` has a wired `max`: the menu mirrors the reason, the SERVER
-  // refuses with a notice, nothing is written and no op is pushed.
-  await node(page, "bound").click({ button: "right", position: { x: 10, y: 8 } });
-  const boundItem = menu.getByRole("menuitem", { name: /^collapse/ });
-  await expect(boundItem).toHaveText(/max is wired/);
-  await boundItem.click();
+  // ---- `bound` has a wired `max`, `driven` a wired `value` (the track
+  // itself, so it has no widget): the menu mirrors the reason, the SERVER
+  // refuses with a notice, nothing is written and no op is pushed. The
+  // hint is the server's own words — the notice carries it verbatim, which
+  // is what holds the client mirror (`collapseHint`) to the server's rule
+  // (`collapse_refusal`).
   const notices = page.getByTestId("notices");
-  await expect(notices).toContainText("max is wired");
-  await expect(notices).toContainText("a slider collapses only while min, max and step are literals");
-  await expect(face(page, "bound")).not.toHaveAttribute("data-collapsed", "true");
-  const refused = await debugState(page);
-  expect(refused.history.depth, "a refusal is not an op").toBe(0);
-  expect(refused.text).toBe(START);
-  expect(existsSync(SIDECAR)).toBe(false);
-  // The inspector's action says the same before the click.
-  await node(page, "bound").click({ position: { x: 10, y: 8 } });
-  await expect(page.getByTestId("action-collapse")).toHaveAttribute("data-blocked", "max is wired");
+  for (const [name, reason] of [
+    ["bound", "max is wired"],
+    ["driven", "value is wired"],
+  ] as const) {
+    await node(page, name).click({ button: "right", position: { x: 10, y: 8 } });
+    const item = menu.getByRole("menuitem", { name: /^collapse/ });
+    await expect(item).toBeVisible();
+    const hint = (await item.locator(".cv-menu-hint").textContent()) ?? "";
+    expect(hint, `${name}: the menu hint is the mirror's reason`).toBe(reason);
+    await item.click();
+    await expect(notices).toContainText(
+      `\`${name}\`: ${hint} — a slider collapses only while value, min, max and step are literals`,
+    );
+    await expect(face(page, name)).not.toHaveAttribute("data-collapsed", "true");
+    const refused = await debugState(page);
+    expect(refused.history.depth, `${name}: a refusal is not an op`).toBe(0);
+    expect(refused.text).toBe(START);
+    expect(existsSync(SIDECAR)).toBe(false);
+    // The inspector's action says the same before the click.
+    await node(page, name).click({ position: { x: 10, y: 8 } });
+    await expect(page.getByTestId("action-collapse")).toHaveAttribute("data-blocked", reason);
+  }
 
   expect(errors, errors.join("\n")).toEqual([]);
 });

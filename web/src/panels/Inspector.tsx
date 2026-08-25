@@ -174,7 +174,7 @@ function NodeInspect({ name, extra }: { name: string; extra: number }) {
   // Collapse / expand a slider (wave 4 B4): the server decides and refuses
   // (a wired bound is a notice); the title mirrors its reason beforehand.
   const collapsed = node.collapsed === true;
-  const collapseBlock = node.param?.kind === "slider" && !collapsed ? collapseHint(node) : null;
+  const collapseBlock = node.func === "slider" && !collapsed ? collapseHint(node) : null;
   const toggleCollapsed = () => send({ type: "set_collapsed", payload: { node: name, collapsed: !collapsed } });
   const run = async () => {
     setRunBusy(true);
@@ -362,7 +362,7 @@ function NodeInspect({ name, extra }: { name: string; extra: number }) {
           >
             {off ? "enable" : "disable"}
           </button>
-          {node.param?.kind === "slider" && (
+          {node.func === "slider" && (
             <button
               disabled={!writer}
               title={
@@ -370,7 +370,7 @@ function NodeInspect({ name, extra }: { name: string; extra: number }) {
                   ? "expand to the full node — header and one row per port"
                   : collapseBlock === null
                     ? "one grid unit: name, track and value on one row (GH-like)"
-                    : `${collapseBlock} — a slider collapses only while min, max and step are literals`
+                    : `${collapseBlock} — a slider collapses only while value, min, max and step are literals`
               }
               onClick={toggleCollapsed}
               data-testid="action-collapse"

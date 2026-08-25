@@ -2071,6 +2071,20 @@ impl Session {
                         bad.port
                     )));
                 }
+                // A port named by BOTH a literal and the wire is a
+                // contradiction the client wrote, not a tie to break: one
+                // of the two would vanish under the other with nothing
+                // said. Refused before anything lands (review finding,
+                // 2026-08-24).
+                if let Some(wire) = &connect
+                    && params.iter().any(|param| param.port == wire.to_port)
+                {
+                    return Err(IntentError::Protocol(format!(
+                        "`place_node` names `{}` both as a literal (params) and as the wire's \
+                         port (connect) — one or the other",
+                        wire.to_port
+                    )));
+                }
                 let deps: Vec<&str> = connect
                     .as_ref()
                     .map(|c| vec![c.from.node.as_str()])
@@ -2235,20 +2249,22 @@ impl Session {
                 })
             }
             ClientMessage::SetCollapsed { node, collapsed } => {
-                // The rule is the view-model's (`collapse_refusal`): only a
-                // slider, and only while min / max / step are literals. The
-                // view is the authority on wiring here; a node placed
-                // earlier in this batch is not in it yet and is refused by
-                // name rather than guessed at.
-                let Some(view) = inner.graph.node(&node) else {
-                    if inner.loaded.document.find_binding(&node).is_some() {
-                        return Err(IntentError::Refused(format!(
-                            "`{node}` was placed in this same batch — collapse it in a later op"
-                        )));
-                    }
+                // THE rule is the view-model's `collapse_refusal`, read off
+                // the DOCUMENT: inside a batch the view lags the document
+                // (it is rebuilt at the commit), so a bound wired, unwired
+                // or a slider placed by an earlier op of this same batch
+                // is seen here (a first cut read the view and let the flag
+                // land on a slider the batch had just wired). The view is
+                // asked only to tell a line that does not parse from a
+                // name nobody bound.
+                let document = &inner.loaded.document;
+                if document.find_binding(&node).is_none()
+                    && document.find_disabled(&node).is_none()
+                    && inner.graph.node(&node).is_none()
+                {
                     return Err(IntentError::Unknown(format!("no node named `{node}`")));
-                };
-                if collapsed && let Some(reason) = viewmodel::collapse_refusal(view) {
+                }
+                if collapsed && let Some(reason) = viewmodel::collapse_refusal(document, &node) {
                     return Err(IntentError::Refused(reason));
                 }
                 // Expanded is the default: `false` clears the override (the
@@ -9058,16 +9074,20 @@ size = slider(value=4.0, min=0.5, max=5.0)
     // sidecar-only ops are undo steps): `set_collapsed` writes the sidecar's
     // `collapsed` override as ONE op — text untouched, no solve — and the
     // view says collapsed and one unit tall; it is refused, kind `refused`,
-    // for a slider with a wired bound and for a node that is not a slider,
+    // for a slider with a wired port of the collapsed row (max; min and
+    // step; value — the track itself) and for a node that is not a slider,
     // with nothing written and no op; expanding clears the override (no
     // overrides → no file); undo walks both ways.
     #[test]
-    #[allow(clippy::too_many_lines)] // one story: collapse, three refusals, expand, no-op, undo
+    #[allow(clippy::too_many_lines)] // one story: collapse, five refusals, expand, no-op, undo
     fn set_collapsed_is_a_sidecar_op_refused_for_wired_bounds_and_non_sliders() {
         let (_dir, config) = project(
             "# cicada 1\n\
+             n = 3.0\n\
              size = slider(value=2.0, min=0.5, max=5.0)\n\
              bound = slider(value=1.0, min=0.0, max=size)\n\
+             both = slider(value=4.0, min=n, max=5.0, step=n)\n\
+             driven = slider(value=n, min=0.0, max=10.0)\n\
              span = construct_domain(start=0.0, end=size)\n",
         );
         let pipeline = config.pipeline.clone();
@@ -9126,10 +9146,14 @@ size = slider(value=4.0, min=0.5, max=5.0)
             "a sidecar-only op schedules no solve"
         );
 
-        // Three refusals: a wired `max`, a non-slider, an unknown node. No
-        // delta, nothing written, no op; the kind says which.
+        // Five refusals: a wired `max`; a wired `min` AND `step` (both
+        // named, in spec order); a wired `value` (the collapsed row IS the
+        // track); a non-slider; an unknown node. No delta, nothing written,
+        // no op; the kind says which.
         for (node, kind, needle) in [
-            ("bound", "refused", "max is wired"),
+            ("bound", "refused", "`bound`: max is wired"),
+            ("both", "refused", "`both`: min and step are wired"),
+            ("driven", "refused", "`driven`: value is wired"),
             ("span", "refused", "not a slider"),
             ("nope", "unknown", "no node named"),
         ] {
@@ -9161,10 +9185,12 @@ size = slider(value=4.0, min=0.5, max=5.0)
         assert_eq!(history_of(&session)["depth"], 1, "refusals push no op");
         let (text, sidecar) = on_disk(&pipeline);
         assert_eq!(text, before.0);
-        assert!(
-            !sidecar.as_deref().unwrap().contains("bound"),
-            "a refused collapse leaves no override: {sidecar:?}"
-        );
+        for name in ["bound", "both", "driven", "span"] {
+            assert!(
+                !sidecar.as_deref().unwrap().contains(name),
+                "a refused collapse leaves no override for {name}: {sidecar:?}"
+            );
+        }
 
         // Expanding is always allowed and CLEARS the override: this was the
         // only one, so the sidecar file goes (near-empty by construction).
@@ -9227,6 +9253,191 @@ size = slider(value=4.0, min=0.5, max=5.0)
         drain(&mut rx);
         assert!(session.core.lock_inner().sidecar.overrides.is_empty());
         assert!(on_disk(&pipeline).1.is_none());
+    }
+
+    // Wave 4 B4, review closure (2026-08-24): `set_collapsed` decides off
+    // the DOCUMENT, so inside a `batch` it sees what the batch did two ops
+    // earlier. The first cut read the graph view, which is rebuilt only at
+    // the commit: `batch[connect n.out → size.max, set_collapsed size]` was
+    // accepted, `"collapsed": true` landed on a slider with a wired max,
+    // and the slider was drawn expanded — a silent divergence. Now that
+    // batch is refused whole (kind `refused`, the failing op named), its
+    // inverse — unwire, then collapse — lands, and a slider placed and
+    // collapsed in one batch lands too (the auto-name is the document's
+    // the moment `place_node` runs).
+    #[test]
+    #[allow(clippy::too_many_lines)] // one story: the refused batch, its inverse, place + collapse, undo
+    fn set_collapsed_in_a_batch_sees_the_bound_the_batch_wired() {
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             n = 3.0\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             bound = slider(value=1.0, min=0.0, max=size)\n",
+        );
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        drain(&mut rx);
+        let before = on_disk(&pipeline);
+        assert!(before.1.is_none(), "no sidecar yet");
+
+        // Wire a bound, then collapse, in ONE batch: refused whole.
+        session.handle(
+            id,
+            Some("b1".into()),
+            ClientMessage::Batch {
+                label: "wire then collapse".into(),
+                ops: vec![
+                    ClientMessage::Connect {
+                        from: WireEnd {
+                            node: "n".into(),
+                            port: "out".into(),
+                        },
+                        to: WireEnd {
+                            node: "size".into(),
+                            port: "max".into(),
+                        },
+                        lift: false,
+                    },
+                    ClientMessage::SetCollapsed {
+                        node: "size".into(),
+                        collapsed: true,
+                    },
+                ],
+            },
+        );
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        assert!(
+            !msgs.iter().any(|m| m["type"] == "delta"),
+            "a refused batch broadcasts no delta: {msgs:?}"
+        );
+        let error = msgs.iter().find(|m| m["type"] == "error").unwrap();
+        assert_eq!(error["payload"]["intent_id"], "b1");
+        assert_eq!(error["payload"]["kind"], "refused", "{error}");
+        assert_eq!(
+            error["payload"]["index"], 1,
+            "the collapse is the op that failed"
+        );
+        let message = error["payload"]["message"].as_str().unwrap();
+        assert!(
+            message.contains("op 1 (set_collapsed)") && message.contains("`size`: max is wired"),
+            "{message}"
+        );
+        assert_eq!(
+            on_disk(&pipeline),
+            before,
+            "all or nothing: the wire is rolled back, no sidecar"
+        );
+        assert_eq!(
+            session.debug_state(false)["text"].as_str().unwrap(),
+            before.0,
+            "memory untouched"
+        );
+        assert!(
+            session.core.lock_inner().sidecar.overrides.is_empty(),
+            "no flag landed"
+        );
+        assert_eq!(history_of(&session)["depth"], 0, "no op");
+
+        // The inverse: unwire the bound, then collapse — the batch lands
+        // and the view draws the slider collapsed.
+        session.handle(
+            id,
+            Some("b2".into()),
+            ClientMessage::Batch {
+                label: "unwire then collapse".into(),
+                ops: vec![
+                    ClientMessage::Disconnect {
+                        to: WireEnd {
+                            node: "bound".into(),
+                            port: "max".into(),
+                        },
+                    },
+                    ClientMessage::SetCollapsed {
+                        node: "bound".into(),
+                        collapsed: true,
+                    },
+                ],
+            },
+        );
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        let deltas: Vec<_> = msgs.iter().filter(|m| m["type"] == "delta").collect();
+        assert_eq!(deltas.len(), 1, "one delta: {msgs:?}");
+        assert_eq!(
+            deltas[0]["payload"]["source"]["label"],
+            "unwire then collapse"
+        );
+        assert_eq!(deltas[0]["payload"]["history"]["depth"], 1);
+        let nodes = deltas[0]["payload"]["graph"]["nodes"].as_array().unwrap();
+        let bound = nodes.iter().find(|n| n["name"] == "bound").unwrap();
+        assert_eq!(bound["collapsed"], true, "{bound}");
+        assert_eq!(bound["size"][1], 1);
+        let (text, sidecar) = on_disk(&pipeline);
+        assert!(
+            text.contains("bound = slider(value=1.0, min=0.0)"),
+            "{text}"
+        );
+        assert!(
+            sidecar.as_deref().unwrap().contains("\"bound\""),
+            "{sidecar:?}"
+        );
+
+        // A slider placed AND collapsed in one batch.
+        let param = |port: &str, value: &str| crate::protocol::ParamSpec {
+            port: port.into(),
+            value: value.into(),
+        };
+        session.handle(
+            id,
+            Some("b3".into()),
+            ClientMessage::Batch {
+                label: "place collapsed".into(),
+                ops: vec![
+                    ClientMessage::PlaceNode {
+                        func: "slider".into(),
+                        cell: None,
+                        connect: None,
+                        params: vec![param("value", "1.0"), param("max", "9.0")],
+                    },
+                    ClientMessage::SetCollapsed {
+                        node: "slider_1".into(),
+                        collapsed: true,
+                    },
+                ],
+            },
+        );
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        let delta = msgs
+            .iter()
+            .find(|m| m["type"] == "delta")
+            .unwrap_or_else(|| panic!("the batch lands: {msgs:?}"));
+        let nodes = delta["payload"]["graph"]["nodes"].as_array().unwrap();
+        let placed = nodes.iter().find(|n| n["name"] == "slider_1").unwrap();
+        assert_eq!(placed["collapsed"], true, "{placed}");
+        assert_eq!(placed["size"][1], 1);
+        assert!(
+            on_disk(&pipeline)
+                .0
+                .contains("slider_1 = slider(value=1.0, max=9.0)")
+        );
+        assert_eq!(history_of(&session)["depth"], 2);
+
+        // One undo takes the placement and its flag away together.
+        session.handle(id, None, ClientMessage::Undo {});
+        session.wait_idle();
+        drain(&mut rx);
+        let (text, sidecar) = on_disk(&pipeline);
+        assert!(!text.contains("slider_1"), "{text}");
+        assert!(
+            !sidecar.as_deref().unwrap().contains("slider_1"),
+            "{sidecar:?}"
+        );
+        assert_eq!(history_of(&session)["depth"], 1);
     }
 
     // Wave 4 B4 (the slider shortcut `1<20`): `place_node` with `params`
@@ -9351,6 +9562,106 @@ size = slider(value=4.0, min=0.5, max=5.0)
             "{error}"
         );
         assert_eq!(on_disk(&pipeline), before);
+        assert_eq!(history_of(&session)["depth"], 0, "refusals push no op");
+        assert_eq!(
+            session.debug_state(false)["text"].as_str().unwrap(),
+            before.0,
+            "memory untouched"
+        );
+    }
+
+    // Wave 4 B4, review closure (2026-08-24): `place_node` with `params`
+    // AND `connect` in one placement — the literals and the wire land
+    // together, in spec order, as ONE op (so the order the server applies
+    // them in cannot show); a port named by BOTH is a contradiction the
+    // client wrote and is refused before anything lands (the first cut let
+    // the wire win, the literal gone with nothing said).
+    #[test]
+    fn place_node_with_params_and_a_wire_is_one_op_and_a_port_named_twice_is_refused() {
+        let (_dir, config) = project("# cicada 1\nn = 3.0\n");
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        drain(&mut rx);
+        let before = on_disk(&pipeline);
+        let param = |port: &str, value: &str| crate::protocol::ParamSpec {
+            port: port.into(),
+            value: value.into(),
+        };
+        let wire_into = |port: &str| {
+            Some(crate::protocol::ConnectSpec {
+                from: WireEnd {
+                    node: "n".into(),
+                    port: "out".into(),
+                },
+                to_port: port.into(),
+                lift: false,
+            })
+        };
+
+        session.handle(
+            id,
+            Some("p1".into()),
+            ClientMessage::PlaceNode {
+                func: "slider".into(),
+                cell: Some([2, 2]),
+                connect: wire_into("min"),
+                params: vec![param("max", "20.0"), param("value", "5.0")],
+            },
+        );
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        let deltas: Vec<_> = msgs.iter().filter(|m| m["type"] == "delta").collect();
+        assert_eq!(deltas.len(), 1, "one delta: {msgs:?}");
+        assert_eq!(deltas[0]["payload"]["source"]["label"], "place slider");
+        assert_eq!(deltas[0]["payload"]["history"]["depth"], 1, "ONE op");
+        let (text, _) = on_disk(&pipeline);
+        assert!(
+            text.contains("slider_1 = slider(value=5.0, min=n, max=20.0)"),
+            "the literals and the wire in spec order: {text}"
+        );
+        let status = session.debug_state(false)["statuses"]["slider_1"].clone();
+        assert!(
+            matches!(status["state"].as_str(), Some("done" | "cached")),
+            "{status}"
+        );
+        session.handle(id, None, ClientMessage::Undo {});
+        session.wait_idle();
+        drain(&mut rx);
+        assert_eq!(
+            on_disk(&pipeline),
+            before,
+            "one undo removes the node, its literals and its wire"
+        );
+
+        // `min` as a literal AND as the wire's port: refused whole, before
+        // anything lands.
+        session.handle(
+            id,
+            Some("p2".into()),
+            ClientMessage::PlaceNode {
+                func: "slider".into(),
+                cell: Some([2, 2]),
+                connect: wire_into("min"),
+                params: vec![param("min", "1.0"), param("value", "5.0")],
+            },
+        );
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        assert!(!msgs.iter().any(|m| m["type"] == "delta"), "{msgs:?}");
+        let error = msgs.iter().find(|m| m["type"] == "error").unwrap();
+        assert_eq!(error["payload"]["intent_id"], "p2");
+        assert_eq!(error["payload"]["kind"], "protocol", "{error}");
+        assert!(
+            error["payload"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("`min` both as a literal"),
+            "{error}"
+        );
+        assert_eq!(on_disk(&pipeline), before, "no node, no cell, no wire");
         assert_eq!(history_of(&session)["depth"], 0, "refusals push no op");
         assert_eq!(
             session.debug_state(false)["text"].as_str().unwrap(),

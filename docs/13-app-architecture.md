@@ -93,21 +93,36 @@ Two additive pieces for the sliders (wave 4 B4, 2026-08-24; docs/16
   server assigns the auto-name (`slider_1`) that the later `set_param`s
   would have to name. A param naming a port the node lacks, or a value
   that is not one literal, refuses the whole placement (`unknown` /
-  `refused`; no node, no cell, no op).
+  `refused`; no node, no cell, no op); so does a port named by BOTH a
+  param and the `connect` (`protocol` — a contradiction the client wrote,
+  not a tie the server breaks).
 - **`set_collapsed {node, collapsed}`** writes the sidecar's existing
   `collapsed` override as an op like a move (`collapse x` / `expand x`;
   sidecar only, no solve; `false` clears the override, so an expanded
   slider has no entry). The view-model carries it as `NodeView.collapsed`
   (omitted when false) with `size` already `[w, 1]`. THE rule is the
-  view-model's `collapse_refusal`: only a slider, and only while `min`,
-  `max` and `step` are literals — the server refuses (`refused`) a
-  non-slider and a slider with a wired bound ("`bound`: max is wired — a
-  slider collapses only while min, max and step are literals (the
-  collapsed row has no port for a wire)"), and a node placed earlier in
-  the same `batch` (the view lags the document there); the client only
-  MIRRORS the reason as a hint (`collapseHint`). A slider whose bound a
-  later text edit wires is drawn expanded while the wire stands — the
-  flag stays in the sidecar and takes effect again when the wire goes.
+  view-model's `collapse_refusal`, read off the DOCUMENT — the binding's
+  call (`func == "slider"`; a kwarg whose unlifted value is a reference
+  is wired), never off the graph view: inside a `batch` the view lags
+  the document (it is rebuilt at the commit), so a bound wired, unwired
+  or a slider placed by an earlier op of the same batch is seen by the
+  `set_collapsed` that follows — `batch[connect n.out → size.max,
+  set_collapsed size]` is refused whole (the failing op named, nothing
+  lands), `batch[disconnect bound.max, set_collapsed bound]` and
+  `batch[place_node slider, set_collapsed slider_1]` land (the first cut
+  read the view and let the flag land silently on a slider the batch had
+  just wired — review finding, 2026-08-24). Only a slider, and only while
+  `value`, `min`, `max` and `step` are literals (the collapsed row is
+  name · track · value · output — the track IS `value`): the server
+  refuses (`refused`) a non-slider and a slider with a wired port of that
+  row ("`bound`: max is wired — a slider collapses only while value, min,
+  max and step are literals (the collapsed row has no port for a wire)";
+  the ports named in spec order); the client only MIRRORS the reason as a
+  hint (`collapseHint`, keyed on `func` like the rule — the notice carries
+  the hint verbatim, and `slider.spec.ts` asserts it does). A slider
+  whose bound a later text edit wires is drawn expanded while the wire
+  stands — the flag stays in the sidecar and takes effect again when the
+  wire goes.
 
 **Slider drags get a dedicated ephemeral path**: during the drag, the
 client streams `param_preview` messages (not ops, not undoable); the

@@ -1067,9 +1067,10 @@ pub enum ClientMessage {
     /// slider is one grid unit tall — name, track and value on one row.
     /// An op like a move (`collapse x` / `expand x`). Refused (kind
     /// `refused`) for a node that is not a slider, and for a slider any of
-    /// whose `min` / `max` / `step` is wired — the collapsed row has no
-    /// port for the wire; the server decides, the client mirrors the
-    /// reason.
+    /// whose `value` / `min` / `max` / `step` is wired — the collapsed row
+    /// has no port for the wire; the server decides off the DOCUMENT
+    /// (`viewmodel::collapse_refusal`, so a `batch` sees what it wired
+    /// earlier), the client mirrors the reason.
     SetCollapsed {
         /// Node.
         node: String,

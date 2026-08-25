@@ -61,6 +61,17 @@ function sliderView(name: string, extra: Partial<NodeView> = {}): NodeView {
 const collapsed = sliderView("size", { collapsed: true, size: [8, 1] });
 /** `size` expanded (the sidecar says nothing). */
 const expanded = sliderView("size");
+/** `driven = slider(value=size, min=0.0, max=10.0)` — a wired value: no widget (no `param`), and the server refuses to collapse it (the row IS the track). */
+const driven = sliderView("driven", {
+  text: "driven = slider(value=size, min=0.0, max=10.0)",
+  inputs: [
+    { ...port("value", ""), literal: undefined, literal_value: undefined, wired: { node: "size", port: "out" } },
+    port("min", "0.0"),
+    port("max", "10.0"),
+    port("step", "0.0"),
+  ],
+  param: undefined,
+});
 /** `bound = slider(value=1.0, min=0.0, max=size)` — a wired max: the server refuses to collapse it. */
 const bound = sliderView("bound", {
   text: "bound = slider(value=1.0, min=0.0, max=size)",
@@ -204,9 +215,18 @@ describe("the inspector's collapse / expand action", () => {
     render(<Inspector />);
     const button = screen.getByTestId("action-collapse");
     expect(button.getAttribute("data-blocked")).toBe("max is wired");
-    expect(button.title).toMatch(/^max is wired — a slider collapses only while min, max and step are literals/);
+    expect(button.title).toMatch(/^max is wired — a slider collapses only while value, min, max and step are literals/);
     fireEvent.click(button);
     expect(writes()).toEqual([{ type: "set_collapsed", payload: { node: "bound", collapsed: true } }]);
+  });
+
+  it("offers the action for a slider whose value is wired — no widget, still a slider — with the mirrored reason", () => {
+    seed("writer", [expanded, driven], "driven");
+    render(<Inspector />);
+    const button = screen.getByTestId("action-collapse");
+    expect(button.textContent).toBe("collapse");
+    expect(button.getAttribute("data-blocked")).toBe("value is wired");
+    expect(button.title).toMatch(/^value is wired — a slider collapses only while value, min, max and step are literals/);
   });
 
   it("has no such action for a node that is not a slider, and is disabled for an observer", () => {

@@ -331,6 +331,18 @@ mod tests {
         sidecar.set_collapsed("size", Some(true));
         assert_eq!(sidecar.overrides["size"].collapsed, Some(true));
         assert!(sidecar.render().contains("\"collapsed\": true"));
+        // The flag was the whole entry: clearing it prunes the entry AT
+        // ONCE — by `set_collapsed`'s own prune, not by a later override's
+        // (the 2026-08-24 review dropped this prune and the suite stayed
+        // green: the entry lingered empty until `set_cell(None)` pruned
+        // it, and `save` hid it through `is_default_shape`).
+        sidecar.set_collapsed("size", None);
+        assert!(
+            !sidecar.overrides.contains_key("size"),
+            "an entry holding only a cleared flag is pruned by set_collapsed itself: {:?}",
+            sidecar.overrides
+        );
+        sidecar.set_collapsed("size", Some(true));
         sidecar.set_cell("size", Some([3, 4]));
         sidecar.set_collapsed("size", None);
         assert_eq!(
