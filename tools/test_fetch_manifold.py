@@ -10,7 +10,7 @@ import re
 import sys
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_DIR = os.path.dirname(TOOLS_DIR)
@@ -88,8 +88,11 @@ class ManifestPins(unittest.TestCase):
 
 class Environment(unittest.TestCase):
     def layout(self, subdir: str) -> fm.Layout:
-        root = Path(r"C:\cache\cicada-manifold") if subdir == "win-64" else Path("/home/x/.cache/cicada-manifold")
-        return fm.Layout(root, subdir, "v3.5.2")
+        # Pure paths: a Windows layout spells itself with backslashes and a POSIX one
+        # with slashes on EVERY test host (a `Path(r"C:\…")` on Linux is a POSIX path
+        # with a literal backslash in its name — the first CI run caught that).
+        root = PureWindowsPath(r"C:\cache\cicada-manifold") if subdir == "win-64" else PurePosixPath("/home/x/.cache/cicada-manifold")
+        return fm.Layout(root, subdir, "v3.5.2")  # type: ignore[arg-type]
 
     def test_bash_lines_on_windows_use_forward_slashes(self):
         lines = fm.env_lines(self.layout("win-64"), "bash")
@@ -101,23 +104,20 @@ class Environment(unittest.TestCase):
         self.assertEqual(fm.env_lines(layout, "cmd"), [r"set MANIFOLD_CSG_LIB_DIR=C:\cache\cicada-manifold\manifold-v3.5.2-win-64\lib", "set MANIFOLD_CSG_LIB_KIND=static"])
 
     def test_unix_lines(self):
-        # A POSIX root on a Windows test host renders through WindowsPath; the
-        # function passes the layout's own spelling through, so that is what is
-        # asserted — the lib dir of the layout, quoted, nothing rewritten.
-        layout = self.layout("linux-64")
         self.assertEqual(
-            fm.env_lines(layout, "bash"),
-            [f"export MANIFOLD_CSG_LIB_DIR='{layout.lib_dir}'", "export MANIFOLD_CSG_LIB_KIND='static'"],
+            fm.env_lines(self.layout("linux-64"), "bash"),
+            ["export MANIFOLD_CSG_LIB_DIR='/home/x/.cache/cicada-manifold/manifold-v3.5.2-linux-64/lib'", "export MANIFOLD_CSG_LIB_KIND='static'"],
         )
-        self.assertTrue(str(layout.lib_dir).endswith(os.path.join("manifold-v3.5.2-linux-64", "lib")))
 
     def test_unknown_shell_is_refused(self):
         with self.assertRaises(fm.FetchError):
             fm.env_lines(self.layout("linux-64"), "fish")
 
     def test_github_env_entries(self):
-        layout = self.layout("linux-64")
-        self.assertEqual(fm.github_env_entries(layout), [f"MANIFOLD_CSG_LIB_DIR={layout.lib_dir}", "MANIFOLD_CSG_LIB_KIND=static"])
+        self.assertEqual(
+            fm.github_env_entries(self.layout("linux-64")),
+            ["MANIFOLD_CSG_LIB_DIR=/home/x/.cache/cicada-manifold/manifold-v3.5.2-linux-64/lib", "MANIFOLD_CSG_LIB_KIND=static"],
+        )
 
     def test_static_filenames_follow_the_sys_crate_table(self):
         self.assertEqual(fm.static_filename("manifold", "win-64"), "manifold.lib")
