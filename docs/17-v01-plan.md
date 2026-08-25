@@ -45,6 +45,26 @@ layer (the `batch` path is its landing pad), the 2D sketcher.
   The most valuable lens is "can a check report a false PASS".
 - Commit conventions, doc-update rule, catalog regeneration, and the
   definition of done are AGENTS.md's; they apply unchanged.
+- **Iteration speed (decided with Ben 2026-08-24).** The waves took
+  hours because every agent paid a cold kernel build (Manifold via
+  cmake, the OCCT glue, a second toolchain for lints) and every package
+  ran three fresh agents in series regardless of its size — a grid-colour
+  change cost 24 minutes of which the edit was seconds. Standing rules,
+  recorded in AGENTS.md §Working rules: the fast lane for small findings
+  (fixed directly on main by the orchestrating session), per-track
+  merges (a track lands the moment it is green), per-package reviews
+  only for engine/server/protocol work (one per track for UI), agents
+  verify what they touched and the full suite runs at the merge, one
+  toolchain, and prebuilt kernels — Manifold joins OCCT as a prebuilt
+  (`manifold-csg-sys` already links an external build through
+  `MANIFOLD_CSG_LIB_DIR`; landed 2026-08-24 as `tools/fetch_manifold.py`
+  — measured on the dev machine: the prefix builds in 1 m 34 s, a cold
+  `cargo build -p cicada-cli` in a fresh target dir takes 29 s with the
+  prebuilt against 127 s without, the wall carve hash unchanged and
+  cicada-geom's 131 tests green against the prebuilt-linked binary).
+  Seeding worktree targets by copying the main one was considered and
+  dropped: 23 GB of debug artefacts copy in about the time the
+  kernel-free cold build now takes.
 
 ## Item 0 — the corpus move (hours)
 

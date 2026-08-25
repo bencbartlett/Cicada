@@ -1,0 +1,25 @@
+{
+  "_comment": "The prebuilt Manifold pin (tools/fetch_manifold.py; AGENTS.md iteration-speed rule 6). `manifold_csg_sys` is the crate version in Cargo.lock whose build script these flags mirror; `tag`/`commit` are upstream's. tools/test_fetch_manifold.py holds `manifold_csg_sys` to Cargo.lock and `tag` + `cmake_flags` to the crate's source; the script itself refuses to build a clone whose HEAD is not `commit`. Changing the pin changes every CI cache key (hashFiles of this file).",
+  "manifold_csg_sys": "3.5.104",
+  "repository": "https://github.com/elalish/manifold.git",
+  "tag": "v3.5.2",
+  "commit": "11235e6b8ebea2dbed8aec4285685aafd3d95667",
+  "parallel": true,
+  "cmake_flags": [
+    "-DCMAKE_BUILD_TYPE=Release",
+    "-DMANIFOLD_TEST=OFF",
+    "-DMANIFOLD_PYBIND=OFF",
+    "-DMANIFOLD_JSBIND=OFF",
+    "-DMANIFOLD_CBIND=ON",
+    "-DMANIFOLD_CROSS_SECTION=ON",
+    "-DMANIFOLD_USE_BUILTIN_CLIPPER2=ON",
+    "-DBUILD_SHARED_LIBS=OFF",
+    "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
+    "-DMANIFOLD_PAR=ON",
+    "-DMANIFOLD_USE_BUILTIN_TBB=ON"
+  ],
+  "libraries": {
+    "required": ["manifold", "manifoldc", "Clipper2"],
+    "tbb_candidates": ["tbb12", "tbb", "tbb12_static"]
+  }
+}
