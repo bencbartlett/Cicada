@@ -1666,6 +1666,90 @@ and AGENTS.md; canvas and open both touch `Viewport.tsx`'s header —
 small, by hand). Then the verify-change loop on main, the wall hash
 unchanged, and the push.
 
+### Wave 4 — second half: work packages (contracts frozen 2026-08-24)
+
+Two worktrees, under the iteration-speed rules (per-package adversarial
+reviews — both are engine/server/protocol work; each lands the moment it is
+green; the prebuilt kernels make their cold builds ~30 s).
+
+**Track S — `wt/scrub` (item 5, scrub caching; DECISIONS.md row 39, docs/12
+§Speculative warming).** Plainly: a slider the user opts in gets its
+positions pre-solved while the app is idle, nearest the current value
+first, so dragging it later is instant — a video-style buffer bar.
+- **S1 — the engine half.** (a) Eligibility is a pure function of the
+  slider's literals: `positions = floor((max − min) / step) + 1`, and the
+  slider may scrub iff `step > 0` and `positions ≤ SCRUB_MAX_POSITIONS`
+  (**32** — 0…1 by 0.1 is 11, 0…10 by 0.5 is 21, 0…1 by 0.02 is 51 and
+  refused; the constant is the ledger's to revise — Ben's call, 32 unless
+  he says otherwise; recorded in row 39 when the item lands). A wired
+  `min`/`max`/`step` is ineligible. (b) The opt-in is the TEXT: `slider`
+  gains `scrub = False` (a kwarg like any other — `version` bump, the
+  signature ledger, the catalog regenerated, docs/08 and docs/10); the
+  sidecar never carries it. (c) Warming: for every eligible slider with
+  `scrub=True` whose drag is not live, the session submits idle-class
+  hypothetical solves (3b's `Session::solve_hypothetical` /
+  `SolveLoop::run_idle` — paint nothing, pre-empted by any real generation
+  or Esc, fill the ordinary memo) over the step-quantized positions,
+  nearest the committed value first and alternating sides, one position
+  at a time, skipping positions whose cone is already a memo hit (the
+  hash-only dry run `predict_cone` already answers that), and stopping at
+  a per-slider byte cap — **256 MiB** of memo entries attributed to the
+  warming, counted from the store's cost records — or when every position
+  is warm. The worker is generic over (param, ordered value list); the
+  transport's playhead-ahead warming can reuse it later. A slider whose
+  text changes (min/max/step/value, or `scrub` toggled off) drops its
+  queue. (d) Additive protocol (skill `protocol-change`): every
+  `ParamView` of an eligible slider carries `scrub: {on, positions, warmed:
+  <index list>, warming: bool, bytes}`; a coalesced `scrub_progress {node,
+  port, warmed, warming, bytes}` broadcast at the statuses' cadence (≤ 10
+  Hz) while warming runs; `set_scrub {node, on}` is a write gesture that
+  edits the kwarg (an op, undoable — the delta carries the new view); an
+  ineligible slider refuses `set_scrub` with the reason (`too many
+  positions (51 > 32)`, `min is wired`); `/debug/state.scrub` lists every
+  warming queue. (e) Tests at the right layers: eligibility (boundaries
+  32/33, step 0, wired ports), the nearest-first order (a property test
+  over random min/max/value), pre-emption (a real preview arriving
+  mid-warm lands first and the queue resumes), the byte cap, the queue
+  dropped on a text change, the refusal reasons; the DoD measurement:
+  after idle, a step-snapped `tools/measure/slider_loop.mjs` sweep over the
+  test slider reports every generation `cached`.
+- **S2 — the web half.** The toggle (the inspector's param row + the node
+  context menu: "Scrub-cache this slider", greyed with the server's reason
+  when ineligible — the client computes nothing itself); the buffer bar
+  under the track on BOTH slider widgets (canvas + params): a segment per
+  position, warm ones filled, the current position marked, a subtle pulse
+  while `warming`; observers see the same. The compute-on-release tie-in
+  needs no client code: a tick on a warm position is a pure cache read and
+  the server previews it live (the hysteresis rule already says so) — the
+  e2e asserts it: drag a scrub-cached slider across warm positions and the
+  viewport follows live with zero computed nodes; drag onto a cold one and
+  the pending chip appears. docs/16 (the bar, the toggle), docs/13 (the
+  shapes), `web/e2e/scrub.spec.ts`; the consumer is `examples/02-solids.cic`
+  with `scrub=True` on its cone slider (positions ≤ 32 — set the step so).
+
+**Track C — `wt/catalog-c2` (the 21 unblocked docs/08 S+1 rows; skill
+`add-stdlib-node`: one node per file, three tests each, `gh =` names,
+runnable `# Examples`, the catalog regenerated per commit; per-package
+review).**
+- **C2a — Point · Vector · Plane (12):** `distance`, `closest_point`
+  (kd-tree backed — a new dependency is the ledger's to see; say which, or
+  a flat scan if the sizes in docs/08 allow), `cull_duplicates`,
+  `construct_vector` + `deconstruct_vector`, `amplitude` + `vector_length`
+  (the doc's "Vector Length" — `length` is the list node's), `cross_product`
+  + `dot_product` + `angle` (the doc's "Cross" — `cross` is the list
+  combinator's reserved name), `rotate_vector`, `plane_normal`.
+- **C2b — Transform and the stragglers (9):** `rotate_axis`, `scale_nu`,
+  `polar_array`, `rectangular_array`, `compose_xform`, `transform` (the
+  `Xform` kind exists), `value_list` (the dropdown param — `options:
+  [Text]`, `value: Text`; a `ParamView` kind the inspector and the canvas
+  render as a select: the small web half rides in this package),
+  `center_box`, `mesh_plane`.
+- Every name is checked against the catalog AND the phantom list of
+  `crates/cicada-cli/tests/diagnostic_vocabulary.rs`; consumers: a new
+  `examples/09-vectors.cic` (C2a), additions to `06-lists` / `02-solids`
+  (C2b); docs/08's tier column is updated per row (`area`'s catalog tier,
+  `S`, corrected to the doc's `1` on the way).
+
 ## Follow-ups (found by the v0.1 reviews and measurements; scheduled, not yet placed)
 
 - **Obstacle-aware trace channels (B2 review, 2026-08-24)** — the trace
