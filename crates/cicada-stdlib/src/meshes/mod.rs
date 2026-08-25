@@ -15,6 +15,7 @@ pub mod mesh_difference;
 pub mod mesh_extrude;
 pub mod mesh_intersection;
 pub mod mesh_loft;
+pub mod mesh_plane;
 pub mod mesh_sphere;
 pub mod mesh_union;
 pub mod tessellate;

@@ -20,6 +20,7 @@ bounds	1	bounds(list: [Number]) → Domain
 box	1	box(plane: Plane = xy_plane, x: Domain, y: Domain, z: Domain) → Watertight<Mesh>	uses_tolerance
 box	2	box(plane: Plane = xy_plane, x: Domain, y: Domain, z: Domain) → Solid	uses_tolerance
 ceiling	1	ceiling(x: Number) → Number	
+center_box	1	center_box(plane: Plane = xy_plane, x: Number = 1.0, y: Number = 1.0, z: Number = 1.0) → Solid	uses_tolerance
 chunk	1	chunk(list: [E], size: Integer) → [[E]]	
 circle	1	circle(plane: Plane = xy_plane, radius: Number) → Closed<Curve>	uses_tolerance
 clock	1	clock(speed: Number = 1.0, t: Number = 0.0) → Number	volatile
@@ -83,6 +84,7 @@ mesh_difference	1	mesh_difference(mesh: Watertight<Mesh>, cutters: [Watertight<M
 mesh_extrude	1	mesh_extrude(profile: Closed<Curve>, direction: Vector, segments: Integer = 64) → Watertight<Mesh>	uses_tolerance
 mesh_intersection	1	mesh_intersection(a: Watertight<Mesh>, b: Watertight<Mesh>) → Watertight<Mesh>	
 mesh_loft	1	mesh_loft(start: Closed<Curve>, end: Closed<Curve>, segments: Integer = 64) → Watertight<Mesh>	uses_tolerance
+mesh_plane	1	mesh_plane(plane: Plane = xy_plane, x: Domain, y: Domain, x_count: Integer = 1, y_count: Integer = 1) → Mesh	uses_tolerance
 mesh_sphere	1	mesh_sphere(plane: Plane = xy_plane, radius: Number, segments: Integer = 32) → Watertight<Mesh>	uses_tolerance
 mesh_union	1	mesh_union(meshes: [Watertight<Mesh>]) → Watertight<Mesh>	
 min	1	min(a: Number, b: Number) → Number	

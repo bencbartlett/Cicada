@@ -4504,6 +4504,73 @@
       ]
     },
     {
+      "name": "center_box",
+      "title": "Center Box",
+      "description": "a B-rep box centred on a plane's origin, sized by three half-extents.",
+      "category": "Surface & solid",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "a half-extent is not above tolerance (the box would be flat), the plane is degenerate, or the kernel refuses.",
+      "gh": "Center Box",
+      "examples": [
+        "block = center_box(x=1.5, y=1.0, z=0.5)"
+      ],
+      "inputs": [
+        {
+          "name": "plane",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "default": "xy_plane",
+          "doc": "The box's frame: the box is centred on its origin."
+        },
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "1.0",
+          "doc": "Half-extent along the frame's x axis: the box spans `-x..x` (the default makes a 2 × 2 × 2 cube, as Grasshopper's does).",
+          "dimension": "length"
+        },
+        {
+          "name": "y",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "1.0",
+          "doc": "Half-extent along the frame's y axis: the box spans `-y..y`.",
+          "dimension": "length"
+        },
+        {
+          "name": "z",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "1.0",
+          "doc": "Half-extent along the frame's z axis: the box spans `-z..z`.",
+          "dimension": "length"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Solid",
+          "base": "Solid",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The box solid."
+        }
+      ]
+    },
+    {
       "name": "cone",
       "title": "Cone",
       "description": "a B-rep cone standing on a plane: a planar base of `radius`, an exact conical face to the apex `height` above it (a frustum is `loft(profiles=[circle, circle])`).",
@@ -5453,6 +5520,77 @@
           "list_depth": 0,
           "optional": false,
           "doc": "The watertight solid between the two sections, capped at both ends."
+        }
+      ]
+    },
+    {
+      "name": "mesh_plane",
+      "title": "Mesh Plane",
+      "description": "a flat rectangular grid mesh in a plane's frame.",
+      "category": "Mesh & field",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "an extent is empty at tolerance, the plane is degenerate, a count is below 1, or the vertex count `(x_count + 1) × (y_count + 1)` is above the shared ceilings (2^22 slots, or 1 GiB of mesh).",
+      "gh": "Mesh Plane",
+      "examples": [
+        "span = construct_domain(start=-5.0, end=5.0)\nground = mesh_plane(x=span, y=span, x_count=10, y_count=10)"
+      ],
+      "inputs": [
+        {
+          "name": "plane",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "default": "xy_plane",
+          "doc": "The grid's frame: the mesh lies in it, facing along its normal."
+        },
+        {
+          "name": "x",
+          "type": "Domain",
+          "base": "Domain",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Extent along the frame's x axis."
+        },
+        {
+          "name": "y",
+          "type": "Domain",
+          "base": "Domain",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Extent along the frame's y axis."
+        },
+        {
+          "name": "x_count",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "default": "1",
+          "doc": "Cells along the frame's x axis (each cell is two triangles)."
+        },
+        {
+          "name": "y_count",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "default": "1",
+          "doc": "Cells along the frame's y axis."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Mesh",
+          "base": "Mesh",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The grid mesh: `2 × x_count × y_count` triangles facing the frame's +z."
         }
       ]
     },
