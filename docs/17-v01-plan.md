@@ -23,7 +23,7 @@ runs in parallel from day 1:
 | 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | **DONE** 2026-08-20 (`wt/transport`): engine — `cycle` / `clock` with the `transport_driven` port attribute, the playhead injected at lowering, per-session transport state + the five `transport_*` intents + `TransportView` in every snapshot and the `transport` broadcast, playback over the preview loop, `examples/08-orbit.cic` (orbit second pass 120 generations, 0 computed / 1,800 cached, p50 0.43 ms); web — the play bar (play/pause, the frame scrubber, speed, reset), `Space`, the transport-driven ports hidden on the canvas and in the inspector (each driven port carrying its own loop; the server owns the wire-target rule — `probe_wire`/`connect` refuse), observers read-only, `web/e2e/transport.spec.ts` |
 | 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | pending |
 | 6 | WASM script host — load precompiled guests, epoch cancellation, `cicada-guest` SDK | last | weeks | pending |
-| C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); **C1 done** (2026-08-20: 48 nodes — lists, maths tail, sequences; the diagnostics name real nodes and a test keeps it so; `compact` satisfiable at check time; `examples/06-lists.cic`); **`cicada mcp` done** (2026-08-20: the four doc-11 read tools over stdio on `rmcp`); **C2a done** (2026-08-24, `wt/catalog-c2`: the 12 Point · Vector · Plane rows — `distance`, `closest_point` (a flat scan, no new dependency), `cull_duplicates`, `construct_vector` / `deconstruct_vector`, `amplitude` / `vector_length`, `cross_product` / `dot_product` / `angle`, `rotate_vector`, `plane_normal`; `examples/09-vectors.cic`); C2b pending |
+| C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); **C1 done** (2026-08-20: 48 nodes — lists, maths tail, sequences; the diagnostics name real nodes and a test keeps it so; `compact` satisfiable at check time; `examples/06-lists.cic`); **`cicada mcp` done** (2026-08-20: the four doc-11 read tools over stdio on `rmcp`); **C2a done** (2026-08-24, `wt/catalog-c2`: the 12 Point · Vector · Plane rows — `distance`, `closest_point` (a flat scan, no new dependency), `cull_duplicates`, `construct_vector` / `deconstruct_vector`, `amplitude` / `vector_length`, `cross_product` / `dot_product` / `angle`, `rotate_vector`, `plane_normal`; `examples/09-vectors.cic`); **C2b done** (2026-08-24, `wt/catalog-c2`: `rotate_axis`, `scale_nu`, `polar_array`, `rectangular_array`, `compose_xform`, `transform`, `center_box`, `mesh_plane`, the dropdown param as `choice` (the ledger's name; the contract's `value_list`) with its `<select>` on both param surfaces, plus `construct_xform` as the one `Xform` producer; `cicada_geom::transform::Affine`; `examples/06-lists.cic` gains the pegboard; the record and its deviations are under the wave-4 second-half contract); next C3+ |
 
 Out of v0.1 (unchanged from doc 05): fillets/chamfers and B-rep
 maturity, the Blender bridge, fidget, the .gh importer, Tauri, the AI
@@ -930,7 +930,12 @@ format, doc 08.
   and the vector/plane nodes (ports pin_cutters / tip_caps math out of
   Python in the wall). **C2a — the 12 vector/plane rows — done
   2026-08-24** (`wt/catalog-c2`; the record and its deviations are under
-  the wave-4 second-half contract below).
+  the wave-4 second-half contract below). **C2b — the Transform rows and
+  the stragglers — done 2026-08-24** (same worktree, five commits; the
+  record and its deviations are under the contract below). Every
+  §5–§10 S+1 row of docs/08 that needs no new kind is shipped with C2;
+  what remains of the S+1 list waits on `Surface`, `Arc` / `Ellipse` /
+  `Compound` (C3) and the checker's second type variable.
 - **C3**: the core Curve ABI landed once (Arc/Ellipse/Compound,
   `Planar<Curve>`, Color authoring) then the curve nodes.
 - **C4+**: the rest of docs/08 S+1, category by category, Solid rows
@@ -1795,6 +1800,58 @@ review).**
   [Text]`, `value: Text`; a `ParamView` kind the inspector and the canvas
   render as a select: the small web half rides in this package),
   `center_box`, `mesh_plane`.
+  **Landed 2026-08-24** (`wt/catalog-c2`, five commits on top of C2a:
+  cicada-geom's `Affine`; the seven Transform nodes; `center_box` +
+  `mesh_plane`; the dropdown param end to end; the consumer + docs). Every
+  node in the one-node-per-file format with the three tests, goldens
+  blessed run-once and transcendental-free (`center_box`'s through
+  `platform_golden`, win-64), ten ledger rows, the catalog regenerated
+  per commit; `examples/06-lists.cic` gains the pegboard (`center_box` →
+  `rectangular_array`, `move` → `polar_array`, a `choice` label on a
+  `text_tag`) and `cicada-cli/tests/examples_solve.rs` solves it at every
+  option of the dropdown and asserts the stray value red; docs/08 §1, §7,
+  §8, §10 carry the shipped signatures. *Deviations, recorded here as the
+  contract asks:* (1) **the dropdown param is `choice`, not
+  `value_list`** — the DECISIONS.md dialect-grammar row ("params are
+  constructor bindings (`slider`/`toggle`/`choice`/bare literals)") and
+  docs/10 §3 (`mode = choice(value="fast", options=["fast", "exact"])`)
+  have named it so since the first draft; the contract's `value_list` was
+  the GH name snake-cased, and the ledger is never contradicted for a
+  naming choice made without it; `gh = "Value List"` keeps the GH name in
+  search-to-place, and the `ParamView` kind is `choice` like the `slider`
+  / `toggle` kinds are their nodes' names. (2) **`construct_xform` is a
+  tenth node, not in the contract or in docs/08** — `compose_xform` and
+  `transform` had nothing to compose or apply: no node emitted an `Xform`
+  (GH's transform components emit theirs as a second `X` output, and a
+  second output on `move` & co. would change every consumer's binding
+  shape). The smallest honest producer is the 3×4 matrix row by row,
+  twelve finite numbers (`gh = "Construct Matrix"` — GH's Matrix casts to
+  a Transform); a constructor per motion (`translation(v) → Xform` …) is
+  recorded in docs/08 §10 as the road if the matrix form proves too raw.
+  (3) **`scale_nu` and `transform` refuse a Solid under a non-similarity**
+  — the kernel transform is `gp_Trsf`, which silently re-orthogonalizes
+  whatever it is handed (a shear would come back as a rotation), and the
+  general `BRepBuilderAPI_GTransform` is not glued (a follow-up below);
+  equal factors / a similarity `Xform` take the kernel path exactly. The
+  same rule makes the two nodes honest on the analytic kinds: a circle is
+  carried while its plane is scaled evenly, a rectangle while its frame is
+  not skewed, else red with the numbers (`GeomError::AffineRefused`) —
+  "exactness, not similarity" (cicada-geom `transform.rs` module doc).
+  (4) `polar_array`'s fence posts: a full turn divides the circle (`k ×
+  angle / count`), a shorter sweep is filled to its end (`k × angle /
+  (count − 1)`) — Rhino's and Grasshopper's rule, spelled out in the node
+  doc because docs/08 said nothing; beyond a full turn is red. (5)
+  `rectangular_array`'s spacing is ONE `cell: Vector` (GH's Cell box
+  reduced to its three extents) rather than three step ports; `mesh_plane`
+  takes `mesh_box`'s plane + domains rather than GH's rectangle, so it is
+  statically total; `center_box` takes GH's half-extents (`x = 1` spans
+  two units). (6) The consumer additions went to `06-lists.cic` only, not
+  `02-solids.cic` — 02 is Track S's consumer in the same wave (its cone
+  slider gains `scrub=True`) and the smoke's node-count pipeline, so the
+  parallel worktree keeps it untouched. *Not built, recorded:* a `.gh`
+  importer will want the GH Value List's label/value pairing (`choice`
+  makes the option the value); `deconstruct_xform`; the Params tab does
+  not yet group by canvas groups (unchanged).
 - Every name is checked against the catalog AND the phantom list of
   `crates/cicada-cli/tests/diagnostic_vocabulary.rs`; consumers: a new
   `examples/09-vectors.cic` (C2a), additions to `06-lists` / `02-solids`
@@ -1802,6 +1859,20 @@ review).**
   `S`, corrected to the doc's `1` on the way).
 
 ## Follow-ups (found by the v0.1 reviews and measurements; scheduled, not yet placed)
+
+- **The kernel's general transform (C2b, 2026-08-24)** — `scale_nu` and
+  `transform` refuse a `Solid` under a non-similarity (a stretch, a
+  shear): the glued kernel transform is `gp_Trsf`, whose `SetValues`
+  silently re-orthogonalizes its matrix, so a non-similarity must never
+  reach it. The honest Solid stretch is `BRepBuilderAPI_GTransform` over a
+  `gp_GTrsf` (planes and lines stay analytic; cylinders, spheres and
+  circles become B-spline surfaces and curves in OCCT's own
+  representation — the bytes grow, the later booleans slow); glue it in
+  `crates/cicada-geom/src/occt/glue.hxx` with the `Copy = true`
+  discipline of `transform`, a pcurve check like the 2026-08-21 one, and
+  per-OS goldens, then drop the `Solid` arm of `Affine::try_apply`'s
+  refusal. Until then a stretched Solid is "tessellate, then scale the
+  mesh" — the message says so.
 
 - **Obstacle-aware trace channels (B2 review, 2026-08-24)** — the trace
   router knows no obstacles: a stair's long run along a row, or a Z's

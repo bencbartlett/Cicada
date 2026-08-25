@@ -54,7 +54,12 @@ touching the committed examples — the app writes what you do.
   / `dispatch` / `group_by` with their index maps, the reducers
   (`mass_addition`, `average`), maths lifted with `each()` (`larger`,
   `floor`), and the strict-zip adapters made visible (`repeat`,
-  `pad_last`) feeding `cull` and a sphere per kept column. Pure
+  `pad_last`) feeding `cull` and a sphere per kept column; then the
+  pegboard (catalog C2b): one `center_box` peg as a `rectangular_array`
+  grid and, moved out to a radius, a `polar_array` ring, with a `choice`
+  dropdown labelling the board through a `text_tag` (every option keeps
+  the example green — `crates/cicada-cli/tests/examples_solve.rs` picks
+  each one as the widget would and asserts a stray value red). Pure
   throughout — the second `--time` run is fully cached.
 - **08-orbit.cic** — the time transport (docs/13 §Animation transport):
   a `cycle` (one 4 s loop in 120 frames) drives a planet around a sun

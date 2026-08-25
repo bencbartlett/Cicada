@@ -482,6 +482,56 @@ fn a_sound_pipeline_passes() {
 // corners, and straight above a post. Each position is set the way a drag
 // sets it — the writer's `set_param`, the gesture the canvas commits — and
 // solved like any example.
+// The `choice` param is a contract too (catalog C2b): examples/06-lists.cic
+// offers three options in its `label` dropdown, and every one of them must
+// keep the example green — the node is red for a value outside its options,
+// so a pick the widget offers must never be one. Each option is set the
+// way the dropdown sets it: the writer's `set_param` with the option
+// spelled as a Text literal (the one literal rule), then solved like any
+// example. `every_example_solves` sees only the committed default.
+#[test]
+fn the_lists_example_is_total_over_its_choice() {
+    let source = std::fs::read_to_string(examples_dir().join("06-lists.cic")).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let options = ["pegboard", "columns", "ring"];
+    let mut failures: Vec<String> = Vec::new();
+    for (index, option) in options.iter().enumerate() {
+        let mut document = Document::parse(&source);
+        writer::set_param(
+            &mut document,
+            "label",
+            "value",
+            &format!("{option:?}"),
+            None,
+        )
+        .unwrap_or_else(|e| panic!("setting `label` to {option}: {e}"));
+        let path = dir.path().join(format!("lists_{index}.cic"));
+        std::fs::write(&path, document.emit()).unwrap();
+        if let Err(reason) = solve_pipeline(&path, &dir.path().join(format!("cache_{index}"))) {
+            failures.push(format!("label {option:?}:\n{reason}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "06-lists goes red at {} of {} choice option(s) — an example's dropdown must keep it green:\n{}",
+        failures.len(),
+        options.len(),
+        failures.join("\n")
+    );
+    // And a value outside the options IS red — the dropdown's stray entry
+    // is the text's business, never an option the widget would offer.
+    let mut document = Document::parse(&source);
+    writer::set_param(&mut document, "label", "value", "\"nothing\"", None).unwrap();
+    let path = dir.path().join("lists_stray.cic");
+    std::fs::write(&path, document.emit()).unwrap();
+    let reason = solve_pipeline(&path, &dir.path().join("cache_stray"))
+        .expect_err("a value outside the options is red");
+    assert!(
+        reason.contains("`label`") && reason.contains("is not one of the options"),
+        "{reason}"
+    );
+}
+
 #[test]
 fn the_vectors_example_is_total_over_its_sliders() {
     let source = std::fs::read_to_string(examples_dir().join("09-vectors.cic")).unwrap();

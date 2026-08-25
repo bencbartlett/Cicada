@@ -1,7 +1,8 @@
 # cicada 1
 # Lists 101: the typed combinators that replace GH's tree surgery (docs/09)
 # — sort / dispatch / group_by keep provenance, zip is strict and its
-# adapters are visible nodes, and maths lifts element-wise with each().
+# adapters are visible nodes, maths lifts element-wise with each(), and the
+# arrays (rectangular_array, polar_array) are list producers like any other.
 # Run:   cargo run -p cicada-cli -- run examples/06-lists.cic
 # (every node is pure: add --time and the second run is fully cached)
 
@@ -48,3 +49,28 @@ radii = multiply(a=each(scales), b=0.3)
 tops = construct_point(x=each(kept_xs), z=each(kept_heights))
 frames = xy_plane(origin=each(tops))
 balls = mesh_sphere(plane=each(frames), radius=each(radii), segments=16)
+
+# Arrays are lists too (catalog C2b). One peg — a B-rep block centred on
+# its plane, half-extents like Grasshopper's Center Box — laid out as a
+# grid below the columns: rectangular_array steps along the plane's axes by
+# the cell's components, x fastest, then y.
+peg = center_box(x=0.25, y=0.25, z=0.5)
+pitch = construct_vector(x=2.0, y=2.0, z=1.0)
+pegs = rectangular_array(geometry=peg, cell=pitch, x_count=8, y_count=2)
+
+# ...and as a ring: polar_array turns a copy about a plane's normal; a full
+# turn (the default sweep) divides the circle, so the last peg never lands
+# on the first. The arm is the peg moved out to the ring's radius.
+hub = construct_point(x=7.0, y=-7.0, z=0.0)
+hub_plane = xy_plane(origin=hub)
+offset = construct_vector(x=10.0, y=-7.0, z=0.0)
+arm = move(geometry=peg, motion=offset)
+ring = polar_array(geometry=arm, plane=hub_plane, count=6)
+
+# A label for the board chosen from a list: Grasshopper's Value List is the
+# `choice` param — a dropdown on the canvas and in the params panel; pick
+# one and the tag follows (a value that is not an option is a red node).
+label = choice(value="pegboard", options=["pegboard", "columns", "ring"])
+tag_at = construct_point(x=0.0, y=-3.0, z=0.0)
+tag_frame = xy_plane(origin=tag_at)
+tag = text_tag(location=tag_frame, text=label, size=1.0)
