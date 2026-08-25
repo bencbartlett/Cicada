@@ -175,8 +175,13 @@ test("U6 — the in-flight connection line is a trace in trace mode", async ({ p
   const y = box.y + box.height / 2;
   await page.mouse.move(x, y);
   await page.mouse.down();
-  // Four units right and three down, in flow units: a Z (within the stair threshold, a tall enough drop for a vertical run).
-  await page.mouse.move(x + 4 * unit * zoom, y + 3 * unit * zoom, { steps: 8 });
+  // Five units right and five down, in flow units: a Z — inside the staircase
+  // threshold (TRACE_STAIRCASE_UNITS = 6) with a drop that clears two
+  // one-unit corner cuts AND a vertical leg whatever the fit zoom. Three
+  // units down used to pass on the 19-node 06-lists; at the 31-node layout's
+  // smaller zoom (catalog C2b's pegboard, 2026-08-24) it reached the router
+  // as 1.75 units and the route was, correctly, one diagonal.
+  await page.mouse.move(x + 5 * unit * zoom, y + 5 * unit * zoom, { steps: 8 });
   const line = page.locator("path.cicada-connection-path");
   await expect(line).toBeVisible();
   const d = await line.getAttribute("d");
