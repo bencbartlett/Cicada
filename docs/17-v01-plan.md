@@ -23,7 +23,7 @@ runs in parallel from day 1:
 | 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | **DONE** 2026-08-20 (`wt/transport`): engine — `cycle` / `clock` with the `transport_driven` port attribute, the playhead injected at lowering, per-session transport state + the five `transport_*` intents + `TransportView` in every snapshot and the `transport` broadcast, playback over the preview loop, `examples/08-orbit.cic` (orbit second pass 120 generations, 0 computed / 1,800 cached, p50 0.43 ms); web — the play bar (play/pause, the frame scrubber, speed, reset), `Space`, the transport-driven ports hidden on the canvas and in the inspector (each driven port carrying its own loop; the server owns the wire-target rule — `probe_wire`/`connect` refuse), observers read-only, `web/e2e/transport.spec.ts` |
 | 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | pending |
 | 6 | WASM script host — load precompiled guests, epoch cancellation, `cicada-guest` SDK | last | weeks | pending |
-| C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); **C1 done** (2026-08-20: 48 nodes — lists, maths tail, sequences; the diagnostics name real nodes and a test keeps it so; `compact` satisfiable at check time; `examples/06-lists.cic`); **`cicada mcp` done** (2026-08-20: the four doc-11 read tools over stdio on `rmcp`); C2+ pending |
+| C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); **C1 done** (2026-08-20: 48 nodes — lists, maths tail, sequences; the diagnostics name real nodes and a test keeps it so; `compact` satisfiable at check time; `examples/06-lists.cic`); **`cicada mcp` done** (2026-08-20: the four doc-11 read tools over stdio on `rmcp`); **C2a done** (2026-08-24, `wt/catalog-c2`: the 12 Point · Vector · Plane rows — `distance`, `closest_point` (a flat scan, no new dependency), `cull_duplicates`, `construct_vector` / `deconstruct_vector`, `amplitude` / `vector_length`, `cross_product` / `dot_product` / `angle`, `rotate_vector`, `plane_normal`; `examples/09-vectors.cic`); C2b pending |
 
 Out of v0.1 (unchanged from doc 05): fillets/chamfers and B-rep
 maturity, the Blender bridge, fidget, the .gh importer, Tauri, the AI
@@ -928,7 +928,9 @@ format, doc 08.
   number).
 - **C2**: mesh-tier cylinder/cone/extrude_to_point/volume/bounding_box
   and the vector/plane nodes (ports pin_cutters / tip_caps math out of
-  Python in the wall).
+  Python in the wall). **C2a — the 12 vector/plane rows — done
+  2026-08-24** (`wt/catalog-c2`; the record and its deviations are under
+  the wave-4 second-half contract below).
 - **C3**: the core Curve ABI landed once (Arc/Ellipse/Compound,
   `Planar<Curve>`, Color authoring) then the curve nodes.
 - **C4+**: the rest of docs/08 S+1, category by category, Solid rows
@@ -1738,6 +1740,31 @@ review).**
   (the doc's "Vector Length" — `length` is the list node's), `cross_product`
   + `dot_product` + `angle` (the doc's "Cross" — `cross` is the list
   combinator's reserved name), `rotate_vector`, `plane_normal`.
+  **Landed 2026-08-24** (`wt/catalog-c2`, two commits; 12 nodes in
+  `crates/cicada-stdlib/src/points/`, each with the three tests, goldens
+  blessed run-once on exact-arithmetic inputs, 12 ledger rows, the catalog
+  regenerated, `examples/09-vectors.cic` using every node, docs/08 rows
+  marked). *Deviations, recorded here as the contract asks:* (1)
+  `closest_point` is a **flat scan**, not a kd-tree, and **no dependency
+  was added** — the node takes ONE query point, so under the `each()` lift
+  it is called once per query and a tree built per call is O(n log n)
+  against the O(n) scan it would replace; docs/08's "kd-tree backed" note
+  is rewritten to say so, and a shared index is named as belonging to a
+  future node that takes the queries as a list. (2) The one-vector ports
+  are named `vector` (`vector_length(vector=…)`, `amplitude(vector=…)`,
+  `deconstruct_vector(vector=…)`, `rotate_vector(vector=…)`): docs/08's
+  `v` was shorthand and its Deconstruct Vector row named no port; the rows
+  now carry the shipped signatures as the other shipped rows do. (3)
+  `glam` became a direct dependency of cicada-stdlib — already in the
+  workspace (core, geom), dev-only in the stdlib until now; `rotate_vector`
+  names `DMat3` (the axis-angle matrix `Similarity::rotation` builds) and
+  `plane_normal` the world axes. (4) `angle`'s golden hashes the three
+  values IEEE 754 / C99 Annex F pin exactly (`atan2(+0, x>0) = 0`,
+  `atan2(y>0, 0) = π/2`, `atan2(+0, x<0) = π`) and asserts run-to-run
+  identity for a general angle; `rotate_vector`'s golden is the angle-0
+  turn (exact identity) plus run-to-run identity for a quarter turn. Not
+  done here: the `area` tier correction (`S` → `1`) named in the shared
+  bullet below is left to C2b, whose stragglers touch `solids/`.
 - **C2b — Transform and the stragglers (9):** `rotate_axis`, `scale_nu`,
   `polar_array`, `rectangular_array`, `compose_xform`, `transform` (the
   `Xform` kind exists), `value_list` (the dropdown param — `options:

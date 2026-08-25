@@ -307,18 +307,18 @@ it (doc 09).
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
 | Construct / Deconstruct Point | `(x, y, z: Number) ↔ Point` | S | |
-| Distance | `(a: Point, b: Point) → Number` | 1 | |
-| Closest Point | `(point: Point, cloud: [Point]) → (closest: Point, index: Integer, distance: Number)` | 1 | kd-tree backed |
-| Cull Duplicates | `(points: [Point], tolerance: Number) → (points: [Point], map: IndexMap)` | 1 | |
+| Distance | `distance(a: Point, b: Point) → Number` | 1 | shipped (C2a) |
+| Closest Point | `closest_point(point: Point, cloud: [Point]) → (closest: Point, index: Integer, distance: Number)` | 1 | shipped (C2a): a flat scan, not a kd-tree — the node is called once per query point (the lift is `each()` over the queries), so a tree built per call would cost more than the O(n) scan it replaces, and no dependency was added; a shared index belongs to a node that takes the queries as a list, when one is needed. Ties go to the lowest index; an empty cloud is red |
+| Cull Duplicates | `cull_duplicates(points: [Point], tolerance: Number) → (points: [Point], map: IndexMap)` | 1 | shipped (C2a): first-kept — a point is compared against the points already kept, never against dropped ones (a uniform grid of `tolerance`-wide cells is the candidate filter, the sanctioned `coincident` decides), so the survivors are pairwise further apart than the tolerance; `tolerance = 0` keeps only exactly equal points apart; a negative tolerance is red |
 | Unit X / Y / Z | `(factor: Number = 1) → Vector` | S | |
 | Vector 2Pt | `(a: Point, b: Point, unitize: Boolean = false) → Vector` | S | |
-| Vector XYZ / Deconstruct Vector | `(x, y, z) ↔ Vector` | 1 | |
-| Amplitude / Vector Length | `(v: Vector, length: Number) → Vector` / `(v) → Number` | 1 | |
-| Cross / Dot / Angle | `(a: Vector, b: Vector) → …` | 1 | |
-| Rotate Vector | `(vector: Vector, angle: Number, axis: Vector) → Vector` | 1 | |
+| Vector XYZ / Deconstruct Vector | `construct_vector(x, y, z: Number = 0) → Vector` / `deconstruct_vector(vector: Vector) → (x, y, z: Number)` | 1 | shipped (C2a): the components are length-dimensioned like a point's coordinates |
+| Amplitude / Vector Length | `amplitude(vector: Vector, length: Number) → Vector` / `vector_length(vector: Vector) → Number` | 1 | shipped (C2a) as `amplitude` / `vector_length` (`length` is the list node's name); the one-vector port is `vector`; `amplitude` is red on a zero vector at tolerance, a negative `length` flips the direction, 0 gives the zero vector |
+| Cross / Dot / Angle | `cross_product(a: Vector, b: Vector) → Vector` / `dot_product(a, b) → Number` / `angle(a, b) → Number` | 1 | shipped (C2a) as `cross_product` / `dot_product` / `angle` (`cross` is the reserved all-pairs combinator, docs/09); `angle` is unsigned, radians in `[0, π]` (`atan2(|a × b|, a · b)` — no reference plane, so never reflex), red when either vector has no length at tolerance |
+| Rotate Vector | `rotate_vector(vector: Vector, angle: Number, axis: Vector) → Vector` | 1 | shipped (C2a): right-handed about `axis` (any length) — the same axis-angle matrix `rotate` builds, so a vector and the geometry it came from turn alike; red when the axis has no length at tolerance |
 | XY / XZ / YZ Plane | `(origin: Point = origin) → Plane` | S | |
 | Construct Plane | `(origin: Point = origin, x: Vector = unit_x, y: Vector = unit_y) → Plane` | S | `y` is orthonormalized against `x`; red when `x` is zero-length or `y` is parallel to `x` at tolerance (stage 6: the wall's part/plate frames) |
-| Plane Normal | `(origin: Point, z: Vector) → Plane` | 1 | |
+| Plane Normal | `plane_normal(origin: Point, z: Vector) → Plane` | 1 | shipped (C2a): x is the world axis least aligned with the normal, projected into the plane (ties go to x, then y), `y = z × x` — so `z = unit_z` gives the XY plane and `unit_x` the YZ plane; deterministic for a given normal, not continuous across a tie (no normal-to-frame rule is); red when `z` has no length at tolerance |
 
 ### 6 · Curve
 

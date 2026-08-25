@@ -64,6 +64,15 @@ touching the committed examples — the app writes what you do.
   play bar (or `Space`) and watch the first pass compute each frame once
   and the second pass play from cache; the scrubber seeks, Esc pauses.
   (07 is the B-rep bracket of the solid track.)
+- **09-vectors.cic** — vectors 101 (docs/08 §Catalog 5, the C2a nodes):
+  a ring of posts from one arm turned by `rotate_vector` and moved out
+  from the centre (`range` includes both ends, so the last arm lands on
+  the first post — `cull_duplicates` drops it and returns the index map),
+  a probe's `closest_point` and `distance`, the algebra between the two
+  (`angle`, `dot_product`, `cross_product`, `vector_length`,
+  `deconstruct_vector`, `amplitude`), and a marker frame from a normal
+  (`plane_normal`, `construct_vector`). Three sliders to drag in the app;
+  pure throughout — the second `--time` run is fully cached.
 
 **The rule: every example must solve.** CI runs each `examples/**/*.cic`
 headlessly with a fresh cache through the same compile → lower → solve
