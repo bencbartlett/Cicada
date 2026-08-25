@@ -3068,6 +3068,155 @@
       ]
     },
     {
+      "name": "amplitude",
+      "title": "Amplitude",
+      "description": "the vector's direction at a given length.",
+      "category": "Point · Vector · Plane",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "`vector` has no length at tolerance — a zero vector has no direction to give a length to.",
+      "gh": "Amplitude",
+      "examples": [
+        "lean = construct_vector(x=3.0, y=4.0, z=0.0)\nreach = amplitude(vector=lean, length=10.0)"
+      ],
+      "inputs": [
+        {
+          "name": "vector",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The vector whose direction is kept."
+        },
+        {
+          "name": "length",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The length the result gets (negative flips the direction, 0 gives the zero vector).",
+          "dimension": "length"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The vector scaled to `length` along its own direction."
+        }
+      ]
+    },
+    {
+      "name": "angle",
+      "title": "Angle",
+      "description": "the unsigned angle between two vectors, in radians (0 for the same direction, π/2 perpendicular, π opposed; never reflex — there is no reference plane to give it a sign).",
+      "category": "Point · Vector · Plane",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "`a` or `b` has no length at tolerance — a zero vector points nowhere, so no angle is defined.",
+      "gh": "Angle",
+      "examples": [
+        "along = unit_x(factor=2.0)\nlean = construct_vector(x=1.0, y=1.0, z=0.0)\nturn = angle(a=along, b=lean)"
+      ],
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "First vector."
+        },
+        {
+          "name": "b",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Second vector."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The angle between `a` and `b`, in radians, in `[0, π]`."
+        }
+      ]
+    },
+    {
+      "name": "closest_point",
+      "title": "Closest Point",
+      "description": "the point of a cloud nearest to a point, with its index and distance.",
+      "category": "Point · Vector · Plane",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": false,
+      "panics": "the cloud is empty — nothing is closest to anything.",
+      "gh": "Closest Point",
+      "examples": [
+        "xs = [0.0, 3.0, 6.0]\ncloud = construct_point(x=each(xs), y=0.0, z=0.0)\nprobe = construct_point(x=2.0, y=1.0, z=0.0)\nnearest, at, gap = closest_point(point=probe, cloud=cloud)"
+      ],
+      "inputs": [
+        {
+          "name": "point",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The point to search from."
+        },
+        {
+          "name": "cloud",
+          "type": "[Point]",
+          "base": "Point",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The points to search."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "closest",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The cloud point nearest to `point` (its coordinates exactly as they are in the cloud)."
+        },
+        {
+          "name": "index",
+          "type": "Integer",
+          "base": "Integer",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Its index in the cloud; at a tie, the lowest index."
+        },
+        {
+          "name": "distance",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The distance from `point` to it."
+        }
+      ]
+    },
+    {
       "name": "construct_plane",
       "title": "Construct Plane",
       "description": "a frame from an origin and two axes: x unitized, y orthonormalized against x (Gram–Schmidt), so the stored plane is a right-handed orthonormal frame with normal x × y.",
@@ -3180,6 +3329,159 @@
       ]
     },
     {
+      "name": "construct_vector",
+      "title": "Vector XYZ",
+      "description": "a vector from x/y/z components.",
+      "category": "Point · Vector · Plane",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": false,
+      "gh": "Vector XYZ",
+      "examples": [
+        "lean = construct_vector(x=1.0, y=0.0, z=2.0)"
+      ],
+      "inputs": [
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "0.0",
+          "doc": "X component.",
+          "dimension": "length"
+        },
+        {
+          "name": "y",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "0.0",
+          "doc": "Y component.",
+          "dimension": "length"
+        },
+        {
+          "name": "z",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "default": "0.0",
+          "doc": "Z component.",
+          "dimension": "length"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The vector (x, y, z)."
+        }
+      ]
+    },
+    {
+      "name": "cross_product",
+      "title": "Cross Product",
+      "description": "the vector perpendicular to two vectors, `a × b` (right-handed; its length is `|a|·|b|·sin` of the angle between them).",
+      "category": "Point · Vector · Plane",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": false,
+      "gh": "Cross Product",
+      "examples": [
+        "along = construct_vector(x=1.0, y=2.0, z=3.0)\nacross = construct_vector(x=4.0, y=5.0, z=6.0)\nnormal = cross_product(a=along, b=across)"
+      ],
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "First vector."
+        },
+        {
+          "name": "b",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Second vector."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The cross product `a × b`."
+        }
+      ]
+    },
+    {
+      "name": "cull_duplicates",
+      "title": "Cull Duplicates",
+      "description": "drop every point within `tolerance` of an earlier kept point, returning the survivors and the index map back into the source.",
+      "category": "Point · Vector · Plane",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": false,
+      "panics": "`tolerance` is negative — no two points are that close.",
+      "gh": "Cull Duplicates",
+      "examples": [
+        "xs = [0.0, 1.0, 1.0000001, 5.0, 0.0]\npts = construct_point(x=each(xs), y=0.0, z=0.0)\nunique, sources = cull_duplicates(points=pts, tolerance=0.001)"
+      ],
+      "inputs": [
+        {
+          "name": "points",
+          "type": "[Point]",
+          "base": "Point",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The points to deduplicate, in order."
+        },
+        {
+          "name": "tolerance",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Two points this close (Euclidean, inclusive) are duplicates; 0 keeps only exactly coincident points apart.",
+          "dimension": "length"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "points",
+          "type": "[Point]",
+          "base": "Point",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The kept points — the first of every group, in source order."
+        },
+        {
+          "name": "map",
+          "type": "IndexMap",
+          "base": "IndexMap",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Provenance: `map[i]` is the source index of `points[i]` (docs/08 rule 6)."
+        }
+      ]
+    },
+    {
       "name": "deconstruct_point",
       "title": "Deconstruct Point",
       "description": "the x/y/z coordinates of a point.",
@@ -3227,6 +3529,240 @@
           "list_depth": 0,
           "optional": false,
           "doc": "Z coordinate."
+        }
+      ]
+    },
+    {
+      "name": "deconstruct_vector",
+      "title": "Deconstruct Vector",
+      "description": "the x/y/z components of a vector.",
+      "category": "Point · Vector · Plane",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": false,
+      "gh": "Deconstruct Vector",
+      "examples": [
+        "lean = construct_vector(x=1.0, y=0.0, z=2.0)\nx, y, z = deconstruct_vector(vector=lean)"
+      ],
+      "inputs": [
+        {
+          "name": "vector",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The vector."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "x",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "X component."
+        },
+        {
+          "name": "y",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Y component."
+        },
+        {
+          "name": "z",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Z component."
+        }
+      ]
+    },
+    {
+      "name": "distance",
+      "title": "Distance",
+      "description": "the Euclidean distance between two points.",
+      "category": "Point · Vector · Plane",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": false,
+      "gh": "Distance",
+      "examples": [
+        "here = construct_point(x=1.0, y=1.0, z=0.0)\nthere = construct_point(x=4.0, y=5.0, z=0.0)\ngap = distance(a=here, b=there)"
+      ],
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "First point."
+        },
+        {
+          "name": "b",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Second point."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The distance `|b − a|`, in document units."
+        }
+      ]
+    },
+    {
+      "name": "dot_product",
+      "title": "Dot Product",
+      "description": "the scalar product of two vectors, `a · b` (`|a|·|b|·cos` of the angle between them: positive when they lean the same way, zero when perpendicular, negative when opposed).",
+      "category": "Point · Vector · Plane",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": false,
+      "gh": "Dot Product",
+      "examples": [
+        "along = construct_vector(x=1.0, y=2.0, z=3.0)\nacross = construct_vector(x=4.0, y=5.0, z=6.0)\nagreement = dot_product(a=along, b=across)"
+      ],
+      "inputs": [
+        {
+          "name": "a",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "First vector."
+        },
+        {
+          "name": "b",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Second vector."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The dot product `a · b`."
+        }
+      ]
+    },
+    {
+      "name": "plane_normal",
+      "title": "Plane Normal",
+      "description": "a frame from an origin and a normal: x is the world axis least aligned with the normal, projected into the plane (ties go to world x, then y), and y completes the right-handed frame (`y = z × x`).",
+      "category": "Point · Vector · Plane",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "`z` has no length at tolerance — a zero normal spans no plane.",
+      "gh": "Plane Normal",
+      "examples": [
+        "at = construct_point(x=1.0, y=2.0, z=3.0)\ntilt = construct_vector(x=0.0, y=3.0, z=4.0)\nframe = plane_normal(origin=at, z=tilt)"
+      ],
+      "inputs": [
+        {
+          "name": "origin",
+          "type": "Point",
+          "base": "Point",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Plane origin."
+        },
+        {
+          "name": "z",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The normal (any length; unitized) — the plane's z axis."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Plane",
+          "base": "Plane",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The right-handed orthonormal frame at `origin` whose normal is `z`; `plane_normal(z=unit_z)` is the world XY plane, `z=unit_x` the YZ plane."
+        }
+      ]
+    },
+    {
+      "name": "rotate_vector",
+      "title": "Rotate Vector",
+      "description": "rotate a vector about an axis by an angle (right-handed: counter-clockwise when the axis points at you).",
+      "category": "Point · Vector · Plane",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": true,
+      "panics": "`axis` has no length at tolerance — a zero axis has no direction to rotate about.",
+      "gh": "Rotate",
+      "examples": [
+        "arm = unit_x(factor=3.0)\nup = unit_z(factor=1.0)\nturned = rotate_vector(vector=arm, angle=1.5707963267948966, axis=up)"
+      ],
+      "inputs": [
+        {
+          "name": "vector",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The vector to rotate."
+        },
+        {
+          "name": "angle",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "Rotation angle in radians (right-handed about `axis`).",
+          "dimension": "angle"
+        },
+        {
+          "name": "axis",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The axis to rotate about (any length; its direction is what counts)."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The vector turned by `angle` about `axis`; its length and its component along the axis are unchanged."
         }
       ]
     },
@@ -3388,6 +3924,41 @@
           "list_depth": 0,
           "optional": false,
           "doc": "The vector from `a` to `b`, unit length when `unitize` is on."
+        }
+      ]
+    },
+    {
+      "name": "vector_length",
+      "title": "Vector Length",
+      "description": "the Euclidean length of a vector.",
+      "category": "Point · Vector · Plane",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": false,
+      "gh": "Vector Length",
+      "examples": [
+        "lean = construct_vector(x=3.0, y=4.0, z=0.0)\nspan = vector_length(vector=lean)"
+      ],
+      "inputs": [
+        {
+          "name": "vector",
+          "type": "Vector",
+          "base": "Vector",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The vector."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Number",
+          "base": "Number",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The length `|vector|`, in document units (0 for the zero vector)."
         }
       ]
     },

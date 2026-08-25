@@ -15,11 +15,14 @@ cicada-core.workspace = true
 # on a workspace-inherited dependency whose workspace entry keeps defaults).
 cicada-geom = { path = "../cicada-geom", default-features = false }
 cicada-macros.workspace = true
+# glam: the math under core's Point/Vector newtypes. Most nodes reach it
+# through the newtypes' fields alone; `rotate_vector` names `DMat3` (the
+# axis-angle matrix `Similarity::rotation` builds) and `plane_normal` the
+# world axes, so the crate depends on it directly (C2a, 2026-08-24 — it was
+# a dev-dependency for the text-node tests' bounding boxes before).
+glam.workspace = true
 
 [dev-dependencies]
-# glam (dev only): the text-node tests measure mesh bounding boxes; the
-# library itself reaches glam through core's Point/Vector newtypes.
-glam.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
 

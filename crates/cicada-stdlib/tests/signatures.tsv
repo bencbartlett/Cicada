@@ -5,7 +5,9 @@
 absolute	1	absolute(x: Number) → Number	
 acos	1	acos(x: Number) → Number	
 add	1	add(a: Number, b: Number) → Number	
+amplitude	1	amplitude(vector: Vector, length: Number) → Vector	uses_tolerance
 and	1	and(a: Boolean, b: Boolean) → Boolean	
+angle	1	angle(a: Vector, b: Vector) → Number	uses_tolerance
 area	1	area(curve: Closed<Curve>) → (area: Number, centroid: Point)	uses_tolerance
 as_closed	1	as_closed(curve: Curve) → Closed<Curve>	uses_tolerance
 as_watertight	1	as_watertight(mesh: Mesh) → Watertight<Mesh>	
@@ -21,25 +23,32 @@ ceiling	1	ceiling(x: Number) → Number
 chunk	1	chunk(list: [E], size: Integer) → [[E]]	
 circle	1	circle(plane: Plane = xy_plane, radius: Number) → Closed<Curve>	uses_tolerance
 clock	1	clock(speed: Number = 1.0, t: Number = 0.0) → Number	volatile
+closest_point	1	closest_point(point: Point, cloud: [Point]) → (closest: Point, index: Integer, distance: Number)	
 compact	1	compact(list: [E?]) → (values: [E], map: IndexMap)	
 concat	1	concat(a: [E], b: [E]) → [E]	
 cone	1	cone(plane: Plane = xy_plane, radius: Number, height: Number) → Solid	uses_tolerance
 construct_domain	1	construct_domain(start: Number, end: Number) → Domain	
 construct_plane	1	construct_plane(origin: Point = origin, x: Vector = unit_x, y: Vector = unit_y) → Plane	uses_tolerance
 construct_point	1	construct_point(x: Number = 0.0, y: Number = 0.0, z: Number = 0.0) → Point	
+construct_vector	1	construct_vector(x: Number = 0.0, y: Number = 0.0, z: Number = 0.0) → Vector	
 cos	1	cos(x: Number) → Number	
+cross_product	1	cross_product(a: Vector, b: Vector) → Vector	
 cull	1	cull(list: [E], pattern: [Boolean]) → (kept: [E], map: IndexMap)	
+cull_duplicates	1	cull_duplicates(points: [Point], tolerance: Number) → (points: [Point], map: IndexMap)	
 custom_preview	1	custom_preview(geometry: Geometry, color: Color = white) → ()	
 cycle	1	cycle(period: Number = 4.0, frames: Integer = 120, frame: Integer = 0) → Number	
 cylinder	1	cylinder(plane: Plane = xy_plane, radius: Number, height: Number) → Solid	uses_tolerance
 deconstruct_domain	1	deconstruct_domain(domain: Domain) → (start: Number, end: Number)	
 deconstruct_point	1	deconstruct_point(point: Point) → (x: Number, y: Number, z: Number)	
 deconstruct_solid	1	deconstruct_solid(solid: Solid, deflection: Number = 0.01) → (edges: [Curve], vertices: [Point], face_count: Integer)	uses_tolerance
+deconstruct_vector	1	deconstruct_vector(vector: Vector) → (x: Number, y: Number, z: Number)	
 degrees	1	degrees(radians: Number) → Number	
 dispatch	1	dispatch(list: [E], pattern: [Boolean]) → (a: [E], b: [E], map_a: IndexMap, map_b: IndexMap)	
+distance	1	distance(a: Point, b: Point) → Number	
 divide	1	divide(a: Number, b: Number) → Number	
 divide_curve	1	divide_curve(curve: Curve, count: Integer = 10) → (points: [Point], tangents: [Vector], parameters: [Number])	uses_tolerance
 divide_curve	3	divide_curve(curve: Curve, count: Integer = 10) → (points: [Point], tangents: [Vector], parameters: [Number])	uses_tolerance
+dot_product	1	dot_product(a: Vector, b: Vector) → Number	
 duplicate	1	duplicate(item: E, count: Integer) → [E]	
 duplicate	2	duplicate(item: E, count: Integer) → [E]	
 equals	1	equals(a: Number, b: Number, tolerance: Number = 0.0) → Boolean	
@@ -90,6 +99,7 @@ panel	1	panel(data: Any) → ()
 partition	1	partition(list: [E], sizes: [Integer]) → [[E]]	
 pick	1	pick(pattern: Boolean, true: E, false: E) → E	
 pipe	1	pipe(rail: Curve, radius: Number) → Solid	uses_tolerance
+plane_normal	1	plane_normal(origin: Point, z: Vector) → Plane	uses_tolerance
 polyline	1	polyline(vertices: [Point], closed: Boolean = false) → Curve	
 power	1	power(a: Number, b: Number) → Number	
 radians	1	radians(degrees: Number) → Number	
@@ -104,6 +114,7 @@ repeat	2	repeat(pattern: [E], count: Integer) → [E]
 reverse	1	reverse(list: [E]) → [E]	
 revolve	1	revolve(profile: Closed<Curve>, axis: Curve, angle: Domain = full turn) → Solid	uses_tolerance
 rotate	1	rotate(geometry: T, angle: Number, plane: Plane = xy_plane) → T	uses_tolerance
+rotate_vector	1	rotate_vector(vector: Vector, angle: Number, axis: Vector) → Vector	uses_tolerance
 round	1	round(x: Number) → Number	
 scale	1	scale(geometry: T, center: Point = origin, factor: Number) → T	uses_tolerance
 section	1	section(solid: Solid, plane: Plane = xy_plane, deflection: Number = 0.01) → [Closed<Curve>]	uses_tolerance
@@ -139,6 +150,7 @@ unit_x	1	unit_x(factor: Number = 1.0) → Vector
 unit_y	1	unit_y(factor: Number = 1.0) → Vector	
 unit_z	1	unit_z(factor: Number = 1.0) → Vector	
 vector_2pt	1	vector_2pt(a: Point, b: Point, unitize: Boolean = false) → Vector	uses_tolerance
+vector_length	1	vector_length(vector: Vector) → Number	
 volume	1	volume(solid: Solid) → (volume: Number, centroid: Point)	
 voronoi	1	voronoi(seeds: [Point], boundary: Closed<Curve>, segments: Integer = 64) → (cells: [Closed<Curve>])	uses_tolerance
 voronoi	2	voronoi(seeds: [Point], boundary: Closed<Curve>, segments: Integer = 64) → (cells: [Closed<Curve>])	uses_tolerance

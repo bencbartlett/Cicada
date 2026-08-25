@@ -101,13 +101,25 @@ one `.cic` snippet per node, solved by CI).
 
 ## Point · Vector · Plane
 
+- `amplitude(vector: Vector, length: Number) → Vector` — Amplitude · GH: Amplitude — the vector's direction at a given length. Red when: `vector` has no length at tolerance — a zero vector has no direction to give a length to.
+- `angle(a: Vector, b: Vector) → Number` — Angle · GH: Angle — the unsigned angle between two vectors, in radians (0 for the same direction, π/2 perpendicular, π opposed; never reflex — there is no reference plane to give it a sign). Red when: `a` or `b` has no length at tolerance — a zero vector points nowhere, so no angle is defined.
+- `closest_point(point: Point, cloud: [Point]) → (closest: Point, index: Integer, distance: Number)` — Closest Point · GH: Closest Point — the point of a cloud nearest to a point, with its index and distance. Red when: the cloud is empty — nothing is closest to anything.
 - `construct_plane(origin: Point = origin, x: Vector = unit_x, y: Vector = unit_y) → Plane` — Construct Plane · GH: Construct Plane — a frame from an origin and two axes: x unitized, y orthonormalized against x (Gram–Schmidt), so the stored plane is a right-handed orthonormal frame with normal x × y. Red when: `x` has no length at tolerance, or `y` is parallel to `x` at tolerance (its component off the x line has no length) — red with the measured length, never a NaN frame.
 - `construct_point(x: Number = 0.0, y: Number = 0.0, z: Number = 0.0) → Point` — Construct Point · GH: Construct Point — a point from x/y/z coordinates.
+- `construct_vector(x: Number = 0.0, y: Number = 0.0, z: Number = 0.0) → Vector` — Vector XYZ · GH: Vector XYZ — a vector from x/y/z components.
+- `cross_product(a: Vector, b: Vector) → Vector` — Cross Product · GH: Cross Product — the vector perpendicular to two vectors, `a × b` (right-handed; its length is `|a|·|b|·sin` of the angle between them).
+- `cull_duplicates(points: [Point], tolerance: Number) → (points: [Point], map: IndexMap)` — Cull Duplicates · GH: Cull Duplicates — drop every point within `tolerance` of an earlier kept point, returning the survivors and the index map back into the source. Red when: `tolerance` is negative — no two points are that close.
 - `deconstruct_point(point: Point) → (x: Number, y: Number, z: Number)` — Deconstruct Point · GH: Deconstruct — the x/y/z coordinates of a point.
+- `deconstruct_vector(vector: Vector) → (x: Number, y: Number, z: Number)` — Deconstruct Vector · GH: Deconstruct Vector — the x/y/z components of a vector.
+- `distance(a: Point, b: Point) → Number` — Distance · GH: Distance — the Euclidean distance between two points.
+- `dot_product(a: Vector, b: Vector) → Number` — Dot Product · GH: Dot Product — the scalar product of two vectors, `a · b` (`|a|·|b|·cos` of the angle between them: positive when they lean the same way, zero when perpendicular, negative when opposed).
+- `plane_normal(origin: Point, z: Vector) → Plane` — Plane Normal · GH: Plane Normal — a frame from an origin and a normal: x is the world axis least aligned with the normal, projected into the plane (ties go to world x, then y), and y completes the right-handed frame (`y = z × x`). Red when: `z` has no length at tolerance — a zero normal spans no plane.
+- `rotate_vector(vector: Vector, angle: Number, axis: Vector) → Vector` — Rotate Vector · GH: Rotate — rotate a vector about an axis by an angle (right-handed: counter-clockwise when the axis points at you). Red when: `axis` has no length at tolerance — a zero axis has no direction to rotate about.
 - `unit_x(factor: Number = 1.0) → Vector` — Unit X · GH: Unit X — the world x direction, scaled.
 - `unit_y(factor: Number = 1.0) → Vector` — Unit Y · GH: Unit Y — the world y direction, scaled.
 - `unit_z(factor: Number = 1.0) → Vector` — Unit Z · GH: Unit Z — the world z direction, scaled.
 - `vector_2pt(a: Point, b: Point, unitize: Boolean = false) → Vector` — Vector 2Pt · GH: Vector 2Pt — the vector from `a` to `b`, optionally unitized. Red when: `unitize` is on and the points coincide within tolerance — a zero vector has no direction.
+- `vector_length(vector: Vector) → Number` — Vector Length · GH: Vector Length — the Euclidean length of a vector.
 - `xy_plane(origin: Point = origin) → Plane` — XY Plane · GH: XY Plane — the world XY frame at an origin.
 - `xz_plane(origin: Point = origin) → Plane` — XZ Plane · GH: XZ Plane — the world XZ frame at an origin.
 - `yz_plane(origin: Point = origin) → Plane` — YZ Plane · GH: YZ Plane — the world YZ frame at an origin.
