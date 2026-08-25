@@ -62,6 +62,11 @@ pub fn rotate_vector(config: &ProjectConfig, input: RotateVectorIn) -> Vector {
 mod tests {
     use std::f64::consts::{FRAC_PI_2, PI};
 
+    use cicada_core::spatial::Point;
+    use cicada_geom::frame::Frame;
+    use cicada_geom::transform::Similarity;
+    use glam::DVec3;
+
     use super::*;
     use crate::points::support::testing::hex;
 
@@ -120,7 +125,14 @@ mod tests {
     proptest::proptest! {
         // A rotation is an isometry that fixes its axis: the vector's length
         // and its component along the axis are preserved, and turning back
-        // by the negated angle restores the vector.
+        // by the negated angle restores the vector. Those three are
+        // sign-blind — a left-handed turn passes them (the C2a review) — so
+        // the handedness is pinned twice over: with `n` the unit axis and
+        // `v⊥` the part of `v` across it, `n · (v × out) = |v⊥|² sin θ` and
+        // `v · out = |v∥|² + |v⊥|² cos θ` (a negated angle flips the first's
+        // sign), and the turn agrees with `Similarity::rotation` about a
+        // frame whose z is the axis — the matrix the `rotate` node applies
+        // to geometry, as the node's doc claims.
         #[test]
         fn property_rotate_vector_preserves_length_and_axial_part(
             vx in -100.0..100.0_f64, vy in -100.0..100.0_f64, vz in -100.0..100.0_f64,
@@ -131,11 +143,31 @@ mod tests {
             let axis = Vector::new(ax, ay, az);
             proptest::prop_assume!(axis.0.length() > 1e-3);
             let out = turn(v, angle, axis);
-            let unit_axis = axis.0.normalize();
-            proptest::prop_assert!(tol::close(out.0.length(), v.0.length(), 1e-9 * (1.0 + v.0.length())));
-            proptest::prop_assert!(tol::close(out.0.dot(unit_axis), v.0.dot(unit_axis), 1e-9 * (1.0 + v.0.length())));
+            let n = axis.0.normalize();
+            let scale = 1.0 + v.0.length();
+            proptest::prop_assert!(tol::close(out.0.length(), v.0.length(), 1e-9 * scale));
+            proptest::prop_assert!(tol::close(out.0.dot(n), v.0.dot(n), 1e-9 * scale));
             let back = turn(out, -angle, axis);
-            proptest::prop_assert!(tol::near_zero((back.0 - v.0).length(), 1e-9 * (1.0 + v.0.length())));
+            proptest::prop_assert!(tol::near_zero((back.0 - v.0).length(), 1e-9 * scale));
+            // Handedness: the two trigonometric identities.
+            let along = v.0.dot(n);
+            let across_sq = v.0.length_squared() - along * along;
+            proptest::prop_assert!(tol::close(
+                n.dot(v.0.cross(out.0)),
+                across_sq * angle.sin(),
+                1e-9 * scale * scale
+            ));
+            proptest::prop_assert!(tol::close(
+                v.0.dot(out.0),
+                along * along + across_sq * angle.cos(),
+                1e-9 * scale * scale
+            ));
+            // …and the `rotate` node's matrix about a frame with that z.
+            let helper = if n.x.abs() < 0.9 { DVec3::X } else { DVec3::Y };
+            let x = (helper - n * helper.dot(n)).normalize();
+            let frame = Frame { origin: Point::origin(), x, y: n.cross(x), z: n };
+            let by_similarity = Similarity::rotation(&frame, angle).apply_vector(v);
+            proptest::prop_assert!(tol::near_zero((by_similarity.0 - out.0).length(), 1e-9 * scale));
         }
     }
 

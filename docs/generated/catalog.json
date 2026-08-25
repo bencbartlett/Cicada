@@ -4358,7 +4358,7 @@
       "title": "Area",
       "description": "the enclosed area and the area centroid of a closed planar curve (the spike form of docs/08 §7 Area: closed curves only; surfaces arrive with v0.1). Polylines by the shoelace formula in their own plane (Newell normal) — the centroid is the AREA centroid, not the vertex mean (the wall scales its Voronoi cells about it); circles and rectangles analytically. The area is orientation-independent (always positive). Self-intersecting polylines are not detected: the shoelace result is what it is (lobes of opposite winding cancel).",
       "category": "Surface & solid",
-      "tier": "S",
+      "tier": "1",
       "version": 1,
       "pure": true,
       "volatile": false,

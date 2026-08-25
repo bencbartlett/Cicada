@@ -71,8 +71,12 @@ touching the committed examples — the app writes what you do.
   a probe's `closest_point` and `distance`, the algebra between the two
   (`angle`, `dot_product`, `cross_product`, `vector_length`,
   `deconstruct_vector`, `amplitude`), and a marker frame from a normal
-  (`plane_normal`, `construct_vector`). Three sliders to drag in the app;
-  pure throughout — the second `--time` run is fully cached.
+  (`plane_normal`, `construct_vector`). Three sliders to drag in the app,
+  and no position of them paints a node red — the probe floats half a unit
+  above the ring's plane so its vector from the centre never vanishes
+  (`crates/cicada-cli/tests/examples_solve.rs` solves the centre, the
+  corners and a post-top to keep it so); pure throughout — the second
+  `--time` run is fully cached.
 
 **The rule: every example must solve.** CI runs each `examples/**/*.cic`
 headlessly with a fresh cache through the same compile → lower → solve

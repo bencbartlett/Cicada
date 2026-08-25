@@ -66,13 +66,18 @@ mod tests {
     proptest::proptest! {
         // a × b is perpendicular to both, anticommutative, and has length
         // |a||b| sin θ — which Lagrange's identity states without any trig:
-        // |a × b|² + (a · b)² = |a|²|b|².
+        // |a × b|² + (a · b)² = |a|²|b|². Every one of those holds for b × a
+        // too (the C2a review), so the orientation is pinned by the scalar
+        // triple product: (a × b) · c is the determinant of [a b c], and a
+        // determinant changes sign when two columns swap.
         #[test]
         fn property_cross_product_is_perpendicular(
             ax in -1.0e3..1.0e3_f64, ay in -1.0e3..1.0e3_f64, az in -1.0e3..1.0e3_f64,
             bx in -1.0e3..1.0e3_f64, by in -1.0e3..1.0e3_f64, bz in -1.0e3..1.0e3_f64,
+            cx in -1.0e3..1.0e3_f64, cy in -1.0e3..1.0e3_f64, cz in -1.0e3..1.0e3_f64,
         ) {
             let (a, b) = (Vector::new(ax, ay, az), Vector::new(bx, by, bz));
+            let c = glam::DVec3::new(cx, cy, cz);
             let ab = cross_product(VectorPairIn { a, b }).0;
             let ba = cross_product(VectorPairIn { a: b, b: a }).0;
             let scale = a.0.length() * b.0.length();
@@ -81,6 +86,9 @@ mod tests {
             proptest::prop_assert!(tol::near_zero((ab + ba).length(), 1e-9 * scale));
             let lagrange = ab.length_squared() + a.0.dot(b.0).powi(2);
             proptest::prop_assert!(tol::close(lagrange, scale * scale, 1e-9 * scale * scale));
+            // Orientation: the signed volume of the parallelepiped.
+            let volume = glam::DMat3::from_cols(a.0, b.0, c).determinant();
+            proptest::prop_assert!(tol::close(ab.dot(c), volume, 1e-9 * scale * c.length()));
         }
     }
 

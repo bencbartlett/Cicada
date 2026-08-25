@@ -49,7 +49,7 @@ pub struct AreaOut {
 /// ```
 #[node(
     category = "Surface & solid",
-    tier = "S",
+    tier = "1",
     version = 1,
     gh = "Area",
     uses_tolerance

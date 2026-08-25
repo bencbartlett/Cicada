@@ -1762,9 +1762,33 @@ review).**
   values IEEE 754 / C99 Annex F pin exactly (`atan2(+0, x>0) = 0`,
   `atan2(y>0, 0) = π/2`, `atan2(+0, x<0) = π`) and asserts run-to-run
   identity for a general angle; `rotate_vector`'s golden is the angle-0
-  turn (exact identity) plus run-to-run identity for a quarter turn. Not
-  done here: the `area` tier correction (`S` → `1`) named in the shared
-  bullet below is left to C2b, whose stragglers touch `solids/`.
+  turn (exact identity) plus run-to-run identity for a quarter turn.
+  *Review closure (2026-08-24, the package's adversarial review — verdict
+  ship, one minor):* the probe of `examples/09-vectors.cic` now floats
+  0.5 above the ring's plane — IN the plane, the probe on the centre (the
+  x/y sliders' midpoint, a one-keystroke literal in the inspector) zeroed
+  `to_probe` and painted `angle` / `amplitude` red, a reachable slider
+  position of an example whose README promises sliders to drag;
+  `cicada-cli/tests/examples_solve.rs` now also solves the example at the
+  centre (at the radius's default and bounds), the four corners and
+  straight above a post, each position set through the writer's
+  `set_param` as a drag sets it (the test that would have caught it —
+  `every_example_solves` sees only the committed defaults). The
+  `rotate_vector` and `cross_product` property tests now pin handedness
+  (the review's mutation runs found them sign-blind, the tables and
+  goldens catching the flips): `n · (v × out) = |v⊥|² sin θ`, `v · out =
+  |v∥|² + |v⊥|² cos θ` and agreement with `Similarity::rotation` about a
+  frame with that z; the scalar triple product against the determinant of
+  `[a b c]`. The `area` tier correction (`S` → `1`, docs/08 §7) from the
+  shared bullet below is done in the same commit (catalog regenerated; the
+  tier is not a signature-ledger column). Recorded, not changed:
+  `closest_point`'s flat scan; `plane_normal`'s in-plane rule is Cicada's
+  own, not Rhino's `PerpendicularTo` (a `.gh` importer would port it and
+  bump `version`); `angle`'s π/2 and π goldens rest on atan2's C99 Annex F
+  special values on the 3-OS Nightly; ±inf coordinates pass through
+  `closest_point` / `cull_duplicates` as IEEE arithmetic (the value model
+  refuses NaN and admits ±inf — a core rule for the ledger, not a per-node
+  refusal two nodes would apply and `distance` / `move` would not).
 - **C2b — Transform and the stragglers (9):** `rotate_axis`, `scale_nu`,
   `polar_array`, `rectangular_array`, `compose_xform`, `transform` (the
   `Xform` kind exists), `value_list` (the dropdown param — `options:

@@ -66,6 +66,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use cicada_core::config::ProjectConfig;
+use cicada_lang::{Document, writer};
 use cicada_sched::{
     CancelToken, DiskStore, MonotonicClock, NodeId, NodeOutcome, NoopObserver, Scheduler,
     SchedulerConfig, SolveReport,
@@ -466,5 +467,60 @@ fn a_sound_pipeline_passes() {
         !never.exists(),
         "the exporter must not have run: {} exists",
         never.display()
+    );
+}
+
+// An example's sliders are a contract too: "three sliders to drag in the
+// app" (examples/README.md) promises that NO position of them paints a
+// node red — `every_example_solves` sees only the committed defaults. The
+// first version of 09-vectors kept the probe in the ring's plane, so the
+// probe ON the centre — the x/y sliders' midpoint, a one-keystroke literal
+// in the inspector — made `to_probe` the zero vector and `angle` /
+// `amplitude` red (the C2a review, 2026-08-24); the probe now floats above
+// the plane, and this test holds the example total at the positions that
+// can degenerate: the centre at the radius's default and bounds, the four
+// corners, and straight above a post. Each position is set the way a drag
+// sets it — the writer's `set_param`, the gesture the canvas commits — and
+// solved like any example.
+#[test]
+fn the_vectors_example_is_total_over_its_sliders() {
+    let source = std::fs::read_to_string(examples_dir().join("09-vectors.cic")).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    // (radius, probe_x, probe_y).
+    let positions: [(f64, f64, f64); 8] = [
+        (6.0, 0.0, 0.0),
+        (2.0, 0.0, 0.0),
+        (10.0, 0.0, 0.0),
+        (6.0, 6.0, 0.0),
+        (6.0, -10.0, -10.0),
+        (6.0, 10.0, -10.0),
+        (6.0, -10.0, 10.0),
+        (6.0, 10.0, 10.0),
+    ];
+    let mut failures: Vec<String> = Vec::new();
+    for (index, &(radius, probe_x, probe_y)) in positions.iter().enumerate() {
+        let mut document = Document::parse(&source);
+        for (binding, value) in [
+            ("radius", radius),
+            ("probe_x", probe_x),
+            ("probe_y", probe_y),
+        ] {
+            writer::set_param(&mut document, binding, "value", &format!("{value:?}"), None)
+                .unwrap_or_else(|e| panic!("setting `{binding}` to {value}: {e}"));
+        }
+        let path = dir.path().join(format!("vectors_{index}.cic"));
+        std::fs::write(&path, document.emit()).unwrap();
+        if let Err(reason) = solve_pipeline(&path, &dir.path().join(format!("cache_{index}"))) {
+            failures.push(format!(
+                "radius {radius}, probe ({probe_x}, {probe_y}):\n{reason}"
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "09-vectors goes red at {} of {} slider position(s) — an example's sliders must keep it green:\n{}",
+        failures.len(),
+        positions.len(),
+        failures.join("\n")
     );
 }

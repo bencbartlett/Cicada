@@ -24,9 +24,13 @@ posts, post_sources = cull_duplicates(points=posts_with_return, tolerance=0.0000
 ring = polyline(vertices=posts, closed=True)
 
 # --- the probe and its nearest post -------------------------------------------
+# The probe floats half a unit ABOVE the ring's plane, so `to_probe` below
+# has length no matter where the sliders put it — on the centre (both at 0,
+# the sliders' midpoint) it would otherwise be the zero vector, which `angle`
+# and `amplitude` refuse. Every slider position keeps every node green.
 probe_x = slider(value=3.0, min=-10.0, max=10.0)
 probe_y = slider(value=4.0, min=-10.0, max=10.0)
-probe = construct_point(x=probe_x, y=probe_y, z=0.0)
+probe = construct_point(x=probe_x, y=probe_y, z=0.5)
 nearest, nearest_index, gap = closest_point(point=probe, cloud=posts)
 reach = distance(a=centre, b=probe)
 tether = line(a=probe, b=nearest)
