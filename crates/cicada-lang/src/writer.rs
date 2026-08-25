@@ -235,6 +235,13 @@ pub fn wrap_each(document: &mut Document, binding: &str, port: &str) -> Result<(
 /// order) is given, else appended, exactly as [`set_kwarg`] inserts a
 /// wire. `literal_text` is the new literal (shortest round-trip repr).
 ///
+/// A present kwarg is rewritten ONE TOKEN at a time: the literal inside
+/// its `each(…)` wrappers, so `start=each(1.0)` → `start=each(2.0)` and
+/// the lift stays (the B3 review: the chip shows the inner literal, and a
+/// commit that silently dropped the `each(…)` was a text change beyond
+/// the one token). A wire ([`set_kwarg`]) replaces the whole value — the
+/// lift is the probe's to offer again for the new source.
+///
 /// # Errors
 ///
 /// As [`set_kwarg`].
@@ -245,6 +252,15 @@ pub fn set_param(
     literal_text: &str,
     spec_order: Option<&[&str]>,
 ) -> Result<(), WriterError> {
+    guard_version(document)?;
+    let (line, statement) = call_statement(document, binding)?;
+    let Rhs::Call(call) = &statement.rhs else {
+        unreachable!("call_statement checked")
+    };
+    if let Some(kwarg) = call.kwargs.iter().find(|k| k.name.name == port) {
+        let span = kwarg.value.unlifted().span();
+        return checked_splice(document, line, span, literal_text);
+    }
     set_kwarg(document, binding, port, literal_text, spec_order)
 }
 

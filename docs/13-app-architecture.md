@@ -69,9 +69,10 @@ release, the param widgets, and (wave 4 B3, 2026-08-24) the
 typed-literal chips on any node's unconnected literal-typed ports
 (docs/16 §Canvas conventions): it names `{node, port, value}` with the
 value already spelled as a dialect literal, the server refuses anything
-that is not one literal token, rewrites the kwarg in place, or **adds
-it at its spec-order position when the call lacks it** (a placed node's
-port — docs/10 round-trip table). The view-model's `InputView` carries
+that is not one literal token, rewrites the kwarg's literal in place
+(inside its `each(…)` when the text lifts it — the lift stays), or
+**adds it at its spec-order position when the call lacks it** (a placed
+node's port — docs/10 round-trip table). The view-model's `InputView` carries
 what such an editor needs: `literal` / `literal_value` (the kwarg as
 written and parsed), `default` (the catalog rendering) and, since B3,
 `default_value` — that rendering parsed in the port's kind by the

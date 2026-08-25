@@ -85,6 +85,16 @@ const slider = view(
   { param: { kind: "slider", port: "value", value: 2, min: 0.5, max: 5, step: 0 } },
 );
 
+/**
+ * `z = construct_domain(start=0, end=each(1.0))` — a Number port spelled as
+ * an integer (the checker accepts it), and a literal inside a lift (the
+ * view-model's `literal` is the inner token; `lift` counts the wrappers).
+ */
+const spelled = view("z", "construct_domain", "z = construct_domain(start=0, end=each(1.0))", [
+  port("start", "Number", { literal: "0", literal_value: 0 }),
+  port("end", "Number", { literal: "1.0", literal_value: 1, lift: 1 }),
+]);
+
 function propsFor(v: NodeView) {
   return {
     id: v.name,
@@ -119,7 +129,7 @@ function seed(role: "writer" | "observer", selected: NodeView) {
     connection: "open",
     role,
     catalog: null,
-    graph: { nodes: [domain, shifted, outlines, slider], wires: [], diagnostics: [] },
+    graph: { nodes: [domain, shifted, outlines, slider, spelled], wires: [], diagnostics: [] },
     selection: { nodes: [selected.name], wire: null, element: null },
     transport: null,
     statuses: {},
@@ -322,6 +332,74 @@ describe("the typed-literal chip on the canvas node row", () => {
     const { container } = renderNode(off);
     expect(container.querySelector("[data-testid^='lit-']")).toBeNull();
     expect(container.querySelectorAll(".cn-literal")).toHaveLength(4);
+  });
+
+  it("the number editor is a text field: `3,5`, `1/2` and `abc` reach the rule and are refused with a notice, never written", () => {
+    // The review's finding: a `type="number"` input sanitises its value
+    // before React sees it — `3,5` became `35` and was WRITTEN; `abc`
+    // became empty and cancelled silently. docs/16 promises a notice.
+    renderNode(domain);
+    const attempts: [string, string][] = [
+      ["3,5", '"3,5" is not a valid number'],
+      ["1/2", '"1/2" is not a valid number'],
+      ["abc", '"abc" is not a valid number'],
+      ["1e400", '"1e400" is too large for the Number type'],
+    ];
+    for (const [typed] of attempts) {
+      fireEvent.doubleClick(screen.getByTestId("lit-construct_domain_1-end"));
+      const input = screen.getByTestId("lit-construct_domain_1-end-input") as HTMLInputElement;
+      expect(input.type).toBe("text");
+      expect(input.inputMode).toBe("decimal");
+      fireEvent.change(input, { target: { value: typed } });
+      expect(input.value, "the field holds what was typed, character for character").toBe(typed);
+      fireEvent.keyDown(input, { key: "Enter" });
+    }
+    expect(sent).toEqual([]);
+    expect(useCicada.getState().notices.map((n) => [n.level, n.message])).toEqual(
+      attempts.map(([, reason]) => ["warning", `construct_domain_1.end: ${reason} — nothing written`]),
+    );
+    // The chip is back and still empty after every refusal.
+    expect(screen.getByTestId("lit-construct_domain_1-end").dataset.state).toBe("unset");
+  });
+
+  it("a Number literal spelled as an integer (`start=0`): Enter over it, or a typed `0.0`, writes nothing — no spelling-only op", () => {
+    seed("writer", spelled);
+    renderNode(spelled);
+    const start = screen.getByTestId("lit-z-start");
+    expect(start.textContent).toBe("0");
+    expect(start.dataset.state).toBe("literal");
+    fireEvent.doubleClick(start);
+    let input = screen.getByTestId("lit-z-start-input") as HTMLInputElement;
+    expect(input.value).toBe("0");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(sent, "the untouched `0` — the rule would spell it `0.0`, the same number").toEqual([]);
+    fireEvent.doubleClick(screen.getByTestId("lit-z-start"));
+    input = screen.getByTestId("lit-z-start-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "0.0" } });
+    fireEvent.blur(input);
+    expect(sent, "a re-spelling alone is no edit").toEqual([]);
+    fireEvent.doubleClick(screen.getByTestId("lit-z-start"));
+    input = screen.getByTestId("lit-z-start-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "1" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(sent).toEqual([setParam("z", "start", "1.0")]);
+  });
+
+  it("a literal inside `each(…)` wears its chip beside the lift badge; a commit sends the inner token (the writer keeps the lift)", () => {
+    seed("writer", spelled);
+    const { container } = renderNode(spelled);
+    const end = screen.getByTestId("lit-z-end");
+    expect(end.textContent).toBe("1.0");
+    expect(Array.from(container.querySelectorAll(".cn-lift")).map((el) => el.textContent)).toEqual(["map"]);
+    fireEvent.doubleClick(end);
+    const input = screen.getByTestId("lit-z-end-input") as HTMLInputElement;
+    expect(input.value).toBe("1.0");
+    fireEvent.change(input, { target: { value: "2" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    // `set_param` names the port; `writer::set_param` rewrites the literal
+    // INSIDE its `each(…)` — `end=each(2.0)` (gestures fixture
+    // `set_param_lifted`), never `end=2.0`.
+    expect(sent).toEqual([setParam("z", "end", "2.0")]);
   });
 });
 

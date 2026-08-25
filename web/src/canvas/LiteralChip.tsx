@@ -9,10 +9,15 @@
  * commits ONE `set_param {node, port, value}` spelled by `paramValueText`
  * (the server adds the kwarg when the call lacks it, in spec order); Esc
  * cancels. Nothing streams from the typed editor: Enter is the one write,
- * so a cancelled edit leaves no preview behind, and a value spelled the
- * same as what the chip showed writes nothing. An unspellable value (`2.5`
- * on an Integer port) is refused with a notice, never written. Observers
- * and `#off` ghosts get no chip — the callers show the text instead.
+ * so a cancelled edit leaves no preview behind, and a value equal to what
+ * the chip showed writes nothing (`isNoEdit`: by value, so `0` over a
+ * Number port's `start=0` is no spelling-only op). An unspellable value
+ * (`2.5` on an Integer port, `3,5` or `1/2` anywhere) is refused with a
+ * notice, never written — the number editor is a plain text field so the
+ * rule sees every keystroke; a browser number input would have dropped the
+ * offending characters and written `35`. A literal inside `each(…)` is
+ * edited inside it (the writer rewrites the inner token; the lift stays).
+ * Observers and `#off` ghosts get no chip — the callers show the text.
  *
  * Keys inside the editor never reach the hotkey map or React Flow (the
  * keydown is stopped) — except `Ctrl+S`, the commit dialog, which must
@@ -22,7 +27,7 @@ import { useEffect, useRef, useState } from "react";
 import { isCommitChord } from "../keyboard";
 import { useCicada } from "../state/store";
 import { sendWrite } from "./flow";
-import { chipFace, chipTitle, spellEdit, type ChipKind, type ChipSource } from "./literalFace";
+import { chipFace, chipTitle, isNoEdit, spellEdit, type ChipKind, type ChipSource } from "./literalFace";
 import "./canvas.css";
 
 export interface LiteralChipProps extends ChipSource {
@@ -98,11 +103,16 @@ function LiteralEditor({ kind, startText, startChecked, label, testId, onCommit,
       />
     );
   }
+  // A plain text field for numbers too — never `type="number"`: the browser
+  // sanitises that one's value before React sees it (`3,5` → `35`, `1/2` →
+  // `12`, `abc` → empty), so the refusal in `spellEdit` would never fire and
+  // a different number than typed would be written. `inputMode` keeps the
+  // numeric keyboard where there is one.
   return (
     <input
       ref={ref}
-      type={kind === "text" ? "text" : "number"}
-      step={kind === "integer" ? 1 : kind === "number" ? "any" : undefined}
+      type="text"
+      inputMode={kind === "text" ? undefined : "decimal"}
       className="lit-input compact nodrag nopan nowheel mono"
       value={text}
       onChange={(event) => setText(event.target.value)}
@@ -130,8 +140,9 @@ export function LiteralChip(props: LiteralChipProps) {
       return;
     }
     // What the chip already showed — the literal as written, or the
-    // default the text omits — is no edit.
-    if (spelling.spelled === face.spelled) return;
+    // default the text omits — is no edit; compared by value, so a
+    // re-spelling alone (`0` → `0.0`) is no op either.
+    if (isNoEdit(face, spelling)) return;
     sendWrite({ type: "set_param", payload: { node, port, value: spelling.spelled } });
   };
 

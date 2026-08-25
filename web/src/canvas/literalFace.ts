@@ -111,28 +111,60 @@ export function chipTitle(
   }
 }
 
+/** A spelled edit: the `set_param` text and the scalar it denotes. */
+export interface SpelledEdit {
+  spelled: string;
+  value: Scalar;
+}
+
+/**
+ * The number spellings the editor accepts — the dialect's own grammar
+ * (`parse.rs::parse_number`: digits, an optional point, an optional
+ * exponent; `.5` and `5.` included) plus a leading `+`. Nothing else is
+ * reinterpreted: `0x10`, `1_000`, `Infinity` and `3,5` are refusals, not
+ * the numbers JavaScript's `Number()` would quietly make of them.
+ */
+const NUMBER_SPELLING = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+
 /**
  * The `set_param` spelling of what an editor holds, or the reason it
  * cannot be spelled (an empty number field is no value; `2.5` is no
- * integer). `{ skip: true }` = nothing typed, nothing to write.
+ * integer; `3,5` and `1/2` are no numbers). `{ skip: true }` = nothing
+ * typed, nothing to write. The number field is a plain text field, so
+ * every keystroke reaches this rule — a browser `type="number"` input
+ * drops the characters it dislikes before anyone sees them (`3,5` → `35`).
  */
-export function spellEdit(
-  kind: ChipKind,
-  held: string | boolean,
-): { spelled: string } | { skip: true } | { error: string } {
+export function spellEdit(kind: ChipKind, held: string | boolean): SpelledEdit | { skip: true } | { error: string } {
   switch (kind) {
-    case "boolean":
-      return { spelled: paramValueText("boolean", held === true) };
-    case "text":
-      return { spelled: paramValueText("text", String(held)) };
+    case "boolean": {
+      const value = held === true;
+      return { spelled: paramValueText("boolean", value), value };
+    }
+    case "text": {
+      const value = String(held);
+      return { spelled: paramValueText("text", value), value };
+    }
     case "number":
     case "integer": {
       const raw = String(held).trim();
       if (raw === "") return { skip: true };
+      if (!NUMBER_SPELLING.test(raw)) return { error: `"${raw}" is not a valid number` };
       const x = Number(raw);
-      if (!Number.isFinite(x)) return { error: `"${raw}" is not a valid number` };
+      if (!Number.isFinite(x)) return { error: `"${raw}" is too large for the Number type` };
       if (kind === "integer" && !Number.isInteger(x)) return { error: `"${raw}" is not an integer` };
-      return { spelled: paramValueText(kind, x) };
+      return { spelled: paramValueText(kind, x), value: x };
     }
   }
+}
+
+/**
+ * Whether a spelled edit leaves the file as it is: what the chip already
+ * showed — the literal as written, or the default the text omits — is no
+ * edit. Compared by VALUE as well as by spelling: `0` typed over a Number
+ * port's `start=0` (the checker accepts the integer spelling) denotes the
+ * same number as the `0.0` the rule would write, and a spelling-only op is
+ * no edit the user made.
+ */
+export function isNoEdit(face: ChipFace, edit: SpelledEdit): boolean {
+  return edit.spelled === face.spelled || (face.start !== null && edit.value === face.start);
 }

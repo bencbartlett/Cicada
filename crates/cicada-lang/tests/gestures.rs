@@ -200,6 +200,39 @@ fn set_param_adds_the_kwarg_a_call_lacks_in_spec_order() {
     );
 }
 
+/// B3 review closure: a present kwarg is rewritten ONE TOKEN at a time — the
+/// literal inside its `each(…)` wrappers — so the lift the text carries
+/// survives a typed value (the chip shows the inner literal; a commit that
+/// dropped the `each(…)` was a silent text change beyond the one token).
+/// The wire gesture keeps replacing the whole value.
+#[test]
+fn set_param_rewrites_the_literal_inside_its_lift() {
+    let before = include_str!("fixtures/gestures/set_param_lifted/before.cic");
+    let after = include_str!("fixtures/gestures/set_param_lifted/after.cic");
+    let domain = ["start", "end"];
+    let emitted = apply(before, |doc| {
+        // One `each(…)`: the inner literal alone.
+        writer::set_param(doc, "lifted", "start", "2.0", Some(&domain)).unwrap();
+        // Nested lifts: the innermost token; the comment survives.
+        writer::set_param(doc, "deep", "item", "5", Some(&["item", "count"])).unwrap();
+        // A lifted REFERENCE typed over: the literal takes the reference's
+        // place inside the lift (the server never sends this for a wired
+        // port — the chip is not offered — but the writer's rule is one).
+        writer::set_param(doc, "wired", "start", "0.0", Some(&domain)).unwrap();
+    });
+    assert_eq!(emitted, after);
+
+    // A wire onto a lifted kwarg replaces the whole value, lift included:
+    // the probe offers the lift again for the new source.
+    let rewired = apply(before, |doc| {
+        writer::set_kwarg(doc, "lifted", "start", "size", Some(&domain)).unwrap();
+    });
+    assert!(
+        rewired.contains("lifted = construct_domain(start=size, end=3.0)\n"),
+        "{rewired}"
+    );
+}
+
 #[test]
 fn delete_removes_the_statement_never_cascades() {
     let before = include_str!("fixtures/gestures/delete/before.cic");

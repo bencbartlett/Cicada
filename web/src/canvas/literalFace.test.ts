@@ -6,7 +6,7 @@
  * required slot — plus the one spelling rule an edit goes through.
  */
 import { describe, expect, it } from "vitest";
-import { chipFace, chipTitle, ofKind, spellEdit } from "./literalFace";
+import { chipFace, chipTitle, isNoEdit, ofKind, spellEdit } from "./literalFace";
 
 describe("chipFace", () => {
   it("a kwarg the text carries: shown as written, the editor starts on it, an unchanged commit is no edit", () => {
@@ -87,20 +87,71 @@ describe("ofKind", () => {
 });
 
 describe("spellEdit", () => {
-  it("spells what the editor holds through the one literal rule", () => {
-    expect(spellEdit("number", "40")).toEqual({ spelled: "40.0" });
-    expect(spellEdit("number", " 2.5 ")).toEqual({ spelled: "2.5" });
-    expect(spellEdit("integer", "3")).toEqual({ spelled: "3" });
-    expect(spellEdit("boolean", true)).toEqual({ spelled: "True" });
-    expect(spellEdit("boolean", false)).toEqual({ spelled: "False" });
-    expect(spellEdit("text", "hi")).toEqual({ spelled: '"hi"' });
-    expect(spellEdit("text", "")).toEqual({ spelled: '""' });
+  it("spells what the editor holds through the one literal rule, and says what it denotes", () => {
+    expect(spellEdit("number", "40")).toEqual({ spelled: "40.0", value: 40 });
+    expect(spellEdit("number", " 2.5 ")).toEqual({ spelled: "2.5", value: 2.5 });
+    expect(spellEdit("integer", "3")).toEqual({ spelled: "3", value: 3 });
+    expect(spellEdit("boolean", true)).toEqual({ spelled: "True", value: true });
+    expect(spellEdit("boolean", false)).toEqual({ spelled: "False", value: false });
+    expect(spellEdit("text", "hi")).toEqual({ spelled: '"hi"', value: "hi" });
+    expect(spellEdit("text", "")).toEqual({ spelled: '""', value: "" });
+  });
+  it("accepts the dialect's number spellings: a point either side of the digits, an exponent, a sign", () => {
+    expect(spellEdit("number", ".5")).toEqual({ spelled: "0.5", value: 0.5 });
+    expect(spellEdit("number", "5.")).toEqual({ spelled: "5.0", value: 5 });
+    expect(spellEdit("number", "-2")).toEqual({ spelled: "-2.0", value: -2 });
+    expect(spellEdit("number", "+5")).toEqual({ spelled: "5.0", value: 5 });
+    expect(spellEdit("number", "1e3")).toEqual({ spelled: "1000.0", value: 1000 });
+    expect(spellEdit("number", "2.5E-1")).toEqual({ spelled: "0.25", value: 0.25 });
+    expect(spellEdit("integer", "-7")).toEqual({ spelled: "-7", value: -7 });
   });
   it("an empty number field is nothing to write; an unspellable value is a refusal, never a guess", () => {
     expect(spellEdit("number", "")).toEqual({ skip: true });
     expect(spellEdit("integer", "   ")).toEqual({ skip: true });
     expect(spellEdit("number", "abc")).toEqual({ error: '"abc" is not a valid number' });
     expect(spellEdit("integer", "2.5")).toEqual({ error: '"2.5" is not an integer' });
+    // What a browser `type="number"` input would have quietly turned into
+    // `35`, `12` and `4.56` — the review's finding; the field is text now
+    // and the rule sees what was typed.
+    expect(spellEdit("number", "3,5")).toEqual({ error: '"3,5" is not a valid number' });
+    expect(spellEdit("number", "1/2")).toEqual({ error: '"1/2" is not a valid number' });
+    expect(spellEdit("number", "4.5.6")).toEqual({ error: '"4.5.6" is not a valid number' });
+    // JavaScript's `Number()` would read these; the dialect does not, so
+    // neither does the editor — no reinterpretation.
+    expect(spellEdit("number", "0x10")).toEqual({ error: '"0x10" is not a valid number' });
+    expect(spellEdit("integer", "1_000")).toEqual({ error: '"1_000" is not a valid number' });
+    expect(spellEdit("number", "Infinity")).toEqual({ error: '"Infinity" is not a valid number' });
+    expect(spellEdit("number", "1e400")).toEqual({ error: '"1e400" is too large for the Number type' });
+    expect(spellEdit("number", ".")).toEqual({ error: '"." is not a valid number' });
+    expect(spellEdit("number", "-")).toEqual({ error: '"-" is not a valid number' });
+  });
+});
+
+describe("isNoEdit", () => {
+  it("what the chip showed is no edit — by spelling or by value, so a re-spelling alone writes nothing", () => {
+    // `start=0` on a Number port: the checker accepts the integer spelling;
+    // Enter over the untouched `0` (or a typed `0.0`) denotes the same number.
+    const zero = chipFace({ kind: "number", literal: "0", value: 0 });
+    expect(zero.spelled).toBe("0");
+    expect(isNoEdit(zero, { spelled: "0.0", value: 0 })).toBe(true);
+    expect(isNoEdit(zero, { spelled: "1.0", value: 1 })).toBe(false);
+    // `1e3` in the text, `1000` typed: the same number, nothing to write.
+    expect(isNoEdit(chipFace({ kind: "number", literal: "1e3", value: 1000 }), { spelled: "1000.0", value: 1000 })).toBe(true);
+    // The default the text omits, re-typed: no edit; toggled: an edit.
+    const wrap = chipFace({ kind: "boolean", defaultText: "true", defaultValue: true });
+    expect(isNoEdit(wrap, { spelled: "True", value: true })).toBe(true);
+    expect(isNoEdit(wrap, { spelled: "False", value: false })).toBe(false);
+    // Text compares as text.
+    const font = chipFace({ kind: "text", literal: '"hi"', value: "hi" });
+    expect(isNoEdit(font, { spelled: '"hi"', value: "hi" })).toBe(true);
+    expect(isNoEdit(font, { spelled: '"Hi"', value: "Hi" })).toBe(false);
+  });
+  it("an empty slot, or a literal the editor could not start from, has nothing to compare by value", () => {
+    expect(isNoEdit(chipFace({ kind: "number" }), { spelled: "0.0", value: 0 })).toBe(false);
+    // `"x"` on a Number port: shown, but `start` is null — typing `0` is an edit.
+    const odd = chipFace({ kind: "number", literal: '"x"', value: "x" });
+    expect(isNoEdit(odd, { spelled: "0.0", value: 0 })).toBe(false);
+    expect(isNoEdit(odd, { spelled: '"x"', value: "x" })).toBe(true);
   });
 });
 

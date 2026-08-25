@@ -1,0 +1,4 @@
+# cicada 1
+lifted = construct_domain(start=each(1.0), end=3.0)
+deep = duplicate(item=each(each(2)), count=3)  # nested lifts stay too
+wired = construct_domain(start=each(size), end=3.0)

@@ -1179,7 +1179,20 @@ packages in sequence, each reviewed.
   notice, an empty number field a cancel; a Boolean's editor is a
   checkbox (Space toggles, Enter commits); (6) ports of other bases
   (`T`, `Any`) with a present scalar literal keep their chip — the
-  spike's rule, unchanged; a `[Number]` list port has none.*
+  spike's rule, unchanged; a `[Number]` list port has none.
+  Review closure, same day: the number editor was a browser
+  `type="number"` input, which sanitises its value before the rule sees
+  it — `3,5` was WRITTEN as `35.0`, `1/2` as `12.0`, `abc` cancelled
+  without a word — so the documented refusal never fired on a Number
+  port; it is a plain text field now (`inputMode="decimal"`) and
+  `spellEdit` accepts exactly the dialect's number grammar (`0x10`,
+  `1_000`, `Infinity` refused, never JavaScript's reading of them). Two
+  minors with it: (7) "unchanged writes nothing" is judged by VALUE
+  (`isNoEdit`) — Enter over `start=0` on a Number port no longer writes
+  a spelling-only `0.0`; (8) `writer::set_param` rewrites a present
+  literal INSIDE its `each(…)` (fixture `gestures/set_param_lifted`), so
+  a chip on a lifted literal no longer drops the lift. Vitest, the
+  gestures + session tests and `literals.spec.ts` carry each.*
 - **B4 — sliders.** (a) Search-to-place parses `A<B` and `A<B<C` (GH's
   grammar; negatives allowed): min A, max B (or C), value A (or B); step
   = 10^-(the most decimals typed), integers → step 1 and an `Integer`

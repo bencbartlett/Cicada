@@ -223,7 +223,7 @@ Every canvas gesture is specified as a text edit:
 | Accept lift chip | Wrap that kwarg's value in `each(…)` |
 | Accept adapter chip | Insert adapter binding (`outline_c = as_closed(curve=outline)`) + rewire |
 | Drag slider | Rewrite one numeric literal |
-| Type a literal into an unconnected port (the canvas / inspector chip, wave 4 B3) | Rewrite that kwarg's literal — or, when the call lacks the kwarg (a just-placed node's port: `place` writes `name = fn()`), insert `port=literal` at its spec-order position, as a wire is inserted (`construct_domain()` → `construct_domain(end=40.0)` → `construct_domain(start=0.0, end=40.0)`); one token either way, one op |
+| Type a literal into an unconnected port (the canvas / inspector chip, wave 4 B3) | Rewrite that kwarg's literal — or, when the call lacks the kwarg (a just-placed node's port: `place` writes `name = fn()`), insert `port=literal` at its spec-order position, as a wire is inserted (`construct_domain()` → `construct_domain(end=40.0)` → `construct_domain(start=0.0, end=40.0)`); one token either way, one op. A literal inside `each(…)` is rewritten INSIDE it — `start=each(1.0)` → `start=each(2.0)`, the lift stays (a wire, by contrast, replaces the whole value; the lift is the probe's to offer again) |
 | Delete node | Delete its statement; downstream references become red unknown-name errors — **never cascade deletion** |
 | Toggle disable | Prefix / unprefix the statement with `#off ` |
 | Rename node | Rename binding + all references + sidecar key, atomically |

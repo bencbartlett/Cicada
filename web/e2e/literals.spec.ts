@@ -9,7 +9,11 @@
  * Esc cancels. A Boolean port (`shift_list.wrap`, the catalog's default
  * shown as `True`) toggles to `wrap=False`; an Integer port writes a bare
  * `3`; a Text port writes `text="hello"`; a wired port shows no chip and a
- * slider's own `value` port belongs to its widget.
+ * slider's own `value` port belongs to its widget. Review closure: `1/2`
+ * typed into a Number chip is a warning notice and NOT a write (the field
+ * is text, so the rule sees the slash a number input would have dropped);
+ * Enter over `start=0` writes no spelling-only `0.0`; a literal inside
+ * `each(…)` is rewritten inside it.
  *
  * Runs against the REAL `cicada serve` from `playwright.config.ts` over a
  * SCRATCH copy of `examples/`, on its own pipeline file (typing writes it).
@@ -25,11 +29,16 @@ const PIPELINE = "literals.cic";
 const FILE = join(meta.scratch, "examples", PIPELINE);
 
 // A slider and a node wired from it: `span.end` is wired (no chip),
-// `span.start` is a literal, `size.value` is the slider widget's.
+// `span.start` is a Number literal spelled as an integer (the checker
+// accepts it; Enter over it must not re-spell it), `size.value` is the
+// slider widget's. `lifted.start` is a literal inside `each(…)` — its chip
+// edits the inner token and the lift stays (the node is red: a lift over
+// a scalar — that is the text's business, not the chip's).
 const START =
   "# cicada 1\n" +
   "size = slider(value=2.0, min=0.5, max=5.0)\n" +
-  "span = construct_domain(start=0.0, end=size)\n";
+  "span = construct_domain(start=0, end=size)\n" +
+  "lifted = construct_domain(start=each(1.0), end=3.0)\n";
 
 interface DebugState {
   text: string;
@@ -96,15 +105,42 @@ test("a placed node's unconnected inputs are typed into: chips on the canvas and
 
   await page.goto(`/?token=${TOKEN}&pipeline=${PIPELINE}`);
   await expect(page.getByTestId("app")).toBeVisible();
-  await expect(page.locator(".react-flow__node")).toHaveCount(2);
+  await expect(page.locator(".react-flow__node")).toHaveCount(3);
 
   // ---- The starting file: a wired port has no chip; a literal one has a
-  // chip reading the text; the slider's own `value` port is its widget's.
+  // chip reading the text AS WRITTEN; the slider's own `value` port is its
+  // widget's.
   await expect(page.getByTestId("lit-span-end")).toHaveCount(0);
-  await expect(page.getByTestId("lit-span-start")).toHaveText("0.0");
+  await expect(page.getByTestId("lit-span-start")).toHaveText("0");
   await expect(page.getByTestId("lit-span-start")).toHaveAttribute("data-state", "literal");
   await expect(page.getByTestId("lit-size-value")).toHaveCount(0);
   await expect(page.getByTestId("lit-size-min")).toHaveText("0.5");
+  const depth0 = (await debugState(page)).history.depth;
+
+  // Enter over the untouched `0` writes nothing — not even the `0.0` the
+  // rule would spell: the same number is no edit (review minor 2).
+  await page.getByTestId("lit-span-start").dblclick();
+  await expect(page.getByTestId("lit-span-start-input")).toBeFocused();
+  await expect(page.getByTestId("lit-span-start-input")).toHaveValue("0");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("lit-span-start-input")).toHaveCount(0);
+  await expectLine(page, "span = construct_domain(start=0, end=size)");
+  expect((await debugState(page)).history.depth).toBe(depth0);
+
+  // A literal inside `each(…)`: the chip shows the inner token beside the
+  // lift badge, and a commit rewrites THAT token — the lift stays (review
+  // minor 3; gestures fixture `set_param_lifted`).
+  const liftedStart = page.getByTestId("lit-lifted-start");
+  await expect(liftedStart).toHaveText("1.0");
+  await expect(node(page, "lifted").locator(".cn-lift")).toHaveText("map");
+  await liftedStart.dblclick();
+  await expect(page.getByTestId("lit-lifted-start-input")).toBeFocused();
+  await page.keyboard.type("2");
+  await page.keyboard.press("Enter");
+  await expectLine(page, "lifted = construct_domain(start=each(2.0), end=3.0)");
+  await expect(liftedStart).toHaveText("2.0");
+  await expect(node(page, "lifted").locator(".cn-lift")).toHaveText("map");
+  expect((await debugState(page)).history.depth).toBe(depth0 + 1);
 
   // ---- U9 verbatim: place construct_domain. Both required ports are empty
   // slots and the node is red (nothing typed yet).
@@ -155,12 +191,30 @@ test("a placed node's unconnected inputs are typed into: chips on the canvas and
   await expect(page.getByTestId(`lit-${domain}-end-input`)).toHaveCount(0);
   await expect(end).toHaveText("40.0");
   expect((await debugState(page)).text).toContain(`${domain} = construct_domain(start=0.0, end=40.0)`);
-  // Enter on the unchanged value writes nothing: two edits so far, two ops
-  // after the place.
+  // Enter on the unchanged value writes nothing: the lifted edit, the
+  // place, `end`, `start` — four ops, no fifth.
   await end.dblclick();
   await page.keyboard.press("Enter");
   await expect(page.getByTestId(`lit-${domain}-end-input`)).toHaveCount(0);
-  expect((await debugState(page)).history.depth).toBe(3);
+  expect((await debugState(page)).history.depth).toBe(depth0 + 4);
+
+  // `1/2` into a Number chip: the field is TEXT, so the slash reaches the
+  // rule — a warning notice, the chip and the file stand, no op (review
+  // major: a number input would have dropped the slash and written `12.0`).
+  await end.dblclick();
+  const half = page.getByTestId(`lit-${domain}-end-input`);
+  await expect(half).toBeFocused();
+  await expect(half).toHaveAttribute("type", "text");
+  await page.keyboard.type("1/2");
+  await expect(half).toHaveValue("1/2");
+  await page.keyboard.press("Enter");
+  await expect(half).toHaveCount(0);
+  await expect(page.getByTestId("notices")).toContainText(
+    `${domain}.end: "1/2" is not a valid number — nothing written`,
+  );
+  await expect(end).toHaveText("40.0");
+  expect((await debugState(page)).text).toContain(`${domain} = construct_domain(start=0.0, end=40.0)`);
+  expect((await debugState(page)).history.depth).toBe(depth0 + 4);
 
   // ---- A Boolean port: `shift_list.wrap` defaults to `true` in the catalog
   // and the chip says `True` (the dialect's spelling) greyed; the editor is

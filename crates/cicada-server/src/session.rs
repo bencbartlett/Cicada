@@ -6175,6 +6175,39 @@ mod tests {
         assert_eq!(history_of(&session)["depth"], 4, "one place + three edits");
     }
 
+    // B3 review closure: a literal inside `each(…)` is rewritten INSIDE it.
+    // The view-model shows the chip the inner token (`literal`) and the lift
+    // (`lift`); `set_param` into that port must change the token alone —
+    // the lift the text carries is not the chip's to drop.
+    #[test]
+    fn set_param_keeps_the_lift_around_a_literal() {
+        let (_dir, config) =
+            project("# cicada 1\nlifted = construct_domain(start=each(1.0), end=3.0)\n");
+        let pipeline = config.pipeline.clone();
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, role) = session.connect(ClientLanes::merged(tx));
+        assert_eq!(role, Role::Writer);
+        drain(&mut rx);
+        let text = || std::fs::read_to_string(&pipeline).unwrap();
+
+        let start = input_view(&session, "lifted", "start");
+        assert_eq!(start["literal"], "1.0");
+        assert_eq!(start["literal_value"], 1.0);
+        assert_eq!(start["lift"], 1);
+
+        set_param(&session, id, "lifted", "start", "2.0");
+        assert_eq!(
+            text(),
+            "# cicada 1\nlifted = construct_domain(start=each(2.0), end=3.0)\n"
+        );
+        let start = input_view(&session, "lifted", "start");
+        assert_eq!(start["literal"], "2.0");
+        assert_eq!(start["lift"], 1, "the lift survived the typed value");
+        assert_eq!(history_of(&session)["depth"], 1, "one op");
+    }
+
     // The same path for a Boolean and an Integer port, and what the chip
     // reads BEFORE anything is typed: the catalog default as text AND as a
     // value in the port's kind (the macro spells a Boolean default `true`;
