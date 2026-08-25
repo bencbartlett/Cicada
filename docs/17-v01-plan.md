@@ -1003,6 +1003,20 @@ carries a verdict and the wave-4 package that owns it. The order Ben set:
 these first, then the rest of wave 4 (item 5 scrub caching, catalog C2,
 the follow-ups).
 
+**Landed 2026-08-24** (the first wave run under the iteration-speed
+rules — merged per track as each went green: `wt/open` at 2ea353c,
+`wt/launch` at ebf8169, `wt/canvas` at 86b063e; every package implemented,
+adversarially reviewed and fixed on its branch — the per-package closure
+paragraphs are under each contract below; DECISIONS.md row of the date).
+Three things the merges taught, recorded where they bite: a test that
+spells a Windows path as a literal fails on the POSIX runners (two such
+tests, fixed through the function's own `join` / pure paths); the verify
+loops' Playwright step must capture Playwright's exit, not the filter's;
+and the transport spec flaked once in a loaded full-suite run on the dev
+machine (passed 2/2 after) — the wall-scale traces spec is now gated with
+`compute_on_release` behind `CICADA_E2E_HEAVY` so the per-PR smoke never
+runs a wall carve under its timing specs.
+
 | # | Finding (Ben's words, condensed) | Verdict | Package |
 |---|---|---|---|
 | U1 | Which launch commands run every time? `fetch_occt.py` takes long. | Measured: `fetch_occt.py --print-env` is 0.2 s (the warm path verifies 88 libraries by size); what takes minutes is the first fetch and any `cargo run` that rebuilds. Per launch the ONLY need is the kernel's loader path, and the launcher below removes even that (the run-time libraries beside the binary on Windows, the rpath on macOS). | L1–L2 |

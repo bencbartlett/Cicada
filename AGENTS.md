@@ -222,10 +222,12 @@ Python 3 on PATH (or `CICADA_PYTHON`); worker protocol is dependency-free
   Rust 1.98.0 (2026-08-18) turned CI red with a new clippy lint while local
   `stable` was still 1.97.1 (fixed 2026-08-20 — `chunks_exact(N)` with a
   constant → `as_chunks::<N>()`). When CI's Linux fmt·clippy job goes red on
-  a lint you do not see locally, first `rustup update stable` (or install the
-  new version side by side: `rustup toolchain install 1.98.0 --profile
-  minimal --component clippy --component rustfmt` and `rustup run 1.98.0
-  cargo clippy …`) before touching code.
+  a lint you do not see locally, first `rustup update stable` — in a quiet
+  moment, with no builds in flight — before touching code, and never a
+  second toolchain side by side for lints (iteration-speed rule 5: it
+  doubled every compile; the `rustup run 1.98.0` detour of 2026-08-20..24
+  ended when local `stable` became 1.98.0 on 2026-08-24 and the extra
+  toolchain was uninstalled).
 - **PowerShell execution policy blocks `npm`/`npx`** in an interactive PS
   5.1 shell (`npm.ps1 cannot be loaded because running scripts is
   disabled`). Use `npm.cmd` / `npx.cmd`, or once per user:
