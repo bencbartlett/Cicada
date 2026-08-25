@@ -808,9 +808,13 @@ fn esc_parks_the_warming_until_the_next_real_generation() {
     assert!(newest >= 1, "the load's generation was issued");
     // Esc lands while the worker stands between its decision and its solve.
     session.handle(id, None, ClientMessage::Cancel {});
-    // Released, the held position is withheld — no solve — and the worker
-    // parks instead of taking the next position.
-    release.send(()).unwrap();
+    // Released — with releases to spare, so a worker that wrongly walks on
+    // runs to the end and FAILS the assertions below instead of hanging on
+    // the next gate — the held position is withheld (no solve) and the
+    // worker parks instead of taking the next position.
+    for _ in 0..20 {
+        let _ = release.send(());
+    }
     session.wait_scrub();
     let state = session.debug_state(false);
     assert_eq!(state["scrub"]["state"], "parked", "{}", state["scrub"]);
