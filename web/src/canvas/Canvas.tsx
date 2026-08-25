@@ -167,6 +167,18 @@ function CanvasInner() {
     setEdges(buildEdges(graph, state.selection.wire));
   }, [graph, unit]);
 
+  // The cell under the view's centre, for the ribbon's placements (U29):
+  // reported after every pan / zoom end and after the first fit; null
+  // once this canvas is gone.
+  const recordCenter = useCallback(() => {
+    const pane = containerRef.current;
+    if (pane === null) return;
+    const rect = pane.getBoundingClientRect();
+    const p = rf.screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+    useCicada.getState().setCanvasCenter(pxToCell(p.x, p.y, unit));
+  }, [rf, unit]);
+  useEffect(() => () => useCicada.getState().setCanvasCenter(null), []);
+
   // First graph with nodes: frame everything once, readable zoom.
   useEffect(() => {
     if (fitOnce.current || nodes.length === 0) return;
@@ -174,9 +186,9 @@ function CanvasInner() {
     // Next frame: node dimensions are known from the view-model, but React
     // Flow measures on mount.
     requestAnimationFrame(() => {
-      void rf.fitView({ padding: 0.15, maxZoom: 1, minZoom: 0.1 });
+      void rf.fitView({ padding: 0.15, maxZoom: 1, minZoom: 0.1 }).then(recordCenter);
     });
-  }, [nodes.length, rf]);
+  }, [nodes.length, rf, recordCenter]);
 
   // -------------------------------------------- store selection → React Flow
   useEffect(() => {
@@ -684,7 +696,10 @@ function CanvasInner() {
           onEdgeClick={onEdgeClick}
           onNodeContextMenu={onNodeContextMenu}
           onEdgeContextMenu={onEdgeContextMenu}
-          onMoveEnd={() => setMoveTick((t) => t + 1)}
+          onMoveEnd={() => {
+            setMoveTick((t) => t + 1);
+            recordCenter();
+          }}
           onMoveStart={() => setMenu(null)}
           nodesDraggable={writer}
           nodesConnectable={writer}

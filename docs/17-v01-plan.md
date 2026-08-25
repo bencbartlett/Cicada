@@ -2091,6 +2091,96 @@ review).**
   (C2b); docs/08's tier column is updated per row (`area`'s catalog tier,
   `S`, corrected to the doc's `1` on the way).
 
+## Usage findings 2026-08-25 (Ben's second user test) and wave 5
+
+Ben user-tested the wave-4 app on 2026-08-25 and pasted the findings
+below; each carries a verdict and the package that owns it. The small
+ones were fixed the same day in the fast lane (AGENTS.md iteration-speed
+rule 1 — one surface, targeted tests, one commit, no agents); the
+questions were answered with measurements; what is genuinely
+multi-package is the **proposed wave 5** at the end of this section,
+which waits for Ben's confirmation before any contract is frozen.
+
+**Landed 2026-08-25 (fast lane):** two LOD states (U18, U19), the eye
+icon (U20), the wire glow on hover and on a selected node's wires (U21,
+U22), four-significant-figure face values in smaller, fainter text
+(U23a), the timing badge (U25), GH's wire convention (U26), ribbon
+placements at the view's centre (U29) — `web/src/canvas/{grid.ts,
+valueText.ts, CicadaNode.tsx, CicadaEdge.tsx, Canvas.tsx, canvas.css}`,
+`web/src/panels/Ribbon.tsx`, `web/src/state/store.ts`; unit tests beside
+each rule, `web/e2e/visuals.spec.ts` for the tiers and the handles;
+docs/16 §Canvas conventions and docs/09 revised in the same commits,
+DECISIONS.md row of 2026-08-11 (UI contracts) revised for the tiers.
+
+| # | Finding (Ben's words, condensed) | Verdict | Package |
+|---|---|---|---|
+| U15 | Start doing releases; an **About** entry in the settings menu with the exact version and commit hash. | Build. Today the binary knows only `CARGO_PKG_VERSION` (`0.0.1`, every build) and nothing of its commit; there are no tags and no release workflow. The version + commit (+ build date) are stamped at build time (a build script reading `git describe`, `CICADA_GIT_SHA` for CI checkouts), ride `hello` additively, and show in About and in `cicada --version`; a `v*` tag builds the three OS bundles (`tools/launch/bundle.py --out dist/ --check`) and attaches them to a GitHub Release; pre-releases `v0.1.0-alpha.N` from now, `v0.1.0` when the plan's items close. | R1 |
+| U16 | Replace the pop-out button with a three-way toggle — **Split** (today's panes), **Floating** (a resizable, draggable viewport inside the main window), **Window** (picture-in-picture style, not a full browser window with tabs — as a video call's PiP behaves). | Build. Window = the browser's Document Picture-in-Picture window (an always-on-top, chrome-less window the page renders INTO — the same document, the same WebGL scene, no second socket; Chromium ≥ 116, which the `--app` window is) with the wave-4 observer pop-out as the fallback where the API is missing (Firefox/Safari), said in a notice; Floating = an overlay panel over the canvas with a drag handle and a resize corner, its place and size per-user settings; the three are one `viewportMode` setting. docs/16 §Viewport conventions and the DECISIONS row of 2026-08-24 (the observer pop-out) are revised when this lands — the observer window stays as the fallback and for a true second monitor. | V1 |
+| U17 | The collapse toggle should be **part of the node** (a chevron on the face); a collapsed slider's value should be an **editable text field**; the name should not be truncated — shrink the slider track by up to 60 % to fit it, truncate only after that. | Build: the chevron on the expanded face's bottom edge and on the collapsed row (sliders — the one collapsible node — today; the same control carries groups later); the collapsed value is the chip editor (one `set_param` on Enter, Esc cancels, like the literal chips); the row lays out name-first with the track's `flex-shrink` bounded at 60 % of its full width. | N1 |
+| U18 | Zoomed far out you see only the title; zoom in and the title moves to the bar but the arguments are blank; zoom in more and they appear. The latter two should coincide: **either only the title, or the full preview.** | **Done 2026-08-25** (fast lane): the `mid` tier is gone — `lodTier` is `far` (< 0.35) · `near` · `closest` (≥ 1.6, reserved); `showsPortValues` is every tier but `far`; docs/16 LOD table, DECISIONS row revised. | — |
+| U19 | Zoomed far out the port dots shift and the edges no longer meet them. Keep the positions the same across zoom levels. | **Done 2026-08-25** (fast lane): the far tier took the header out of the flow (`position: absolute; inset: 0`), pulling the rows and their handles up a unit; now the header keeps its slot and only the name is lifted over the face. `visuals.spec.ts` compares every handle's place in node units at `near` and `far` (≤ 1 px). | — |
+| U20 | The preview icon should be an **eye**; off = an eye with a slash. | **Done 2026-08-25** (fast lane): an inline SVG (`EyeIcon`, `data-icon="eye" / "eye-off"`). | — |
+| U21 | Make the **hover** effect on an edge far more noticeable — like the selected-edge effect at a slightly lower opacity. | **Done 2026-08-25** (fast lane): the glow path is drawn under every wire; hover shows it at 0.2, the selected wire at 0.32 (`canvas.css`). | — |
+| U22 | Selecting a node highlights all its connected edges with the hover effect. | **Done 2026-08-25** (fast lane): each edge reads one boolean from the store's selection (`attached`) and wears the hover glow. | — |
+| U23 | Nodes should show the values of their **inputs** as well as their outputs at close zoom; numbers (and vectors of numbers) to **4 significant figures** on the node (full in the inspector); value text 30 % smaller and fainter. | **Half done 2026-08-25** (fast lane): `valueText.ts` rounds every decimal on the face to four significant figures (the hover and the inspector keep the server's rendering); the value text is 5.25 px / `--fg-faint`. **Input values → N1**: `inspect` answers outputs only today; the server resolves each wired input to its source output's summary (the view-model knows the wire) and the face shows it beside the port like an output's. | N1 |
+| U24 | Mouseover text boxes should appear ~50 % faster. | Build. The delay is the browser's (native `title` tooltips, ~1 s in Chromium, not configurable), so a tooltip layer of our own: one listener on the document, the hovered element's `title` shown after ~250 ms in a themed box, the attribute parked in `data-title` while hovered so the native one never doubles it, restored on leave — 125 `title=` sites keep working unchanged; the e2e specs that read `title` do so unhovered. | T1 |
+| U25 | Profiling badge: slightly smaller; drop the word "cached" — always the last timing, grey and in parentheses when cached; 3 significant figures in the hover; `ns` below 1 µs. | **Done 2026-08-25** (fast lane): `durationLabel` / `durationTitle` in `grid.ts`; `(1.2ms)` in `--fg-faint` for a memo hit (the entry's recorded cost — the word stays only for an entry that recorded none), `done in 1.24 ms` hovers, `640ns`. | — |
+| U26 | Adopt GH's wire convention: single line = one value, double line = list, thick dashed = tree / nested / complex. | **Done 2026-08-25** (fast lane): `wireStyle(depth)` — single · double (a 4 px stroke with a 1.5 px background core) · thick dashed (depth ≥ 2); docs/09 and docs/16 said "double / hatched" and now say what is drawn. | — |
+| U27 | The ribbon should not be persistent: a **dropdown menu** per tab that closes on a click elsewhere, with **sub-categories** (as GH groups Maths into Operators / Trig / Util …). | Build. The catalog carries the sub-group: `#[node(…, sub = "operators")]` on every node (docs/08's category sections gain their sub-groups; `catalog.json` format 3 `sub`; the conformance test requires it), and the ribbon becomes a **menu bar** — a tab opens a panel whose columns are the sub-groups, closed by an outside click, Esc or a placement; the `ribbonCollapsed` setting goes. A mechanical catalog package (C2c, every node file) and a web package (M1) that can group by category alone until C2c lands. | C2c + M1 |
+| U28 | Icons for every node instead of the two-letter glyphs — not now, but what is a good workflow to mass-generate them? | **Answer** (docs/16 §Icons already names an AI pipeline; this is the workflow): generate SVG *code*, not raster images — a language model writes each icon from a manifest row (`catalog.json`: name, title, category, description, `gh`), a **style contract that is a lint** (24-unit viewBox, stroke-only monoline at 1.75 with round caps and joins, `currentColor` only so the category hue is the CSS's, no text, ≤ 12 elements, no `<style>`/`<image>`/scripts) and five hand-picked exemplars for consistency-by-example, batched and in parallel; a **contact sheet** (one page of all 150 on dark and light, each under its name) is the review surface — accept, or regenerate by name with a one-line note; the icons land at `web/src/icons/<name>.svg` (Vite glob), the face falls back to the glyph when one is missing, and a test holds every catalog node to an icon or an allow-list that must only shrink. Raster models cannot hold one stroke style across 150 glyphs and yield nothing themeable or lintable; GH's own icons are not ours to copy. Cost: minutes of generation, about an hour of looking at the sheet. A track-C package when Ben wants it. | (C3+) |
+| U29 | Clicking a node in the menu should add it at the **centre of the view** — it appeared below the first row, out of sight; the user must get immediate feedback. | **Done 2026-08-25** (fast lane): the canvas reports the cell under its centre to the store after every pan / zoom / fit; the ribbon's `place_node` carries it (`cell`), as search-to-place carries the click's cell. | — |
+| U30 | 09-vectors with 1,000 `sphere`s (instead of `mesh_sphere`): the canvas is sluggish, a placed node appears seconds later, undo/redo are very slow; not with `mesh_sphere`. Canvas editing should be prioritised over solver speed. | **Measured 2026-08-25** — §Measurement U30 / U31 below. | D1 |
+| U31 | With the 1,000 solids the solve reads 56 ms yet the viewport updates over seconds — the profiling is inaccurate, or the preview viewer is slow. | **Measured 2026-08-25** — §Measurement U30 / U31 below. | D1 |
+| U32 | The viewport needs its own profiling indicator — a spinner while the preview is updating. | Build: the server brackets each generation's frames with `display_begin {generation, outputs, bytes}` / `display_end {generation, ms}`; the viewport shows a spinner between them and the time it took after; `/debug/state` carries the same. | D1 |
+| U33 | Replace "solved gen N · 2 computed / 34 cached · 56 ms" with **"Solving gen N"** + a spinner while solving; edits made while a preview is being drawn should cancel the draw (keeping the last rendered one) and start on the newest state — never a queue of states to render. | Build: the chip says `Solving gen N` with a spinner, then `gen N · 56 ms` (the counts move to the profiler); server: a superseded generation's display pass stops at the next output (the frame emission checks the loop's latest-wins token); client: frames of a superseded generation are dropped before decoding (the `display_begin` of the newer one marks them stale) — the viewport stays on the last complete generation until the new one's frames land. | D1 |
+| U34 | A **profiler** button beside the solve chip: the last solve + render aggregated — a ring chart of what took how long and a scrollable table — including the preview / rendering phases, for real benchmarks going forward. | Build: a `profile {generation}` read answering per-node costs (computed: measured `nanos`; cached: the entry's last cost, marked), the server's phases (lowering, solve, display tessellation, frame encode, bytes) and the client's own (decode, GPU upload, first paint) merged in the page; the panel: an SVG ring (no chart dependency) + a sortable table; the same numbers in `/debug/state` for agents. | P1 |
+
+### Measurement U30 / U31 (2026-08-25)
+
+*(being measured on the release engine — this subsection is filled when
+the numbers are in)*
+
+### Wave 5 — PROPOSED (awaiting Ben's confirmation; contracts not yet frozen)
+
+Tracks, by the iteration-speed rules (per-track merges the moment a
+track is green; adversarial review for engine/server/protocol work, one
+review per track for pure UI; agents verify what they touched, the
+orchestrator runs the full suite at each merge; at most three worktrees
+at once — two rounds):
+
+- **Round 1**
+  - **Track D — `wt/display`: D1 display responsiveness + P1 profiler**
+    (server + protocol + web; adversarial review). The fixes §Measurement
+    U30 / U31 supports; the display lifecycle (`display_begin` /
+    `display_end`), latest-wins for the display pass, the solve chip
+    (`Solving gen N` + spinner), the viewport's indicator; the `profile`
+    read + the panel. docs/12 §Display, docs/13 (messages), docs/16
+    §Status and progress language revised; `/debug/state` additive.
+  - **Track N — `wt/face`: N1 node face** (web + a small server addition;
+    one review). The collapse chevron on the face in both states, the
+    editable collapsed value, name-first layout (track shrinks ≤ 60 %),
+    input values on the face (`inspect` answers inputs). docs/16
+    §Canvas conventions §Sliders revised.
+  - **Track M — `wt/menu`: C2c catalog `sub` + M1 menu bar** (catalog +
+    web; the catalog half is mechanical and gets one review, the UI half
+    one review). `#[node(sub)]` over every node file, docs/08 sub-groups,
+    `catalog.json` format 3, the conformance rule; the ribbon as dropdown
+    menus grouped by `sub`. docs/08, docs/14 §node file format, docs/16
+    §Application layout revised; the `add-stdlib-node` skill updated.
+- **Round 2**
+  - **Track V — `wt/viewport`: V1 viewport modes** (web; one review).
+    Split / Floating / Window with Document PiP and the observer
+    fallback. docs/16 §Viewport conventions, DECISIONS row 2026-08-24
+    revised.
+  - **Track A — `wt/about`: R1 releases + About, T1 tooltips** (cli +
+    server + web + CI; R1's server half gets the adversarial pass, the
+    rest one review). The build-time version stamp in `hello` and
+    `--version`, the About entry, `release.yml` on `v*` tags; the tooltip
+    layer.
+
+Out of the wave, answered in place: U28 (the icon workflow — a track-C
+package when wanted).
+
 ## Follow-ups (found by the v0.1 reviews and measurements; scheduled, not yet placed)
 
 - **The kernel's general transform (C2b, 2026-08-24)** — `scale_nu` and

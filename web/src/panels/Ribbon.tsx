@@ -1,8 +1,11 @@
 /**
  * Ribbon (docs/16 §Application layout): the GH tab bar — one tab per docs/08
  * category populated from the JSON catalog; the active tab lists its nodes
- * as buttons; click → `place_node` (the server auto-lays it out).
- * Collapsible to tab names only (`settings.ribbonCollapsed`).
+ * as buttons; click → `place_node` at the cell under the centre of the
+ * canvas view (the canvas keeps it in the store — finding U29: the server's
+ * auto-layout put new nodes below the first row, out of sight; the user
+ * must see what a click did). Collapsible to tab names only
+ * (`settings.ribbonCollapsed`).
  */
 import { useMemo, useState } from "react";
 import { kindColor } from "../kinds";
@@ -17,6 +20,7 @@ export function Ribbon() {
   const updateSettings = useCicada((s) => s.updateSettings);
   const writer = useCicada(canWrite);
   const send = useCicada((s) => s.send);
+  const center = useCicada((s) => s.canvasCenter);
   const [active, setActive] = useState<string | null>(null);
 
   const tabs = useMemo(() => ribbonTabs(catalog?.nodes ?? []), [catalog]);
@@ -28,7 +32,9 @@ export function Ribbon() {
       state.addNotice("warning", `${writeBlockReason(state) ?? "cannot write"} — placing nodes ignored`);
       return;
     }
-    send({ type: "place_node", payload: { func, cell: null } });
+    // The centre of the view when the canvas has reported one; else the
+    // server's auto-layout (no canvas mounted yet).
+    send({ type: "place_node", payload: { func, cell: center } });
   };
 
   return (

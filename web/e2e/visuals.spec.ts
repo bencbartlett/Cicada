@@ -8,8 +8,11 @@
  *     else along the top edge — and it follows the camera: an orbit turns
  *     the axis directions `scene().gimbal` reports (the GIMBAL camera's
  *     pose, `Gimbal.directions()`) AND moves the red pixels' centroid;
- *   - the output value summaries show at the `near` zoom tier, not only
- *     at `closest`, and not at `mid`.
+ *   - the output value summaries show on every tier that shows the face
+ *     (`near`, from zoom 0.35) and not on the title-only `far` tier — two
+ *     visible states, nothing in between (U7, then U18);
+ *   - the port handles sit at the same place on the node at `far` as at
+ *     `near`, so the wires still meet them (U19).
  *
  * Evidence files (the whole page, dark and light, and the viewport's own
  * PNG) land in this test's output dir under `web/test-results/`.
@@ -246,49 +249,100 @@ test("U5 — the gimbal is drawn in the viewport's upper-left and follows the ca
   await setTheme(page, "dark");
 });
 
+const TIER_ORDER = ["far", "near", "closest"] as const;
+type Tier = (typeof TIER_ORDER)[number];
+
 /** Wheel over the canvas until its zoom LOD tier (`data-lod`) is `tier`; throws if it never gets there. */
-async function zoomToTier(page: Page, tier: "mid" | "near"): Promise<void> {
+async function zoomToTier(page: Page, tier: Tier): Promise<void> {
   const canvas = page.locator(".cicada-canvas");
   const pane = page.locator(".react-flow__pane");
   const box = await pane.boundingBox();
   if (box === null) throw new Error("no canvas pane");
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   for (let i = 0; i < 60; i += 1) {
-    const at = await canvas.getAttribute("data-lod");
+    const at = (await canvas.getAttribute("data-lod")) as Tier | null;
     if (at === tier) return;
-    // Small steps (×1.3 per notch) so the near band (0.65 – 1.6) is never
-    // jumped over; `far`/`mid` are below `near`/`closest`.
-    const below = at === "far" || (at === "mid" && tier === "near");
+    // Small steps (×1.3 per notch) so the near band (0.35 – 1.6) is never
+    // jumped over.
+    const below = at !== null && TIER_ORDER.indexOf(at) < TIER_ORDER.indexOf(tier);
     await page.mouse.wheel(0, below ? -190 : 190);
   }
   throw new Error(`the canvas never reached the ${tier} zoom tier (at ${await canvas.getAttribute("data-lod")})`);
 }
 
-test("U7 — output value summaries show at the near tier, not at mid", async ({ page }, testInfo) => {
+/** The canvas zoom factor, read off React Flow's viewport transform. */
+async function canvasZoom(page: Page): Promise<number> {
+  const zoom = await page.evaluate(() => {
+    const viewport = document.querySelector(".react-flow__viewport") as HTMLElement | null;
+    const match = /scale\(([\d.]+)\)/.exec(viewport?.style.transform ?? "");
+    return match === null ? null : Number(match[1]);
+  });
+  if (zoom === null) throw new Error("no canvas zoom");
+  return zoom;
+}
+
+/**
+ * Every port handle's centre in NODE units (canvas px at zoom 1, relative
+ * to its node's top-left), keyed by `node.port` — the places the wires are
+ * drawn to. Read at one tier and compared at another.
+ */
+async function handlePlaces(page: Page): Promise<Record<string, [number, number]>> {
+  const zoom = await canvasZoom(page);
+  return page.evaluate((z) => {
+    const out: Record<string, [number, number]> = {};
+    for (const node of Array.from(document.querySelectorAll(".cn[data-node]")) as HTMLElement[]) {
+      const box = node.getBoundingClientRect();
+      for (const handle of Array.from(node.querySelectorAll(".react-flow__handle")) as HTMLElement[]) {
+        const h = handle.getBoundingClientRect();
+        const key = `${node.dataset.node}.${handle.dataset.handleid ?? handle.dataset.port ?? "?"}.${handle.classList.contains("source") ? "out" : "in"}`;
+        out[key] = [
+          Math.round(((h.left + h.width / 2 - box.left) / z) * 10) / 10,
+          Math.round(((h.top + h.height / 2 - box.top) / z) * 10) / 10,
+        ];
+      }
+    }
+    return out;
+  }, zoom);
+}
+
+test("U7 · U18 · U19 — the face shows its values from the first full tier; the title-only tier keeps the handles in place", async ({
+  page,
+}, testInfo) => {
   await open(page);
   // Every binding solved (the summaries are fetched for solved nodes only).
   const state = await page.request.get(`/debug/state?token=${TOKEN}&pipeline=${PIPELINE}&wait=true`);
   expect(state.ok()).toBeTruthy();
 
-  await zoomToTier(page, "mid");
-  await expect(page.locator(".cn-port-value")).toHaveCount(0);
-
+  // The full face, with its values, at the near tier …
   await zoomToTier(page, "near");
   const values = page.locator(".cn-port-value");
   await expect.poll(async () => values.count()).toBeGreaterThan(0);
   // The summaries arrive (an `inspect` per visible solved node): at least
   // one shows a value, not the `—` placeholder.
   await expect.poll(async () => (await values.allTextContents()).filter((t) => t !== "—").length).toBeGreaterThan(0);
-  const zoom = await page.evaluate(() => {
-    const viewport = document.querySelector(".react-flow__viewport") as HTMLElement | null;
-    const match = /scale\(([\d.]+)\)/.exec(viewport?.style.transform ?? "");
-    return match === null ? null : Number(match[1]);
-  });
-  expect(zoom, "the canvas zoom is inside the near band").not.toBeNull();
-  expect(zoom!).toBeGreaterThanOrEqual(0.65);
-  expect(zoom!).toBeLessThan(1.6);
+  const nearZoom = await canvasZoom(page);
+  expect(nearZoom, "the canvas zoom is inside the near band").toBeGreaterThanOrEqual(0.35);
+  expect(nearZoom).toBeLessThan(1.6);
+  await expect(page.locator(".cn-port-label").first()).toBeVisible();
   await evidence(page, testInfo, "values-at-near.png");
+  const atNear = await handlePlaces(page);
+  expect(Object.keys(atNear).length).toBeGreaterThan(4);
 
-  await zoomToTier(page, "mid");
+  // … and the title alone at far: no values, no labels — and every handle
+  // exactly where it was, in node units, so the wires still meet the dots.
+  await zoomToTier(page, "far");
   await expect(page.locator(".cn-port-value")).toHaveCount(0);
+  await expect(page.locator(".cn-port-label").first()).toBeHidden();
+  await evidence(page, testInfo, "title-only-at-far.png");
+  const atFar = await handlePlaces(page);
+  expect(Object.keys(atFar).sort()).toEqual(Object.keys(atNear).sort());
+  for (const [key, [x, y]] of Object.entries(atNear)) {
+    const [fx, fy] = atFar[key]!;
+    expect(Math.abs(fx - x), `${key} x moved between tiers`).toBeLessThanOrEqual(1);
+    expect(Math.abs(fy - y), `${key} y moved between tiers`).toBeLessThanOrEqual(1);
+  }
+
+  // Back to the face: the values return at once (nothing in between).
+  await zoomToTier(page, "near");
+  await expect.poll(async () => values.count()).toBeGreaterThan(0);
 });

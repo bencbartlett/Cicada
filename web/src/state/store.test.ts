@@ -745,3 +745,18 @@ describe("resetSession (File → Open / Recent / Close, Back)", () => {
     expect(useCicada.getState().hello).toBeNull();
   });
 });
+
+describe("the canvas centre (U29)", () => {
+  it("is recorded by the canvas, unchanged by an equal cell, cleared with null", () => {
+    useCicada.setState({ canvasCenter: null });
+    useCicada.getState().setCanvasCenter([3, -2]);
+    expect(useCicada.getState().canvasCenter).toEqual([3, -2]);
+    const held = useCicada.getState().canvasCenter;
+    useCicada.getState().setCanvasCenter([3, -2]);
+    expect(useCicada.getState().canvasCenter).toBe(held);
+    useCicada.getState().setCanvasCenter([4, -2]);
+    expect(useCicada.getState().canvasCenter).toEqual([4, -2]);
+    useCicada.getState().setCanvasCenter(null);
+    expect(useCicada.getState().canvasCenter).toBeNull();
+  });
+});

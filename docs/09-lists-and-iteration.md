@@ -63,8 +63,8 @@ failures:
 
 - **Types carry depth.** `T`, `[T]`, `[[T]]` are distinct wire types.
   Wire styling keeps GH's familiar convention — single line for a
-  scalar, double for a list, hatched (with a depth number) for nested —
-  but backed by the checker instead of vibes.
+  scalar, double for a list, thick dashed for nested (a tree; the depth
+  is in the wire's hover) — but backed by the checker instead of vibes.
 - **Levels may be named** (axes, doc 02): `parts: Solid` means "one
   Solid per part." Naming is optional for quick work and encouraged for
   long pipelines; cross-axis mistakes become type errors.

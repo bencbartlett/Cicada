@@ -353,6 +353,14 @@ export interface CicadaState {
   commitDialog: boolean;
   /** File → Open…: the dialog over `GET /api/files` (docs/16 §Application layout). */
   fileDialog: boolean;
+  /**
+   * The grid cell under the centre of the canvas view (finding U29,
+   * 2026-08-25): written by the canvas after every pan / zoom / fit, null
+   * while no canvas is mounted; the ribbon places its nodes there, so a
+   * click lands where the user is looking instead of wherever the server's
+   * auto-layout has room.
+   */
+  canvasCenter: [number, number] | null;
 
   // ---- actions
   /** Installed by the connection module. */
@@ -418,6 +426,8 @@ export interface CicadaState {
   updateSettings: (patch: Partial<Settings>) => void;
   openSearch: (anchor: { x: number; y: number; cell: [number, number] | null; from: WireEnd | null }) => void;
   closeSearch: () => void;
+  /** The canvas reports the cell under its view's centre (null on unmount). */
+  setCanvasCenter: (cell: [number, number] | null) => void;
   clearRunNotice: () => void;
   /**
    * A status read answered: replace the cache (a byte-identical answer —
@@ -484,6 +494,7 @@ export const useCicada = create<CicadaState>((set, get) => ({
   runNotice: null,
   commitDialog: false,
   fileDialog: false,
+  canvasCenter: null,
 
   send: (message) => {
     console.warn("cicada: no connection yet — dropped", message.type);
@@ -853,6 +864,12 @@ export const useCicada = create<CicadaState>((set, get) => ({
 
   openSearch: (anchor) => set({ search: anchor }),
   closeSearch: () => set({ search: null }),
+  setCanvasCenter: (cell) => {
+    // An equal cell is not a change: every pan end reports, few move the cell.
+    const now = get().canvasCenter;
+    if (now === cell || (now !== null && cell !== null && now[0] === cell[0] && now[1] === cell[1])) return;
+    set({ canvasCenter: cell });
+  },
   clearRunNotice: () => set({ runNotice: null }),
 
   setGitStatus: (status, asOf) =>

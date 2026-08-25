@@ -51,26 +51,32 @@ export function snapToStep(x: number, min: number, step: number): number {
   return Number((min + k * step).toFixed(Math.min(20, decimals)));
 }
 
-/** Zoom LOD tiers (docs/16 §Canvas conventions: far · mid · near · closest). */
-export type LodTier = "far" | "mid" | "near" | "closest";
+/**
+ * Zoom LOD tiers (docs/16 §Canvas conventions: far · near · closest). Two
+ * VISIBLE states only — `far` is the title alone over the box, everything
+ * else is the full face (labels, literals, values); a node never shows its
+ * header bar with blank port rows (Ben's second user test, U18, 2026-08-25:
+ * the old `mid` tier was exactly that in-between state). `closest` draws
+ * the same face and stays reserved for the thumbnails and deeper widgets.
+ */
+export type LodTier = "far" | "near" | "closest";
 
 /** The tier of a canvas zoom factor; the thresholds are the docs/16 LOD table's. */
 export function lodTier(zoom: number): LodTier {
   if (zoom < 0.35) return "far";
-  if (zoom < 0.65) return "mid";
   if (zoom < 1.6) return "near";
   return "closest";
 }
 
 /**
- * Whether a tier shows the output value summaries (docs/16 LOD table): from
- * `near` (zoom ≥ 0.65) up — one tier earlier than the original design's
- * `closest`, since Ben's first user test (U7, 2026-08-24: the previews
- * needed too much zoom). ONE rule for the node face (which renders them)
- * and the canvas (which fetches them with `inspect`).
+ * Whether a tier shows the output value summaries (docs/16 LOD table): on
+ * every tier that shows the face — the title-only `far` tier is the one
+ * that does not (U7 moved them from `closest` to `near`, 2026-08-24; U18
+ * folded `mid` into `near`, 2026-08-25). ONE rule for the node face (which
+ * renders them) and the canvas (which fetches them with `inspect`).
  */
 export function showsPortValues(tier: LodTier): boolean {
-  return tier === "near" || tier === "closest";
+  return tier !== "far";
 }
 
 /** One search-to-place hit: the catalog node plus the ports a probed wire could land on. */
@@ -260,12 +266,36 @@ export interface Badge {
   title: string;
 }
 
-function ms(nanos: number): string {
+/**
+ * The badge's compact duration: `640ns` · `5µs` · `1.2ms` · `43ms` · `2.3s`
+ * (finding U25, 2026-08-25: below a microsecond the unit is nanoseconds,
+ * never `0µs`).
+ */
+export function durationLabel(nanos: number): string {
+  if (nanos < 1e3) return `${Math.round(nanos)}ns`;
   const v = nanos / 1e6;
   if (v < 0.1) return `${(nanos / 1e3).toFixed(0)}µs`;
   if (v < 10) return `${v.toFixed(1)}ms`;
   if (v < 1000) return `${v.toFixed(0)}ms`;
   return `${(v / 1000).toFixed(1)}s`;
+}
+
+/**
+ * The hover's duration: THREE significant figures in the unit that puts
+ * the number in [1, 1000) — `640 ns`, `4.80 µs`, `1.24 ms`, `43.9 s`
+ * (finding U25). Whole seconds from 1000 s up (no exponent on a hover).
+ */
+export function durationTitle(nanos: number): string {
+  if (nanos >= 1e12) return `${Math.round(nanos / 1e9)} s`;
+  const units: [number, string][] = [
+    [1e9, "s"],
+    [1e6, "ms"],
+    [1e3, "µs"],
+  ];
+  for (const [scale, unit] of units) {
+    if (nanos >= scale) return `${(nanos / scale).toPrecision(3)} ${unit}`;
+  }
+  return `${nanos.toPrecision(3)} ns`;
 }
 
 export function statusBadge(status: NodeStatus | undefined, diagnostics: number): Badge {
@@ -276,8 +306,16 @@ export function statusBadge(status: NodeStatus | undefined, diagnostics: number)
     case "cached": {
       // The memo entry's recorded cost: what the LAST compute of this key
       // took, never this generation's cache read (docs/13 §Solve streaming).
-      const last = status.nanos !== undefined ? ` (last compute ${ms(status.nanos)})` : "";
-      return { label: "cached", className: "state-cached", title: `cached — result reused${last}` };
+      // The face shows that time in parentheses (grey, by the class) — the
+      // word "cached" only when the entry recorded no cost (U25).
+      if (status.nanos === undefined) {
+        return { label: "cached", className: "state-cached", title: "cached — result reused" };
+      }
+      return {
+        label: `(${durationLabel(status.nanos)})`,
+        className: "state-cached",
+        title: `cached — result reused; the last compute took ${durationTitle(status.nanos)}`,
+      };
     }
     case "queued":
       return { label: "queued", className: "state-queued", title: "queued" };
@@ -298,8 +336,12 @@ export function statusBadge(status: NodeStatus | undefined, diagnostics: number)
       };
     }
     case "done": {
-      const time = status.nanos !== undefined ? ms(status.nanos) : "";
-      return { label: time || "done", className: "state-done", title: `done${time ? ` in ${time}` : ""}` };
+      if (status.nanos === undefined) return { label: "done", className: "state-done", title: "done" };
+      return {
+        label: durationLabel(status.nanos),
+        className: "state-done",
+        title: `done in ${durationTitle(status.nanos)}`,
+      };
     }
     case "red": {
       const count = Math.max(diagnostics, 1);
@@ -324,11 +366,26 @@ export function firstLine(text: string): string {
   return line.length > 60 ? `${line.slice(0, 57)}…` : line;
 }
 
-/** Wire stroke width by list depth (docs/09: single / double / hatched). */
+/**
+ * The GH wire convention (docs/09; finding U26, 2026-08-25): a single line
+ * for one value, a DOUBLE line for a list, a thick DASHED line for a tree
+ * (depth ≥ 2 — nested lists, and every deeper structure).
+ */
+export type WireStyle = "single" | "double" | "dashed";
+
+export function wireStyle(depth: number): WireStyle {
+  if (depth <= 0) return "single";
+  if (depth === 1) return "double";
+  return "dashed";
+}
+
+/**
+ * Wire stroke width by list depth: the double line is drawn as one 4 px
+ * stroke with a 1.5 px core in the canvas background (two 1.25 px lines);
+ * the tree's dashes are the same 4 px.
+ */
 export function wireStrokeWidth(depth: number): number {
-  if (depth <= 0) return 1.5;
-  if (depth === 1) return 2.5;
-  return 4;
+  return depth <= 0 ? 1.5 : 4;
 }
 
 /** Whether a rendered base type expects a refinement (`Closed<Curve>`, `Watertight<Mesh>`). */

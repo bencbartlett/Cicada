@@ -210,7 +210,7 @@
 }
 
 .cn-state {
-  font-size: 9px;
+  font-size: 8px;
   line-height: 14px;
   padding: 0 4px;
   border-radius: 999px;
@@ -225,8 +225,9 @@
 .cn-state.state-done {
   color: var(--ok);
 }
+/* the memo's last compute time, grey and in parentheses (U25) */
 .cn-state.state-cached {
-  color: var(--cached);
+  color: var(--fg-faint);
 }
 .cn-state.state-running,
 .cn-state.state-queued {
@@ -248,12 +249,18 @@
 .cn-eye {
   all: unset;
   cursor: pointer;
-  font-size: 12px;
-  line-height: 14px;
-  width: 16px;
-  text-align: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 14px;
   color: var(--fg-faint);
   border-radius: 3px;
+}
+.cn-eye svg {
+  display: block;
+  width: 14px;
+  height: 14px;
 }
 .cn-eye:hover {
   color: var(--fg);
@@ -466,8 +473,7 @@
   outline: none;
 }
 
-.cicada-canvas[data-lod="far"] .cn-literal-chip,
-.cicada-canvas[data-lod="mid"] .cn-literal-chip {
+.cicada-canvas[data-lod="far"] .cn-literal-chip {
   visibility: hidden;
 }
 
@@ -516,8 +522,7 @@
   accent-color: var(--accent);
 }
 
-.cicada-canvas[data-lod="far"] .cn-literal-edit,
-.cicada-canvas[data-lod="mid"] .cn-literal-edit {
+.cicada-canvas[data-lod="far"] .cn-literal-edit {
   visibility: hidden;
 }
 
@@ -840,10 +845,11 @@
   line-height: 10px;
 }
 
+/* 30 % smaller and fainter than the port labels (U23): present, not loud */
 .cn .cn-port-value {
-  font-size: 7.5px;
-  line-height: 9px;
-  color: var(--fg-dim);
+  font-size: 5.25px;
+  line-height: 7px;
+  color: var(--fg-faint);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -905,25 +911,37 @@
   visibility: hidden;
 }
 
+/* The header keeps its one-unit slot (the port rows below it — and the
+   handles the wires are drawn to — must sit exactly where they sit at every
+   other tier, U19); it just stops looking like a bar. Only the name is
+   lifted out, centred over the whole face. */
 .cicada-canvas[data-lod="far"] .cn-header {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  height: auto;
-  border-bottom: none;
+  border-bottom-color: transparent;
   background: transparent;
-  justify-content: center;
-  padding: 0 4px;
   pointer-events: none;
 }
 
+.cicada-canvas[data-lod="far"] .cn-glyph {
+  display: none;
+}
+
 .cicada-canvas[data-lod="far"] .cn-name {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
+  text-align: center;
   font-size: 28px;
+  line-height: 1.1;
   letter-spacing: -0.02em;
   min-width: 0;
-  max-width: 100%;
+  max-width: none;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 .cicada-canvas[data-lod="far"] .cn-rows .cn-port {
@@ -932,22 +950,6 @@
 
 .cicada-canvas[data-lod="far"] .react-flow__handle {
   opacity: 0.6;
-}
-
-.cicada-canvas[data-lod="mid"] .cn-port-label,
-.cicada-canvas[data-lod="mid"] .cn-literal,
-.cicada-canvas[data-lod="mid"] .cn-note,
-.cicada-canvas[data-lod="mid"] .cn-widget-kind {
-  visibility: hidden;
-}
-
-/* the slider's number stays readable at mid zoom (probe friction) */
-.cicada-canvas[data-lod="mid"] .cn-widget-value {
-  font-size: 13px;
-}
-
-.cicada-canvas[data-lod="mid"] .cn-name {
-  font-size: 15px;
 }
 
 /* blocked-port reason during a wire drag (title tooltips do not show while
@@ -997,16 +999,32 @@
   stroke-linejoin: round;
 }
 
+/* The glow is drawn under every wire and shown by state: hover and a
+   selected node's attached wires at a lower opacity, the selected wire
+   itself at the full one (U21, U22). */
 .cicada-edge-glow {
   fill: none;
-  opacity: 0.28;
+  opacity: 0;
   stroke-linecap: round;
   stroke-linejoin: round;
+  pointer-events: none;
+  transition: opacity 80ms ease;
 }
 
-.cicada-edge-hatch {
+.cicada-edge:hover .cicada-edge-glow,
+.cicada-edge.attached .cicada-edge-glow {
+  opacity: 0.2;
+}
+
+.cicada-edge.selected .cicada-edge-glow {
+  opacity: 0.32;
+}
+
+/* the double wire's core: the canvas background between the two lines */
+.cicada-edge-core {
   fill: none;
   stroke: var(--bg);
+  stroke-linecap: round;
   stroke-linejoin: round;
   pointer-events: none;
 }
@@ -1017,10 +1035,6 @@
   stroke-dasharray: 3 5;
   opacity: 0.7;
   pointer-events: none;
-}
-
-.cicada-edge:hover .react-flow__edge-path {
-  filter: brightness(1.25);
 }
 
 .cicada-edge-chip {

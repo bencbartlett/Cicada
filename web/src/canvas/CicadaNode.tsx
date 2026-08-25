@@ -48,6 +48,7 @@ import { LiteralChip } from "./LiteralChip";
 import { chipFace } from "./literalFace";
 import { useLodTier } from "./lod";
 import { ParamWidget } from "./ParamWidget";
+import { compactValueText } from "./valueText";
 
 /** `node.port` of the output a wire is currently being dragged from (null = no drag). */
 function useDragSource(): string | null {
@@ -249,10 +250,12 @@ function OutputRow({
   const tag = output.displayable ? " (displayable)" : "";
   const valueLine = shown ? `\n${summaryText(value)}` : "";
   const title = portTitle(output.name, type, doc) + tag + valueLine;
+  // The face rounds every decimal to four significant figures (U23); the
+  // hover above and the inspector keep the full value.
   return (
     <div className={`cn-port cn-out${shown ? " with-value" : ""}`} title={title}>
       <span className="cn-port-label">{output.name}</span>
-      {shown && <span className="cn-port-value mono">{summaryText(value)}</span>}
+      {shown && <span className="cn-port-value mono">{compactValueText(summaryText(value))}</span>}
       <Handle
         type="source"
         position={Position.Right}
@@ -530,7 +533,7 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
               aria-pressed={view.preview}
               data-testid={`eye-${name}`}
             >
-              {view.preview ? "◉" : "◌"}
+              <EyeIcon off={!view.preview} />
             </button>
           )}
           <span className={`cn-state ${badge.className}`} title={badge.title} data-testid={`state-${name}`}>
@@ -593,6 +596,33 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
 }
 
 export const CicadaNode = memo(CicadaNodeImpl);
+
+/**
+ * The preview toggle's icon (finding U20, 2026-08-25): an eye while the
+ * output is drawn, the same eye with a slash across it while it is hidden —
+ * drawn here as two strokes and a circle, theme-coloured through
+ * `currentColor`. `data-icon` names the state for tests and tooling.
+ */
+function EyeIcon({ off }: { off: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      data-icon={off ? "eye-off" : "eye"}
+    >
+      <path d="M2 12c2.6-4 6-6 10-6s7.4 2 10 6c-2.6 4-6 6-10 6S4.6 16 2 12z" />
+      <circle cx="12" cy="12" r="3" />
+      {off && <path d="M4 4l16 16" />}
+    </svg>
+  );
+}
 
 /** The spike's fallback glyph (docs/16 §Icons): two letters on the node's
  * output kind hue — the generated icon set lands with the v0.1 catalog. */

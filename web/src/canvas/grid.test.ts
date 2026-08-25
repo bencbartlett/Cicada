@@ -20,6 +20,9 @@ import {
   stepDecimals,
   transportDrivenSignal,
   wireStrokeWidth,
+  wireStyle,
+  durationLabel,
+  durationTitle,
 } from "./grid";
 
 describe("grid maths", () => {
@@ -75,28 +78,25 @@ describe("sliderStep", () => {
 });
 
 describe("lodTier", () => {
-  it("has four monotone tiers", () => {
+  it("has three monotone tiers — and no in-between state (U18)", () => {
     expect(lodTier(0.2)).toBe("far");
-    expect(lodTier(0.5)).toBe("mid");
+    expect(lodTier(0.5)).toBe("near");
     expect(lodTier(1)).toBe("near");
     expect(lodTier(2)).toBe("closest");
   });
-  it("flips at the docs/16 table's thresholds — 0.35 · 0.65 · 1.6, each inclusive upward", () => {
+  it("flips at the docs/16 table's thresholds — 0.35 · 1.6, each inclusive upward", () => {
     expect(lodTier(0.3499)).toBe("far");
-    expect(lodTier(0.35)).toBe("mid");
-    expect(lodTier(0.6499)).toBe("mid");
-    expect(lodTier(0.65)).toBe("near");
+    expect(lodTier(0.35)).toBe("near");
     expect(lodTier(1.5999)).toBe("near");
     expect(lodTier(1.6)).toBe("closest");
   });
-  it("shows the output value summaries from near up (U7: one tier earlier than closest)", () => {
+  it("shows the output value summaries on every tier that shows the face (U7, then U18)", () => {
     expect(showsPortValues("far")).toBe(false);
-    expect(showsPortValues("mid")).toBe(false);
     expect(showsPortValues("near")).toBe(true);
     expect(showsPortValues("closest")).toBe(true);
-    // The zoom that first shows them is the near tier's floor.
-    expect(showsPortValues(lodTier(0.65))).toBe(true);
-    expect(showsPortValues(lodTier(0.64))).toBe(false);
+    // The zoom that first shows them is the face's floor: title-only below it.
+    expect(showsPortValues(lodTier(0.35))).toBe(true);
+    expect(showsPortValues(lodTier(0.34))).toBe(false);
   });
 });
 
@@ -312,15 +312,39 @@ describe("port docs from the catalog", () => {
   });
 });
 
+describe("durations (U25)", () => {
+  it("labels compactly, in nanoseconds below a microsecond", () => {
+    expect(durationLabel(640)).toBe("640ns");
+    expect(durationLabel(4_800)).toBe("5µs");
+    expect(durationLabel(1_237_600)).toBe("1.2ms");
+    expect(durationLabel(43_000_000)).toBe("43ms");
+    expect(durationLabel(2_300_000_000)).toBe("2.3s");
+  });
+  it("titles with three significant figures in the unit that fits", () => {
+    expect(durationTitle(640)).toBe("640 ns");
+    expect(durationTitle(4_800)).toBe("4.80 µs");
+    expect(durationTitle(1_237_600)).toBe("1.24 ms");
+    expect(durationTitle(43_900_000_000)).toBe("43.9 s");
+    expect(durationTitle(1_234_000_000_000)).toBe("1234 s");
+  });
+});
+
 describe("statusBadge", () => {
   it("speaks the docs/16 vocabulary", () => {
     expect(statusBadge(undefined, 0).label).toBe("idle");
-    expect(statusBadge({ state: "done", generation: 1, nanos: 1_237_600 }, 0).label).toBe("1.2ms");
+    const done = statusBadge({ state: "done", generation: 1, nanos: 1_237_600 }, 0);
+    expect(done.label).toBe("1.2ms");
+    expect(done.title).toBe("done in 1.24 ms");
     expect(statusBadge({ state: "done", generation: 1, nanos: 4_800 }, 0).label).toBe("5µs");
-    // A cached node's nanos are its LAST compute's (memo entry), said so in the title.
+    expect(statusBadge({ state: "done", generation: 1, nanos: 640 }, 0).label).toBe("640ns");
+    // A cached node shows its LAST compute's time (the memo entry's cost) in
+    // parentheses — the class greys it — and says so in the title (U25).
     const cached = statusBadge({ state: "cached", generation: 2, nanos: 43_900_000_000 }, 0);
-    expect(cached.label).toBe("cached");
-    expect(cached.title).toBe("cached — result reused (last compute 43.9s)");
+    expect(cached.label).toBe("(43.9s)");
+    expect(cached.className).toBe("state-cached");
+    expect(cached.title).toBe("cached — result reused; the last compute took 43.9 s");
+    // An entry that recorded no cost has nothing to show but the word.
+    expect(statusBadge({ state: "cached", generation: 2 }, 0).label).toBe("cached");
     expect(statusBadge({ state: "cached", generation: 2 }, 0).title).toBe("cached — result reused");
     expect(statusBadge({ state: "running", generation: 1, elements_done: 3, elements: 12 }, 0).label).toBe(
       "25%",
@@ -337,9 +361,13 @@ describe("misc", () => {
     expect(firstLine("a\nb")).toBe("a");
     expect(firstLine("x".repeat(80))).toHaveLength(58);
   });
-  it("wire widths grow with depth", () => {
+  it("wires follow the GH convention: single, double, thick dashed (U26)", () => {
+    expect(wireStyle(0)).toBe("single");
+    expect(wireStyle(1)).toBe("double");
+    expect(wireStyle(2)).toBe("dashed");
+    expect(wireStyle(5)).toBe("dashed");
     expect(wireStrokeWidth(0)).toBeLessThan(wireStrokeWidth(1));
-    expect(wireStrokeWidth(1)).toBeLessThan(wireStrokeWidth(2));
+    expect(wireStrokeWidth(1)).toBe(wireStrokeWidth(2));
   });
   it("detects refinements", () => {
     expect(isRefinement("Watertight<Mesh>")).toBe(true);
