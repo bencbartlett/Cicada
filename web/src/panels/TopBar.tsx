@@ -14,6 +14,7 @@ import {
   type SplitPreset,
   type WireMode,
 } from "../state/store";
+import { FileMenu } from "./FileMenu";
 import { basename, summaryText, withStatusCounts } from "./format";
 import { gitChip } from "./gitFormat";
 import { useInspectorTab } from "./inspectorTab";
@@ -51,6 +52,7 @@ export function TopBar() {
   return (
     <header className="topbar" data-testid="topbar">
       <span className="tb-brand">Cicada</span>
+      <FileMenu />
       <span className="tb-item" title={hello?.project ?? "project"}>
         <span className="faint">project</span>
         <span className="mono" data-testid="tb-project">

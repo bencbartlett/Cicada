@@ -1042,6 +1042,70 @@ canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
   documented in docs/13 §HTTP surface; route tests for the shape and for
   every escape. The server still binds 127.0.0.1 only, and the list
   reveals nothing above the root.
+  *Built 2026-08-24 (`wt/open`: `cicada_cli::serve::resolve_root` — the
+  function `cicada app` calls — `cicada_server::files`, `GET
+  /api/files`, `tests/root_and_files.rs`).* What the contract did not
+  foresee, each the smaller honest deviation: (1) the watcher no longer
+  watches the root recursively — it watches each open pipeline's
+  directory and its `scripts/`, non-recursively, and a `scripts/` that
+  appears later is watched from its arrival (a recursive watch over a
+  home directory exhausts inotify and floods every backend; docs/13
+  §External changes revised, the watcher driven by a route test over a
+  subdirectory pipeline). (2) Two refusals beyond the contract's two: a
+  `dir` that does not exist, or names a file, is `404 not_found` (403
+  for a missing directory would be false); and besides dot-directories /
+  `node_modules` / `target`, directories the OS marks hidden are not
+  listed (a Windows home directory carries a dozen hidden junctions —
+  `Application Data`, `Cookies`, … — that Explorer hides and nobody can
+  enter). (3) A symlink whose canonical path leaves the root is refused
+  as the contract says AND not listed — what the picker shows must be
+  enterable — and so is a link the server cannot follow at all (dangling,
+  or its target unreadable to it); hidden directories and links are
+  dropped before anything follows them, so one odd reparse point under a
+  home root cannot fail the whole listing. Found, not fixed (follow-ups,
+  not in O1's contract):
+  relative exporter paths resolve against the server's cwd = the ROOT —
+  under a home root, the home directory — while `cicada run` resolves
+  against the pipeline's directory (the two agree only for a pipeline at
+  the root; pre-existing for any served directory); the git handle is
+  rooted at the root, so a pipeline inside a repository under a home
+  root reads `not_a_repo`; and `GET /api/project` still walks the root
+  to depth 4, which over a home root is slow and lists every `.cic`
+  within reach — O2's picker must use `/api/files`, and the landing page
+  should stop calling `/api/project` for the list.
+  *Review closure (2026-08-24).* The adversarial review's mutation runs
+  found the listing and the root resolution tight and the watcher
+  rewrite under-proved: the route test's third step passed with the
+  late re-watch made a no-op (its snapshot came from step 2's burst —
+  how many snapshots one burst yields is timing-dependent, one or two
+  80 ms coalescing windows) and a `scripts/` present at open — the
+  wall's shape — had no test at all. Fixed: `/debug/state` carries
+  `watched` (the server's watched directories, root-relative), the
+  watcher tests are state-based (a content-only script rewrite changes a
+  node's title, which the catalog shows only once a rescan has read it —
+  no snapshot counting, no drain, no sleep), the late watch is asserted
+  on the watched set AND on the rewrite, and a scripts-at-open test
+  exists; both fail under their mutations now. Minors closed: a name the
+  file system cannot hold (`a?b` on Windows) or a path through a file is
+  404 `not_found` on every OS, not 403 (`ErrorKind::InvalidFilename` /
+  `NotADirectory` → not found); `/api/project`'s walk and the listing
+  share ONE skip predicate (`files::skipped_directory` — dot-names,
+  `node_modules` / `target`, OS-hidden), so they never disagree about
+  what a root contains — NOT a speed fix: measured over this home root
+  the walk still takes 1.4 s for 24 pipelines, 16 of them scratch copies
+  under `AppData`, which this profile does not mark hidden (a default
+  Windows profile does; `attrib` checked), so both the listing and the
+  walk include it — the picker must read `/api/files` and never
+  `/api/project`, as already recorded; unlisted is documented as not
+  unenterable (the root is the boundary; route-tested); `cicada serve Upper.CIC` resolves like the list and
+  `?pipeline=` accept it; a `scripts/` the watcher cannot re-watch is a
+  `warning` notice to the session (`Session::notify_warning`) besides
+  the console line. Declined: a duplicate `?dir=` is axum's plain-text
+  400 like every route's query rejection (one typed body for one route's
+  malformed query is not worth the surface); the landing page still
+  walks `/api/project` — O2 replaces it in this worktree before the
+  track merges; d6fc6cb's recursive root watch stays in history
+  (0541033 removes it; squash on merge if a bisectable history matters).
 - **O2 — File → Open / Recent / Close.** The top bar gains a File menu:
   Open… (a dialog over `/api/files` with breadcrumbs, directories and
   pipelines, keyboard navigation; Enter / double-click opens), Recent
@@ -1055,6 +1119,80 @@ canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
   `web/e2e/files.spec.ts` (the scratch `examples/` tree lists; opening
   `02-solids.cic` then `06-lists.cic` shows each graph; Recent holds
   both; Close shows the picker).
+  *Built 2026-08-24 (`wt/open`).* The URL is the route
+  (`web/src/state/route.ts`: `parseRoute` / `routeSearch` / `popoutUrl`,
+  the `useRoute` store, `installRouting(window, syncConnection)` in
+  `main.tsx`, `openPipeline` / `closePipeline` = one `history.pushState`
+  + a route change; `popstate` follows the URL); the connection follows
+  the route (`connection.ts`: `syncConnection` → `startConnection` /
+  `stopConnection`, one socket at a time, the same route a no-op; the
+  store's `resetSession` clears every pipeline-bound slice and bumps
+  `displayResets` so the viewport's ledger empties before the next
+  join's `display_reset`); `Root.tsx` picks the screen. The picker
+  (`Landing.tsx`) and the dialog (`OpenDialog.tsx`) share
+  `FileBrowser.tsx` over `protocol/files.ts` (the typed `GET /api/files`
+  client); `FileMenu.tsx` sits left of the project name; Recent is
+  `state/recent.ts` (remembered on the `hello`, `cicada.recent.v1`).
+  Tests: vitest for the route, the recent list, the files client, the
+  pure path/cursor helpers, the browser component (jsdom: keyboard walk,
+  Backspace, double-click, a refused listing, a stale answer), the
+  store's reset, and the connection's route following (a fake socket:
+  one socket per pipeline, the switch closes the first and resets the
+  store, the picker leaves none, an abandoned socket's late close says
+  nothing); `web/e2e/files.spec.ts` as the contract names it, plus Back
+  / Forward, the Recent entry, `localStorage`, the first session's
+  0 clients after the switch, and a tap proving the picker never reads
+  `/api/project`. What the contract did not foresee, the smaller honest
+  choice: (1) Recent is remembered when the session's `hello` arrives,
+  not when the file is asked for — a URL naming a file the server
+  refuses never becomes recent. (2) The landing's project line (engine,
+  git summary from `/api/project`) is gone with the `/api/project` read;
+  `projectGitLine` and its test were removed (the top bar's git chip
+  carries the git facts once a pipeline is open). (3) The Open dialog
+  starts in the open pipeline's own directory, the picker at the root.
+  (4) The same pipeline chosen again pushes no history entry and
+  reconnects nothing. (5) The pure helper module is `panels/filePaths.ts`,
+  not `fileBrowser.ts`: on a case-insensitive file system TypeScript
+  conflates `./fileBrowser` with `./FileBrowser.tsx` (TS1149) — names
+  differing only in case are a Windows hazard in this tree.
+  *Review closure (2026-08-24).* The adversarial review found the
+  contract implemented and 18 of 21 mutations killed at the right layer,
+  and two real gaps. (1) A Recent entry (or any URL) naming a pipeline
+  the server no longer has left the app on an empty canvas in a silent
+  forever-reconnect: `session_for` refused the ws UPGRADE with a 404,
+  which a browser sees as a bare 1006 and the client read as a network
+  drop. Fixed on both sides: the pipeline is now resolved INSIDE the
+  handshake (after the version verdict) and refused as one typed `error`
+  of kind `pipeline` — `reason` (`protocol::JoinRefusal`: `unnamed` /
+  `path_not_allowed` / `not_found` / `open_failed`, the one
+  classification the HTTP routes map to 400 / 400 / 404 / 422) +
+  `pipeline` as sent — then Close (docs/13 §Projects, pipelines,
+  sessions; `http_e2e.rs` and `root_and_files.rs` drive every reason
+  over a real socket); the client treats it as terminal (`joinRefused`:
+  no reconnect, the reason as a notice, a `not_found` file dropped from
+  Recent with a notice saying so — `forgetRecent` now has its caller —
+  and the tab back on the picker by `history.replaceState`, so Back
+  skips the dead URL; `connection.test.ts`, `route.test.ts`; the picker
+  renders the notices; `files.spec.ts`'s second test drives it through
+  a seeded Recent entry). (2) The FileBrowser "stale answer" test was a
+  false PASS — it remounted the component, so the late answer reached
+  an unmounted instance whatever the guard did; it now races two
+  requests inside ONE mounted browser (a slow `wall`, the root crumb
+  clicked before it lands, the late answer released) and goes red when
+  the request guard is removed. Minors: a pipeline switch re-frames the
+  canvas (`<Canvas key={pipeline}>` in `App.tsx` — a new file is a new
+  canvas; `files.spec.ts` zooms 02-solids off the pane first, then
+  asserts every node of 06-lists inside it); Recent's stored list is
+  asserted at ten, not only the read. Notes taken: `CicadaClient.close()`
+  detaches `onmessage`/`onerror` (a closed socket's late hello is
+  nobody's — `client.test.ts`, `connection.test.ts`); the FileBrowser
+  test reads names from `.files-name` (locale-proof); docs/16 and this
+  paragraph's O3 note say that a second pop-out click re-targets the
+  existing window to the main window's current pipeline. Declined:
+  surfacing a refusing `localStorage` as a notice (a private window's
+  choice; "nothing yet" is not a wrong answer about the pipeline, and a
+  notice per visit would nag) and dropping the redundant `serde(default)`
+  on `hello.role` (documentation).
 - **O3 — the pop-out viewport.** A viewport header button opens
   `window.open(<same URL> + "&view=viewport", "cicada-viewport")`; with
   `view=viewport` the SPA renders the viewport alone (no canvas, panels
@@ -1065,6 +1203,49 @@ canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
   sync is explicitly not in this slice). docs/13 (the join hint),
   docs/16 §Viewport conventions; a Playwright spec: the pop-out shows
   the geometry and stays read-only while the main window keeps writing.
+  *Built 2026-08-24 (`wt/open`).* The hint is the client's `hello`'s
+  optional `role` (`ClientMessage::Hello { v, role: Option<Role> }`,
+  additive — omitted unless asked for, an older client reads as `None`,
+  `PROTOCOL_VERSION` unchanged): `client_loop` parses it,
+  `attach_client` hands it to `Session::join`, and a declared observer
+  (`Client::observer_only`) is never the writer — `register_client`
+  leaves a free lease free, `transfer_lease_if_free` skips it, and its
+  `take_lease` is `IntentError::DeclaredObserver` (kind `lease`, the
+  reason in the message; 403 on the HTTP mapping). Tests: the wire shape
+  (`protocol.rs`), the session rules (`a_declared_observer_never_takes_
+  the_lease`: free lease left free, refused `take_lease` with nothing
+  broadcast, no promotion while only declared observers remain and the
+  rejoin takes the lease back, an ordinary observer promoted ahead of an
+  older declared one), the socket path (`tests/observer_join.rs`), and
+  the client (`CicadaClient.hello()` + `client.test.ts`, `connection.test.ts`
+  for the `view=viewport` route). The web half: `viewport/popout.ts`
+  (`popOutViewport`: `window.open(popoutUrl(location), "cicada-viewport")`,
+  a blocked pop-up is a warning notice), the toolbar button in
+  `Viewport.tsx` (hidden inside a pop-out; the file's diff is the
+  button, one hook and two imports), `ViewportOnly.tsx` (the viewport,
+  the connection banner, the notices, a chip naming the pipeline and
+  `read-only observer`), the route's `view` → `role: observer` in
+  `optionsForRoute`. `web/e2e/popout.spec.ts`: the named window's URL,
+  the viewport alone, `hello.role` observer with the main window's id
+  the lease holder, geometry in the pop-out, the main window's
+  `set_param` moving the pop-out's text and bounds with both roles
+  unchanged, `take_lease` refused with "declared observer", a write
+  refused, the writer unchanged after the pop-out closes. A finding
+  worth recording: the spec's first run FAILED against a stale engine
+  binary — an OLDER server ignores the unknown `role` field (serde's
+  default), joins the pop-out as an ordinary observer, and its
+  `take_lease` SUCCEEDS; the client cannot tell a declared join from an
+  ordinary one by the `hello`'s `role` alone. Mixed-age engine and SPA
+  are a dev-only shape (the embedded SPA ships with its engine), so no
+  acknowledgement field was added; if that shape ever matters, an
+  additive `hello.declared` from the server is the one-line answer.
+  Not in this slice, as the contract says: camera sync between the
+  windows; also not done: the pop-out following the main window's
+  pipeline switches (it stays on the pipeline it was opened for — though
+  a second click of the button, `window.open` re-targeting the named
+  window, navigates the existing pop-out to the main window's current
+  pipeline; review note 2026-08-24), and hotkeys in the pop-out (the
+  toolbar's buttons are its controls).
 
 **Track L — `wt/launch` (cli + tools + docs).**
 - **L1 — `cicada app [path]`.** = `serve` + opens the app window: a

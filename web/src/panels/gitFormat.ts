@@ -11,7 +11,6 @@ import type {
   GitStatusResponse,
   NodeChange,
   PipelineGitStatus,
-  ProjectGit,
   RemovedNode,
   ScopeFile,
 } from "../protocol/messages";
@@ -246,25 +245,3 @@ export function markerBadge(change: NodeChange): { glyph: string; title: string;
   }
 }
 
-/**
- * The landing page's line for `GET /api/project`'s git summary: the branch
- * and the project-wide dirty count (every `git status` entry under the
- * project dir — not one pipeline's scope), or why there is none.
- */
-export function projectGitLine(git: ProjectGit | undefined): string | null {
-  if (git === undefined) return null;
-  switch (git.kind) {
-    case "repo":
-    case "locked": {
-      const where = git.branch ?? "detached HEAD";
-      const dirty = git.dirty_count === 0 ? "clean" : `${git.dirty_count} dirty`;
-      return `git: ${where} · ${dirty}${git.kind === "locked" ? " · index.lock held" : ""}`;
-    }
-    case "not_a_repo":
-      return "git: not a repository";
-    case "git_not_found":
-      return "git: no `git` on PATH";
-    default:
-      return `git: ${git.error ?? git.kind}`;
-  }
-}

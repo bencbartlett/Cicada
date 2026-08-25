@@ -8,9 +8,11 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { frameBus } from "../state/frameBus";
+import { useRoute } from "../state/route";
 import { nodeByName, nodeByRef, useCicada, type ElementPick } from "../state/store";
 import { installViewportApi, type ViewportApi } from "./api";
 import { liveSceneStore } from "./liveStore";
+import { popOutViewport } from "./popout";
 import { ViewportScene, type ScenePick } from "./scene";
 import { sampleTheme } from "./theme";
 import "./viewport.css";
@@ -53,6 +55,7 @@ export function Viewport() {
   const displayMode = useCicada((s) => s.settings.displayMode);
   const hoverPick = useCicada((s) => s.hoverPick);
   const updateSettings = useCicada((s) => s.updateSettings);
+  const view = useRoute((s) => s.route.view);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -204,6 +207,16 @@ export function Viewport() {
           >
             frame all
           </button>
+          {view !== "viewport" && (
+            <button
+              type="button"
+              title="pop the viewport out into its own window — a read-only observer of this pipeline, with its own camera (docs/16)"
+              data-testid="viewport-popout"
+              onClick={() => popOutViewport(window)}
+            >
+              pop out
+            </button>
+          )}
         </div>
         <div className="viewport-readout mono" data-testid="viewport-readout">
           {readout.outputs} outputs · {readout.triangles} tris · {readout.drawCalls} draws · gen{" "}
