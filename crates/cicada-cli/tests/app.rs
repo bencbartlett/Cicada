@@ -187,6 +187,13 @@ fn app_without_a_browser_serves_the_spa_and_prints_the_url() {
     );
     let url = header.split(" — ").nth(1).unwrap().to_owned();
     assert!(url.ends_with("/?token=t&pipeline=demo.cic"), "{url}");
+    // `  root <dir> — demo.cic open`: the root model (wave 4 O1) names what is
+    // served and what opened, right under the URL.
+    let root_line = server.line("the root line");
+    assert!(
+        root_line.trim_start().starts_with("root ") && root_line.ends_with("— demo.cic open"),
+        "{root_line}"
+    );
     let second = server.line("the Ctrl-C line");
     assert!(second.contains("Ctrl-C stops the server"), "{second}");
     let third = server.line("the --no-browser line");
