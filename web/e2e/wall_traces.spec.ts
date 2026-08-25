@@ -31,6 +31,16 @@ const meta = config.metadata as { token: string };
 const TOKEN = meta.token;
 const PIPELINE = "wall/wall.cic";
 
+// Wall-scale: opening the wall starts its 1,200-part carve and its ~350 MB
+// display set on the suite's shared 2-thread engine, and the per-PR smoke's
+// timing specs run on that same engine — so this spec runs where the other
+// wall-scale spec runs: the nightly `Playwright heavy (wall)` job, which sets
+// CICADA_E2E_HEAVY=1 (locally: the same variable).
+test.skip(
+  !process.env.CICADA_E2E_HEAVY,
+  "wall-scale spec — run with CICADA_E2E_HEAVY=1 (the nightly heavy job, or locally)",
+);
+
 test("U6 — the wall in trace mode: every run orthogonal or 45°, no two parallel runs coinciding, no collapsed lane", async ({ page }, testInfo) => {
   await page.goto(`/?token=${TOKEN}&pipeline=${PIPELINE}`);
   await expect(page.getByTestId("app")).toBeVisible();

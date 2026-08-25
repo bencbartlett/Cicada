@@ -219,7 +219,7 @@ jobs:
           CICADA_EMBEDDED: "1"
           CICADA_E2E_HEAVY: "1"
           CICADA_BIN: ${{ github.workspace }}/target/release/cicada
-        run: npx playwright test e2e/compute_on_release.spec.ts
+        run: npx playwright test e2e/compute_on_release.spec.ts e2e/wall_traces.spec.ts
       - uses: actions/upload-artifact@v4
         if: failure()
         continue-on-error: true
