@@ -82,7 +82,8 @@ REPO = TOOLS.parent
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
-import fetch_occt as fo  # noqa: E402  (needs TOOLS on sys.path first)
+import fetch_manifold as fm  # noqa: E402  (needs TOOLS on sys.path first)
+import fetch_occt as fo  # noqa: E402
 
 #: The launcher's stamp beside the release binary: the build it made.
 STAMP_NAME = "cicada.launch-stamp.json"
@@ -340,14 +341,22 @@ def find_tool(name: str, environ: dict[str, str], extra_dirs: Iterable[Path] = (
     return None
 
 
-def build_environment(base: dict[str, str], layout: fo.Layout, system: str, cmake_dir: Path | None) -> dict[str, str]:
+def build_environment(
+    base: dict[str, str], layout: fo.Layout, system: str, cmake_dir: Path | None, manifold: fm.Layout | None = None
+) -> dict[str, str]:
     """The env the BUILD runs in: `fetch_occt.github_env_entries`'s answer
     for this OS (Windows: the library dir on PATH; macOS: an rpath in
     RUSTFLAGS and NEVER a loader variable -- conda's libiconv ahead of the
     system's made cargo segfault on CI; Linux: LD_LIBRARY_PATH) plus
-    `DEP_OCCT_ROOT`, the cmake policy floor and cmake's directory on PATH."""
+    `DEP_OCCT_ROOT`, the cmake policy floor and cmake's directory on PATH —
+    and, when a warm prebuilt-Manifold layout is given, `MANIFOLD_CSG_LIB_DIR`
+    / `MANIFOLD_CSG_LIB_KIND` so cargo links it instead of compiling the
+    kernel with cmake inside the target dir (AGENTS.md iteration-speed
+    rule 6)."""
     env = dict(base)
     entries, path_entries = fo.github_env_entries(layout, base.get(layout.loader_variable, ""), base.get("RUSTFLAGS", ""))
+    if manifold is not None:
+        entries = [*entries, *fm.github_env_entries(manifold)]
     for line in entries:
         key, _, value = line.partition("=")
         env[key] = value
@@ -521,7 +530,17 @@ def launch(argv: list[str], environ: dict[str, str] | None = None, system: str |
         fo.fetch(manifest, layout, lambda m: print(f"    {m}", flush=True))
     except fo.FetchError as error:
         raise LaunchError(f"fetch_occt: {error}") from error
-    build_env = build_environment(environ, layout, system, cmake_dir)
+    # The prebuilt Manifold (AGENTS.md iteration-speed rule 6): built ONCE per
+    # machine (about a minute and a half on the dev machine, printed), then
+    # every cargo build links it instead of compiling the kernel with cmake.
+    fm_manifest = fm.load_manifest()
+    fm_layout = fm.Layout(fm.default_cache_root(environ), fm.detect_subdir(), fm_manifest["tag"])
+    say(f"Manifold prebuilt {fm_manifest['tag']} ({fm_layout.subdir}) in {fm_layout.prefix}")
+    try:
+        fm.ensure(fm_manifest, fm_layout, lambda m: print(f"    {m}", flush=True))
+    except fm.FetchError as error:
+        raise LaunchError(f"fetch_manifold: {error}") from error
+    build_env = build_environment(environ, layout, system, cmake_dir, manifold=fm_layout)
 
     if plan.install:
         run_step("npm ci", [str(npm), "ci"], REPO / "web", build_env)

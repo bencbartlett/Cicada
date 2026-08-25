@@ -22,6 +22,7 @@ import threading
 import unittest
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
+import fetch_manifold as fm  # noqa: E402
 import fetch_occt as fo
 from test_fetch_occt import fake_macho, fake_pe
 
@@ -303,6 +304,15 @@ class EnvironmentTest(unittest.TestCase):
         self.assertEqual((env["GIT_CONFIG_KEY_1"], env["GIT_CONFIG_VALUE_1"]), ("core.longpaths", "true"))
         with self.assertRaisesRegex(launch.LaunchError, "GIT_CONFIG_COUNT is 'many'"):
             launch.build_environment({"PATH": r"C:\bin", "GIT_CONFIG_COUNT": "many"}, layout, "windows", None)
+
+    def test_build_env_carries_the_prebuilt_manifold_when_given_its_layout(self):
+        layout = fo.Layout(PureWindowsPath(r"C:\cache\cicada-occt"), "win-64")
+        manifold = fm.Layout(PureWindowsPath(r"C:\cache\cicada-manifold"), "win-64", "v3.5.2")
+        env = launch.build_environment({"PATH": r"C:\bin"}, layout, "windows", None, manifold=manifold)
+        self.assertEqual(env["MANIFOLD_CSG_LIB_DIR"], r"C:\cache\cicada-manifold\manifold-v3.5.2-win-64\lib")
+        self.assertEqual(env["MANIFOLD_CSG_LIB_KIND"], "static")
+        without = launch.build_environment({"PATH": r"C:\bin"}, layout, "windows", None)
+        self.assertNotIn("MANIFOLD_CSG_LIB_DIR", without)
 
     def test_macos_build_env_is_an_rpath_never_a_loader_variable(self):
         layout = self.layout("osx-arm64")

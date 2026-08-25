@@ -92,8 +92,10 @@ line tools). Then:
 A terminal window opens and stays — it is the server console. The launcher
 fetches the pinned OpenCASCADE prebuilt on first use (`tools/fetch_occt.py`,
 into your user cache dir), builds the engine in release with the app
-embedded when it is missing or stale (the first build compiles the
-geometry kernel and takes about ten minutes; later launches are seconds),
+embedded when it is missing or stale (the first launch also builds the
+prebuilt Manifold kernel once — `tools/fetch_manifold.py`, about a minute
+and a half on a fast machine — so the first engine build is a few minutes,
+not the ten a from-source kernel costs; later launches are seconds),
 puts the kernel's run-time libraries beside the binary so no environment
 variable is ever needed, and runs `cicada app`: the server on `127.0.0.1`
 with a session token, and the app window in Edge or Chrome (app mode) or in
