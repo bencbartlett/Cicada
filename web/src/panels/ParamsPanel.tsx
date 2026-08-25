@@ -170,6 +170,8 @@ export function ParamWidget({
       );
     case "text":
       return <TextWidget node={node} param={param} disabled={disabled} />;
+    case "choice":
+      return <ChoiceWidget node={node} param={param} disabled={disabled} />;
     case "list":
       return (
         <span className="lit" title="list constants are edited on the canvas / in text">
@@ -380,6 +382,41 @@ function NumberWidget({ node, param, disabled }: { node: NodeView; param: ParamV
         if (e.key === "Escape") setDraft(null);
       }}
     />
+  );
+}
+
+/**
+ * The `choice` node's dropdown (catalog C2b): the text's options in order,
+ * the current value selected — a stray value (the node is red) kept as an
+ * extra option marked so, never silently replaced; picking one commits ONE
+ * `set_param` spelling it as a Text literal. Wired options (a list the view
+ * cannot read) leave the text field.
+ */
+function ChoiceWidget({ node, param, disabled }: { node: NodeView; param: ParamView; disabled: boolean }) {
+  const options = param.options;
+  if (options === undefined) return <TextWidget node={node} param={param} disabled={disabled} />;
+  const current = String(param.value);
+  const stray = !options.includes(current);
+  return (
+    <select
+      className={stray ? "stray" : undefined}
+      value={current}
+      disabled={disabled}
+      title={stray ? `"${current}" is not one of the options` : undefined}
+      aria-label={`${node.name} value`}
+      data-testid={`widget-${node.name}`}
+      data-stray={stray ? "true" : undefined}
+      onChange={(e) => {
+        if (e.target.value !== current) commitValue(node.name, param, e.target.value);
+      }}
+    >
+      {stray && <option value={current}>{current} (not an option)</option>}
+      {options.map((option, index) => (
+        <option key={`${index}-${option}`} value={option}>
+          {option}
+        </option>
+      ))}
+    </select>
   );
 }
 

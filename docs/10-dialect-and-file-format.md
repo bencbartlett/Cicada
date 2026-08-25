@@ -155,7 +155,7 @@ transformations are nodes.
 ```python
 amps = slider(value=12.0, min=0.0, max=30.0, step=0.5)   # Number Slider
 show = toggle(value=True)                                 # Boolean Toggle
-mode = choice(value="fast", options=["fast", "exact"])    # Value List
+mode = choice(value="fast", options=["fast", "exact"])    # Value List (shipped 2026-08-24, catalog C2b)
 count = 40                                                # bare literal = constant
 ```
 
@@ -367,5 +367,6 @@ downstream; the rest of the file solves normally.
 - Expression node port order under edits: order of first appearance is
   stable, but adding a new leading variable reorders ports — accept,
   or pin order in an annotation?
-- `choice()` param typing: string-valued enums v1; typed enum values
-  (e.g., a `Plane` choice) when a real need appears.
+- `choice()` param typing: string-valued enums v1 (shipped so in catalog
+  C2b, 2026-08-24: `choice(value: Text, options: [Text]) → Text`); typed
+  enum values (e.g., a `Plane` choice) when a real need appears.

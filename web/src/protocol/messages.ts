@@ -220,12 +220,18 @@ export interface OutputView {
 }
 
 export interface ParamView {
-  kind: "slider" | "toggle" | "number" | "integer" | "boolean" | "text" | "list";
+  kind: "slider" | "toggle" | "choice" | "number" | "integer" | "boolean" | "text" | "list";
   port?: string;
   value: number | boolean | string;
   min?: number;
   max?: number;
   step?: number;
+  /**
+   * A `choice`'s options in the text's order (catalog C2b). Absent for every
+   * other kind, and for a `choice` whose `options` is wired — the widget then
+   * takes the value as typed text instead of a select.
+   */
+  options?: string[];
 }
 
 export interface ExcludedView {

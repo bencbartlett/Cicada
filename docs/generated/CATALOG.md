@@ -18,6 +18,7 @@ one `.cic` snippet per node, solved by CI).
 
 ## Params & input
 
+- `choice(value: Text, options: [Text]) → Text` — Value List · GH: Value List — a text parameter chosen from a fixed list of options (a dropdown on the canvas and in the params panel). Red when: `value` is not one of `options` (an option renamed or removed in the text leaves a drifted value — a loud red, never a silent fallback to the first option) — an empty `options` list included.
 - `clock(speed: Number = 1.0, t: Number = 0.0) → Number` — Clock · volatile · transport-driven `t` (time) — unbounded time `0 → ∞` in seconds, driven by the transport and uncached by design (Grasshopper's Timer has no counterpart: a Clock is a value, not a re-solve trigger). Red when: `t` or `speed` is not finite.
 - `cycle(period: Number = 4.0, frames: Integer = 120, frame: Integer = 0) → Number` — Cycle · transport-driven `frame` (frame) — looping time `0 → 1`, frame-quantized and driven by the transport, never by an ambient clock (Grasshopper's Timer has no counterpart: a Cycle is a value, not a re-solve trigger). Red when: `frames` or `period` is not positive, or when `frames` does not convert to a Number exactly (beyond 2^53 — the position would drift).
 - `panel(data: Any) → ()` — Panel · GH: Panel — display sink; shows counts and samples on the canvas.

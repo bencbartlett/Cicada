@@ -21,6 +21,7 @@ box	1	box(plane: Plane = xy_plane, x: Domain, y: Domain, z: Domain) → Watertig
 box	2	box(plane: Plane = xy_plane, x: Domain, y: Domain, z: Domain) → Solid	uses_tolerance
 ceiling	1	ceiling(x: Number) → Number	
 center_box	1	center_box(plane: Plane = xy_plane, x: Number = 1.0, y: Number = 1.0, z: Number = 1.0) → Solid	uses_tolerance
+choice	1	choice(value: Text, options: [Text]) → Text	
 chunk	1	chunk(list: [E], size: Integer) → [[E]]	
 circle	1	circle(plane: Plane = xy_plane, radius: Number) → Closed<Curve>	uses_tolerance
 clock	1	clock(speed: Number = 1.0, t: Number = 0.0) → Number	volatile

@@ -126,6 +126,24 @@ server (`viewmodel.rs::default_json`; the macro spells a Boolean
 default `true`, the chip says `True`), so no client re-derives the
 catalog's spelling. Additive; the protocol version is unchanged.
 
+The param widget of a node is the view-model's `ParamView` (`NodeView.param`):
+`kind` (`slider` / `toggle` / `choice` / `number` / `integer` / `boolean` /
+`text` / `list`), `port` (the kwarg the widget edits — `value` for the
+constructor bindings; absent for a bare literal), `value`, and the
+slider's `min` / `max` / `step`. Since catalog C2b (2026-08-24) the
+`choice` node (docs/10 §3 — GH's Value List) has the kind `choice` and an
+additive `options: [Text]` — the text's literal `options` list in order,
+read off the DOCUMENT like the slider's bounds; the client renders a
+`<select>` and commits the pick as one `set_param` spelling the option as
+a Text literal (the one literal rule). A wired `value` has no widget (the
+wire is the value, as for a slider); a wired `options` keeps the widget
+with `options` absent — the list is a solve result the view-model does
+not read — and the client falls back to a text field. A value that is not
+among the options is the node's red (the stdlib refuses it), and the select
+keeps it as a marked extra entry rather than swapping it silently.
+Additive; the protocol version is unchanged (`viewmodel.rs`,
+`web/src/protocol/messages.ts`; `web/e2e/choice.spec.ts`).
+
 Two additive pieces for the sliders (wave 4 B4, 2026-08-24; docs/16
 §Canvas conventions — the GH slider shortcut and the collapsed slider):
 

@@ -2,6 +2,50 @@
   "format": 2,
   "nodes": [
     {
+      "name": "choice",
+      "title": "Value List",
+      "description": "a text parameter chosen from a fixed list of options (a dropdown on the canvas and in the params panel).",
+      "category": "Params & input",
+      "tier": "1",
+      "version": 1,
+      "pure": true,
+      "volatile": false,
+      "uses_tolerance": false,
+      "panics": "`value` is not one of `options` (an option renamed or removed in the text leaves a drifted value — a loud red, never a silent fallback to the first option) — an empty `options` list included.",
+      "gh": "Value List",
+      "examples": [
+        "mode = choice(value=\"fast\", options=[\"fast\", \"exact\"])"
+      ],
+      "inputs": [
+        {
+          "name": "value",
+          "type": "Text",
+          "base": "Text",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The chosen option — one of `options`, as written."
+        },
+        {
+          "name": "options",
+          "type": "[Text]",
+          "base": "Text",
+          "list_depth": 1,
+          "optional": false,
+          "doc": "The options to choose from, in the order the dropdown lists them."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "Text",
+          "base": "Text",
+          "list_depth": 0,
+          "optional": false,
+          "doc": "The chosen option."
+        }
+      ]
+    },
+    {
       "name": "clock",
       "title": "Clock",
       "description": "unbounded time `0 → ∞` in seconds, driven by the transport and uncached by design (Grasshopper's Timer has no counterpart: a Clock is a value, not a re-solve trigger).",
