@@ -7,11 +7,14 @@
  * else; greyed with the SERVER's reason (verbatim, in `data-blocked` and the
  * title) while an ineligible slider is off; an ineligible slider that is on
  * can be turned off; observers and `#off` ghosts see it disabled; nothing is
- * offered for a node that is not a slider.
+ * offered for a node that is not a slider. The state is read off the MERGED
+ * view: a `scrub_progress` broadcast moves the tooltip's warm count (and
+ * `data-hint`) on both surfaces without a delta and without touching the
+ * graph — the review of 2026-08-24 found the first cut reading the raw view.
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ClientMessage, InputView, NodeView, ScrubView } from "../protocol/messages";
+import type { ClientMessage, InputView, NodeView, ScrubView, ServerEnvelope } from "../protocol/messages";
 import { useCicada } from "../state/store";
 import { Inspector } from "./Inspector";
 import { ParamsPanel } from "./ParamsPanel";
@@ -90,6 +93,13 @@ function seed(role: "writer" | "observer", nodes: NodeView[], selected: string) 
 /** The inspector asks for the selected node's values on mount (`inspect`, a read); the writes are what matters here. */
 const writes = () => sent.filter((message) => message.type !== "inspect");
 
+/** A `scrub_progress` broadcast for `node` as the socket would deliver it. */
+function progress(node: string, warmed: number[], warming: boolean): ServerEnvelope {
+  return { v: 1, seq: 9, type: "scrub_progress", payload: { node, port: "value", warmed, warming, bytes: warmed.length * 1000 } };
+}
+const hear = (envelope: ServerEnvelope) => act(() => useCicada.getState().applyServerMessage(envelope));
+const allWarm = Array.from({ length: 19 }, (_, i) => i);
+
 describe("the inspector's scrub-cache action", () => {
   afterEach(cleanup);
 
@@ -141,6 +151,33 @@ describe("the inspector's scrub-cache action", () => {
     expect(writes()).toEqual([{ type: "set_scrub", payload: { node: "fine", on: false } }]);
   });
 
+  it("reads the MERGED view: a scrub_progress broadcast moves the tooltip's warm count without a delta, the graph untouched", () => {
+    const view = sliderView("size", eligibleOn);
+    seed("writer", [view, sliderView("other", eligibleOn)], "size");
+    render(<Inspector />);
+    const toggle = screen.getByTestId("scrub-toggle-size") as HTMLButtonElement;
+    // The last delta's view: one warm position.
+    expect(toggle.getAttribute("data-hint")).toBe("1 / 19 positions warm");
+    expect(toggle.title).toMatch(/^1 \/ 19 positions warm — /);
+    // Another slider's broadcast moves nothing here.
+    hear(progress("other", allWarm, false));
+    expect(toggle.getAttribute("data-hint")).toBe("1 / 19 positions warm");
+    // This slider's: the count is the broadcast's — the bar's number —
+    // while the graph's view still says one (the overlay lives beside it).
+    hear(progress("size", [3, 4, 5, 6, 7, 8, 9], true));
+    expect(toggle.getAttribute("data-hint")).toBe("7 / 19 positions warm");
+    hear(progress("size", allWarm, false));
+    expect(toggle.getAttribute("data-hint")).toBe("19 / 19 positions warm");
+    expect(toggle.title).toMatch(/^19 \/ 19 positions warm — pre-solved while the app is idle/);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(toggle.disabled).toBe(false);
+    expect(useCicada.getState().graph.nodes[0]).toBe(view);
+    expect(view.param?.scrub?.warmed).toEqual([6]);
+    // The click still sends the text's flip.
+    fireEvent.click(toggle);
+    expect(writes()).toEqual([{ type: "set_scrub", payload: { node: "size", on: false } }]);
+  });
+
   it("is disabled for an observer and for a #off ghost, and absent for a non-slider", () => {
     seed("observer", [sliderView("size", eligibleOff)], "size");
     render(<Inspector />);
@@ -178,6 +215,18 @@ describe("the params row's compact toggle", () => {
     const blocked = screen.getByTestId("scrub-toggle-fine") as HTMLButtonElement;
     expect(blocked.disabled).toBe(true);
     expect(blocked.getAttribute("data-blocked")).toBe("too many positions (51 > 32)");
+  });
+
+  it("the compact pill reads the MERGED view too: the broadcast moves its tooltip and data-hint", () => {
+    seed("writer", [sliderView("size", eligibleOn)], "size");
+    render(<ParamsPanel />);
+    const pill = screen.getByTestId("scrub-toggle-size") as HTMLButtonElement;
+    expect(pill.textContent).toBe("scrub");
+    expect(pill.getAttribute("data-hint")).toBe("1 / 19 positions warm");
+    hear(progress("size", allWarm, false));
+    expect(pill.getAttribute("data-hint")).toBe("19 / 19 positions warm");
+    expect(pill.title).toMatch(/^19 \/ 19 positions warm — /);
+    expect(pill.getAttribute("aria-checked")).toBe("true");
   });
 
   it("an observer sees the state, disabled; a toggle param has no scrub toggle", () => {

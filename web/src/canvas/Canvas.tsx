@@ -38,10 +38,9 @@ import {
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { asOneOp, type GestureMessage, type WireEnd } from "../protocol/messages";
-import { canWrite, useCicada, writeBlockReason } from "../state/store";
+import { canWrite, scrubProgressFor, useCicada, writeBlockReason } from "../state/store";
 import "./canvas.css";
 import { CicadaEdge } from "./CicadaEdge";
-import { scrubToggle } from "../state/scrub";
 import { CicadaNode } from "./CicadaNode";
 import { collapseHint } from "./collapse";
 import { ConnectionLine } from "./ConnectionLine";
@@ -57,6 +56,7 @@ import {
 } from "./flow";
 import { pxToCell, showsPortValues } from "./grid";
 import { useLodTier } from "./lod";
+import { scrubMenuItems } from "./scrubMenu";
 import { SearchBox } from "./SearchBox";
 import { TraceLanesContext, useTraceLanes } from "./traceLanes";
 
@@ -143,6 +143,12 @@ function CanvasInner() {
   // render; the edges read theirs from the context.
   const traceLanes = useTraceLanes(graph, nodes, unit, wireMode === "trace");
   const [menu, setMenu] = useState<Menu | null>(null);
+  // The open node menu's `scrub_progress` overlay (item 5 S2): the scrub
+  // menu item reads the MERGED view — the graph's `param.scrub` with the
+  // broadcast laid over it, as the bar does — so its warm count is the
+  // bar's and moves while the menu is open. Undefined while no node menu
+  // is open, so the 10 Hz broadcast re-renders nothing here.
+  const menuScrub = useCicada((s) => (menu?.kind === "node" ? scrubProgressFor(s, menu.node) : undefined));
   const [moveTick, setMoveTick] = useState(0);
   const rightDrag = useRef<{ x: number; y: number } | null>(null);
   const reconnecting = useRef(false);
@@ -545,18 +551,9 @@ function CanvasInner() {
           // menu item — `scrub-cache this slider` / `stop scrub-caching`,
           // greyed with the SERVER's reason (`param.scrub.ineligible`)
           // while the slider is off and cannot; the client computes nothing.
-          ...(() => {
-            const toggle = scrubToggle(view);
-            if (toggle === null) return [];
-            return [
-              {
-                label: toggle.label,
-                disabled: toggle.disabled,
-                hint: toggle.hint,
-                onClick: () => sendWrite({ type: "set_scrub", payload: { node: view.name, on: toggle.next } }),
-              },
-            ];
-          })(),
+          // Built by `scrubMenu.ts` off the merged view (`menuScrub`), where
+          // `scrubMenu.test.tsx` pins the label, the greying and the hint.
+          ...scrubMenuItems(view, menuScrub, sendWrite),
           {
             label: "rename…",
             onClick: () => {
@@ -634,7 +631,7 @@ function CanvasInner() {
         { label: "group selection", onClick: notice("groups arrive later") },
       ],
     };
-  }, [menu, rf, unit, writer]);
+  }, [menu, rf, unit, writer, menuScrub]);
 
   // Overlay anchors: client → pane coordinates, kept inside the pane.
   const paneRect = containerRef.current?.getBoundingClientRect();

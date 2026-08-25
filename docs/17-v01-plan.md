@@ -1898,7 +1898,29 @@ first, so dragging it later is instant — a video-style buffer bar.
   of dropping stays a follow-up. (6) The current-notch marker is the one
   number the client computes — `round((value − min) / step)` clamped,
   the widget's own snap, display only; eligibility and the warm set stay
-  the server's.
+  the server's. **The review's closure (2026-08-24)** added: (7) the node
+  menu's item and `scrubToggle`'s state were computed from the RAW graph
+  view — with the overlay kept beside the graph (deviation 4) the menu
+  read `0 / 19 positions warm` under a full bar, and the e2e's hint
+  assertion held only when an unrelated delta happened to land after the
+  warming (`16 / 19` on the reviewer's machine). `scrubToggle(view,
+  progress)` now takes the overlay as a REQUIRED argument and every
+  surface passes it: `canvas/scrubMenu.ts` (the menu item as a pure
+  builder `Canvas.tsx` spreads, subscribed to the open menu's node;
+  `scrubMenu.test.tsx` renders it through the real `ContextMenu` — the
+  greyed `disabled` the review found covered by the e2e alone is pinned
+  there), `ScrubToggle.tsx` (the switch's and the pill's tooltip lead with
+  the count, `data-hint` carries it; `ScrubToggle.test.tsx` moves both
+  surfaces with a `scrub_progress` and holds the graph untouched),
+  `scrub.test.ts` (the pure merge: `3 / 19` → `19 / 19`, the text's fields
+  the view's). The e2e keeps the menu assertion — by construction now,
+  the bar's and the menu's numbers are one read — and holds the
+  inspector's `data-hint` at 19 after a release's rebuild (the delta
+  carries the partial set, the broadcasts fill it: the failing shape), and
+  its cold-drag test asserts the drag's `compute_on_release` mode FIRST
+  with a message naming `COMPUTE_ON_RELEASE_MS` and the burn's `work`
+  (the wall-clock constant's failure is self-explanatory on a faster
+  interpreter: raise `work`, never loosen the assertion).
 
 **Track C — `wt/catalog-c2` (the 21 unblocked docs/08 S+1 rows; skill
 `add-stdlib-node`: one node per file, three tests each, `gh =` names,

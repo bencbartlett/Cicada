@@ -110,10 +110,23 @@ export interface ScrubToggleState {
  * a slider that is ON and ineligible — a hand-written `scrub=True` the
  * server warms nothing for — keeps the toggle live, since turning it off
  * is always allowed (docs/13), and the hint says nothing is warmed.
+ *
+ * `progress` is the slider's `scrub_progress` overlay (`store.scrubProgress`,
+ * read with `scrubProgressFor`) and is REQUIRED, undefined spelled out: the
+ * state is computed off the MERGED view — the view the bar draws — so the
+ * warm count in the hint and in the tooltip is the bar's. The review of
+ * 2026-08-24 found the first cut reading the raw graph view on two
+ * surfaces: the overlay never writes the graph (docs/13), so the node menu
+ * said `0 / 19 positions warm` under a full bar. An optional parameter
+ * would let the next surface forget again.
  */
-export function scrubToggle(view: Pick<NodeView, "func" | "param"> | undefined): ScrubToggleState | null {
-  const scrub = view?.param?.scrub;
-  if (view === undefined || view.func !== "slider" || scrub === undefined) return null;
+export function scrubToggle(
+  view: Pick<NodeView, "func" | "param"> | undefined,
+  progress: ScrubProgressPayload | undefined,
+): ScrubToggleState | null {
+  if (view === undefined || view.func !== "slider") return null;
+  const scrub = mergeScrub(view.param?.scrub, progress);
+  if (scrub === undefined) return null;
   const reason = scrub.ineligible ?? null;
   const on = scrub.on;
   const disabled = !on && reason !== null;
@@ -127,8 +140,10 @@ export function scrubToggle(view: Pick<NodeView, "func" | "param"> | undefined):
       ? `${reason} — the text says scrub=True but nothing is warmed; turning it off removes the kwarg`
       : `${reason} — scrub caching needs literal min, max and step and a bounded position count`;
   } else if (on) {
+    // The tooltip leads with the count, so the switch and the pill (which
+    // spell no hint) show the warm set on hover — the bar's number.
     hint = `${scrub.warmed.length} / ${positions} warm`;
-    title = `the ${positions} of this slider are pre-solved while the app is idle (scrub=True in the text); turning it off removes the kwarg`;
+    title = `${hint} — pre-solved while the app is idle (scrub=True in the text); turning it off removes the kwarg`;
   } else {
     hint = positions;
     title = `pre-solve the ${positions} of this slider while the app is idle, so dragging it is a cache read (writes scrub=True into the text)`;

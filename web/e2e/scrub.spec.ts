@@ -248,7 +248,12 @@ test("02-solids: the bar fills while idle on both widgets, the toggle flips the 
   await expect(rowToggle).toBeEnabled();
   await expect(rowToggle).toHaveText("scrub");
 
-  // ---- the node menu: the same state as a menu item.
+  // ---- the node menu: the same state as a menu item. Its hint is the
+  // bar's number BY CONSTRUCTION — both read the MERGED view (the graph's
+  // `param.scrub` with the `scrub_progress` overlay laid over it); the raw
+  // view is whatever the last delta carried, and the review of 2026-08-24
+  // saw `0 / 19 positions warm` there under a full bar. The bar reported 19
+  // above, so the menu must too, whatever delta did or did not land.
   await node(page, "size").click({ button: "right", position: { x: 10, y: 8 } });
   const menu = page.getByTestId("context-menu");
   const item = menu.getByRole("menuitem", { name: /scrub-cach/ });
@@ -312,6 +317,13 @@ test("02-solids: the bar fills while idle on both widgets, the toggle flips the 
   const action = page.getByTestId("scrub-toggle-size");
   await expect(action).toHaveText("stop scrub-caching");
   await expect(action).toHaveAttribute("aria-checked", "true");
+  // The switch's tooltip carries the warm count off the MERGED view. This is
+  // the shape that failed the review: the release's delta carried the
+  // rebuilt queue's PARTIAL warm set and the broadcasts since filled it, so
+  // the raw view said fewer (`16 / 19`) while the server said 19 — the
+  // merge says 19 without another delta.
+  await expect(action).toHaveAttribute("data-hint", "19 / 19 positions warm");
+  await expect(action).toHaveAttribute("title", /^19 \/ 19 positions warm — /);
   await action.click();
   await expect.poll(async () => (await debugState(page, PIPELINE, false)).text).not.toContain("scrub=True");
   const off = await debugState(page, PIPELINE, true);
@@ -484,6 +496,18 @@ test("an expensive cone: warm positions preview live with nothing computed, a co
   await page.mouse.down();
   await page.mouse.move(boxB.x + boxB.width * 0.95, yB, { steps: 10 });
   expect(await sliderB.inputValue()).toBe("3");
+  // The tie-in's premise first, in its own words: the cold tick must be
+  // PREDICTED at ≥ COMPUTE_ON_RELEASE_MS (1 s) off the burn's recorded cost
+  // — BURN_SCRIPT's `work` is sized for that. A machine whose interpreter
+  // runs 60 M iterations under a second fails HERE, self-explained; the fix
+  // is a larger `work`, never a looser assertion.
+  await expect
+    .poll(async () => (await debugState(page, PIPELINE, false)).solve.drag?.mode ?? "no drag", {
+      timeout: 30_000,
+      message:
+        "b's cold tick must be withheld (drag mode compute_on_release): the burn's predicted cost did not reach COMPUTE_ON_RELEASE_MS = 1 s on this interpreter — raise BURN_SCRIPT's `work`",
+    })
+    .toBe("compute_on_release");
   const chip = page.getByTestId("pending-b");
   await expect(chip).toBeVisible({ timeout: 30_000 });
   await expect(chip).toHaveText(/^pending · ~?\d+(\.\d+)? (ms|s)$/);

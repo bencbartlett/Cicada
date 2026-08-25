@@ -3,7 +3,8 @@
  * §Scrub caching, docs/16 §Sliders; v0.1 item 5 S2): the merge of a
  * slider's view with a later `scrub_progress`, the current-position index
  * off the widget's snap rule, the bar's tooltip, the toggle's state from the
- * SERVER's words alone — and the store keeping the progress beside the
+ * SERVER's words alone and off the MERGED view (the overlay moves its warm
+ * count, as it moves the bar's) — and the store keeping the progress beside the
  * graph, replaced per slider, cleared by every snapshot / delta /
  * disconnect / reset.
  */
@@ -120,13 +121,15 @@ describe("scrubBarTitle", () => {
 
 describe("scrubToggle — the server's words, on every surface", () => {
   it("is not offered for a non-slider, or a slider view without scrub (an older server)", () => {
-    expect(scrubToggle(undefined)).toBeNull();
-    expect(scrubToggle(slider("n", eligibleOff, "construct_domain"))).toBeNull();
-    expect(scrubToggle(slider("s", undefined))).toBeNull();
+    expect(scrubToggle(undefined, undefined)).toBeNull();
+    expect(scrubToggle(slider("n", eligibleOff, "construct_domain"), undefined)).toBeNull();
+    expect(scrubToggle(slider("s", undefined), undefined)).toBeNull();
+    // An overlay for a node without a scrub view offers nothing either.
+    expect(scrubToggle(slider("s", undefined), { node: "s", port: "value", warmed: [1], warming: false, bytes: 0 })).toBeNull();
   });
 
   it("an eligible slider that is off: live, `scrub-cache this slider`, the position count as the hint, next = on", () => {
-    expect(scrubToggle(slider("size", eligibleOff))).toMatchObject({
+    expect(scrubToggle(slider("size", eligibleOff), undefined)).toMatchObject({
       on: false,
       disabled: false,
       reason: null,
@@ -137,7 +140,8 @@ describe("scrubToggle — the server's words, on every surface", () => {
   });
 
   it("an eligible slider that is on: live, `stop scrub-caching`, the warm count, next = off", () => {
-    expect(scrubToggle(slider("size", eligibleOn))).toMatchObject({
+    const state = scrubToggle(slider("size", eligibleOn), undefined);
+    expect(state).toMatchObject({
       on: true,
       disabled: false,
       reason: null,
@@ -145,21 +149,60 @@ describe("scrubToggle — the server's words, on every surface", () => {
       hint: "3 / 19 positions warm",
       next: false,
     });
+    // The tooltip leads with the count: the switch and the pill spell no hint.
+    expect(state?.title).toMatch(/^3 \/ 19 positions warm — pre-solved while the app is idle/);
+  });
+
+  it("reads the MERGED view: a scrub_progress overlay moves the hint and the tooltip; the text's fields stay the view's", () => {
+    const allWarm: ScrubProgressPayload = {
+      node: "size",
+      port: "value",
+      warmed: Array.from({ length: 19 }, (_, i) => i),
+      warming: false,
+      bytes: 2_000_000,
+    };
+    // The review of 2026-08-24: the raw view is frozen at the last delta
+    // (`3 / 19`) while the bar, drawn off the merge, is full.
+    expect(scrubToggle(slider("size", eligibleOn), undefined)?.hint).toBe("3 / 19 positions warm");
+    const merged = scrubToggle(slider("size", eligibleOn), allWarm);
+    expect(merged).toMatchObject({
+      on: true,
+      disabled: false,
+      reason: null,
+      label: "stop scrub-caching",
+      hint: "19 / 19 positions warm",
+      next: false,
+    });
+    expect(merged?.title).toMatch(/^19 \/ 19 positions warm — /);
+    // A partial overlay moves it too — the count is the overlay's, not the view's.
+    expect(scrubToggle(slider("size", eligibleOn), { ...allWarm, warmed: [4, 5, 6, 7, 8, 9, 10], warming: true })?.hint).toBe(
+      "7 / 19 positions warm",
+    );
+    // `on`, `positions` and `ineligible` move with the text only: an
+    // ineligible slider keeps the server's words whatever the overlay says,
+    // an off slider keeps the position count (no queue, no broadcast).
+    expect(scrubToggle(slider("fine", tooMany), { ...allWarm, node: "fine" })).toMatchObject({
+      on: false,
+      disabled: true,
+      hint: "too many positions (51 > 32)",
+    });
+    expect(scrubToggle(slider("size", eligibleOff), allWarm)).toMatchObject({ on: false, disabled: false, hint: "19 positions", next: true });
   });
 
   it("an ineligible slider that is off is greyed with the SERVER's reason, verbatim", () => {
-    const state = scrubToggle(slider("fine", tooMany));
+    const state = scrubToggle(slider("fine", tooMany), undefined);
     expect(state).toMatchObject({ on: false, disabled: true, reason: "too many positions (51 > 32)", hint: "too many positions (51 > 32)" });
     expect(state?.title).toMatch(/^too many positions \(51 > 32\) — /);
     const wired = scrubToggle(
       slider("bound", { ...tooMany, ineligible: "max is wired — the positions are a function of literal min, max and step" }),
+      undefined,
     );
     expect(wired?.disabled).toBe(true);
     expect(wired?.hint).toBe("max is wired — the positions are a function of literal min, max and step");
   });
 
   it("an ineligible slider that is ON (a hand-written kwarg) stays live: turning it off is always allowed", () => {
-    expect(scrubToggle(slider("fine", handWrittenOnIneligible))).toMatchObject({
+    expect(scrubToggle(slider("fine", handWrittenOnIneligible), undefined)).toMatchObject({
       on: true,
       disabled: false,
       reason: "too many positions (51 > 32)",
