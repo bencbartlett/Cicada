@@ -670,22 +670,38 @@ mod tests {
             "LOCALAPPDATA" => Some(r"D:\Profiles\u\AppData\Local".to_owned()),
             _ => None,
         };
+        // Expected through the same `join` the function uses: a literal
+        // Windows path compared on a POSIX host (CI's Linux job) would have
+        // its separators wrong (run 32799906653, 2026-08-24); the roots and
+        // the per-browser relative path are what the function is about.
+        let under = |root: &str, browser: Browser| Path::new(root).join(browser.windows_relative());
         assert_eq!(
             windows_usual_paths(Browser::Edge, vars),
             vec![
-                PathBuf::from(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
-                PathBuf::from(EDGE),
-                PathBuf::from(r"D:\Profiles\u\AppData\Local\Microsoft\Edge\Application\msedge.exe"),
+                under(r"C:\Program Files", Browser::Edge),
+                under(r"C:\Program Files (x86)", Browser::Edge),
+                under(r"D:\Profiles\u\AppData\Local", Browser::Edge),
             ]
         );
         assert_eq!(
             windows_usual_paths(Browser::Chrome, vars),
             vec![
-                PathBuf::from(CHROME),
-                PathBuf::from(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
-                PathBuf::from(r"D:\Profiles\u\AppData\Local\Google\Chrome\Application\chrome.exe"),
+                under(r"C:\Program Files", Browser::Chrome),
+                under(r"C:\Program Files (x86)", Browser::Chrome),
+                under(r"D:\Profiles\u\AppData\Local", Browser::Chrome),
             ]
         );
+        // On Windows the joins spell the documented install paths exactly.
+        if cfg!(windows) {
+            assert_eq!(
+                under(r"C:\Program Files (x86)", Browser::Edge),
+                PathBuf::from(EDGE)
+            );
+            assert_eq!(
+                under(r"C:\Program Files", Browser::Chrome),
+                PathBuf::from(CHROME)
+            );
+        }
         assert!(windows_usual_paths(Browser::Edge, |_| None).is_empty());
     }
 
