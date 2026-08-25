@@ -95,10 +95,10 @@ enum Command {
 /// `cicada_cli::serve`).
 #[derive(clap::Args)]
 struct ServeCli {
-    /// A project directory, or a .cic file (its directory becomes the
-    /// project and the file the default pipeline). Default: `.`.
-    #[arg(default_value = ".")]
-    path: PathBuf,
+    /// A directory — the root the app's file picker lists — or a .cic
+    /// file (its directory becomes the root and the file opens).
+    /// Without it the root is your home directory and nothing opens.
+    path: Option<PathBuf>,
     /// Bind host (127.0.0.1 by default — remote deployment goes behind
     /// a reverse proxy with real auth, docs/13).
     #[arg(long, default_value = "127.0.0.1")]

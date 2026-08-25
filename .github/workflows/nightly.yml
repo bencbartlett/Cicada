@@ -55,6 +55,14 @@ jobs:
           python -m pip install --quiet zstandard
           python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --check-closure
           python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --github-env
+      - name: Cache the prebuilt Manifold (key = the pinned manifest)
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/cicada-manifold
+          key: cicada-manifold-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageVersion }}-${{ hashFiles('tools/fetch_manifold_manifest.json') }}
+      - name: Build once or reuse the prebuilt Manifold, export its env (AGENTS.md iteration-speed rule 6)
+        shell: bash
+        run: python tools/fetch_manifold.py --dest "$RUNNER_TEMP/cicada-manifold" --github-env
       - name: Prime the kernel builds (retry once — belt; see AGENTS.md)
         run: cargo build --locked -p cicada-geom || cargo build --locked -p cicada-geom
       - run: cargo test --locked --workspace
@@ -113,6 +121,14 @@ jobs:
         run: |
           python -m pip install --quiet zstandard
           python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --github-env
+      - name: Cache the prebuilt Manifold (key = the pinned manifest)
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/cicada-manifold
+          key: cicada-manifold-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageVersion }}-${{ hashFiles('tools/fetch_manifold_manifest.json') }}
+      - name: Build once or reuse the prebuilt Manifold, export its env (AGENTS.md iteration-speed rule 6)
+        shell: bash
+        run: python tools/fetch_manifold.py --dest "$RUNNER_TEMP/cicada-manifold" --github-env
       - name: Prime the kernel builds (retry once — belt; see AGENTS.md)
         run: cargo build --locked --release -p cicada-geom || cargo build --locked --release -p cicada-geom
       - name: Build the engine
@@ -179,6 +195,14 @@ jobs:
         run: |
           python -m pip install --quiet zstandard
           python tools/fetch_occt.py --dest "$RUNNER_TEMP/cicada-occt" --github-env
+      - name: Cache the prebuilt Manifold (key = the pinned manifest)
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/cicada-manifold
+          key: cicada-manifold-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageVersion }}-${{ hashFiles('tools/fetch_manifold_manifest.json') }}
+      - name: Build once or reuse the prebuilt Manifold, export its env (AGENTS.md iteration-speed rule 6)
+        shell: bash
+        run: python tools/fetch_manifold.py --dest "$RUNNER_TEMP/cicada-manifold" --github-env
       - name: Prime the kernel builds (release; retry once — belt; see AGENTS.md)
         run: cargo build --locked --release -p cicada-geom || cargo build --locked --release -p cicada-geom
       - name: Build the SPA

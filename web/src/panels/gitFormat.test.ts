@@ -8,7 +8,6 @@ import {
   groupMarkers,
   markerBadge,
   markerCount,
-  projectGitLine,
   revertRequest,
   revertable,
   scopeNote,
@@ -257,15 +256,3 @@ describe("groupMarkers / markerCount / revertable / markerBadge", () => {
   });
 });
 
-describe("projectGitLine (the landing page)", () => {
-  it("branch + project-wide dirty count; locked, detached, no repo, no git, error", () => {
-    expect(projectGitLine(undefined)).toBeNull();
-    expect(projectGitLine({ kind: "repo", branch: "main", dirty_count: 0 })).toBe("git: main · clean");
-    expect(projectGitLine({ kind: "repo", branch: "main", dirty_count: 3 })).toBe("git: main · 3 dirty");
-    expect(projectGitLine({ kind: "locked", branch: "main", dirty_count: 1 })).toBe("git: main · 1 dirty · index.lock held");
-    expect(projectGitLine({ kind: "repo", branch: null, dirty_count: 0 })).toBe("git: detached HEAD · clean");
-    expect(projectGitLine({ kind: "not_a_repo", branch: null, dirty_count: 0 })).toBe("git: not a repository");
-    expect(projectGitLine({ kind: "git_not_found", branch: null, dirty_count: 0 })).toBe("git: no `git` on PATH");
-    expect(projectGitLine({ kind: "error", branch: null, dirty_count: 0, error: "git status failed" })).toBe("git: git status failed");
-  });
-});

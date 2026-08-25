@@ -5,13 +5,14 @@
  * Regions are components owned by their folders; this file only arranges
  * them and applies per-user settings (theme, split).
  */
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { Canvas } from "./canvas/Canvas";
 import { useKeyboard } from "./keyboard";
 import { CommitDialog } from "./panels/CommitDialog";
 import { ConnBanner } from "./panels/ConnBanner";
 import { Inspector } from "./panels/Inspector";
 import { Notices } from "./panels/Notices";
+import { OpenDialog } from "./panels/OpenDialog";
 import { Ribbon } from "./panels/Ribbon";
 import { StatusBar } from "./panels/StatusBar";
 import { TopBar } from "./panels/TopBar";
@@ -28,14 +29,12 @@ const SPLITS: Record<string, [string, string]> = {
 export function App() {
   const settings = useCicada((s) => s.settings);
   const updateSettings = useCicada((s) => s.updateSettings);
+  const pipeline = useCicada((s) => s.pipeline);
   const workRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   useKeyboard();
 
-  useEffect(() => {
-    document.documentElement.dataset.theme = settings.theme;
-  }, [settings.theme]);
-
+  // The theme on the document is `Root`'s (every screen shares it).
   const [a, b] = SPLITS[settings.split] ?? SPLITS.canvas!;
   const style = { "--split-a": a, "--split-b": b } as React.CSSProperties;
 
@@ -56,8 +55,14 @@ export function App() {
     dragging.current = false;
   };
 
-  const first = settings.swap ? <Viewport /> : <Canvas />;
-  const second = settings.swap ? <Canvas /> : <Viewport />;
+  // A new file is a new canvas: keyed by the pipeline, the canvas remounts
+  // on a switch (File → Open / Recent, Back) and frames the new graph
+  // itself — `fitView` runs once per canvas — instead of showing it at the
+  // previous file's zoom and offset (docs/16 §Application layout). The
+  // viewport stays mounted: its camera is the user's.
+  const canvas = <Canvas key={pipeline} />;
+  const first = settings.swap ? <Viewport /> : canvas;
+  const second = settings.swap ? canvas : <Viewport />;
 
   return (
     <div className="app" data-testid="app">
@@ -98,6 +103,7 @@ export function App() {
       <StatusBar />
       <Notices />
       <CommitDialog />
+      <OpenDialog />
     </div>
   );
 }

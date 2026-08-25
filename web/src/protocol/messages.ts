@@ -128,12 +128,24 @@ export type ErrorKind =
    * `transport` broadcast follows a refusal — this error is the whole answer.
    */
   | "transport"
+  /**
+   * The handshake's verdict on the pipeline the socket named (docs/13
+   * §Projects, pipelines, sessions): the server cannot open it — `reason`
+   * says why, `pipeline` is the reference as sent — and closes. Terminal:
+   * the connection module schedules no reconnect, shows the reason, drops
+   * a `not_found` file from Recent and returns the tab to the picker.
+   */
+  | "pipeline"
   | (string & {});
+
+/** Why the server refused a socket's pipeline (`protocol::JoinRefusal`, snake_case; the HTTP routes' 400 / 400 / 404 / 422). */
+export type JoinRefusal = "unnamed" | "path_not_allowed" | "not_found" | "open_failed";
 
 /**
  * The `error` payload: `kind` + `message`, plus the kind-specific facts the
  * server flattens in (`current_text_hash` on `stale_base`, `diagnostics` on
- * `parse_error`, `index` = the failing op of a `batch`).
+ * `parse_error`, `index` = the failing op of a `batch`, `pipeline` +
+ * `reason` on the handshake's `pipeline` refusal).
  */
 export interface ErrorPayload {
   intent_id?: string;
@@ -142,6 +154,8 @@ export interface ErrorPayload {
   current_text_hash?: string;
   diagnostics?: Diagnostic[];
   index?: number;
+  pipeline?: string;
+  reason?: JoinRefusal;
 }
 
 /** doc-11 diagnostic (cicada-lang `Diagnostic`). `span.line` is 1-based. */
@@ -597,6 +611,52 @@ export interface ProjectGit {
   error?: string;
 }
 
+// ------------------------------------------------- the root's file list --
+
+/** An entry of `GET /api/files` (`protocol::FileKind`): a directory to descend into, or a `.cic` to open. */
+export type FileKind = "dir" | "pipeline";
+
+/** One entry of `GET /api/files` (`protocol::FileEntry`). */
+export interface FileEntry {
+  /** The entry's own name (no path). */
+  name: string;
+  kind: FileKind;
+  /** Last modification, milliseconds since the Unix epoch (negative before it). */
+  modified_ms: number;
+}
+
+/**
+ * `GET /api/files?dir=<root-relative>` (`protocol::FilesResponse`; docs/13
+ * §HTTP surface): ONE directory under the served root — directories first,
+ * then pipelines, each group in case-insensitive name order. `root` is the
+ * root directory's own name, never its path; `dir` and `parent` are
+ * root-relative, `/`-separated, `""` for the root itself (`parent` is
+ * `null` there). A pipeline opens as `?pipeline=<dir>/<name>`.
+ */
+export interface FilesResponse {
+  root: string;
+  dir: string;
+  parent: string | null;
+  entries: FileEntry[];
+}
+
+/**
+ * The `kind` of a refused `GET /api/files` (`protocol::FilesErrorKind`):
+ * `path_not_allowed` 400 (`..`, an absolute path, a drive or UNC prefix, a
+ * backslash, a NUL byte, a symlink leaving the root), `not_found` 404 (nothing
+ * is there: no such directory, a file, a path through a file, a name the file
+ * system cannot hold), `io_error` 403 (the directory exists but could not be
+ * read).
+ */
+export type FilesErrorKind = "path_not_allowed" | "not_found" | "io_error" | (string & {});
+
+/** A refused file listing's body: `{kind, message, path}` — `path` is the `dir` as sent. */
+export interface FilesErrorBody {
+  kind: FilesErrorKind;
+  message: string;
+  path: string;
+}
+
 // ------------------------------------------------------- server messages --
 
 export interface ProbeVerdict {
@@ -773,7 +833,17 @@ export type GestureMessage =
   | { type: "set_preview"; payload: { node: string; on?: boolean | null } };
 
 export type ClientMessage =
-  | { type: "hello"; payload: { v: number } }
+  /**
+   * The handshake. `role: "observer"` is the join hint (docs/13 §Projects,
+   * pipelines, sessions; wave 4 O3): this socket joins as a DECLARED
+   * observer that never holds the write lease — not at the join even on a
+   * free lease, not by promotion when the writer leaves, and its
+   * `take_lease` is refused (kind `lease`). The pop-out viewport
+   * (`?view=viewport`) sends it; the main window sends no `role` and joins
+   * by the first-client-writes rule. Additive: the field is absent unless
+   * asked for.
+   */
+  | { type: "hello"; payload: { v: number; role?: Role } }
   | GestureMessage
   | { type: "param_preview"; payload: { node: string; port?: string | null; value: string } }
   /**

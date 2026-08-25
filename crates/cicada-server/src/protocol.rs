@@ -601,6 +601,114 @@ pub struct ProjectGit {
     pub error: Option<String>,
 }
 
+/// What an entry of `GET /api/files` is (docs/13 §HTTP surface; v0.1
+/// wave 4 O1): a directory to descend into, or a `.cic` pipeline to open.
+/// Declared in listing order — directories sort before pipelines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileKind {
+    /// A directory under the root (never a dot-directory, `node_modules`
+    /// or `target`; never one the OS hides).
+    Dir,
+    /// A `*.cic` file — openable as `?pipeline=<dir>/<name>`.
+    Pipeline,
+}
+
+/// One entry of `GET /api/files`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileEntry {
+    /// The entry's own name (no path).
+    pub name: String,
+    /// Directory or pipeline.
+    pub kind: FileKind,
+    /// Last modification, milliseconds since the Unix epoch (negative
+    /// before it — the file system's clock, not ours).
+    pub modified_ms: i64,
+}
+
+/// The reply of `GET /api/files?dir=<root-relative>`: ONE directory under
+/// the served root — directories first, then pipelines, each group in
+/// case-insensitive name order. Nothing above the root is ever named:
+/// `root` is the root directory's own name (not its path), `dir` and
+/// `parent` are root-relative.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FilesResponse {
+    /// The root's display name — its last path component (the full path
+    /// only for a file-system root, which has none).
+    pub root: String,
+    /// The listed directory, normalised and root-relative, `/`-separated;
+    /// `""` is the root itself.
+    pub dir: String,
+    /// `dir`'s parent in the same form; `None` for the root.
+    pub parent: Option<String>,
+    /// The entries, sorted as described.
+    pub entries: Vec<FileEntry>,
+}
+
+/// The `kind` of a refused `GET /api/files` — the body is `{kind, message,
+/// path}` like every git-route refusal; the status codes are docs/13's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FilesErrorKind {
+    /// `dir` is not a plain root-relative path, or resolves outside the
+    /// root (`..`, an absolute path, a drive or UNC prefix, a backslash, a
+    /// NUL byte, a symlink whose canonical path leaves the root) (400).
+    PathNotAllowed,
+    /// No such directory under the root — missing, or a file (404).
+    NotFound,
+    /// The directory exists inside the root but could not be read (403).
+    IoError,
+}
+
+/// Why a request's pipeline could not be opened — ONE classification for
+/// every route that names one (docs/13 §Projects, pipelines, sessions). An
+/// HTTP route answers with the status in parentheses; the socket answers
+/// its handshake with the `error` of kind `pipeline` carrying this as
+/// `reason` beside `pipeline` (the reference as the client sent it) — the
+/// upgrade itself is never refused for the pipeline, because a refused
+/// upgrade reaches a browser as a bare close code the app could only read
+/// as a network drop (wave 4 O2 review). Terminal for the client: a retry
+/// changes nothing until the file or the URL does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JoinRefusal {
+    /// The request named no pipeline and the server has no default (400).
+    Unnamed,
+    /// The reference is not a plain root-relative `.cic` path, or resolves
+    /// outside the root (400).
+    PathNotAllowed,
+    /// No such file under the root — moved, renamed or deleted (404). The
+    /// client drops it from Recent.
+    NotFound,
+    /// The file is there but its session could not open; the message says
+    /// why (422).
+    OpenFailed,
+}
+
+impl ServerMessage {
+    /// The handshake's refusal for the pipeline a socket named: kind
+    /// `pipeline`, the reason as `reason`, the reference as `pipeline`
+    /// (absent when none was named), and the text the routes would have
+    /// answered with.
+    #[must_use]
+    pub fn join_refused(pipeline: Option<&str>, reason: JoinRefusal, message: String) -> Self {
+        let mut details = serde_json::Map::new();
+        if let Some(pipeline) = pipeline {
+            details.insert("pipeline".to_owned(), pipeline.into());
+        }
+        details.insert(
+            "reason".to_owned(),
+            serde_json::to_value(reason).unwrap_or(serde_json::Value::Null),
+        );
+        Self::Error {
+            intent_id: None,
+            kind: "pipeline".to_owned(),
+            message,
+            details,
+        }
+    }
+}
+
 /// The session's transport (docs/13 §Animation transport; DECISIONS.md
 /// time row) as every client sees it — in every `snapshot` and in the
 /// `transport` broadcast after every change (play / pause / seek / speed /
@@ -762,13 +870,14 @@ pub enum ServerMessage {
         /// Machine kind (`writer`, `lease`, `protocol`, `unknown`,
         /// `refused`, `persist`, `nothing_to_undo`, `nothing_to_redo`,
         /// `stale_base`, `parse_error`, `path_not_allowed`, `io_error`,
-        /// `transport`).
+        /// `transport`, `pipeline`).
         kind: String,
         /// Human message.
         message: String,
         /// Kind-specific facts, flattened into the payload (additive):
         /// `current_text_hash` (`stale_base`), `diagnostics` (`parse_error`),
-        /// `index` (the failing op of a batch).
+        /// `index` (the failing op of a batch), `pipeline` + `reason` (the
+        /// handshake's `pipeline` refusal — [`ServerMessage::join_refused`]).
         #[serde(flatten)]
         details: serde_json::Map<String, serde_json::Value>,
     },
@@ -933,6 +1042,16 @@ pub enum ClientMessage {
     Hello {
         /// Protocol version the client speaks.
         v: u32,
+        /// The join hint (additive, v0.1 wave 4 O3 — the pop-out
+        /// viewport): `observer` asks to join as a DECLARED observer, one
+        /// that never holds the write lease — not at the join even when
+        /// the lease is free, not by promotion when the writer leaves, and
+        /// its `take_lease` is refused (kind `lease`) — so a second window
+        /// of the same person can never steal the first one's lease, a
+        /// reconnect included. Absent (an older client) or `writer`: the
+        /// stage-5 rule, the first client takes the lease.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        role: Option<Role>,
     },
     /// Place a node (search-to-place / ribbon / drag-to-empty-canvas).
     PlaceNode {
@@ -1452,6 +1571,57 @@ mod tests {
         assert!(!is_write(&read.message));
     }
 
+    // The join hint (v0.1 wave 4 O3): an old client's hello has no `role`
+    // and reads as `None`; `"role":"observer"` is the declared observer;
+    // the field is omitted on the wire when absent (additive — the version
+    // stays).
+    #[test]
+    fn hello_carries_the_optional_join_role() {
+        let old: IntentEnvelope =
+            serde_json::from_str(r#"{"v":1,"type":"hello","payload":{"v":1}}"#).unwrap();
+        assert_eq!(old.message, ClientMessage::Hello { v: 1, role: None });
+        assert!(!is_write(&old.message));
+        let observer: IntentEnvelope =
+            serde_json::from_str(r#"{"v":1,"type":"hello","payload":{"v":1,"role":"observer"}}"#)
+                .unwrap();
+        assert_eq!(
+            observer.message,
+            ClientMessage::Hello {
+                v: 1,
+                role: Some(Role::Observer)
+            }
+        );
+        let writer: IntentEnvelope =
+            serde_json::from_str(r#"{"v":1,"type":"hello","payload":{"v":1,"role":"writer"}}"#)
+                .unwrap();
+        assert_eq!(
+            writer.message,
+            ClientMessage::Hello {
+                v: 1,
+                role: Some(Role::Writer)
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(ClientMessage::Hello { v: 1, role: None }).unwrap(),
+            serde_json::json!({"type": "hello", "payload": {"v": 1}})
+        );
+        assert_eq!(
+            serde_json::to_value(ClientMessage::Hello {
+                v: 1,
+                role: Some(Role::Observer)
+            })
+            .unwrap(),
+            serde_json::json!({"type": "hello", "payload": {"v": 1, "role": "observer"}})
+        );
+        assert!(
+            serde_json::from_str::<IntentEnvelope>(
+                r#"{"v":1,"type":"hello","payload":{"v":1,"role":"admin"}}"#
+            )
+            .is_err(),
+            "an unknown role is a protocol error, never a silent default"
+        );
+    }
+
     #[test]
     fn undo_redo_batch_and_apply_text_are_writes_with_the_documented_shapes() {
         let undo: IntentEnvelope =
@@ -1543,6 +1713,58 @@ mod tests {
             value["payload"].as_object().unwrap().len(),
             2,
             "no details → just kind + message: {value}"
+        );
+    }
+
+    /// The handshake's `pipeline` refusal is the client's cue to stop
+    /// retrying, show the reason and (for `not_found`) drop the Recent
+    /// entry — so its shape is a contract: kind `pipeline`, `reason` in
+    /// `snake_case`, `pipeline` as sent, no `intent_id`.
+    #[test]
+    fn a_join_refusal_carries_the_pipeline_and_the_reason() {
+        let text = encode(
+            0,
+            &ServerMessage::join_refused(
+                Some("gone.cic"),
+                JoinRefusal::NotFound,
+                "opening gone.cic: no pipeline `gone.cic` in the project".into(),
+            ),
+        );
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["seq"], 0);
+        assert_eq!(
+            value["payload"],
+            serde_json::json!({
+                "kind": "pipeline",
+                "message": "opening gone.cic: no pipeline `gone.cic` in the project",
+                "pipeline": "gone.cic",
+                "reason": "not_found",
+            }),
+            "{value}"
+        );
+        // Every reason has a snake_case wire name the client mirrors.
+        for (reason, wire) in [
+            (JoinRefusal::Unnamed, "unnamed"),
+            (JoinRefusal::PathNotAllowed, "path_not_allowed"),
+            (JoinRefusal::NotFound, "not_found"),
+            (JoinRefusal::OpenFailed, "open_failed"),
+        ] {
+            assert_eq!(serde_json::to_value(reason).unwrap(), wire);
+            assert_eq!(
+                serde_json::from_value::<JoinRefusal>(wire.into()).unwrap(),
+                reason
+            );
+        }
+        // No pipeline named → no `pipeline` key at all.
+        let text = encode(
+            0,
+            &ServerMessage::join_refused(None, JoinRefusal::Unnamed, "no pipeline".into()),
+        );
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            value["payload"],
+            serde_json::json!({"kind": "pipeline", "message": "no pipeline", "reason": "unnamed"}),
+            "{value}"
         );
     }
 

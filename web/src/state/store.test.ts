@@ -653,3 +653,95 @@ describe("compute-on-release (docs/13 §Slider drags — the frozen client contr
     expect(useCicada.getState().pending, "the drag died with the socket").toBeNull();
   });
 });
+
+describe("resetSession (File → Open / Recent / Close, Back)", () => {
+  it("sets the identity and clears every pipeline-bound slice; settings, notices and the catalog survive; the viewport's ledger is told", () => {
+    const catalog = { format: 2 as const, nodes: [] };
+    useCicada.setState({
+      connection: "open",
+      connectionMessage: "",
+      reconnect: { attempt: 2, nextAt: 5 },
+      hello: { clientId: 3, role: "writer", protocol: 1, engine: "x", project: "p", pipeline: "a.cic", unitPx: 24 },
+      role: "writer",
+      lease: { writer: 3, clients: [[3, "writer"]] },
+      token: "t",
+      pipeline: "a.cic",
+      seq: 12,
+      text: "# cicada 1\ndeboss = slider()\n",
+      statuses: { deboss: { state: "done", generation: 4 } },
+      summary: {
+        generation: 4,
+        running: false,
+        cancelled: false,
+        computed: 1,
+        cached: 0,
+        pending: 0,
+        red: 0,
+        blocked: 0,
+        elapsed_ms: 3,
+        eta_rough: false,
+      },
+      dirty: ["deboss"],
+      lastDeltaLabel: "set deboss",
+      history: { ...EMPTY_HISTORY, can_undo: true, depth: 2 },
+      lastError: { kind: "lease", message: "x" },
+      snapshots: 3,
+      displayGeneration: 4,
+      displayResets: 2,
+      catalog,
+      nodeValues: { deboss: { generation: 4, outputs: [] } },
+      wireValues: { "a.out->b.x": { from: { node: "a", port: "out" }, to: { node: "b", port: "x" }, summary: null, pairing: "" } },
+      probe: { from: { node: "a", port: "out" }, targets: {}, catalog: [], intentId: null },
+      transport: { view: TRANSPORT_AT_REST, receivedAt: 1 },
+      pending: { node: "deboss", port: "value", mode: "compute_on_release", value: "0.5", estimateMs: 1000, rough: false, seq: 12 },
+      selection: { nodes: ["deboss"], wire: null, element: null },
+      notices: [{ id: 1, level: "info", message: "kept", at: 0 }],
+      search: { x: 1, y: 2, cell: null, from: null },
+      commitDialog: true,
+      fileDialog: true,
+    });
+    useCicada.getState().setGitStatus({
+      state: { kind: "not_a_repo" },
+      pipeline: { path: "a.cic", tracked: false, ignored: false, dirty: false, nodes: [{ name: "deboss", change: "added" }], removed: [] },
+      scope: [],
+      text_hash: "00",
+    });
+    const settings = useCicada.getState().settings;
+
+    useCicada.getState().resetSession("t", "sub/b.cic");
+    const s = useCicada.getState();
+    expect([s.token, s.pipeline]).toEqual(["t", "sub/b.cic"]);
+    expect(s.connection).toBe("idle");
+    expect(s.reconnect).toBeNull();
+    expect(s.hello).toBeNull();
+    expect(s.role).toBe("observer");
+    expect(canWrite(s)).toBe(false);
+    expect(s.lease).toEqual({ writer: null, clients: [] });
+    expect([s.seq, s.text, s.dirty, s.lastDeltaLabel, s.snapshots, s.displayGeneration]).toEqual([0, "", [], "", 0, 0]);
+    expect(s.graph.nodes).toEqual([]);
+    expect(s.statuses).toEqual({});
+    expect(s.summary.generation).toBe(0);
+    expect(s.history).toEqual(EMPTY_HISTORY);
+    expect(s.lastError).toBeNull();
+    expect(s.displayResets, "bumped: the scene's ledger empties on the change").toBe(3);
+    expect(s.nodeValues).toEqual({});
+    expect(s.wireValues).toEqual({});
+    expect(s.probe).toBeNull();
+    expect(s.git.status, "the git cache is the old pipeline's").toBeNull();
+    expect(s.gitMarkers).toEqual({});
+    expect(s.transport).toBeNull();
+    expect(s.pending).toBeNull();
+    expect(s.selection).toEqual({ nodes: [], wire: null, element: null });
+    expect(s.search).toBeNull();
+    expect([s.commitDialog, s.fileDialog]).toEqual([false, false]);
+    expect(s.catalog, "the catalog stays until the join's snapshot re-reads it").toBe(catalog);
+    expect(s.notices.map((n) => n.message)).toEqual(["kept"]);
+    expect(s.settings).toBe(settings);
+  });
+
+  it("the picker's reset leaves no pipeline", () => {
+    useCicada.getState().resetSession("t", "");
+    expect(useCicada.getState().pipeline).toBe("");
+    expect(useCicada.getState().hello).toBeNull();
+  });
+});
