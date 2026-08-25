@@ -1,0 +1,90 @@
+/* Scrub caching (docs/16 §Sliders; v0.1 item 5 S2): the buffer bar shared by
+   both slider widgets — one segment per step position, warm ones filled in
+   the accent, the thumb's position ringed, the cold ones pulsing softly
+   while the server's worker still has work, and in the warn hue when the
+   byte cap stopped it. The surfaces position it (canvas.css: absolutely
+   under the track; panels.css: a line under the range in the track column);
+   this file is the picture. */
+.scrub-bar {
+  display: flex;
+  gap: 1px;
+  height: 3px;
+  min-width: 0;
+  pointer-events: auto;
+}
+
+.scrub-seg {
+  flex: 1 1 0;
+  min-width: 1px;
+  border-radius: 1px;
+  background: var(--border-strong);
+  opacity: 0.55;
+}
+
+.scrub-seg.warm {
+  background: var(--accent);
+  opacity: 1;
+}
+
+.scrub-seg.current {
+  position: relative;
+  z-index: 1;
+  box-shadow: 0 0 0 1px var(--fg);
+}
+
+.scrub-bar.capped .scrub-seg:not(.warm) {
+  background: var(--warn);
+}
+
+@keyframes scrub-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+.scrub-bar.warming .scrub-seg:not(.warm) {
+  animation: scrub-pulse 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scrub-bar.warming .scrub-seg:not(.warm) {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
+/* the toggle (the inspector's actions row, the params row): a switch whose
+   checked state is the text's `scrub=True`; greyed with the server's reason
+   when the slider cannot scrub-cache */
+.scrub-toggle[aria-checked="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.scrub-toggle.compact {
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 14px;
+  padding: 0 6px;
+  border-radius: 999px;
+}
+
+.scrub-toggle.compact::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.35;
+  vertical-align: 1px;
+}
+
+.scrub-toggle.compact[aria-checked="true"]::before {
+  opacity: 1;
+}

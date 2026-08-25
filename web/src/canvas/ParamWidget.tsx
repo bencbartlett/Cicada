@@ -23,9 +23,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { NodeView, ParamView } from "../protocol/messages";
 import { pendingHint, pendingTitle } from "../panels/format";
-import { pendingFor, useCicada } from "../state/store";
+import { mergeScrub } from "../state/scrub";
+import { pendingFor, scrubProgressFor, useCicada } from "../state/store";
 import { paramValueText, sliderStep, snapToStep } from "./grid";
 import { LiteralWidget } from "./LiteralWidgets";
+import { ScrubBar } from "./ScrubBar";
 import { useParamSender } from "./useParamSender";
 
 interface Props {
@@ -51,6 +53,11 @@ function SliderWidget({ view, param, writer }: Props) {
   const pending = useCicada((s) => pendingFor(s, view.name, port));
   const trackPendingValue = useCicada((s) => s.trackPendingValue);
   const endDrag = useCicada((s) => s.endDrag);
+  // The buffer bar (docs/16 §Sliders): the view's scrub state with the
+  // `scrub_progress` overlay laid over it — the server's warm set, never
+  // computed here.
+  const scrubProgress = useCicada((s) => scrubProgressFor(s, view.name));
+  const scrub = mergeScrub(param.scrub, scrubProgress);
 
   // The server's value wins whenever we are not mid-drag.
   useEffect(() => {
@@ -148,6 +155,7 @@ function SliderWidget({ view, param, writer }: Props) {
           {pendingHint(pending)}
         </span>
       )}
+      <ScrubBar node={view.name} scrub={scrub} value={shown} min={min} step={step} />
     </div>
   );
 }

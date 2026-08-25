@@ -19,9 +19,12 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CATEGORY_ORDER } from "../kinds";
+import { ScrubBar } from "../canvas/ScrubBar";
 import type { NodeView, ParamView } from "../protocol/messages";
-import { canWrite, pendingFor, useCicada, type PendingParam } from "../state/store";
+import { mergeScrub } from "../state/scrub";
+import { canWrite, pendingFor, scrubProgressFor, useCicada, type PendingParam } from "../state/store";
 import { paramValueText, pendingHint, pendingTitle, snapSlider } from "./format";
+import { ScrubToggle } from "./ScrubToggle";
 
 export function ParamsPanel() {
   const graph = useCicada((s) => s.graph);
@@ -121,6 +124,8 @@ function ParamRow({
       </span>
       <span className="param-widget">
         <ParamWidget node={node} param={param} disabled={!writer || off} pending={pending} />
+        {/* The scrub-cache toggle (docs/16 §Sliders): a slider's only; the server's reason greys it. */}
+        <ScrubToggle view={node} writer={writer && !off} compact />
       </span>
     </div>
   );
@@ -294,28 +299,35 @@ function SliderWidget({
   );
 
   const pendingClass = pending === undefined ? undefined : "pending";
+  // The buffer bar (docs/16 §Sliders) under the range, in the track column:
+  // the view's scrub state with the `scrub_progress` overlay laid over it.
+  const scrubProgress = useCicada((s) => scrubProgressFor(s, node.name));
+  const scrub = mergeScrub(param.scrub, scrubProgress);
   return (
     <>
-      <input
-        ref={rangeRef}
-        type="range"
-        className={pendingClass}
-        min={min}
-        max={max}
-        step={step > 0 ? step : "any"}
-        value={shown}
-        disabled={disabled}
-        data-testid={`widget-${node.name}`}
-        aria-label={`${node.name} slider`}
-        onChange={(e) => {
-          const v = Number(e.target.value);
-          setDraft(v);
-          preview(v);
-        }}
-        onPointerUp={release}
-        onPointerCancel={release}
-        onKeyUp={release}
-      />
+      <span className="param-track">
+        <input
+          ref={rangeRef}
+          type="range"
+          className={pendingClass}
+          min={min}
+          max={max}
+          step={step > 0 ? step : "any"}
+          value={shown}
+          disabled={disabled}
+          data-testid={`widget-${node.name}`}
+          aria-label={`${node.name} slider`}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            setDraft(v);
+            preview(v);
+          }}
+          onPointerUp={release}
+          onPointerCancel={release}
+          onKeyUp={release}
+        />
+        <ScrubBar node={node.name} scrub={scrub} value={shown} min={min} step={step} />
+      </span>
       <input
         type="number"
         className={pendingClass}

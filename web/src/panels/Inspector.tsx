@@ -28,6 +28,7 @@ import { formatBytes, formatMs, statusText, summaryText } from "./format";
 import { GitPanel } from "./GitPanel";
 import { useInspectorTab, type InspectorTab } from "./inspectorTab";
 import { ParamsPanel } from "./ParamsPanel";
+import { ScrubToggle } from "./ScrubToggle";
 import { TextPanel } from "./TextPanel";
 import { usePlayhead } from "./usePlayhead";
 import { ValueSummaryView } from "./ValueSummaryView";
@@ -379,6 +380,8 @@ function NodeInspect({ name, extra }: { name: string; extra: number }) {
               {collapsed ? "expand" : "collapse"}
             </button>
           )}
+          {/* Scrub caching (item 5 S2): a slider's toggle — checked = `scrub=True` in the text; greyed with the server's reason. */}
+          <ScrubToggle view={node} writer={writer && !off} />
           <button disabled={!writer} onClick={rename} data-testid="action-rename">
             rename
           </button>

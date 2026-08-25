@@ -24,6 +24,7 @@ import type {
   ProbeCatalogEntry,
   ProbeVerdict,
   Role,
+  ScrubProgressPayload,
   ServerEnvelope,
   SolveSummary,
   ValueSummary,
@@ -325,6 +326,21 @@ export interface CicadaState {
    */
   pending: PendingParam | null;
 
+  // ---- scrub caching (docs/13 §Scrub caching; v0.1 item 5 S2)
+  /**
+   * The `scrub_progress` broadcasts heard since the last snapshot / delta,
+   * by slider name — the fields of a slider's `param.scrub` that move
+   * between deltas (`warmed`, `warming`, `bytes`, `capped`). Kept BESIDE
+   * the graph rather than written into it: a progress message arrives at
+   * up to 10 Hz while a queue warms, and replacing the graph would rebuild
+   * the React Flow nodes and re-route every trace wire each time. The
+   * widgets read `mergeScrub(param.scrub, scrubProgress[name])`
+   * (`state/scrub.ts`). Cleared by every snapshot and delta — the server
+   * overlays its queues on the views it sends, so those carry the current
+   * warm set — and by a disconnect / a session reset.
+   */
+  scrubProgress: Record<string, ScrubProgressPayload>;
+
   // ---- ui
   selection: Selection;
   hoverPick: ElementPick | null;
@@ -458,6 +474,8 @@ export const useCicada = create<CicadaState>((set, get) => ({
 
   pending: null,
 
+  scrubProgress: {},
+
   selection: { nodes: [], wire: null, element: null },
   hoverPick: null,
   notices: [],
@@ -490,6 +508,8 @@ export const useCicada = create<CicadaState>((set, get) => ({
       // The drag died with the socket: the re-hydrated session knows
       // nothing of it, and the next tick is announced afresh.
       pending: null,
+      // The warm sets too: the re-hydration snapshot carries them.
+      scrubProgress: {},
       // So did our knowledge of the transport: extrapolating a playhead
       // nobody can confirm would animate a counter over a dead socket.
       transport: null,
@@ -527,6 +547,7 @@ export const useCicada = create<CicadaState>((set, get) => ({
       gitMarkers: {},
       transport: null,
       pending: null,
+      scrubProgress: {},
       selection: { nodes: [], wire: null, element: null },
       hoverPick: null,
       search: null,
@@ -587,6 +608,8 @@ export const useCicada = create<CicadaState>((set, get) => ({
           wireValues: {},
           // A reload barrier (and a fresh hydration) ends the drag.
           pending: null,
+          // The snapshot's views carry every slider's current warm set.
+          scrubProgress: {},
           // Every snapshot carries the transport; replace, never merge.
           transport: { view: p.transport, receivedAt: nowMs() },
         });
@@ -631,6 +654,9 @@ export const useCicada = create<CicadaState>((set, get) => ({
           // the release's own `set_param` above all: its delta is the
           // signal that the pending value is now the committed one.
           pending: null,
+          // The delta's views carry every slider's warm set as of the
+          // rebuild (a text change drops and re-verifies the queues).
+          scrubProgress: {},
         });
         break;
       }
@@ -755,6 +781,15 @@ export const useCicada = create<CicadaState>((set, get) => ({
         // the whole view, replacing ours — the position at the moment of
         // the message, which the bar extrapolates from until the next one.
         set({ transport: { view: envelope.payload, receivedAt: nowMs() } });
+        break;
+      }
+      case "scrub_progress": {
+        // A slider's queue moved (coalesced, ≤ 10 Hz): the overlay for that
+        // slider is replaced whole — the payload is the current state, not
+        // a diff — and every other slider's entry stands. The graph is not
+        // touched (see `scrubProgress`); the widgets merge on read.
+        const p = envelope.payload;
+        set((state) => ({ scrubProgress: { ...state.scrubProgress, [p.node]: p } }));
         break;
       }
       case "screenshot_request":
@@ -933,6 +968,14 @@ export function pendingFor(
 ): PendingParam | undefined {
   const { pending } = state;
   return pending !== null && pendingIs(pending, node, port) ? pending : undefined;
+}
+
+/** The `scrub_progress` overlay for `node` since the last snapshot / delta, if any (merge it with `param.scrub` — `state/scrub.ts`). */
+export function scrubProgressFor(
+  state: Pick<CicadaState, "scrubProgress">,
+  node: string,
+): ScrubProgressPayload | undefined {
+  return state.scrubProgress[node];
 }
 
 /** Am I the writer? (Display only — every write is gated by `canWrite`.) */

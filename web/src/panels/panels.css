@@ -901,6 +901,26 @@ aside.inspector {
   accent-color: var(--accent);
 }
 
+/* scrub caching (docs/16 §Sliders, item 5 S2): the range and its buffer bar
+   share the track column, the bar a line under the range inset to the
+   thumb's travel; the compact toggle sits after the number */
+.param-track {
+  flex: 1 1 auto;
+  min-width: 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.param-track > input[type="range"] {
+  width: 100%;
+  min-width: 0;
+}
+
+.param-track .scrub-bar {
+  margin: 0 7px;
+}
+
 .param-widget input[type="number"],
 .param-widget input[type="text"] {
   width: 64px;

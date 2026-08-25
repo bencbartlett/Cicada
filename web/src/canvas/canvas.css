@@ -700,6 +700,21 @@
   accent-color: var(--warn);
 }
 
+/* scrub caching (docs/16 §Sliders, item 5 S2): the buffer bar rides the
+   bottom edge of the widget row, under the track — absolutely positioned
+   like the pending chip, so the track never changes size under a held
+   pointer; it hides with the widget at the far LOD tier */
+.cn-slider .scrub-bar {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 1px;
+}
+
+.cn-collapsed .cn-slider .scrub-bar {
+  bottom: -5px;
+}
+
 .cn-pending {
   position: absolute;
   right: 6px;

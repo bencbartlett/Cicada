@@ -21,7 +21,7 @@ runs in parallel from day 1:
 | 3 | OCCT-backed Solid — the `Solid` kind, primitives/extrude/loft/revolve/sweep, booleans, `tessellate`, STEP; `mesh_*` renames in the same commit | main geometry track from week 3 | weeks | **WP-A done** 2026-08-20, review fixes applied the same day (fork `bencbartlett/opencascade-rs@960a8bc`, `occt` feature + seam in `cicada-geom`, `tools/fetch_occt.py`, the dedicated `occt` CI jobs — folded by WP-C into the standard per-PR `rust` / `test-cross` / `playwright-smoke` jobs and the nightly matrix, every building job fetching the prebuilt first; the non-Windows runs await the branch's first CI run); **WP-B done** 2026-08-20 (`wt/solid`: the `Solid` kind end to end, the sharing model — op-local linear handles, no kernel lock — the value-level `cicada_geom::solid`, display through the session's `SolidCache`, the typed Python refusal, the store variant with a committed pre-change pack; the handle cache measured and NOT built); **WP-B second review closed** 2026-08-21 (`wt/solid`: the moved-sphere stale-pcurve root cause fixed in `transform`, display draws unclosed meshes and says so, display tiered + off the session lock on the worker pool, blobs keyed by the display mesh's hash, typed `NotOneSolid`, cached refusals, the 02-solids display cone at 5.2 ms p50 — §Item 3 has the table); **WP-C + WP-D done** 2026-08-20 (`wt/solid`: `occt` ON by default + every CI job fetches the prebuilt; the node-set glue in cicada-geom; `box`/`sphere`/`cylinder`/`cone`/`extrude`/`extrude_to_point`/`loft`/`revolve`/`sweep`/`pipe`/`solid_union`/`solid_difference`/`solid_intersection`/`volume`/`bounding_box`/`deconstruct_solid`/`section`/`tessellate`/`export_step`/`import_step`; the mesh tier as `mesh_*`, the wall's carve hash unchanged; `examples/07-simple-cad.cic` + its Playwright spec; `mirror` added 2026-08-21; numbers below — the cheap-cone slider on the OCCT example: the display cone PASSES since the second review (5.2 / 9.1 ms) while the COMMITTED 02-solids misses the 16 ms bar because its export `tessellate(deflection=0.01)` node sits in the cone (34 ms per tick — a one-line decision for Ben), and Esc inside ONE kernel call misses 250 ms: both named follow-ups); **WP-C/WP-D review closed** 2026-08-21 (`wt/solid`: the tier flip's cache hygiene — `box`/`sphere`/`extrude`/`loft` at version 2 with a stale-memo regression test and a committed signature ledger that makes "a changed meaning bumps the version" a test; `tessellate` bounded by a budget before the mesher runs; `section` tells a tangent contact from a loop; the stdlib's kernel-free world is real and tested; the MCP registration carries the loader path; §Item 3 has the record) |
 | 3b | Scheduler foundations — per-solve cancel handle, `volatile`, idle-class hypothetical solve — plus compute-on-release | parallel (sched/server) | ~1 week | **done** 2026-08-20 (`wt/sched`, eighteen commits after three review rounds: the engine half, then the web half — both sliders show the pending value + estimate from `preview_policy`, the release that writes nothing is `end_drag` and every announced drag's end is `drag_ended` — with a Playwright drag of the wall's `deboss`, an observer page watching, as its evidence) |
 | 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | **DONE** 2026-08-20 (`wt/transport`): engine — `cycle` / `clock` with the `transport_driven` port attribute, the playhead injected at lowering, per-session transport state + the five `transport_*` intents + `TransportView` in every snapshot and the `transport` broadcast, playback over the preview loop, `examples/08-orbit.cic` (orbit second pass 120 generations, 0 computed / 1,800 cached, p50 0.43 ms); web — the play bar (play/pause, the frame scrubber, speed, reset), `Space`, the transport-driven ports hidden on the canvas and in the inspector (each driven port carrying its own loop; the server owns the wire-target rule — `probe_wire`/`connect` refuse), observers read-only, `web/e2e/transport.spec.ts` |
-| 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | **S1 (engine) done** 2026-08-24 (`wt/scrub`): eligibility as a pure function (32 positions, `step > 0`, literal bounds), `slider`'s `scrub = False` kwarg (version 2), the idle-class warmer (nearest-first alternating, one position at a time, dry-run skips, the 256 MiB cap, dropped on a text change, blocked by a live drag / playback, parked after a pre-emption), the additive protocol (`ParamView.scrub`, `scrub_progress`, `set_scrub`, `/debug/state.scrub`), `02-solids`' cone slider opted in; the DoD sweep (`slider_loop.mjs --snap --expect warm`) — §Item 5; **S2 (web) pending** |
+| 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | **S1 (engine) done** 2026-08-24 (`wt/scrub`): eligibility as a pure function (32 positions, `step > 0`, literal bounds), `slider`'s `scrub = False` kwarg (version 2), the idle-class warmer (nearest-first alternating, one position at a time, dry-run skips, the 256 MiB cap, dropped on a text change, blocked by a live drag / playback, parked after a pre-emption), the additive protocol (`ParamView.scrub`, `scrub_progress`, `set_scrub`, `/debug/state.scrub`), `02-solids`' cone slider opted in; the DoD sweep (`slider_loop.mjs --snap --expect warm`) — §Item 5; **S2 (web) done** 2026-08-24 (`wt/scrub`): the one buffer bar under both slider widgets (`ScrubBar.tsx`), the toggle in the inspector's actions, the params row and the node menu greyed with the server's reason (`ScrubToggle.tsx`, `state/scrub.ts`), `scrub_progress` as a store overlay beside the graph; the `scrub` port row stays; `web/e2e/scrub.spec.ts` — 02-solids warm / toggled and a Python-burn pipeline for the live-vs-withheld tie-in (warm drag: every preview `computed: 0`, the viewport following; cold un-scrubbed drag: the pending chip on writer and observer) — §Item 5 |
 | 6 | WASM script host — load precompiled guests, epoch cancellation, `cicada-guest` SDK | last | weeks | pending |
 | C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); **C1 done** (2026-08-20: 48 nodes — lists, maths tail, sequences; the diagnostics name real nodes and a test keeps it so; `compact` satisfiable at check time; `examples/06-lists.cic`); **`cicada mcp` done** (2026-08-20: the four doc-11 read tools over stdio on `rmcp`); C2+ pending |
 
@@ -868,6 +868,43 @@ than measured separately: a tick arriving mid-warm pre-empts the idle
 solve at its next chunk boundary exactly as Esc does, so its latency is
 the Esc latency plus the tick's own solve; the pre-emption test
 (`a_real_preview_lands_first_and_the_queue_resumes`) holds the order.
+
+**S2 landed 2026-08-24** (`wt/scrub`; the contract in §Wave 4 — second
+half, its deviations recorded beside it). What shipped: the one buffer
+bar for both slider widgets (`web/src/canvas/ScrubBar.tsx` + `scrub.css`
+— a segment per position, warm ones filled, the thumb's notch ringed, a
+pulse while `warming`, the warn hue when `capped`; absolutely positioned
+under the canvas track, expanded or collapsed, and a line under the
+params row's range), the toggle on three surfaces
+(`web/src/panels/ScrubToggle.tsx` in the inspector's actions and compact
+in the params row; the node menu item in `Canvas.tsx`) reading the
+server's `ineligible` verbatim as the greyed reason, the pure half
+(`web/src/state/scrub.ts`: `mergeScrub`, `currentPosition`,
+`scrubBarTitle`, `scrubToggle`) and the store's `scrubProgress` overlay
+(`scrub_progress` kept beside the graph, cleared by every snapshot /
+delta / disconnect / reset). The `scrub` port row stays on the canvas
+(docs/16). Tests: `scrub.test.ts` (the merge, the notch — 0…0.3 by 0.1
+included —, the tooltip, the toggle's state for eligible on/off,
+ineligible off = greyed, ineligible ON = live, the overlay's lifecycle),
+`ScrubBar.test.tsx`, `ScrubToggle.test.tsx` (both surfaces, the sent
+intent, observer / `#off` / non-slider), the bar cases added to
+`ParamWidget.test.tsx` and `ParamsPanel.test.tsx` (the observer view
+from the broadcast alone, the marker following the thumb and the pending
+value); `web/e2e/scrub.spec.ts` — the 02-solids test (the bar on both
+widgets at 19 / 19 after the open, the toggle on the three surfaces, a
+pointer drag across warm positions with every preview generation
+`computed: 0` while the viewport follows the held value, the release as
+one op and the queue re-verified, `scrub size off` from the inspector
+emptying the bar and the queue, Ctrl+Z bringing both back) and the
+expensive-cone test (a Python burn node: `a`'s three positions warmed in
+two idle-class generations while an observer's bar fills from the
+broadcast; `a` dragged across them live with zero computed nodes; `b`
+dragged cold → `pending · 2.61 s` on both pages, no preview computes,
+the viewport stands, one structural generation on release; `fine` at 51
+positions greyed with `too many positions (51 > 32)` and the forced
+`set_scrub` refused with the same words, no op). Measured in the spec's
+runs (debug engine): 02-solids' 19 positions warm within the first
+second after the open; the two tests take 1.9 s and 12.7 s.
 
 ## Item 6 — WASM script host (weeks, last)
 
@@ -1826,6 +1863,42 @@ first, so dragging it later is instant — a video-style buffer bar.
   the pending chip appears. docs/16 (the bar, the toggle), docs/13 (the
   shapes), `web/e2e/scrub.spec.ts`; the consumer is `examples/02-solids.cic`
   with `scrub=True` on its cone slider (positions ≤ 32 — set the step so).
+  **S2 landed 2026-08-24 — where the code and the contract disagreed, the
+  smaller honest deviation, recorded here:** (1) The pending-chip half of
+  the e2e cannot run on 02-solids: its cone is ~40 ms per tick, so a cold
+  position previews live there too and no chip can appear, and it has no
+  un-scrubbed slider. `web/e2e/scrub.spec.ts` therefore has two tests —
+  02-solids for the bar on both widgets, the toggle on its three surfaces,
+  the warm drag (every preview generation `computed: 0`, the viewport
+  following while the pointer is down, no chip), toggle-off / Ctrl+Z —
+  and a pipeline the spec writes into the scratch (`scrub-cold/cold.cic`
+  + `scripts/burn.py`: a Python script node with a fixed CPU loop,
+  seconds per call, fed by a scrub-cached `a` and an un-scrubbed `b`,
+  plus `fine` at 51 positions) for the tie-in proper: `a`'s warm
+  positions preview live with zero computed nodes although each costs
+  seconds cold, `b`'s cold position earns `pending · N s` on the writer
+  and the observer and solves once on release, the observer's bar fills
+  from the broadcast, `fine`'s toggle is greyed with the server's reason
+  and the forced intent is refused with the same words. (2) Deviation 12
+  decided: the `scrub` port row STAYS on the canvas slider (it is the
+  kwarg, editable like every typed literal; the server sizes the node for
+  it; the toggle and the bar are the designed affordances) — docs/16
+  §Sliders §Scrub-cached. (3) "The inspector's param row" is read as both
+  the inspector's ACTIONS row (a switch beside collapse / expand) and the
+  params panel's row (a compact `scrub` pill) — the same component,
+  `ScrubToggle.tsx`; the node menu renders the same state
+  (`state/scrub.ts::scrubToggle`). (4) `scrub_progress` is kept as an
+  overlay beside the graph (`store.scrubProgress`, merged on read,
+  cleared by every snapshot / delta), not written into the graph: at the
+  broadcast's 10 Hz the graph's identity change would rebuild the React
+  Flow nodes and re-route every trace wire (docs/13). (5) Deviation 13
+  stands: a text change still drops and rebuilds every queue, so the bar
+  empties and refills on every release — on 02-solids the re-verify is
+  sub-second (the e2e waits for it after each write); re-centring instead
+  of dropping stays a follow-up. (6) The current-notch marker is the one
+  number the client computes — `round((value − min) / step)` clamped,
+  the widget's own snap, display only; eligibility and the warm set stay
+  the server's.
 
 **Track C — `wt/catalog-c2` (the 21 unblocked docs/08 S+1 rows; skill
 `add-stdlib-node`: one node per file, three tests each, `gh =` names,

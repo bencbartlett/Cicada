@@ -41,6 +41,7 @@ import { asOneOp, type GestureMessage, type WireEnd } from "../protocol/messages
 import { canWrite, useCicada, writeBlockReason } from "../state/store";
 import "./canvas.css";
 import { CicadaEdge } from "./CicadaEdge";
+import { scrubToggle } from "../state/scrub";
 import { CicadaNode } from "./CicadaNode";
 import { collapseHint } from "./collapse";
 import { ConnectionLine } from "./ConnectionLine";
@@ -540,6 +541,22 @@ function CanvasInner() {
                 },
               ]
             : []),
+          // Scrub caching (item 5 S2; docs/16 §Sliders): the toggle as a
+          // menu item — `scrub-cache this slider` / `stop scrub-caching`,
+          // greyed with the SERVER's reason (`param.scrub.ineligible`)
+          // while the slider is off and cannot; the client computes nothing.
+          ...(() => {
+            const toggle = scrubToggle(view);
+            if (toggle === null) return [];
+            return [
+              {
+                label: toggle.label,
+                disabled: toggle.disabled,
+                hint: toggle.hint,
+                onClick: () => sendWrite({ type: "set_scrub", payload: { node: view.name, on: toggle.next } }),
+              },
+            ];
+          })(),
           {
             label: "rename…",
             onClick: () => {

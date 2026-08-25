@@ -190,7 +190,12 @@ warming; DECISIONS.md row 39) — additive, `PROTOCOL_VERSION` unchanged:
   broadcast coalesced at the statuses' cadence (≤ 10 Hz, one per slider
   however many positions landed in between) while a queue moves; it
   updates that slider's `param.scrub` in place and is never sent for a
-  slider without a queue.
+  slider without a queue. (The web client keeps it as an overlay BESIDE
+  the graph — `store.scrubProgress`, by slider, merged on read by
+  `state/scrub.ts::mergeScrub`, cleared by every snapshot / delta since
+  their views carry the warm sets — so a 10 Hz broadcast never rebuilds
+  the React Flow nodes or re-routes the trace wires; S2, 2026-08-24. The
+  merged view feeds the buffer bar and the toggle, docs/16 §Sliders.)
 - `set_scrub {node, on}` is a write gesture (a `batch` element, an op
   labelled `scrub x on` / `scrub x off`, undoable; the delta carries the
   new view and the warming starts from it): `on` writes `scrub=True` into

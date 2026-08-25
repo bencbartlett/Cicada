@@ -216,4 +216,37 @@ describe("the params panel's slider under compute-on-release", () => {
     expect(row.className).not.toMatch(/pending/);
     expect(sent).toEqual([]);
   });
+
+  // Scrub caching (docs/16 §Sliders; item 5 S2): the same buffer bar as the
+  // canvas widget's, in the track column under the range — the view's warm
+  // set moved by `scrub_progress`, the current notch following the thumb —
+  // for the writer and the observer alike.
+  it("the scrub buffer bar sits under the range, reads the view + scrub_progress, and follows the thumb", () => {
+    const scrubbed: NodeView = {
+      ...deboss,
+      param: { ...deboss.param!, scrub: { on: true, positions: 16, warmed: [5], warming: true, bytes: 0 } },
+    };
+    useCicada.setState({ role: "observer", graph: { ...graph, nodes: [scrubbed] }, scrubProgress: {} });
+    const { range } = renderPanel();
+    const bar = screen.getByTestId("scrub-bar-deboss");
+    expect(bar.parentElement).toBe(range.parentElement);
+    expect(bar.parentElement?.className).toBe("param-track");
+    expect(bar.dataset).toMatchObject({ positions: "16", warmed: "1", warming: "true", current: "5" });
+    act(() =>
+      useCicada.getState().applyServerMessage({
+        v: 1,
+        seq: 4,
+        type: "scrub_progress",
+        payload: { node: "deboss", port: "value", warmed: [2, 3, 4, 5, 6, 7, 8], warming: false, bytes: 2048 },
+      }),
+    );
+    expect(bar.dataset).toMatchObject({ warmed: "7", warming: "false" });
+    expect(bar.querySelectorAll(".scrub-seg.warm")).toHaveLength(7);
+    // The writer's compute-on-release drag seen from here: the pending value's notch is the current one.
+    act(() => useCicada.getState().applyServerMessage(policy("1.4")));
+    expect(bar.dataset.current).toBe("9");
+    act(() => useCicada.getState().applyServerMessage(dragEnded));
+    expect(bar.dataset.current).toBe("5");
+    expect(sent).toEqual([]);
+  });
 });

@@ -198,4 +198,58 @@ describe("the canvas slider under compute-on-release", () => {
     expect(range.value).toBe("0.7");
     expect(screen.getByTestId("pending-deboss")).toBeTruthy();
   });
+
+  // Scrub caching (docs/16 §Sliders; item 5 S2): the buffer bar under the
+  // track, from the view's `scrub` and the `scrub_progress` broadcast alone
+  // — the same for the writer, the twin widget and an observer — with the
+  // current notch following the thumb.
+  it("the scrub buffer bar rides under the track: the view's warm set, moved by scrub_progress, the current notch following the thumb", () => {
+    useCicada.setState({ scrubProgress: {} });
+    const scrubbed: NodeView = {
+      ...deboss,
+      param: { ...deboss.param!, scrub: { on: true, positions: 16, warmed: [5], warming: true, bytes: 0 } },
+    };
+    render(<ParamWidget view={scrubbed} param={scrubbed.param!} writer />);
+    const bar = screen.getByTestId("scrub-bar-deboss");
+    expect(bar.parentElement).toBe(screen.getByTestId("slider-deboss").parentElement);
+    // 1.0 on 0.5…2.0 by 0.1 is notch 5 — the committed value's notch is warm.
+    expect(bar.dataset).toMatchObject({ positions: "16", warmed: "1", warming: "true", current: "5" });
+    act(() =>
+      useCicada.getState().applyServerMessage({
+        v: 1,
+        seq: 4,
+        type: "scrub_progress",
+        payload: { node: "deboss", port: "value", warmed: [3, 4, 5, 6, 7], warming: false, bytes: 4096 },
+      }),
+    );
+    expect(bar.dataset).toMatchObject({ warmed: "5", warming: "false", current: "5" });
+    expect(bar.querySelectorAll(".scrub-seg.warm")).toHaveLength(5);
+    // A drag moves the marker with my thumb (1.3 → notch 8); the warm set stands.
+    const range = screen.getByTestId("slider-deboss") as HTMLInputElement;
+    fireEvent.pointerDown(range);
+    fireEvent.input(range, { target: { value: "1.3" } });
+    expect(bar.dataset.current).toBe("8");
+    expect(bar.dataset.warmed).toBe("5");
+    // Another slider's progress is not this bar's.
+    act(() =>
+      useCicada.getState().applyServerMessage({
+        v: 1,
+        seq: 4,
+        type: "scrub_progress",
+        payload: { node: "other", port: "value", warmed: [0], warming: true, bytes: 1 },
+      }),
+    );
+    expect(bar.dataset.warmed).toBe("5");
+  });
+
+  it("no bar for a slider that is not scrub-cached", () => {
+    render(
+      <ParamWidget
+        view={deboss}
+        param={{ ...deboss.param!, scrub: { on: false, positions: 16, warmed: [], warming: false, bytes: 0 } }}
+        writer
+      />,
+    );
+    expect(screen.queryByTestId("scrub-bar-deboss")).toBeNull();
+  });
 });
