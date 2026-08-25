@@ -45,6 +45,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import config from "../playwright.config";
+import { paramValueText } from "../src/state/literals";
 
 const meta = config.metadata as { token: string };
 const TOKEN = meta.token;
@@ -534,7 +535,11 @@ test("a deboss drag shows `pending · N s` while held, paints no computing previ
   await expect(page.getByTestId("number-deboss")).toHaveValue(committed, { timeout: PAGE_BOUND_MS });
   await expect(page.getByTestId("number-deboss")).not.toHaveClass(/pending/, { timeout: PAGE_BOUND_MS });
   await expect(page.getByTestId("pending-deboss")).toHaveCount(0, { timeout: PAGE_BOUND_MS });
-  await expect(page.getByTestId("slider-value-deboss")).toHaveText(committed, { timeout: PAGE_BOUND_MS });
+  // The label shows the value as the dialect writes it (`2.0`, never a bare
+  // `2` — that would parse as an Integer literal); the inputs hold the number.
+  await expect(page.getByTestId("slider-value-deboss")).toHaveText(paramValueText("slider", released), {
+    timeout: PAGE_BOUND_MS,
+  });
   // … and the observer's badge goes down with it (`drag_ended`), its
   // number back on the committed value.
   await expect(observerHint).toHaveCount(0, { timeout: PAGE_BOUND_MS });
