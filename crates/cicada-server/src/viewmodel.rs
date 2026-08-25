@@ -1110,6 +1110,8 @@ fn statement_node(
                             min: None,
                             max: None,
                             step: None,
+                            // A choice has no positions to warm: no scrub view (item 5 is the slider's).
+                            scrub: None,
                             options: text_list_kwarg(call, "options"),
                         }),
                         _ => None,
