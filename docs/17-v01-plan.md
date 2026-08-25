@@ -23,7 +23,7 @@ runs in parallel from day 1:
 | 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | **DONE** 2026-08-20 (`wt/transport`): engine — `cycle` / `clock` with the `transport_driven` port attribute, the playhead injected at lowering, per-session transport state + the five `transport_*` intents + `TransportView` in every snapshot and the `transport` broadcast, playback over the preview loop, `examples/08-orbit.cic` (orbit second pass 120 generations, 0 computed / 1,800 cached, p50 0.43 ms); web — the play bar (play/pause, the frame scrubber, speed, reset), `Space`, the transport-driven ports hidden on the canvas and in the inspector (each driven port carrying its own loop; the server owns the wire-target rule — `probe_wire`/`connect` refuse), observers read-only, `web/e2e/transport.spec.ts` |
 | 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | **S1 (engine) done** 2026-08-24 (`wt/scrub`): eligibility as a pure function (32 positions, `step > 0`, literal bounds), `slider`'s `scrub = False` kwarg (version 2), the idle-class warmer (nearest-first alternating, one position at a time, dry-run skips, the 256 MiB cap, dropped on a text change, blocked by a live drag / playback, parked after a pre-emption), the additive protocol (`ParamView.scrub`, `scrub_progress`, `set_scrub`, `/debug/state.scrub`), `02-solids`' cone slider opted in; the DoD sweep (`slider_loop.mjs --snap --expect warm`) — §Item 5; **S2 (web) done** 2026-08-24 (`wt/scrub`): the one buffer bar under both slider widgets (`ScrubBar.tsx`), the toggle in the inspector's actions, the params row and the node menu greyed with the server's reason (`ScrubToggle.tsx`, `state/scrub.ts`), `scrub_progress` as a store overlay beside the graph; the `scrub` port row stays; `web/e2e/scrub.spec.ts` — 02-solids warm / toggled and a Python-burn pipeline for the live-vs-withheld tie-in (warm drag: every preview `computed: 0`, the viewport following; cold un-scrubbed drag: the pending chip on writer and observer) — §Item 5 |
 | 6 | WASM script host — load precompiled guests, epoch cancellation, `cicada-guest` SDK | last | weeks | pending |
-| C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); **C1 done** (2026-08-20: 48 nodes — lists, maths tail, sequences; the diagnostics name real nodes and a test keeps it so; `compact` satisfiable at check time; `examples/06-lists.cic`); **`cicada mcp` done** (2026-08-20: the four doc-11 read tools over stdio on `rmcp`); C2+ pending |
+| C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); **C1 done** (2026-08-20: 48 nodes — lists, maths tail, sequences; the diagnostics name real nodes and a test keeps it so; `compact` satisfiable at check time; `examples/06-lists.cic`); **`cicada mcp` done** (2026-08-20: the four doc-11 read tools over stdio on `rmcp`); **C2a done** (2026-08-24, `wt/catalog-c2`: the 12 Point · Vector · Plane rows — `distance`, `closest_point` (a flat scan, no new dependency), `cull_duplicates`, `construct_vector` / `deconstruct_vector`, `amplitude` / `vector_length`, `cross_product` / `dot_product` / `angle`, `rotate_vector`, `plane_normal`; `examples/09-vectors.cic`); **C2b done** (2026-08-24, `wt/catalog-c2`: `rotate_axis`, `scale_nu`, `polar_array`, `rectangular_array`, `compose_xform`, `transform`, `center_box`, `mesh_plane`, the dropdown param as `choice` (the ledger's name; the contract's `value_list`) with its `<select>` on both param surfaces, plus `construct_xform` as the one `Xform` producer; `cicada_geom::transform::Affine`; `examples/06-lists.cic` gains the pegboard; the record and its deviations are under the wave-4 second-half contract); next C3+ |
 
 Out of v0.1 (unchanged from doc 05): fillets/chamfers and B-rep
 maturity, the Blender bridge, fidget, the .gh importer, Tauri, the AI
@@ -1008,7 +1008,14 @@ format, doc 08.
   number).
 - **C2**: mesh-tier cylinder/cone/extrude_to_point/volume/bounding_box
   and the vector/plane nodes (ports pin_cutters / tip_caps math out of
-  Python in the wall).
+  Python in the wall). **C2a — the 12 vector/plane rows — done
+  2026-08-24** (`wt/catalog-c2`; the record and its deviations are under
+  the wave-4 second-half contract below). **C2b — the Transform rows and
+  the stragglers — done 2026-08-24** (same worktree, five commits; the
+  record and its deviations are under the contract below). Every
+  §5–§10 S+1 row of docs/08 that needs no new kind is shipped with C2;
+  what remains of the S+1 list waits on `Surface`, `Arc` / `Ellipse` /
+  `Compound` (C3) and the checker's second type variable.
 - **C3**: the core Curve ABI landed once (Arc/Ellipse/Compound,
   `Planar<Curve>`, Color authoring) then the curve nodes.
 - **C4+**: the rest of docs/08 S+1, category by category, Solid rows
@@ -1933,12 +1940,151 @@ review).**
   (the doc's "Vector Length" — `length` is the list node's), `cross_product`
   + `dot_product` + `angle` (the doc's "Cross" — `cross` is the list
   combinator's reserved name), `rotate_vector`, `plane_normal`.
+  **Landed 2026-08-24** (`wt/catalog-c2`, two commits; 12 nodes in
+  `crates/cicada-stdlib/src/points/`, each with the three tests, goldens
+  blessed run-once on exact-arithmetic inputs, 12 ledger rows, the catalog
+  regenerated, `examples/09-vectors.cic` using every node, docs/08 rows
+  marked). *Deviations, recorded here as the contract asks:* (1)
+  `closest_point` is a **flat scan**, not a kd-tree, and **no dependency
+  was added** — the node takes ONE query point, so under the `each()` lift
+  it is called once per query and a tree built per call is O(n log n)
+  against the O(n) scan it would replace; docs/08's "kd-tree backed" note
+  is rewritten to say so, and a shared index is named as belonging to a
+  future node that takes the queries as a list. (2) The one-vector ports
+  are named `vector` (`vector_length(vector=…)`, `amplitude(vector=…)`,
+  `deconstruct_vector(vector=…)`, `rotate_vector(vector=…)`): docs/08's
+  `v` was shorthand and its Deconstruct Vector row named no port; the rows
+  now carry the shipped signatures as the other shipped rows do. (3)
+  `glam` became a direct dependency of cicada-stdlib — already in the
+  workspace (core, geom), dev-only in the stdlib until now; `rotate_vector`
+  names `DMat3` (the axis-angle matrix `Similarity::rotation` builds) and
+  `plane_normal` the world axes. (4) `angle`'s golden hashes the three
+  values IEEE 754 / C99 Annex F pin exactly (`atan2(+0, x>0) = 0`,
+  `atan2(y>0, 0) = π/2`, `atan2(+0, x<0) = π`) and asserts run-to-run
+  identity for a general angle; `rotate_vector`'s golden is the angle-0
+  turn (exact identity) plus run-to-run identity for a quarter turn.
+  *Review closure (2026-08-24, the package's adversarial review — verdict
+  ship, one minor):* the probe of `examples/09-vectors.cic` now floats
+  0.5 above the ring's plane — IN the plane, the probe on the centre (the
+  x/y sliders' midpoint, a one-keystroke literal in the inspector) zeroed
+  `to_probe` and painted `angle` / `amplitude` red, a reachable slider
+  position of an example whose README promises sliders to drag;
+  `cicada-cli/tests/examples_solve.rs` now also solves the example at the
+  centre (at the radius's default and bounds), the four corners and
+  straight above a post, each position set through the writer's
+  `set_param` as a drag sets it (the test that would have caught it —
+  `every_example_solves` sees only the committed defaults). The
+  `rotate_vector` and `cross_product` property tests now pin handedness
+  (the review's mutation runs found them sign-blind, the tables and
+  goldens catching the flips): `n · (v × out) = |v⊥|² sin θ`, `v · out =
+  |v∥|² + |v⊥|² cos θ` and agreement with `Similarity::rotation` about a
+  frame with that z; the scalar triple product against the determinant of
+  `[a b c]`. The `area` tier correction (`S` → `1`, docs/08 §7) from the
+  shared bullet below is done in the same commit (catalog regenerated; the
+  tier is not a signature-ledger column). Recorded, not changed:
+  `closest_point`'s flat scan; `plane_normal`'s in-plane rule is Cicada's
+  own, not Rhino's `PerpendicularTo` (a `.gh` importer would port it and
+  bump `version`); `angle`'s π/2 and π goldens rest on atan2's C99 Annex F
+  special values on the 3-OS Nightly; ±inf coordinates pass through
+  `closest_point` / `cull_duplicates` as IEEE arithmetic (the value model
+  refuses NaN and admits ±inf — a core rule for the ledger, not a per-node
+  refusal two nodes would apply and `distance` / `move` would not).
 - **C2b — Transform and the stragglers (9):** `rotate_axis`, `scale_nu`,
   `polar_array`, `rectangular_array`, `compose_xform`, `transform` (the
   `Xform` kind exists), `value_list` (the dropdown param — `options:
   [Text]`, `value: Text`; a `ParamView` kind the inspector and the canvas
   render as a select: the small web half rides in this package),
   `center_box`, `mesh_plane`.
+  **Landed 2026-08-24** (`wt/catalog-c2`, five commits on top of C2a:
+  cicada-geom's `Affine`; the seven Transform nodes; `center_box` +
+  `mesh_plane`; the dropdown param end to end; the consumer + docs). Every
+  node in the one-node-per-file format with the three tests, goldens
+  blessed run-once and transcendental-free (`center_box`'s through
+  `platform_golden`, win-64), ten ledger rows, the catalog regenerated
+  per commit; `examples/06-lists.cic` gains the pegboard (`center_box` →
+  `rectangular_array`, `move` → `polar_array`, a `choice` label on a
+  `text_tag`) and `cicada-cli/tests/examples_solve.rs` solves it at every
+  option of the dropdown and asserts the stray value red; docs/08 §1, §7,
+  §8, §10 carry the shipped signatures. *Deviations, recorded here as the
+  contract asks:* (1) **the dropdown param is `choice`, not
+  `value_list`** — the DECISIONS.md dialect-grammar row ("params are
+  constructor bindings (`slider`/`toggle`/`choice`/bare literals)") and
+  docs/10 §3 (`mode = choice(value="fast", options=["fast", "exact"])`)
+  have named it so since the first draft; the contract's `value_list` was
+  the GH name snake-cased, and the ledger is never contradicted for a
+  naming choice made without it; `gh = "Value List"` keeps the GH name in
+  search-to-place, and the `ParamView` kind is `choice` like the `slider`
+  / `toggle` kinds are their nodes' names. (2) **`construct_xform` is a
+  tenth node, not in the contract or in docs/08** — `compose_xform` and
+  `transform` had nothing to compose or apply: no node emitted an `Xform`
+  (GH's transform components emit theirs as a second `X` output, and a
+  second output on `move` & co. would change every consumer's binding
+  shape). The smallest honest producer is the 3×4 matrix row by row,
+  twelve finite numbers (`gh = "Construct Matrix"` — GH's Matrix casts to
+  a Transform); a constructor per motion (`translation(v) → Xform` …) is
+  recorded in docs/08 §10 as the road if the matrix form proves too raw.
+  (3) **`scale_nu` and `transform` refuse a Solid under a non-similarity**
+  — the kernel transform is `gp_Trsf`, which silently re-orthogonalizes
+  whatever it is handed (a shear would come back as a rotation), and the
+  general `BRepBuilderAPI_GTransform` is not glued (a follow-up below);
+  equal factors / a similarity `Xform` take the kernel path exactly. The
+  same rule makes the two nodes honest on the analytic kinds: a circle is
+  carried while its plane is scaled evenly, a rectangle while its frame is
+  not skewed, else red with the numbers (`GeomError::AffineRefused`) —
+  "exactness, not similarity" (cicada-geom `transform.rs` module doc).
+  (4) `polar_array`'s fence posts: a full turn divides the circle (`k ×
+  angle / count`), a shorter sweep is filled to its end (`k × angle /
+  (count − 1)`) — Rhino's `ArrayPolar` rule, spelled out in the node doc
+  because docs/08 said nothing; NOT Grasshopper's, whose component divides
+  every sweep by `count` (McNeel RH-81087), so a `.gh` importer translates
+  the angle; the full turn is recognised within the angular tolerance
+  only (a typed `6.28` fills — the review closure below says why no wider
+  band); a zero sweep stacks the copies; beyond a full turn is red. (5)
+  `rectangular_array`'s spacing is ONE `cell: Vector` (GH's Cell box
+  reduced to its three extents) rather than three step ports; `mesh_plane`
+  takes `mesh_box`'s plane + domains rather than GH's rectangle, so it is
+  statically total; `center_box` takes GH's half-extents (`x = 1` spans
+  two units). (6) The consumer additions went to `06-lists.cic` only, not
+  `02-solids.cic` — 02 is Track S's consumer in the same wave (its cone
+  slider gains `scrub=True`) and the smoke's node-count pipeline, so the
+  parallel worktree keeps it untouched. *Not built, recorded:* a `.gh`
+  importer will want the GH Value List's label/value pairing (`choice`
+  makes the option the value); `deconstruct_xform`; the Params tab does
+  not yet group by canvas groups (unchanged).
+  *Review closure (2026-08-24, the package's adversarial review — verdict
+  ship, three minors, no majors):* `compose_xform` answers to `gh =
+  "Compound"` — GH's Transform > Util component that multiplies
+  transforms; `Compose`, the name first shipped, is no GH component, so
+  search-to-place under the GH name found nothing (a spec pin in the
+  node's tests keeps the name). `rectangular_array`'s count product is
+  formed by the new `checked_product` (stdlib `lib.rs`: `checked_mul`
+  over the factors, then `checked_size`): three counts the dialect admits
+  (each under 2^53) multiply past `u128::MAX`, and the bare `x × y × z`
+  was rustc's "attempt to multiply with overflow" — red, but not the
+  node's text; now it is the typed ceiling refusal naming the counts
+  (`rectangular_array_product_past_u128_is_refused_with_the_ceiling_text`;
+  `mesh_plane` takes the same door, its behaviour unchanged — two `i64`s
+  cannot overflow it). `polar_array` keeps its rule and its band — the
+  angular tolerance — because every wider band is either an arbitrary
+  constant (none admits a typed `6.28` without admitting a deliberate
+  359.8° fill) or, scaled to the step, a count-dependent cliff at an
+  unremarkable angle (three copies: 5.0 rad fills to 5.0, 5.1 rad would
+  divide to 3.4); the cliff is now a stated contract instead — the node
+  doc names it, the table pins both sides of the band and the zero
+  sweep, and a second property covers the full-turn branch the sweep
+  property never reached. The parity claim was wrong and is corrected in
+  the node doc, docs/08 §10 and deviation (4): the rule is Rhino's
+  `ArrayPolar`; GH's component divides every sweep by `count` (McNeel
+  RH-81087). Notes recorded, not changed: `Affine::as_similarity` reads
+  `tol` as a relative deviation of the column lengths and dot products
+  (the method doc says so); `Affine::plane` carries a plane whose stored
+  `y` leans off `x` as the frame `orthonormal` denotes — perpendicular
+  axes, the stored lengths — while a similarity moves the axes as typed
+  (now a unit test in cicada-geom,
+  `affine_carries_a_leaning_plane_as_the_frame_it_denotes`, so the repair
+  is a contract, not an accident); the zero-angle goldens pin the identity
+  path only, the tables catch handedness and fence posts; `choice` and
+  `construct_xform` stand as deviations (1) and (2).
 - Every name is checked against the catalog AND the phantom list of
   `crates/cicada-cli/tests/diagnostic_vocabulary.rs`; consumers: a new
   `examples/09-vectors.cic` (C2a), additions to `06-lists` / `02-solids`
@@ -1946,6 +2092,20 @@ review).**
   `S`, corrected to the doc's `1` on the way).
 
 ## Follow-ups (found by the v0.1 reviews and measurements; scheduled, not yet placed)
+
+- **The kernel's general transform (C2b, 2026-08-24)** — `scale_nu` and
+  `transform` refuse a `Solid` under a non-similarity (a stretch, a
+  shear): the glued kernel transform is `gp_Trsf`, whose `SetValues`
+  silently re-orthogonalizes its matrix, so a non-similarity must never
+  reach it. The honest Solid stretch is `BRepBuilderAPI_GTransform` over a
+  `gp_GTrsf` (planes and lines stay analytic; cylinders, spheres and
+  circles become B-spline surfaces and curves in OCCT's own
+  representation — the bytes grow, the later booleans slow); glue it in
+  `crates/cicada-geom/src/occt/glue.hxx` with the `Copy = true`
+  discipline of `transform`, a pcurve check like the 2026-08-21 one, and
+  per-OS goldens, then drop the `Solid` arm of `Affine::try_apply`'s
+  refusal. Until then a stretched Solid is "tessellate, then scale the
+  mesh" — the message says so.
 
 - **Obstacle-aware trace channels (B2 review, 2026-08-24)** — the trace
   router knows no obstacles: a stair's long run along a row, or a Z's

@@ -15,7 +15,7 @@ import { useCicada } from "../state/store";
 import { useParamSender } from "./useParamSender";
 import "./canvas.css";
 
-export type ScalarKind = Exclude<LiteralKind, "slider" | "toggle" | "list">;
+export type ScalarKind = Exclude<LiteralKind, "slider" | "toggle" | "choice" | "list">;
 
 export interface LiteralWidgetProps {
   /** Binding name. */

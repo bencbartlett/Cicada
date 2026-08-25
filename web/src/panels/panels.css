@@ -932,6 +932,25 @@ aside.inspector {
   font-size: 11px;
 }
 
+/* the choice param's dropdown (catalog C2b); `stray` = the text's value is
+   not among the options (the node is red) */
+.param-widget select {
+  min-width: 64px;
+  max-width: 100%;
+  background: var(--bg-node);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.param-widget select.stray {
+  border-color: var(--error);
+  color: var(--error);
+}
+
 /* compute-on-release (docs/13 §Slider drags): the hint is a line in the
    name column, so the range track keeps its width under a held pointer */
 .param-name .param-pending {

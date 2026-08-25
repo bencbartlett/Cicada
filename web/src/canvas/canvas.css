@@ -684,6 +684,26 @@
   border-color: var(--error);
 }
 
+/* the choice param's dropdown (catalog C2b): styled like the text field;
+   a stray value — the text's value is not among the options, the node is
+   red — wears the error colour */
+.cn-widget select {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 18px;
+  padding: 0 2px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-elev);
+  color: var(--fg);
+  font-size: 11px;
+}
+
+.cn-choice.stray select {
+  border-color: var(--error);
+  color: var(--error);
+}
+
 /* compute-on-release (docs/13 §Slider drags): the value label turns warn
    and a chip hangs under the row's right edge — absolutely positioned so
    the range track keeps its width under a held pointer (a narrower track

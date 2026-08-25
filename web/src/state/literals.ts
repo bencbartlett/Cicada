@@ -7,7 +7,8 @@
  *   parse as an Integer literal); otherwise the shortest round-trip repr.
  * - Integer-typed values are bare integers; a non-integer is refused loudly.
  * - Booleans are the capitalised keywords `True` / `False`.
- * - Text is a JSON-quoted string (the dialect's escapes are JSON's).
+ * - Text is a JSON-quoted string (the dialect's escapes are JSON's); a
+ *   `choice`'s option is a Text.
  * - Lists have no widget (edited in text).
  */
 import type { InputView, ParamView } from "../protocol/messages";
@@ -31,6 +32,7 @@ export function paramValueText(kind: LiteralKind, value: number | boolean | stri
     case "boolean":
       return value === true || value === "true" || value === "True" ? "True" : "False";
     case "text":
+    case "choice":
       return JSON.stringify(String(value));
     case "list":
       throw new Error("list literals have no widget — edit them in text");
@@ -46,7 +48,7 @@ export function paramValueText(kind: LiteralKind, value: number | boolean | stri
  */
 export function literalKindOf(
   input: Pick<InputView, "base" | "literal" | "literal_value">,
-): Exclude<LiteralKind, "slider" | "toggle" | "list"> | null {
+): Exclude<LiteralKind, "slider" | "toggle" | "choice" | "list"> | null {
   const value = input.literal_value;
   if (value === undefined) return null;
   switch (input.base) {
@@ -83,7 +85,7 @@ export function literalKindOf(
  */
 export function literalPortKind(
   input: Pick<InputView, "base" | "depth" | "literal" | "literal_value">,
-): Exclude<LiteralKind, "slider" | "toggle" | "list"> | null {
+): Exclude<LiteralKind, "slider" | "toggle" | "choice" | "list"> | null {
   if (input.depth === 0) {
     switch (input.base) {
       case "Integer":

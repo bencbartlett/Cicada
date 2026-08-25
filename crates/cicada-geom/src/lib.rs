@@ -71,6 +71,18 @@ pub enum GeomError {
         /// What failed.
         reason: String,
     },
+    /// A general affine transform (`transform` over an `Xform`, `scale_nu`)
+    /// cannot carry this kind exactly: a circle whose plane it stretches
+    /// unevenly would be an ellipse (no such kind), a frame it skews is not
+    /// a plane, and the kernel's solid transform takes a similarity only.
+    /// Refused rather than approximated (the transform module's rule).
+    #[error("a {kind} cannot take this transform exactly: {reason}")]
+    AffineRefused {
+        /// The kind that cannot be carried (`Circle`, `Plane`, `Solid`).
+        kind: &'static str,
+        /// Why, with the numbers.
+        reason: String,
+    },
     /// A parameter is outside its meaningful range.
     #[error("{name} = {value} is out of range: {requirement}")]
     BadParameter {

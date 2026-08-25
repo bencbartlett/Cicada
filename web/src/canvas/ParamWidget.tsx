@@ -1,6 +1,10 @@
 /**
  * The on-canvas param widget row (docs/10 §3): slider / number / integer /
- * toggle / text. While a slider drags, `param_preview` streams at most one
+ * toggle / text / choice (a select over the `choice` node's options —
+ * catalog C2b; picking one commits ONE `set_param` spelling the option as
+ * a Text literal; a value the text carries that is not among the options
+ * stays selectable as "(not an option)" so the red node shows what it
+ * says; wired options leave a plain text field). While a slider drags, `param_preview` streams at most one
  * value per animation frame (latest wins); release commits `set_param` with
  * the same shortest-repr text. The scalar editors (number / toggle / text)
  * are the shared `LiteralWidgets` — the same ones the inline kwarg literals
@@ -21,6 +25,7 @@
  * before.
  */
 import { useEffect, useRef, useState } from "react";
+import { isCommitChord } from "../keyboard";
 import type { NodeView, ParamView } from "../protocol/messages";
 import { pendingHint, pendingTitle } from "../panels/format";
 import { mergeScrub } from "../state/scrub";
@@ -160,12 +165,75 @@ function SliderWidget({ view, param, writer }: Props) {
   );
 }
 
+/**
+ * The `choice` node's dropdown. The options come from the view-model (the
+ * text's literal list, in order); the current value is the text's, whether
+ * or not it is one of them — a stray value (the node is red) is shown as
+ * an extra option marked so, never silently replaced by the first option.
+ * A wired `options` list is a solve result the view cannot read: the value
+ * is typed as text then.
+ */
+function ChoiceWidget({ view, param, writer }: Props) {
+  const port = param.port ?? null;
+  const { commit } = useParamSender(view.name, port);
+  const current = String(param.value);
+  const options = param.options;
+  if (options === undefined) {
+    return (
+      <div className="cn-widget cn-text nodrag nopan nowheel" title="options are wired — type the value">
+        <LiteralWidget
+          node={view.name}
+          port={port}
+          kind="text"
+          value={param.value}
+          writable={writer}
+          testId={`choice-${view.name}`}
+          label={`${view.name} value`}
+        />
+      </div>
+    );
+  }
+  const stray = !options.includes(current);
+  return (
+    <div
+      className={`cn-widget cn-choice nodrag nopan nowheel${stray ? " stray" : ""}`}
+      title={stray ? `"${current}" is not one of the options` : `${options.length} option${options.length === 1 ? "" : "s"}`}
+    >
+      <select
+        className="nodrag"
+        value={current}
+        disabled={!writer}
+        aria-label={`${view.name} value`}
+        data-testid={`choice-${view.name}`}
+        data-stray={stray ? "true" : undefined}
+        onChange={(event) => {
+          if (event.target.value !== current) commit(paramValueText("choice", event.target.value));
+        }}
+        onKeyDown={(event) => {
+          // Arrows and letters pick options; nothing reaches the hotkey map
+          // or React Flow — except Ctrl+S, the commit dialog (docs/16).
+          if (!isCommitChord(event)) event.stopPropagation();
+        }}
+      >
+        {stray && <option value={current}>{current} (not an option)</option>}
+        {options.map((option, index) => (
+          <option key={`${index}-${option}`} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 export function ParamWidget(props: Props) {
   const { view, param, writer } = props;
   const port = param.port ?? null;
   switch (param.kind) {
     case "slider":
       return <SliderWidget {...props} />;
+    case "choice":
+      return <ChoiceWidget {...props} />;
     case "number":
     case "integer": {
       const kind = param.kind === "integer" ? "integer" : "number";

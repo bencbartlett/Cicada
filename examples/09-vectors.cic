@@ -1,0 +1,57 @@
+# cicada 1
+# Vectors 101 (docs/08 §Catalog 5): the Point · Vector · Plane nodes. A ring
+# of posts is one arm turned about the world z (rotate_vector) and moved out
+# from the centre; a probe finds its nearest post (closest_point); the vector
+# algebra — distance, angle, dot, cross, amplitude, length — reads the
+# relation between the two; plane_normal tilts a marker frame off a normal.
+# Run:   cargo run -p cicada-cli -- run examples/09-vectors.cic
+# (every node is pure: add --time and the second run is fully cached)
+
+# --- the ring ----------------------------------------------------------------
+# `range` includes both ends, so the last arm comes back onto the first post
+# (2π is one full turn): cull_duplicates drops it and `post_sources` says
+# which source slots survived.
+radius = slider(value=6.0, min=2.0, max=10.0)
+turn = construct_domain(start=0.0, end=6.283185307179586)
+angles = range(domain=turn, steps=8)
+east = unit_x(factor=1.0)
+up = unit_z(factor=1.0)
+arm = amplitude(vector=east, length=radius)
+spokes = rotate_vector(vector=arm, angle=each(angles), axis=up)
+centre = construct_point(x=0.0, y=0.0, z=0.0)
+posts_with_return = move(geometry=centre, motion=each(spokes))
+posts, post_sources = cull_duplicates(points=posts_with_return, tolerance=0.000001)
+ring = polyline(vertices=posts, closed=True)
+
+# --- the probe and its nearest post -------------------------------------------
+# The probe floats half a unit ABOVE the ring's plane, so `to_probe` below
+# has length no matter where the sliders put it — on the centre (both at 0,
+# the sliders' midpoint) it would otherwise be the zero vector, which `angle`
+# and `amplitude` refuse. Every slider position keeps every node green.
+probe_x = slider(value=3.0, min=-10.0, max=10.0)
+probe_y = slider(value=4.0, min=-10.0, max=10.0)
+probe = construct_point(x=probe_x, y=probe_y, z=0.5)
+nearest, nearest_index, gap = closest_point(point=probe, cloud=posts)
+reach = distance(a=centre, b=probe)
+tether = line(a=probe, b=nearest)
+
+# --- the vector algebra between the two ---------------------------------------
+to_probe = vector_2pt(a=centre, b=probe)
+to_post = vector_2pt(a=centre, b=nearest)
+swing = angle(a=to_probe, b=to_post)
+agreement = dot_product(a=to_probe, b=to_post)
+twist = cross_product(a=to_probe, b=to_post)
+twist_size = vector_length(vector=twist)
+twist_x, twist_y, twist_z = deconstruct_vector(vector=twist)
+pointer = amplitude(vector=to_probe, length=1.0)
+
+# --- a frame from a normal -------------------------------------------------------
+# The marker's normal leans off the vertical; plane_normal picks the in-plane
+# axes deterministically (the world axis least aligned with the normal).
+lean = construct_vector(x=0.0, y=1.0, z=2.0)
+marker_frame = plane_normal(origin=nearest, z=lean)
+marker = circle(plane=marker_frame, radius=0.75)
+
+# --- something to look at --------------------------------------------------------
+post_frames = xy_plane(origin=each(posts))
+post_balls = mesh_sphere(plane=each(post_frames), radius=0.4, segments=16)

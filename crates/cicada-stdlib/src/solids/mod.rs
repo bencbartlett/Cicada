@@ -10,6 +10,7 @@ pub(crate) mod support;
 pub mod area;
 pub mod bounding_box;
 pub mod r#box;
+pub mod center_box;
 pub mod cone;
 pub mod cylinder;
 pub mod deconstruct_solid;

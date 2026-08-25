@@ -54,7 +54,12 @@ touching the committed examples — the app writes what you do.
   / `dispatch` / `group_by` with their index maps, the reducers
   (`mass_addition`, `average`), maths lifted with `each()` (`larger`,
   `floor`), and the strict-zip adapters made visible (`repeat`,
-  `pad_last`) feeding `cull` and a sphere per kept column. Pure
+  `pad_last`) feeding `cull` and a sphere per kept column; then the
+  pegboard (catalog C2b): one `center_box` peg as a `rectangular_array`
+  grid and, moved out to a radius, a `polar_array` ring, with a `choice`
+  dropdown labelling the board through a `text_tag` (every option keeps
+  the example green — `crates/cicada-cli/tests/examples_solve.rs` picks
+  each one as the widget would and asserts a stray value red). Pure
   throughout — the second `--time` run is fully cached.
 - **08-orbit.cic** — the time transport (docs/13 §Animation transport):
   a `cycle` (one 4 s loop in 120 frames) drives a planet around a sun
@@ -64,6 +69,19 @@ touching the committed examples — the app writes what you do.
   play bar (or `Space`) and watch the first pass compute each frame once
   and the second pass play from cache; the scrubber seeks, Esc pauses.
   (07 is the B-rep bracket of the solid track.)
+- **09-vectors.cic** — vectors 101 (docs/08 §Catalog 5, the C2a nodes):
+  a ring of posts from one arm turned by `rotate_vector` and moved out
+  from the centre (`range` includes both ends, so the last arm lands on
+  the first post — `cull_duplicates` drops it and returns the index map),
+  a probe's `closest_point` and `distance`, the algebra between the two
+  (`angle`, `dot_product`, `cross_product`, `vector_length`,
+  `deconstruct_vector`, `amplitude`), and a marker frame from a normal
+  (`plane_normal`, `construct_vector`). Three sliders to drag in the app,
+  and no position of them paints a node red — the probe floats half a unit
+  above the ring's plane so its vector from the centre never vanishes
+  (`crates/cicada-cli/tests/examples_solve.rs` solves the centre, the
+  corners and a post-top to keep it so); pure throughout — the second
+  `--time` run is fully cached.
 
 **The rule: every example must solve.** CI runs each `examples/**/*.cic`
 headlessly with a fresh cache through the same compile → lower → solve

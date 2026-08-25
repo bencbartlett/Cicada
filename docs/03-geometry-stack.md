@@ -178,7 +178,16 @@ unconditionally — a kernel-free product build does not exist.
   true`, so the result carries no `TopLoc_Location` and its bytes
   describe the moved geometry; `Similarity::apply` takes this path for a
   `Solid`, and the six transform nodes (`move`, `rotate`, `scale`,
-  `orient`, `linear_array`, `mirror`) need no Solid arm of their own.
+  `orient`, `linear_array`, `mirror`) need no Solid arm of their own;
+  nor do C2b's `rotate_axis`, `polar_array` and `rectangular_array`
+  (similarities all). The two general-affine nodes (`scale_nu`,
+  `transform` over an `Xform` — `cicada_geom::transform::Affine`,
+  2026-08-24) REFUSE a Solid unless the affine classifies as a
+  similarity within tolerance, because `gp_Trsf::SetValues` silently
+  re-orthogonalizes whatever it is handed (a shear would come back as a
+  rotation); a true non-uniform scale or shear of a B-rep is
+  `BRepBuilderAPI_GTransform` (`gp_GTrsf`), not glued — docs/17
+  follow-up.
   **Stale pcurves, found 2026-08-21:** the modifier under `Copy = true`
   rebuilds every edge with the transformed 3D curve and pcurves on the
   transformed surfaces but KEEPS, on a sphere's degenerate pole edges,

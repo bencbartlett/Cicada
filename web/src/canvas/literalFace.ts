@@ -11,7 +11,7 @@
  */
 import { paramValueText, type LiteralKind } from "../state/literals";
 
-export type ChipKind = Exclude<LiteralKind, "slider" | "toggle" | "list">;
+export type ChipKind = Exclude<LiteralKind, "slider" | "toggle" | "choice" | "list">;
 export type Scalar = number | boolean | string;
 export type ChipState = "literal" | "default" | "unset";
 

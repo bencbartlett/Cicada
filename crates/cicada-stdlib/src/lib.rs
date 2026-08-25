@@ -191,6 +191,33 @@ pub(crate) fn checked_size(node: &str, what: &str, slots: u128, bytes_per_slot: 
     count
 }
 
+/// A derived slot count that is a PRODUCT of counts — `rectangular_array`'s
+/// `x × y × z` copies, `mesh_plane`'s `(x + 1) × (y + 1)` vertices —
+/// formed without overflow and taken through [`checked_size`]. Three `i64`
+/// counts each under the dialect's 2^53 literal ceiling multiply past
+/// `u128::MAX` ((4 × 10^15)^3 is 6.4 × 10^46), and a bare `*` there is
+/// rustc's "attempt to multiply with overflow" — red, but not the node's
+/// typed refusal (the C2b review reproduced it on the engine). A product
+/// that does not fit is refused with "beyond 2^128" where [`checked_size`]
+/// names the value; the ceiling text is the same.
+pub(crate) fn checked_product(
+    node: &str,
+    what: &str,
+    factors: &[u128],
+    bytes_per_slot: usize,
+) -> usize {
+    let product = factors
+        .iter()
+        .try_fold(1u128, |so_far, &factor| so_far.checked_mul(factor));
+    let Some(slots) = product else {
+        panic!(
+            "{node}: {what} would be beyond 2^128 — above the {MAX_SLOTS} (2^22) slot ceiling of \
+             one node output"
+        )
+    };
+    checked_size(node, what, slots, bytes_per_slot)
+}
+
 /// `count × bytes_per_slot` without overflow (both fit `u64`; the product
 /// fits `u128`).
 fn bytes_of(count: usize, bytes_per_slot: usize) -> u128 {
@@ -302,6 +329,47 @@ mod tests {
             message(fat),
             "linear_array: count is 1048577 — 1073742848 bytes at 1024 bytes a slot, above the \
              1073741824-byte (1 GiB) ceiling of one node allocation"
+        );
+    }
+
+    // The product of counts: formed with `checked_mul`, so three counts the
+    // dialect admits (each under 2^53) whose product is past u128::MAX are
+    // refused with the node's ceiling text, never rustc's overflow panic;
+    // a product that fits goes through `checked_size` unchanged.
+    #[test]
+    fn checked_product_refuses_an_overflowing_product_with_the_ceiling_text() {
+        assert_eq!(
+            checked_product("rectangular_array", "copies", &[3, 4, 5], 8),
+            60
+        );
+        assert_eq!(
+            checked_product("mesh_plane", "vertices", &[], 8),
+            1,
+            "no factors: one"
+        );
+        let fits = std::panic::catch_unwind(|| {
+            checked_product("rectangular_array", "copies", &[100_000, 100_000, 10], 8)
+        })
+        .expect_err("a product over the slot ceiling refuses");
+        assert_eq!(
+            message(fits),
+            "rectangular_array: copies would be 100000000000 — above the 4194304 (2^22) slot \
+             ceiling of one node output"
+        );
+        let four_e15 = 4_000_000_000_000_000u128;
+        let overflow = std::panic::catch_unwind(|| {
+            checked_product(
+                "rectangular_array",
+                "copies",
+                &[four_e15, four_e15, four_e15],
+                8,
+            )
+        })
+        .expect_err("a product past u128::MAX refuses with the ceiling text");
+        assert_eq!(
+            message(overflow),
+            "rectangular_array: copies would be beyond 2^128 — above the 4194304 (2^22) slot \
+             ceiling of one node output"
         );
     }
 

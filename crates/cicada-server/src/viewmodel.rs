@@ -168,7 +168,8 @@ pub struct OutputView {
 /// (`value` for `slider`/`toggle`); `None` edits a bare literal binding.
 #[derive(Debug, Clone, Serialize)]
 pub struct ParamView {
-    /// `slider` / `toggle` / `number` / `integer` / `boolean` / `text`.
+    /// `slider` / `toggle` / `choice` / `number` / `integer` / `boolean` /
+    /// `text` / `list`.
     pub kind: &'static str,
     /// The kwarg the widget edits, if a call.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -192,6 +193,12 @@ pub struct ParamView {
     /// rebuilds the view or records progress.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scrub: Option<ScrubView>,
+    /// A `choice`'s options, in the text's order (catalog C2b; absent for
+    /// every other kind, and for a `choice` whose `options` is wired — the
+    /// list is then a solve result this view cannot read, and the widget
+    /// takes the value as typed text instead of a select).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<String>>,
 }
 
 /// Why a node is out of the solve (mirrors the scheduler's status words).
@@ -699,6 +706,41 @@ fn number_kwarg(call: &cicada_lang::ast::Call, name: &str) -> Option<f64> {
         })
 }
 
+/// The kwarg's Text literal, when it is one.
+fn text_kwarg(call: &cicada_lang::ast::Call, name: &str) -> Option<String> {
+    call.kwargs
+        .iter()
+        .find(|k| k.name.name == name)
+        .and_then(|k| match &k.value {
+            ValueExpr::Literal(lit) => match &lit.lit {
+                Lit::Text(text) => Some(text.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+}
+
+/// The kwarg's list literal of Texts, when it is one (every element a Text
+/// — a mixed list is no option list, and a wired kwarg is none either).
+fn text_list_kwarg(call: &cicada_lang::ast::Call, name: &str) -> Option<Vec<String>> {
+    call.kwargs
+        .iter()
+        .find(|k| k.name.name == name)
+        .and_then(|k| match &k.value {
+            ValueExpr::Literal(lit) => match &lit.lit {
+                Lit::List(items) => items
+                    .iter()
+                    .map(|item| match &item.lit {
+                        Lit::Text(text) => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => None,
+            },
+            _ => None,
+        })
+}
+
 #[allow(clippy::too_many_lines)] // one statement → one node, all cases in one place
 fn statement_node(
     line: usize,
@@ -812,6 +854,7 @@ fn statement_node(
                 max: None,
                 step: None,
                 scrub: None,
+                options: None,
             });
         }
         Rhs::Expression(expr) => {
@@ -1029,6 +1072,7 @@ fn statement_node(
                                     scrub::ineligible_view(scrub_flag(call).unwrap_or(false), &why)
                                 }
                             }),
+                            options: None,
                         }),
                         "toggle" => call
                             .kwargs
@@ -1049,7 +1093,25 @@ fn statement_node(
                                 max: None,
                                 step: None,
                                 scrub: None,
+                                options: None,
                             }),
+                        // The dropdown param (docs/10 §3; catalog C2b): the
+                        // widget is a select over the literal `options`,
+                        // writing `value` as one text literal. A wired
+                        // `value` has no widget (the wire is the value, as
+                        // for a slider); a wired `options` keeps the widget
+                        // with no list — the client falls back to a text
+                        // field — since the list is a solve result this view
+                        // does not read.
+                        "choice" => text_kwarg(call, "value").map(|value| ParamView {
+                            kind: "choice",
+                            port: Some("value".to_owned()),
+                            value: serde_json::Value::String(value),
+                            min: None,
+                            max: None,
+                            step: None,
+                            options: text_list_kwarg(call, "options"),
+                        }),
                         _ => None,
                     };
                 }
@@ -1229,6 +1291,67 @@ mod tests {
         );
         assert!(scrub_of("t").is_none(), "a toggle has no scrub view");
         assert!(g.node("n").unwrap().param.as_ref().unwrap().scrub.is_none());
+    }
+
+    // The dropdown param (catalog C2b): a `choice` with literal `value` and
+    // `options` is a `choice` widget carrying the options in the text's
+    // order; a wired `options` keeps the widget without a list (the client
+    // falls back to a text field); a wired `value` has no widget at all,
+    // like a slider's; a list with a non-Text element is no option list.
+    #[test]
+    fn a_choice_is_a_select_widget_over_its_literal_options() {
+        let g = view(
+            "# cicada 1\n\
+             mode = choice(value=\"fast\", options=[\"fast\", \"exact\"])\n\
+             names = [\"a\", \"b\"]\n\
+             wired = choice(value=\"a\", options=names)\n\
+             driven = choice(value=mode, options=[\"fast\", \"exact\"])\n\
+             mixed = choice(value=\"1\", options=[\"1\", 2])\n",
+        );
+        let mode = g.node("mode").unwrap().param.as_ref().unwrap();
+        assert_eq!(mode.kind, "choice");
+        assert_eq!(mode.port.as_deref(), Some("value"));
+        assert_eq!(mode.value, serde_json::json!("fast"));
+        assert_eq!(
+            mode.options.as_deref(),
+            Some(&["fast".to_owned(), "exact".to_owned()][..])
+        );
+        assert!(mode.min.is_none() && mode.max.is_none() && mode.step.is_none());
+        let wired = g.node("wired").unwrap().param.as_ref().unwrap();
+        assert_eq!((wired.kind, wired.options.as_ref()), ("choice", None));
+        assert_eq!(wired.value, serde_json::json!("a"));
+        assert!(
+            g.node("driven").unwrap().param.is_none(),
+            "a wired value is the wire's, not a widget's"
+        );
+        let mixed = g.node("mixed").unwrap().param.as_ref().unwrap();
+        assert_eq!(
+            (mixed.kind, mixed.options.as_ref()),
+            ("choice", None),
+            "a list with a number in it is no option list (the checker paints it anyway)"
+        );
+        // The slider and toggle carry no options.
+        let others = view("# cicada 1\nsize = slider(value=2.0)\nshow = toggle(value=True)\n");
+        assert!(
+            others
+                .node("size")
+                .unwrap()
+                .param
+                .as_ref()
+                .unwrap()
+                .options
+                .is_none()
+        );
+        assert!(
+            others
+                .node("show")
+                .unwrap()
+                .param
+                .as_ref()
+                .unwrap()
+                .options
+                .is_none()
+        );
     }
 
     #[test]
