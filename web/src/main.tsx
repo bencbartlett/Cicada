@@ -1,8 +1,8 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { App } from "./App";
-import { Landing } from "./panels/Landing";
-import { readUrlOptions, startConnection } from "./state/connection";
+import { Root } from "./Root";
+import { syncConnection } from "./state/connection";
+import { installRouting } from "./state/route";
 import "./styles.css";
 
 const root = document.getElementById("root");
@@ -10,18 +10,13 @@ if (root === null) {
   throw new Error("index.html must provide #root");
 }
 
-const options = readUrlOptions();
-if (options.token !== undefined && options.pipeline !== undefined) {
-  startConnection({ token: options.token, pipeline: options.pipeline });
-  createRoot(root).render(
-    <StrictMode>
-      <App />
-    </StrictMode>,
-  );
-} else {
-  createRoot(root).render(
-    <StrictMode>
-      <Landing token={options.token} />
-    </StrictMode>,
-  );
-}
+// The URL is the route (docs/16 §Application layout): `?token=` alone is
+// the picker, `&pipeline=` the app on that session, `&view=viewport` the
+// pop-out. The connection follows the route — here, outside React, so a
+// StrictMode double-mount never opens two sockets — and `Root` renders it.
+installRouting(window, syncConnection);
+createRoot(root).render(
+  <StrictMode>
+    <Root />
+  </StrictMode>,
+);

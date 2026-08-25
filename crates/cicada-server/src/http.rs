@@ -10,7 +10,7 @@
 //! exactly Jupyter's shape). Nothing here assumes locality except the
 //! default bind; a reverse proxy with real auth is the remote story.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -28,10 +28,11 @@ use cicada_core::config::ProjectConfig;
 use futures_util::{SinkExt as _, StreamExt as _};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
+use crate::files::{self, FilesError};
 use crate::git::{Git, GitRefusal, Scope};
 use crate::protocol::{
-    ApplyTextRequest, CommitRequest, DeltaSource, GitErrorKind, IntentEnvelope, PROTOCOL_VERSION,
-    RevertRequest, Role, ServerMessage, encode,
+    ApplyTextRequest, CommitRequest, DeltaSource, FilesErrorKind, GitErrorKind, IntentEnvelope,
+    JoinRefusal, PROTOCOL_VERSION, RevertRequest, Role, ServerMessage, encode,
 };
 use crate::session::{ClientLanes, IntentError, Outgoing, Session, SessionConfig};
 
@@ -43,9 +44,15 @@ pub const DEFAULT_PORT: u16 = 8420;
 /// `cicada serve` options.
 #[derive(Debug, Clone)]
 pub struct ServeConfig {
-    /// The project directory.
+    /// The served ROOT (docs/13 §Projects, pipelines, sessions): the
+    /// directory every pipeline reference is relative to and nothing is
+    /// ever opened above — a project directory, a pipeline's directory,
+    /// or (since v0.1 wave 4: `cicada serve` without a path) the user's
+    /// home directory, which `GET /api/files` lists one directory at a
+    /// time. The field keeps its stage-5 name: the session, the git handle
+    /// and `apply_text` know it as the project.
     pub project_dir: PathBuf,
-    /// The pipeline to open by default (relative to the project), if any.
+    /// The pipeline to open by default (relative to the root), if any.
     pub pipeline: Option<String>,
     /// Bind address (default 127.0.0.1).
     pub host: IpAddr,
@@ -135,6 +142,14 @@ struct AppState {
     token: String,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    /// The directories under watch (docs/13 §External changes): each open
+    /// pipeline's directory and its `scripts/`, NON-recursively — never
+    /// the root as a tree. The root may be the user's whole home
+    /// directory (v0.1 wave 4), and a recursive watch over it is
+    /// unbounded: inotify runs out of watches and refuses, every other
+    /// backend floods the coalescing thread with events about nothing
+    /// the watcher acts on. Locked before `watcher`.
+    watched: Mutex<HashSet<PathBuf>>,
     /// The project's git handle (doc 17 item 2): every git route runs
     /// through it, with the project dir as cwd.
     git: Git,
@@ -182,9 +197,11 @@ impl ServerHandle {
     }
 }
 
-/// Start serving. Opens the default pipeline eagerly (so a broken project
-/// fails at startup, loudly), starts the project watcher, binds, and
-/// returns a handle.
+/// Start serving. Starts the file watcher (every session's directories
+/// join it as they open), opens the default pipeline eagerly (so a broken
+/// project fails at startup, loudly), binds, and returns a handle. With no
+/// default pipeline nothing is opened: the root is served for the app's
+/// picker (`GET /api/files`) and sessions open on first `?pipeline=`.
 ///
 /// # Errors
 ///
@@ -205,16 +222,18 @@ pub async fn serve(mut config: ServeConfig) -> Result<ServerHandle, ServeError> 
         token: token.clone(),
         sessions: Mutex::new(HashMap::new()),
         watcher: Mutex::new(None),
+        watched: Mutex::new(HashSet::new()),
         git: Git::new(&config.project_dir),
         config,
     });
+    // The watcher first: opening a session adds its directories to it.
+    start_watcher(&state)?;
     if let Some(pipeline) = state.config.pipeline.clone() {
         let opening = Arc::clone(&state);
         tokio::task::spawn_blocking(move || open_session(&opening, &pipeline))
             .await
             .map_err(|e| ServeError::Watch(e.to_string()))??;
     }
-    start_watcher(&state)?;
 
     let app = router(Arc::clone(&state));
     let addr = SocketAddr::new(state.config.host, state.config.port);
@@ -326,6 +345,9 @@ fn open_session(state: &AppState, relative: &str) -> Result<Arc<Session>, ServeE
     {
         return Ok(Arc::clone(existing));
     }
+    // Its directories join the watcher BEFORE the session exists: a
+    // session whose external changes nobody would see is not opened.
+    watch_pipeline_dirs(state, &pipeline)?;
     let session = Session::open(SessionConfig {
         project_dir: state.config.project_dir.clone(),
         pipeline,
@@ -345,13 +367,119 @@ fn open_session(state: &AppState, relative: &str) -> Result<Arc<Session>, ServeE
     Ok(session)
 }
 
-/// The project watcher (docs/13 §External changes): debounced; `.cic`,
+/// Watch what the watcher acts on for one pipeline: its directory (the
+/// `.cic` and its sidecar live there) and the `scripts/` beside it when it
+/// exists, both non-recursively. Idempotent — sessions sharing a directory
+/// share its watch.
+fn watch_pipeline_dirs(state: &AppState, pipeline: &Path) -> Result<(), ServeError> {
+    let Some(dir) = pipeline.parent() else {
+        return Ok(());
+    };
+    ensure_watched(state, dir)?;
+    let scripts = dir.join("scripts");
+    if scripts.is_dir() {
+        ensure_watched(state, &scripts)?;
+    }
+    Ok(())
+}
+
+/// Add `dir` to the watcher unless it already is.
+fn ensure_watched(state: &AppState, dir: &Path) -> Result<(), ServeError> {
+    use notify::Watcher as _;
+    let mut known = state
+        .watched
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if known.contains(dir) {
+        return Ok(());
+    }
+    let mut watcher = state
+        .watcher
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(watcher) = watcher.as_mut() else {
+        return Err(ServeError::Watch(
+            "the file watcher is not running — a session cannot open without it".to_owned(),
+        ));
+    };
+    watcher
+        .watch(dir, notify::RecursiveMode::NonRecursive)
+        .map_err(|e| ServeError::Watch(format!("{}: {e}", dir.display())))?;
+    known.insert(dir.to_owned());
+    Ok(())
+}
+
+/// Watch `dir` afresh: a `scripts/` directory that appeared (or was
+/// replaced) after its pipeline opened — the OS forgets a watch with the
+/// directory it was on, so the set's memory of it is dropped first.
+fn rewatch(state: &AppState, dir: &Path) -> Result<(), ServeError> {
+    use notify::Watcher as _;
+    {
+        let mut known = state
+            .watched
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        known.remove(dir);
+        if let Some(watcher) = state
+            .watcher
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+        {
+            // Not watched any more (or never): nothing to undo.
+            let _ = watcher.unwatch(dir);
+        }
+    }
+    ensure_watched(state, dir)
+}
+
+/// What a batch of changed paths means for one pipeline (the watcher
+/// thread's decision, factored out for its tests): reload when the `.cic`
+/// or its sidecar changed; reload AND rescan scripts when a `scripts/*.py`
+/// beside it changed, or when `scripts/` itself appeared, vanished or was
+/// replaced (`scripts_dir_changed` — the caller re-watches it: a directory
+/// created after the session opened holds files no watch saw arrive).
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Reaction {
+    reload: bool,
+    rescan: bool,
+    scripts_dir_changed: bool,
+}
+
+fn classify_change(changed: &[PathBuf], pipeline: &Path) -> Reaction {
+    let sidecar = crate::sidecar::Sidecar::path_for(pipeline);
+    let scripts_dir = pipeline.parent().map(|d| d.join("scripts"));
+    let mut reaction = Reaction::default();
+    for path in changed {
+        if same_file(path, pipeline) || same_file(path, &sidecar) {
+            reaction.reload = true;
+        }
+        let Some(scripts_dir) = &scripts_dir else {
+            continue;
+        };
+        if path.extension().is_some_and(|e| e == "py")
+            && path.parent().is_some_and(|p| same_file(p, scripts_dir))
+        {
+            reaction.reload = true;
+            reaction.rescan = true;
+        } else if same_file(path, scripts_dir) {
+            reaction.reload = true;
+            reaction.rescan = true;
+            reaction.scripts_dir_changed = true;
+        }
+    }
+    reaction
+}
+
+/// The file watcher (docs/13 §External changes): debounced; `.cic`,
 /// sidecar, and `scripts/*.py` changes reload the affected sessions with a
 /// barrier snapshot. The sessions ignore their own writes by text hash.
+/// Started empty: [`watch_pipeline_dirs`] adds each opening session's
+/// directories (non-recursively) — the root itself is never watched as a
+/// tree.
 fn start_watcher(state: &Arc<AppState>) -> Result<(), ServeError> {
-    use notify::Watcher as _;
     let (tx, rx) = std::sync::mpsc::channel::<PathBuf>();
-    let mut watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
+    let watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
         if let Ok(event) = result {
             // Drop ACCESS events (open / read / close): a read is not a
             // change. This matters because `reload_from_disk` READS the
@@ -370,9 +498,6 @@ fn start_watcher(state: &Arc<AppState>) -> Result<(), ServeError> {
         }
     })
     .map_err(|e| ServeError::Watch(e.to_string()))?;
-    watcher
-        .watch(&state.config.project_dir, notify::RecursiveMode::Recursive)
-        .map_err(|e| ServeError::Watch(e.to_string()))?;
     *state
         .watcher
         .lock()
@@ -399,25 +524,27 @@ fn start_watcher(state: &Arc<AppState>) -> Result<(), ServeError> {
                     .collect();
                 for session in sessions {
                     let pipeline = session.pipeline().to_owned();
-                    let sidecar = crate::sidecar::Sidecar::path_for(&pipeline);
-                    let scripts_dir = pipeline.parent().map(|d| d.join("scripts"));
-                    let mut reload = false;
-                    let mut rescan = false;
-                    for path in &changed {
-                        if same_file(path, &pipeline) || same_file(path, &sidecar) {
-                            reload = true;
-                        }
-                        if path.extension().is_some_and(|e| e == "py")
-                            && scripts_dir
-                                .as_ref()
-                                .is_some_and(|dir| path.parent().is_some_and(|p| same_file(p, dir)))
-                        {
-                            reload = true;
-                            rescan = true;
-                        }
+                    let reaction = classify_change(&changed, &pipeline);
+                    if reaction.scripts_dir_changed
+                        && let Some(scripts_dir) = pipeline.parent().map(|d| d.join("scripts"))
+                        && scripts_dir.is_dir()
+                        && let Err(error) = rewatch(&state, &scripts_dir)
+                    {
+                        // The session stays open (its `.cic` is still
+                        // watched) but script edits there will go unseen:
+                        // say so where the user is — the status bar — not
+                        // only on the server's console; `/debug/state`'s
+                        // `watched` leaves the directory out too.
+                        let message = format!(
+                            "watching {} failed: {error} — later script changes there go unseen \
+                             until the pipeline is reopened",
+                            scripts_dir.display()
+                        );
+                        eprintln!("{message}");
+                        session.notify_warning(message);
                     }
-                    if reload {
-                        match session.reload_from_disk("external file change", rescan) {
+                    if reaction.reload {
+                        match session.reload_from_disk("external file change", reaction.rescan) {
                             Ok(true) => {
                                 eprintln!("reloaded {} (external change)", session.relative());
                             }
@@ -446,6 +573,7 @@ fn router(state: Arc<AppState>) -> Router {
     let api = Router::new()
         .route("/api/catalog", get(api_catalog))
         .route("/api/project", get(api_project))
+        .route("/api/files", get(api_files))
         .route("/api/blob/{hash}", get(api_blob))
         .route("/api/run/{node}", post(api_run))
         .route("/api/edit/text", get(api_edit_text))
@@ -521,32 +649,61 @@ struct PipelineQuery {
     target: Option<String>,
 }
 
+/// A request's pipeline could not be opened: the one classification every
+/// route maps to its own refusal — `session_for` to an HTTP status and the
+/// text, `client_loop` to the socket's `pipeline` error (docs/13 §Projects,
+/// pipelines, sessions).
+struct PipelineRefusal {
+    reason: JoinRefusal,
+    /// The reference as the request sent it; `None` when it sent none.
+    pipeline: Option<String>,
+    /// What the user reads — the same text whichever route answers.
+    message: String,
+}
+
+fn resolve_session(
+    state: &Arc<AppState>,
+    query: &PipelineQuery,
+) -> Result<Arc<Session>, PipelineRefusal> {
+    let Some(relative) = query
+        .pipeline
+        .clone()
+        .or_else(|| state.config.pipeline.clone())
+    else {
+        return Err(PipelineRefusal {
+            reason: JoinRefusal::Unnamed,
+            pipeline: None,
+            message: "no pipeline: pass ?pipeline=<relative .cic path> (see /api/project)"
+                .to_owned(),
+        });
+    };
+    open_session(state, &relative).map_err(|error| {
+        let reason = match error {
+            ServeError::BadPipelineRef(_) | ServeError::OutsideProject { .. } => {
+                JoinRefusal::PathNotAllowed
+            }
+            ServeError::NoSuchPipeline(_) => JoinRefusal::NotFound,
+            _ => JoinRefusal::OpenFailed,
+        };
+        PipelineRefusal {
+            reason,
+            message: format!("opening {relative}: {error}"),
+            pipeline: Some(relative),
+        }
+    })
+}
+
 fn session_for(
     state: &Arc<AppState>,
     query: &PipelineQuery,
 ) -> Result<Arc<Session>, Box<Response>> {
-    let relative = query
-        .pipeline
-        .clone()
-        .or_else(|| state.config.pipeline.clone())
-        .ok_or_else(|| {
-            Box::new(
-                (
-                    StatusCode::BAD_REQUEST,
-                    "no pipeline: pass ?pipeline=<relative .cic path> (see /api/project)",
-                )
-                    .into_response(),
-            )
-        })?;
-    open_session(state, &relative).map_err(|error| {
-        let status = match error {
-            ServeError::BadPipelineRef(_) | ServeError::OutsideProject { .. } => {
-                StatusCode::BAD_REQUEST
-            }
-            ServeError::NoSuchPipeline(_) => StatusCode::NOT_FOUND,
-            _ => StatusCode::UNPROCESSABLE_ENTITY,
+    resolve_session(state, query).map_err(|refusal| {
+        let status = match refusal.reason {
+            JoinRefusal::Unnamed | JoinRefusal::PathNotAllowed => StatusCode::BAD_REQUEST,
+            JoinRefusal::NotFound => StatusCode::NOT_FOUND,
+            JoinRefusal::OpenFailed => StatusCode::UNPROCESSABLE_ENTITY,
         };
-        Box::new((status, format!("opening {relative}: {error}")).into_response())
+        Box::new((status, refusal.message).into_response())
     })
 }
 
@@ -614,9 +771,47 @@ async fn api_project(State(state): State<Arc<AppState>>) -> Response {
     .into_response()
 }
 
+#[derive(serde::Deserialize, Default)]
+struct FilesQuery {
+    dir: Option<String>,
+}
+
+/// `GET /api/files?dir=<root-relative>` (docs/13 §HTTP surface): one
+/// directory of the served root — [`files::list`] off the async runtime
+/// (a directory read is blocking I/O). Refusals are `{kind, message,
+/// path}` with [`files_status`]'s code.
+async fn api_files(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<FilesQuery>,
+) -> Response {
+    let root = state.config.project_dir.clone();
+    let dir = query.dir.unwrap_or_default();
+    match tokio::task::spawn_blocking(move || files::list(&root, &dir)).await {
+        Ok(Ok(listing)) => axum::Json(listing).into_response(),
+        Ok(Err(error)) => (files_status(&error), axum::Json(error.body())).into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+/// The HTTP status of a refused file listing — one per [`FilesErrorKind`].
+fn files_status(error: &FilesError) -> StatusCode {
+    match error.kind() {
+        FilesErrorKind::PathNotAllowed => StatusCode::BAD_REQUEST,
+        FilesErrorKind::NotFound => StatusCode::NOT_FOUND,
+        FilesErrorKind::IoError => StatusCode::FORBIDDEN,
+    }
+}
+
 /// Walk the project for `*.cic` pipelines and the `scripts/*.py` beside
-/// them (project-relative, `/`-separated); shallow, skipping the usual
-/// non-project directories.
+/// them (project-relative, `/`-separated); shallow (depth 4), and skipping
+/// exactly the directories `GET /api/files` leaves unlisted
+/// ([`files::skipped_directory`]: dot-names, `node_modules` / `target`, the
+/// OS-hidden ones), so the two never disagree about what a root contains.
+/// A pipeline is what the listing calls one ([`files::is_pipeline_name`],
+/// extension case-insensitive). Over a home root this is still a walk of
+/// everything not hidden (measured 2026-08-24: 1.4 s, 24 pipelines, 16 of
+/// them scratch copies under a non-hidden `AppData`) — the picker reads
+/// `/api/files`, never this.
 fn collect_pipelines(
     root: &Path,
     dir: &Path,
@@ -635,19 +830,46 @@ fn collect_pipelines(
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
         if path.is_dir() {
-            if name.starts_with('.') || name == "node_modules" || name == "target" {
+            // The entry's OWN metadata carries the hidden flag (a link's,
+            // not its target's); an entry gone since the read is skipped.
+            let Ok(own) = entry.metadata() else {
+                continue;
+            };
+            if files::skipped_directory(&name, &own) {
                 continue;
             }
             collect_pipelines(root, &path, pipelines, scripts, depth + 1);
         } else if let Ok(relative) = path.strip_prefix(root) {
             let relative = relative.to_string_lossy().replace('\\', "/");
-            if path.extension().is_some_and(|e| e == "cic") {
+            if files::is_pipeline_name(&name) {
                 pipelines.push(relative);
             } else if in_scripts_dir && path.extension().is_some_and(|e| e == "py") {
                 scripts.push(relative);
             }
         }
     }
+}
+
+/// The watched set (docs/13 §External changes) as root-relative,
+/// `/`-separated paths, sorted — `""` is the root itself (a pipeline that
+/// sits at the root watches its own directory). `/debug/state` carries it
+/// so an agent — or a test — can tell whether an external edit in a
+/// directory will be seen before making it.
+fn watched_relative(state: &AppState) -> Vec<String> {
+    let mut watched: Vec<String> = state
+        .watched
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .map(|dir| {
+            dir.strip_prefix(&state.config.project_dir)
+                .unwrap_or(dir)
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect();
+    watched.sort();
+    watched
 }
 
 async fn api_blob(
@@ -741,7 +963,7 @@ fn intent_status(error: &IntentError) -> StatusCode {
         | IntentError::NothingToRedo(_) => StatusCode::UNPROCESSABLE_ENTITY,
         IntentError::Io(_) | IntentError::Persist(_) => StatusCode::INTERNAL_SERVER_ERROR,
         IntentError::Protocol(_) => StatusCode::BAD_REQUEST,
-        IntentError::Lease => StatusCode::FORBIDDEN,
+        IntentError::Lease | IntentError::DeclaredObserver => StatusCode::FORBIDDEN,
         IntentError::Batch { source, .. } => intent_status(source),
     }
 }
@@ -994,7 +1216,16 @@ async fn debug_state(
         if wait {
             session.wait_idle();
         }
-        session.debug_state(with_values)
+        let mut value = session.debug_state(with_values);
+        // Server-wide, not the session's: which directories the watcher
+        // has under watch (this session's own, and every other open one's).
+        if let Some(object) = value.as_object_mut() {
+            object.insert(
+                "watched".to_owned(),
+                serde_json::json!(watched_relative(&state)),
+            );
+        }
+        value
     })
     .await
     {
@@ -1141,16 +1372,23 @@ pub(crate) struct Attached {
 /// channels, the lane each goes to, the pump-before-restream — so the
 /// wiring under test is the wiring served (review 2026-08-21: tests that
 /// built their own lanes passed with both merged into one channel here).
-pub(crate) fn attach_client<S>(session: &Arc<Session>, mut sink: S) -> Attached
+pub(crate) fn attach_client<S>(
+    session: &Arc<Session>,
+    mut sink: S,
+    requested: Option<Role>,
+) -> Attached
 where
     S: WireSink + Send + 'static,
 {
     let (control_tx, control_rx) = unbounded_channel::<Outgoing>();
     let (display_tx, display_rx) = unbounded_channel::<Outgoing>();
-    let (id, role) = session.join(ClientLanes {
-        control: control_tx.clone(),
-        display: display_tx.clone(),
-    });
+    let (id, role) = session.join(
+        ClientLanes {
+            control: control_tx.clone(),
+            display: display_tx.clone(),
+        },
+        requested,
+    );
     let pump = tokio::spawn(async move {
         pump_lanes(control_rx, display_rx, &mut sink).await;
     });
@@ -1169,20 +1407,24 @@ where
     }
 }
 
+/// The socket route. The token middleware has passed the request; the
+/// pipeline it names is resolved INSIDE the handshake (`client_loop`), not
+/// before the upgrade: a refused upgrade reaches a browser as a bare close
+/// code (1006) with no body, which the app could only read as a network
+/// drop and retry forever — so the reason rides the socket as the typed
+/// `pipeline` error + Close instead (docs/13 §Projects, pipelines, sessions;
+/// wave 4 O2 review). The gate is the same `resolve_session` every route
+/// uses; nothing is opened or touched for a reference a route would refuse.
 async fn ws_upgrade(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PipelineQuery>,
     ws: WebSocketUpgrade,
 ) -> Response {
-    let session = match session_for(&state, &query) {
-        Ok(session) => session,
-        Err(response) => return *response,
-    };
-    ws.on_upgrade(move |socket| client_loop(socket, session))
+    ws.on_upgrade(move |socket| client_loop(socket, state, query))
 }
 
 #[allow(clippy::too_many_lines)] // handshake, then the one receive loop
-async fn client_loop(socket: WebSocket, session: Arc<Session>) {
+async fn client_loop(socket: WebSocket, state: Arc<AppState>, query: PipelineQuery) {
     let (mut sink, mut stream) = socket.split();
 
     // Handshake FIRST (docs/13): the client's `hello` carries its protocol
@@ -1190,15 +1432,18 @@ async fn client_loop(socket: WebSocket, session: Arc<Session>) {
     // hydration — never guessed around. Anything but a hello first is a
     // protocol error too.
     let first = tokio::time::timeout(Duration::from_secs(10), stream.next()).await;
+    // The handshake's verdict, and on success the join hint the hello
+    // carried (`role: observer` = a declared observer — docs/13 §Projects,
+    // pipelines, sessions; `None` for an older client).
     let handshake = match first {
         Ok(Some(Ok(Message::Text(text)))) => match serde_json::from_str::<IntentEnvelope>(&text) {
             Ok(envelope) => match envelope.message {
-                crate::protocol::ClientMessage::Hello { v }
+                crate::protocol::ClientMessage::Hello { v, role }
                     if v == PROTOCOL_VERSION && envelope.v == PROTOCOL_VERSION =>
                 {
-                    Ok(())
+                    Ok(role)
                 }
-                crate::protocol::ClientMessage::Hello { v } => Err(format!(
+                crate::protocol::ClientMessage::Hello { v, .. } => Err(format!(
                     "protocol version {} — this server speaks {PROTOCOL_VERSION}; reload the app",
                     if envelope.v == PROTOCOL_VERSION {
                         v
@@ -1221,20 +1466,44 @@ async fn client_loop(socket: WebSocket, session: Arc<Session>) {
         Ok(None) => Err("socket closed before hello".to_owned()),
         Err(_) => Err("no hello within 10 s".to_owned()),
     };
-    if let Err(message) = handshake {
-        let refusal = encode(
-            0,
-            &ServerMessage::Error {
-                intent_id: None,
-                kind: "protocol".to_owned(),
-                message,
-                details: serde_json::Map::new(),
-            },
-        );
-        let _ = sink.send(Message::Text(refusal.into())).await;
-        let _ = sink.send(Message::Close(None)).await;
-        return;
-    }
+    let requested = match handshake {
+        Ok(requested) => requested,
+        Err(message) => {
+            let refusal = encode(
+                0,
+                &ServerMessage::Error {
+                    intent_id: None,
+                    kind: "protocol".to_owned(),
+                    message,
+                    details: serde_json::Map::new(),
+                },
+            );
+            let _ = sink.send(Message::Text(refusal.into())).await;
+            let _ = sink.send(Message::Close(None)).await;
+            return;
+        }
+    };
+
+    // The handshake's second verdict: the pipeline this socket named — after
+    // the version check, so an older client still hears "reload the app"
+    // first. Refused the same way the version is: one typed error the client
+    // acts on (kind `pipeline`; `reason`, `pipeline` — `protocol::
+    // JoinRefusal`) and Close; no lease, no hydration, no session opened for
+    // a reference the HTTP routes would refuse. The same blocking open
+    // `session_for` makes for every route (a first open lowers the file).
+    let session = match resolve_session(&state, &query) {
+        Ok(session) => session,
+        Err(refusal) => {
+            let message = ServerMessage::join_refused(
+                refusal.pipeline.as_deref(),
+                refusal.reason,
+                refusal.message,
+            );
+            let _ = sink.send(Message::Text(encode(0, &message).into())).await;
+            let _ = sink.send(Message::Close(None)).await;
+            return;
+        }
+    };
 
     // Two lanes to one socket (docs/13 §Two lanes, one socket): the
     // control plane and the display plane each get a channel, and the write
@@ -1250,7 +1519,7 @@ async fn client_loop(socket: WebSocket, session: Arc<Session>) {
         pump: send_task,
         restream: _restream,
         ..
-    } = attach_client(&session, sink);
+    } = attach_client(&session, sink, requested);
 
     // Intents are handled IN ORDER on one blocking thread per client.
     let (intent_tx, intent_rx) =
@@ -1426,6 +1695,138 @@ mod tests {
     use crate::viewmodel::WireEnd;
     use std::sync::Mutex as StdMutex;
     use tokio::sync::Semaphore;
+
+    /// The watcher thread's decision over a burst of changed paths
+    /// (docs/13 §External changes): what reloads, what rescans, and when
+    /// `scripts/` itself must be (re)watched — for a pipeline that sits in
+    /// a SUBDIRECTORY of the root, the shape the root-as-home serves.
+    #[test]
+    fn a_change_is_classified_by_what_the_session_owns() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let scripts_dir = root.join("sub").join("scripts");
+        std::fs::create_dir_all(&scripts_dir).unwrap();
+        std::fs::create_dir_all(root.join("other")).unwrap();
+        let pipeline = root.join("sub").join("p.cic");
+        std::fs::write(&pipeline, "# cicada 1\n").unwrap();
+        let sidecar = crate::sidecar::Sidecar::path_for(&pipeline);
+        std::fs::write(&sidecar, "{}").unwrap();
+        let script = scripts_dir.join("a.py");
+        std::fs::write(&script, "").unwrap();
+        // Another pipeline's file, a non-pipeline file beside ours, a `.py`
+        // that is NOT under scripts/: none of them is this session's.
+        let other = root.join("other").join("p.cic");
+        std::fs::write(&other, "# cicada 1\n").unwrap();
+        let readme = root.join("sub").join("README.md");
+        std::fs::write(&readme, "").unwrap();
+        let stray = root.join("sub").join("stray.py");
+        std::fs::write(&stray, "").unwrap();
+
+        let classify = |paths: &[&Path]| {
+            let changed: Vec<PathBuf> = paths.iter().map(|p| p.to_path_buf()).collect();
+            classify_change(&changed, &pipeline)
+        };
+        let reload = Reaction {
+            reload: true,
+            rescan: false,
+            scripts_dir_changed: false,
+        };
+        let rescan = Reaction {
+            reload: true,
+            rescan: true,
+            scripts_dir_changed: false,
+        };
+        let rewatch = Reaction {
+            reload: true,
+            rescan: true,
+            scripts_dir_changed: true,
+        };
+        assert_eq!(classify(&[]), Reaction::default());
+        assert_eq!(
+            classify(&[&other, &readme, &stray]),
+            Reaction::default(),
+            "another pipeline, a README, a .py outside scripts/: nothing"
+        );
+        assert_eq!(classify(&[&pipeline]), reload);
+        assert_eq!(classify(&[&sidecar]), reload);
+        assert_eq!(classify(&[&script]), rescan);
+        assert_eq!(
+            classify(&[&scripts_dir]),
+            rewatch,
+            "scripts/ itself changed"
+        );
+        assert_eq!(
+            classify(&[&readme, &script, &pipeline]),
+            rescan,
+            "a burst is the union of its parts"
+        );
+        // `scripts/` just deleted (or about to be created): still recognised
+        // by its name, so the reload rescans to none (or the re-watch lands
+        // when it exists again).
+        std::fs::remove_dir_all(&scripts_dir).unwrap();
+        assert_eq!(classify(&[&scripts_dir]), rewatch);
+    }
+
+    /// `/api/project`'s walk skips exactly what `GET /api/files` leaves
+    /// unlisted — ONE predicate, `files::skipped_directory` — and collects
+    /// what the listing calls a pipeline (`.CIC` included): the two must
+    /// never disagree about what a root contains (before, the walk
+    /// descended into OS-hidden directories the listing left out). The
+    /// OS-hidden arm needs Windows' attribute and SKIPS LOUDLY elsewhere
+    /// (the dot-name and build-tree arms are asserted everywhere).
+    #[test]
+    fn the_project_walk_skips_what_the_file_list_skips() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for sub in [".git", "node_modules", "target", "sub/scripts", "Hidden"] {
+            std::fs::create_dir_all(root.join(sub)).unwrap();
+        }
+        for file in [
+            ".git/g.cic",
+            "node_modules/n.cic",
+            "target/t.cic",
+            "Hidden/h.cic",
+            "sub/p.cic",
+            "sub/scripts/a.py",
+            "sub/stray.py",
+            "top.cic",
+            "Upper.CIC",
+            "notes.txt",
+        ] {
+            std::fs::write(root.join(file), "").unwrap();
+        }
+        let os_hidden = cfg!(windows)
+            && std::process::Command::new("attrib")
+                .arg("+H")
+                .arg(root.join("Hidden"))
+                .status()
+                .is_ok_and(|status| status.success());
+        if !os_hidden {
+            eprintln!(
+                "SKIPPING the OS-hidden arm: no hidden attribute here — `Hidden/h.cic` is expected \
+                 in the walk"
+            );
+        }
+        let mut pipelines = Vec::new();
+        let mut scripts = Vec::new();
+        collect_pipelines(root, root, &mut pipelines, &mut scripts, 0);
+        pipelines.sort();
+        scripts.sort();
+        let mut expected = vec!["Upper.CIC", "sub/p.cic", "top.cic"];
+        if !os_hidden {
+            expected.push("Hidden/h.cic");
+        }
+        expected.sort_unstable();
+        assert_eq!(
+            pipelines, expected,
+            ".git, node_modules, target (and the OS-hidden directory) are not walked; .CIC is a pipeline"
+        );
+        assert_eq!(
+            scripts,
+            ["sub/scripts/a.py"],
+            "a .py outside scripts/ is not a script"
+        );
+    }
 
     /// What the mock client saw, in wire order.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1751,7 +2152,7 @@ mod tests {
         // frame first, then 319 distinct 1 MiB frames (distinct lengths:
         // the FIFO is asserted by them).
         let (mut wire, recorder) = Wire::new();
-        let attached = attach_client(&session, recorder);
+        let attached = attach_client(&session, recorder, None);
         assert_eq!(attached.role, Role::Writer);
         let id = attached.id;
         attached.restream.await.unwrap();
@@ -1919,7 +2320,7 @@ mod tests {
         assert_eq!(before["display"]["ball.out"]["generation"], shown);
 
         let (mut wire, recorder) = Wire::new();
-        let attached = attach_client(&session, recorder);
+        let attached = attach_client(&session, recorder, None);
         assert_eq!(attached.role, Role::Writer);
         let id = attached.id;
         assert_eq!(hold.held().await, id, "the join's restream is parked");
@@ -2046,7 +2447,7 @@ mod tests {
         let (mut hold, restream_hold) = Hold::new();
         let (_dir, session) = session(BOX_AND_BALL_PIPELINE, Some(restream_hold));
         let (mut wire, recorder) = Wire::new();
-        let attached = attach_client(&session, recorder);
+        let attached = attach_client(&session, recorder, None);
         let id = attached.id;
         assert_eq!(hold.held().await, id, "the join's restream is parked");
         assert_eq!(wire.release_one().await, Seen::Text("hello".into()));

@@ -16,19 +16,64 @@ with a proxy for HMR.
 
 ## Projects, pipelines, sessions
 
-- A **project** is a directory (normally a git repo root): `*.cic`
-  pipelines, `scripts/`, sidecars. `cicada serve [dir]` serves exactly
-  one project (`cicada serve file.cic` serves the file's directory and
-  opens that pipeline by default). Clients name pipelines by plain
-  project-relative paths only — absolute, rooted, or `..` forms are
-  refused, and a session can never open or write a file outside the
-  project.
-- Each browser tab opens one pipeline = one **session**.
+- `cicada serve [path]` serves exactly one **root** directory (v0.1 wave
+  4 O1, docs/17): a **project** directory — normally a git repo root with
+  `*.cic` pipelines, `scripts/`, sidecars — when one is named; a
+  pipeline's directory when a `.cic` file is named (that pipeline opens
+  by default); the user's **home directory** when nothing is named, and
+  then nothing opens — the app's picker lists the root through `GET
+  /api/files`, one directory at a time, and a pipeline opens on the
+  first `?pipeline=`. Clients name pipelines by plain root-relative paths
+  only — absolute, rooted, or `..` forms are refused, a path whose
+  canonical form leaves the root (a symlink out) is refused, and a
+  session can never open or write a file outside the root. Inside the
+  server the root keeps its stage-5 name, the project
+  (`ServeConfig::project_dir`): `apply_text`'s paths, the git handle's
+  cwd and `/api/project`'s bounded walk are relative to it; scripts are
+  discovered beside each pipeline, whatever the root.
+- Each browser tab opens one pipeline = one **session**. A tab that
+  switches pipelines (File → Open / Recent, the Back button — v0.1 wave
+  4 O2, docs/16 §Application layout) closes its socket and joins the
+  other pipeline's session afresh: the `?pipeline=` parameter changes
+  (`history.pushState`), the client's mirror is cleared, and the join's
+  `hello` + `snapshot` + restream hydrate it — the one hydration path,
+  nothing pipeline-specific survives on the client. The sessions are the
+  server's and outlive the visit (the one left behind keeps solving for
+  whoever else has it open; with nobody left it pauses its transport and
+  stays warm). **A pipeline the server cannot open is refused INSIDE the
+  socket's handshake, never at the upgrade** (wave 4 O2 review,
+  2026-08-24): the token middleware gates the upgrade, and after the
+  version verdict the server answers the `hello` with one `error` of
+  kind `pipeline` — `reason` ∈ `unnamed` / `path_not_allowed` /
+  `not_found` / `open_failed` (`protocol::JoinRefusal`, the ONE
+  classification the HTTP routes map to 400 / 400 / 404 / 422) and
+  `pipeline` as the client sent it — then Close; no lease, no hydration,
+  no session opened for a reference a route would refuse. A refused
+  upgrade reaches a browser as a bare close code (1006) with no body,
+  which the app could only read as a network drop and retry forever; the
+  typed refusal is terminal for the client: no reconnect, the reason as
+  a notice, a `not_found` file dropped from Recent, the tab back on the
+  picker with the dead URL replaced (docs/16 §Application layout).
 - **Single-writer lease** per pipeline: the first client takes the
   write lease; further clients are live read-only observers (which
   also gives presentation/tablet views for free). The lease transfers
   by explicit UI action, or automatically when the writer disconnects
   (5 s grace). No merge machinery exists in v1 — by design.
+  **The join hint** (v0.1 wave 4 O3, additive — `PROTOCOL_VERSION`
+  unchanged): the client's `hello` may carry `role: "observer"` —
+  `{"type":"hello","payload":{"v":1,"role":"observer"}}` — and the
+  socket then joins as a **declared observer** that never holds the
+  lease: it is not made the writer at its join even when the lease is
+  free, it is never promoted after the writer's departure (the grace
+  period's transfer skips it; with only declared observers connected
+  the lease stays free and the writer's reconnect takes it back at its
+  join), and its `take_lease` is refused with kind `lease` and the
+  reason. It reads everything an observer reads — the same snapshot,
+  deltas, statuses and display set. The pop-out viewport
+  (`?view=viewport`, docs/16 §Viewport conventions) joins this way, so a
+  second window of the same person can never steal the first one's
+  lease, a reconnect included. No `role` (an older client) or `role:
+  "writer"` is the rule above.
 - AI agents are server-side actors (doc 11): their edits enter the
   same op pipeline as a client's, as one atomic batch op, and
   broadcast to clients the same way.
@@ -704,7 +749,8 @@ playback; 0 deltas, 0 ops, the file's bytes untouched.
 |---|---|
 | `GET /` | The embedded SPA |
 | `GET /api/catalog` | Node-spec JSON catalog (docs/08) |
-| `GET /api/project` | `{project, pipelines, scripts, default, open, git: {kind, branch, dirty_count}, engine, protocol}` — the pipeline list, the `scripts/*.py` beside them, and the git summary (`kind` = the git state's tag; `dirty_count` = `git status` entries under the project dir; an unexpected git failure is `kind: error` + `error`, never a failed route) |
+| `GET /api/project` | `{project, pipelines, scripts, default, open, git: {kind, branch, dirty_count}, engine, protocol}` — the pipeline list (a bounded walk of the root, depth 4, skipping exactly the directories `GET /api/files` leaves unlisted — one predicate, `files::skipped_directory` — and collecting what it calls a pipeline, the extension case-insensitive; over a home root the walk is still the project-sized tool and the picker uses `/api/files`), the `scripts/*.py` beside them, and the git summary (`kind` = the git state's tag; `dirty_count` = `git status` entries under the project dir; an unexpected git failure is `kind: error` + `error`, never a failed route) |
+| `GET /api/files` | `?dir=<root-relative>` → `{root, dir, parent, entries: [{name, kind, modified_ms}]}` — ONE directory of the served root (v0.1 wave 4 O1: the root may be the user's home directory, so nothing walks it whole and no listing ever names anything above it). `root` is the root directory's own NAME (its path only for a file-system root, which has none); `dir` is the request normalised (`a//b/`, `./a/b` → `a/b`; `""` = the root); `parent` is `dir`'s parent in the same form (`null` at the root). `entries` = the directories — minus dot-directories, `node_modules`, `target`, and the ones the OS marks hidden (Windows' profile junctions `Application Data`, `Cookies`, …, which Explorer hides and nobody can enter) — and the `*.cic` files (extension case-insensitive, like `?pipeline=` accepts it), directories first, each group in case-insensitive name order; `kind` ∈ `dir` / `pipeline`, `modified_ms` = signed milliseconds since the Unix epoch. A symlink or junction is an entry only when the server can follow it to a place under the root (what the list shows must be enterable): one that leaves the root, dangles, or cannot be resolved is no entry, nor is a name that is not valid Unicode (it could never be named in a request); a hidden directory or hidden link is dropped before anything follows it. Unlisted is not unenterable: the skip list is a convention about what the picker shows, the ROOT is the boundary — a dot-directory, `node_modules` or a hidden directory named in `dir` lists like any other directory under the root. Refusals are `{kind, message, path}` (`path` = the `dir` as sent; `FilesErrorKind` in `protocol.rs`, mirrored by the client): 400 `path_not_allowed` — `..`, a leading `/` (absolute, or `//host/share`), a `:` (a drive or a stream), a backslash, a NUL byte — all refused lexically BEFORE the file system is touched — and a `dir` whose canonical path leaves the root; 404 `not_found` — nothing is there: no such directory, a file, a path through a file, or a name the file system cannot hold (Windows: `a?b`, `a*b`, os error 123); 403 `io_error` — the directory exists under the root but could not be read (or the root itself could not be resolved). The route opens no session |
 | `GET /api/blob/{hash}` | Large payloads on demand (full inspector data, export previews) |
 | `POST /api/run/{node}` | Effectful nodes — requires the explicit-run confirmation, streams progress over the session socket |
 | `GET /api/edit/text` | `{path, text, text_hash}` — the base an agent reads before editing (§Undo/redo) |
@@ -712,7 +758,7 @@ playback; 0 deltas, 0 ops, the file's bytes untouched.
 | `GET /api/git/status` | `?pipeline=` → `{state, pipeline: {path, tracked, ignored, dirty, nodes: [{name, change, from?}], removed: [{name, line_in_head}]}, scope: [{path, status, in_head}], text_hash}` (doc 10 §Git integration, slice 1: working tree vs HEAD). `state` is tagged `kind`: `repo {root, prefix, branch, head_short, upstream: {name, ahead, behind}?, unborn, operation?}` \| `locked` (the SAME fields as `repo` — `index.lock` is held, by another git or by our own commit: status still answers, writes wait, the branch chip keeps its facts) \| `not_a_repo` \| `git_not_found`. `operation` ∈ `merge` / `rebase` / `cherry_pick` / `revert` when the shell left one unfinished (`MERGE_HEAD` etc.) — writes refuse `operation_in_progress` until it is done. `change` ∈ `added` / `modified` / `removed` / `renamed` (`from` = the HEAD name); markers are computed FROM `git diff -U0 HEAD -- <path>` (hunks → binding lines, one binding per line), so they cannot disagree with it; a rename pairs a removed + added line with a byte-identical right-hand side **within one hunk** (the writer's `rename` gesture rewrites one line; a deletion here and an unrelated same-literal addition elsewhere are two hunks → `removed` + `added`); the sidecar never marks a node; an untracked pipeline is every node `added`; an ignored one (`.gitignore`) is `ignored: true`, every node `added`, nothing in the scope. `scope` = the dirty files of the commit scope — this pipeline's `.cic`, its sidecar, `scripts/*.py` beside it (the `apply_text` set), project-relative, `status` ∈ `modified` / `added` / `deleted` / `untracked` / `renamed`, and `in_head` = HEAD has a version of the path — the rule `revert` restores by, published per file so no client re-derives it from `status` (they disagree: porcelain `AD`, added to the index then deleted from disk, is `deleted` with no HEAD version; everything on an unborn branch has none); ignored files are left out (git does not list them and `git add` refuses a list containing one). `text_hash` = blake3 of the working file the markers were computed against (clients dedupe on it). Reads only: every invocation carries `--no-optional-locks`, so a refresh never touches the project and never wakes the watcher — the route test asserts `.git/index` is byte-for-byte untouched across refreshes of a dirty tree (what the flag buys) and the command builder's unit test asserts the flag on every invocation — and no session is opened for it (status is a read about a file: polling it for a pipeline nobody has open must not start hydrating and solving one) |
 | `POST /api/git/commit` | `{message, client?}` (writer-gated: `client` or `X-Cicada-Client` must be the lease holder of the pipeline's OPEN session — committing is a git action on the project, not a document edit, hence unlike `apply_text`; a pipeline nobody has open is 403 `lease` with the reason, never opened on the caller's behalf) → `git add -- <scope>` then `git commit --cleanup=verbatim -F - -- <scope>` (the message verbatim on stdin, written from its own thread so a git that exits early — a failing hook — still reports ITS exit code and stderr whatever the message's length; `-- <paths>` commits ONLY the scope, so whatever else the user staged in a shell stays staged; never `add -A`) → `{hash, short, summary, files}`. 422 `empty_message`, 409 `nothing_to_commit` / `not_a_repo` / `git_not_found` / `ignored` (the pipeline is matched by `.gitignore`: git refuses to add it) / `operation_in_progress` (+ `operation`), 423 `locked`, 403 `lease`, 500 `git_failed` (with `command`, `code`, `stderr`) / `git_timeout` / `internal` |
 | `POST /api/git/revert` | `{paths?, client?}` (writer-gated as above) → `git checkout HEAD -- <paths>` for the dirty scope files that HAVE a HEAD version (the status's `in_head`; `paths` narrows the set — the client's confirm step lists exactly the `in_head` files and names exactly those; 422 `path_not_allowed` outside the scope) → the session reloads through the external-change path (`reload_from_disk` → ONE barrier snapshot, `reason: "git revert"`, op log cleared). Checkout and reload run under the session's **write hold** (`Session::hold_writes` → `reload_from_disk_held`): no intent, undo, `apply_text` or watcher reload can persist between the two — a slider drag arriving mid-revert applies to the REVERTED text afterwards instead of overwriting the restored file (which would have made the reload a no-op and the revert silently lost) — so `reloaded` is always `true` when the files changed and the barrier's reason is always ours; the watcher's later wake finds disk == memory and does nothing. → `{reverted, untracked, reloaded}`. Files without a HEAD version are never deleted: `untracked` lists the ones left alone; an untracked (or ignored) pipeline, or an explicit ask for one, is 409 `untracked`; 409 `nothing_to_revert` / `operation_in_progress`; 500 `reload_failed` when the files are back on disk but the session could not load them (previous state stays live). Measured (route test, debug build, Windows): POST → barrier snapshot on the socket ≤ 35 ms. Every git-route failure body is `{kind, message, …}` with `kind` the snake_case `GitErrorKind` enum in `protocol.rs`, mirrored by the client — including pipeline resolution (`protocol` 400, `no_such_pipeline` 404 with `path`) and server-side failures (`internal` 500); the one exception is the token middleware's 401, text like every route's |
-| `GET /debug/state`, `GET /debug/screenshot` | The agent/dev verification loop (doc 14). `state` (`?pipeline=&values=&wait=`) is the authoritative JSON oracle — graph view-model, text, statuses, summary, per-output display stats with bounds/triangles (plus, additive since v0.1 item 3 WP-B, `stats.solids` = solids drawn through tessellation, `stats.tier` = `preview` / `fine`, the deflection tier those solids were meshed at (a drag's generations draw coarse; the release redraws fine — docs/03 §Display tessellation), `stats.warnings` = per-element caveats for solids drawn although the kernel's mesh did not close, and `stats.errors` = per-element reasons for what could not be drawn; all omitted when zero/empty), `display_cache` = the session's solid tessellation cache counters (`entries`, `bytes`, `budget`, `hits`, `misses`, `evictions`, `oversized`, `refusals` = cached negative entries; docs/12 §Display cache), lease, and `timings` (the last 1,024 generations: kind, `queued_ms` intent-arrival → start, `elapsed_ms`, `cancelled`, computed/cached counts, frame bytes, and `cancel_to_idle_ms` on a generation Esc ended — measured server-side, poll-free; the doc-15 measurement currency); `screenshot` (`?target=viewport`) asks a connected client to render the WebGL viewport to PNG (503 when no client is connected — loud, never blank; whole-page shots are Playwright's job) |
+| `GET /debug/state`, `GET /debug/screenshot` | The agent/dev verification loop (doc 14). `state` (`?pipeline=&values=&wait=`) is the authoritative JSON oracle — graph view-model, text, statuses, summary, per-output display stats with bounds/triangles (plus, additive since v0.1 item 3 WP-B, `stats.solids` = solids drawn through tessellation, `stats.tier` = `preview` / `fine`, the deflection tier those solids were meshed at (a drag's generations draw coarse; the release redraws fine — docs/03 §Display tessellation), `stats.warnings` = per-element caveats for solids drawn although the kernel's mesh did not close, and `stats.errors` = per-element reasons for what could not be drawn; all omitted when zero/empty), `display_cache` = the session's solid tessellation cache counters (`entries`, `bytes`, `budget`, `hits`, `misses`, `evictions`, `oversized`, `refusals` = cached negative entries; docs/12 §Display cache), `watched` = the SERVER's watched directories (§External changes: every open pipeline's directory and its `scripts/`, root-relative, `/`-separated, sorted, `""` = the root — so an agent or a test can tell before an external edit whether the watcher will see it), lease, and `timings` (the last 1,024 generations: kind, `queued_ms` intent-arrival → start, `elapsed_ms`, `cancelled`, computed/cached counts, frame bytes, and `cancel_to_idle_ms` on a generation Esc ended — measured server-side, poll-free; the doc-15 measurement currency); `screenshot` (`?target=viewport`) asks a connected client to render the WebGL viewport to PNG (503 when no client is connected — loud, never blank; whole-page shots are Playwright's job) |
 | `GET /health` | Readiness (no token) — Playwright's `webServer` waits on it |
 
 ## Stage-5 slice, stated honestly
@@ -843,8 +889,34 @@ beyond "layer by dependency depth, stack in definition order".
 
 Humans edit through the canvas (locked decision), but files still
 change on disk — chiefly via git (checkout, pull, restore), rarely via
-a stray editor. The engine watches the project directory (debounced):
-an external change to a `.cic`, sidecar, or script triggers reload →
+a stray editor. The engine watches (debounced) each OPEN pipeline's
+directory and the `scripts/` beside it, non-recursively — never the
+root as a tree: since v0.1 wave 4 (O1) the root may be the user's whole
+home directory, and a recursive watch over it is unbounded (inotify's
+watch limit refuses it outright; every backend floods the coalescing
+thread with events about nothing the watcher acts on). The watched set
+is exactly what the watcher reacts to — the `.cic`, its sidecar (same
+directory), `scripts/*.py` — and a `scripts/` that appears after its
+pipeline opened is put under watch on its arrival, which itself
+rescans (a directory checked out together with its files is not
+missed; `http.rs`'s `classify_change` is the decision, unit-tested, and
+`tests/root_and_files.rs` drives the real watcher over a pipeline in a
+subdirectory of the root — a `scripts/` present at open, proved by the
+watched set at the moment of the join, and one arriving later, proved by
+a content-only rewrite inside it — which only a watch ON the directory
+can see — after an ordered barrier has quiesced the watcher). The
+watched set is published:
+`/debug/state` carries `watched` (root-relative, sorted), and a `scripts/`
+the watcher could not put under watch is a `warning` notice to the
+session's clients — the session stays open on its `.cic`, and says that
+script edits there go unseen until it is reopened. The re-watch is
+idempotent on purpose: Windows reports `scripts/` modified on the
+parent's watch without any entry change (NTFS flushes a file's
+directory-entry info when the file is next opened and closed — the
+session's own read of a script does that), so the reaction runs
+spuriously now and then and costs one fingerprint; a batch of changed
+paths is always the union of its parts, never a count. An external
+change to a `.cic`, sidecar, or script triggers reload →
 re-check → **reload barrier** in the op log (undo stack cleared) →
 full snapshot broadcast to clients. Honest and simple; no
 three-way-merge machinery. The session's own writes echo back through

@@ -575,11 +575,95 @@ async fn serve_snapshot_frames_intents_and_debug_state() {
         .await
         .unwrap();
     assert_eq!(status, 400);
-    // The WebSocket route shares it: the upgrade is refused.
-    let bad_ws = format!("ws://{addr}/ws?token=t&pipeline={}", urlencode(&absolute));
-    assert!(
-        tokio_tungstenite::connect_async(bad_ws).await.is_err(),
-        "ws upgrade with an absolute pipeline must fail"
+    // The WebSocket route shares the gate — but answers INSIDE the handshake
+    // (docs/13 §Projects, pipelines, sessions; wave 4 O2 review): a refused
+    // upgrade reaches a browser as a bare 1006 with no body, which the app
+    // could only read as a network drop and retry forever. So the upgrade
+    // succeeds, the hello is read, and the verdict is one typed `error` of
+    // kind `pipeline` — `reason` + the reference as sent — then Close; no
+    // session is opened (`/api/project`'s `open` is unchanged).
+    for (bad, reason, names) in [
+        (absolute.as_str(), "path_not_allowed", "project-relative"),
+        ("gone.cic", "not_found", "no pipeline `gone.cic`"),
+    ] {
+        let url = format!("ws://{addr}/ws?token=t&pipeline={}", urlencode(bad));
+        let (mut socket, _) = tokio_tungstenite::connect_async(url)
+            .await
+            .expect("the upgrade is accepted; the refusal rides the socket");
+        socket
+            .send(Message::Text(
+                format!(r#"{{"v":{PROTOCOL_VERSION},"type":"hello","payload":{{"v":{PROTOCOL_VERSION}}}}}"#)
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let mut refusal: Option<serde_json::Value> = None;
+        let mut closed = false;
+        while let Ok(Some(Ok(message))) =
+            tokio::time::timeout(Duration::from_secs(5), socket.next()).await
+        {
+            match message {
+                Message::Text(text) => {
+                    assert!(refusal.is_none(), "`{bad}`: one error, then Close: {text}");
+                    refusal = Some(serde_json::from_str(&text).unwrap());
+                }
+                Message::Close(_) => {
+                    closed = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let refusal = refusal.unwrap_or_else(|| panic!("`{bad}`: no error before the close"));
+        assert!(closed, "`{bad}`: the server closes after the refusal");
+        assert_eq!(refusal["type"], "error", "{refusal}");
+        assert_eq!(refusal["payload"]["kind"], "pipeline", "{refusal}");
+        assert_eq!(refusal["payload"]["reason"], reason, "{refusal}");
+        assert_eq!(refusal["payload"]["pipeline"], bad, "{refusal}");
+        assert!(
+            refusal["payload"]["intent_id"].is_null(),
+            "a handshake refusal answers no intent: {refusal}"
+        );
+        let message = refusal["payload"]["message"].as_str().unwrap();
+        assert!(
+            message.starts_with(&format!("opening {bad}: ")) && message.contains(names),
+            "`{bad}`: the text a route would have answered with: {message}"
+        );
+    }
+    // The version verdict comes first: an older client on a missing file
+    // hears "reload the app", not a pipeline it could not act on anyway.
+    {
+        let url = format!("ws://{addr}/ws?token=t&pipeline=gone.cic");
+        let (mut socket, _) = tokio_tungstenite::connect_async(url).await.expect("ws");
+        socket
+            .send(Message::Text(
+                r#"{"v":99,"type":"hello","payload":{"v":99}}"#.into(),
+            ))
+            .await
+            .unwrap();
+        let mut kind: Option<serde_json::Value> = None;
+        while let Ok(Some(Ok(message))) =
+            tokio::time::timeout(Duration::from_secs(5), socket.next()).await
+        {
+            match message {
+                Message::Text(text) => {
+                    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+                    kind = Some(value["payload"]["kind"].clone());
+                }
+                Message::Close(_) => break,
+                _ => {}
+            }
+        }
+        assert_eq!(kind, Some("protocol".into()), "the version is judged first");
+    }
+    let (_, body) = tokio::task::spawn_blocking(move || http_get(addr, "/api/project", Some("t")))
+        .await
+        .unwrap();
+    let project: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        project["open"],
+        serde_json::json!(["p.cic"]),
+        "refused joins open no session"
     );
 
     // ---- Handshake: a wrong protocol version is refused at hello — error,

@@ -99,7 +99,13 @@ dies before `main` with NO message (exit 127 / `STATUS_DLL_NOT_FOUND` as a
 shell sees it). `python tools/fetch_occt.py --print-env mcp > .mcp.json`
 writes the MCP registration with this machine's absolute loader dir in its
 `env`. The kernel-free build is `--no-default-features` (same signatures,
-every kernel call a typed `KernelUnavailable`).
+every kernel call a typed `KernelUnavailable`). **Since 2026-08-24 the same
+incantation also exports `MANIFOLD_CSG_LIB_DIR` / `MANIFOLD_CSG_LIB_KIND`
+when the prebuilt Manifold is present** — `python tools/fetch_manifold.py`
+builds it once per machine (1.5 min on the dev machine) — and then no cargo
+context compiles Manifold with cmake any more; without the prefix the
+incantation says so on stderr and cargo builds Manifold from source as
+before (slower, never wrong).
 
 | Task | Command |
 |---|---|
@@ -112,13 +118,14 @@ every kernel call a typed `KernelUnavailable`).
 | Catalog freshness (CI mode) | `cargo run -p cicada-cli -- catalog --check` |
 | Bless macro compile-fail snapshots (PowerShell) | `$env:TRYBUILD = "overwrite"; cargo test -p cicada-core --test macro_ui; Remove-Item Env:\TRYBUILD` |
 | Web checks (bash; PS 5.1 has no `&&` — use `;`) | `cd web && npm run check && npm run lint && npm test` |
-| Serve the app | `cargo run -p cicada-cli -- serve <dir-or-pipeline.cic> [--port 8420] [--token …] [--cache-dir …] [--web-dir web/dist]` — prints the URL with the token; without a built SPA it is API-only and says so at `/`. Dev: `cd web && npm run dev` (Vite proxies `/api`, `/ws`, `/debug` to port 8420 — `CICADA_SERVER=` overrides) and open the Vite URL with the same `?token=…&pipeline=…`. Release shape: `cd web && npm run build` then `cargo build -p cicada-cli --features embed` |
+| Serve the app | `cargo run -p cicada-cli -- serve [dir-or-pipeline.cic] [--port 8420] [--token …] [--cache-dir …] [--web-dir web/dist]` — prints the URL with the token; a directory is the root, a `.cic` makes its directory the root and opens; NO path = your home directory as the root with nothing opened (the app's picker lists it through `GET /api/files`, one directory per request — v0.1 wave 4 O1); without a built SPA it is API-only and says so at `/`. Dev: `cd web && npm run dev` (Vite proxies `/api`, `/ws`, `/debug` to port 8420 — `CICADA_SERVER=` overrides) and open the Vite URL with the same `?token=…&pipeline=…`. Release shape: `cd web && npm run build` then `cargo build -p cicada-cli --features embed` |
 | Playwright smoke (doc 15 DoD) | `cd web && npm run build && npm run e2e` — starts `cicada serve` from `$CARGO_TARGET_DIR/debug/cicada` (or `CICADA_BIN`) over a scratch copy of `examples/` (it prints which engine/scratch it uses — in a worktree export the PRIVATE `CARGO_TARGET_DIR` in the same shell or you smoke the main checkout's engine; the shell must also carry the OCCT loader path from `tools/fetch_occt.py --print-env`, or the engine dies before `main` without a word); first time: `npx playwright install chromium` |
-| Agent verification of the running app | `GET /debug/state?token=…&pipeline=…&wait=true` (authoritative JSON: graph, statuses, per-output display bounds/triangles, generation timings; `wait=true` blocks until the debounce and any queued/in-flight generation are done — an intent sent on the socket is "in" once its `delta` arrived, so read the delta (or poll `seq`) before asking), `GET /debug/screenshot?token=…` (viewport PNG rendered by a connected client), `window.__cicada.{state,frames,scene,send,screenshot}` in the page |
+| Agent verification of the running app | `GET /debug/state?token=…&pipeline=…&wait=true` (authoritative JSON: graph, statuses, per-output display bounds/triangles, generation timings; `wait=true` blocks until the debounce and any queued/in-flight generation are done — an intent sent on the socket is "in" once its `delta` arrived, so read the delta (or poll `seq`) before asking), `GET /debug/screenshot?token=…` (viewport PNG rendered by a connected client), `window.__cicada.{state,frames,scene,send,screenshot,connection}` in the page (`connection()` = the `{token, pipeline, role?}` the live socket was started with — the route's word made socket; the pop-out's carries `role: "observer"`) |
 | MCP server for agents | `$CARGO_TARGET_DIR/debug/cicada mcp [--project <dir-or-pipeline.cic>]` (build first: `cargo build -p cicada-cli`) — stdio JSON-RPC (stdout is the protocol; notes on stderr); tools `catalog_search`, `node_doc`, `list_categories`, `check` (checker + dry lowering: diagnostics AND `excluded` bindings with the canvas's red/blocked reasons); `--project` adds that project's `scripts/*.py` to the catalog and anchors relative `check` paths. Register via `.mcp.json.example` (copy to the gitignored `.mcp.json`; it names `${CARGO_TARGET_DIR:-target}/debug/cicada`, which Claude Code expands) — or, on any OS, `python tools/fetch_occt.py --print-env mcp > .mcp.json`, which writes the same registration with this machine's absolute OCCT library dir in the server's `env` (the example carries the Windows layout via `${LOCALAPPDATA}`). The `env` block is not optional: the binary links OCCT and Claude Code launches it from its own environment, so without the loader path the server dies silently before `main` (review finding, 2026-08-21). `cargo run -q -p cicada-cli -- mcp` works as the command only on a warm target dir with cmake on PATH — cold, the `-p cicada-cli` context rebuilds the kernel for minutes and the client times out |
 | Headless run | `cargo run -p cicada-cli -- run <pipeline.cic> [--node <name>]… [--time] [--hashes] [--cache-dir <dir>] [--threads N]` — no `--node` = every leaf; `--hashes` prints stable hash lines INSTEAD of values; dialect syntax: [docs/10](docs/10-dialect-and-file-format.md); tests/CI always pass `--cache-dir` |
 | Bless insta snapshots (checker diagnostics) | `cargo insta review` (cargo-insta installed 2026-08-12) — or `$env:INSTA_UPDATE = "always"; cargo test -p cicada-lang; Remove-Item Env:\INSTA_UPDATE` |
 | Fetch the prebuilt OCCT (once per machine; `occt` feature) | `python tools/fetch_occt.py [--check-closure]` — sha256-pinned conda-forge OCCT 7.8.1 + its run-time closure into the user cache dir (`%LOCALAPPDATA%\cicada-occt`, `~/.cache/cicada-occt`; never a repo), prints `DEP_OCCT_ROOT` + the loader path; idempotent (the warm path re-verifies every shared library's presence and size, ~0.2 s; `--check-closure` also reads the import tables). Needs a zstd decoder (`pip install zstandard` on Python < 3.14). `--print-env bash\|powershell` emits the three lines a shell needs, `--print-env mcp` a `.mcp.json` with the loader path in the server's `env`; `--manifest-hash` is the CI cache key; `regenerate-manifest` is maintainer-only (network, re-pins everything) |
+| Build the prebuilt Manifold (once per machine; iteration-speed rule 6) | `python tools/fetch_manifold.py` — clones upstream at the pin in `tools/fetch_manifold_manifest.json` (`tools/test_fetch_manifold.py` holds the crate version to Cargo.lock and the tag + cmake flags to `manifold-csg-sys`'s own source — CI's `rust` job runs it with the registry warm; the script refuses a clone whose HEAD is not the pinned commit), configures cmake with exactly the -sys crate's flags, builds Release, harvests `manifold` / `manifoldc` / `Clipper2` / `tbb12` as static archives into `%LOCALAPPDATA%\cicada-manifold` (`~/.cache/cicada-manifold`), writes a stamp; idempotent (the warm path is four stats). `--print-env bash\|powershell\|cmd` emits the two `MANIFOLD_CSG_*` lines (and `fetch_occt.py --print-env` emits them too when the prefix exists), `--github-env` appends them, `--check` verifies without building, `--manifest-hash` is the CI cache key, `--keep-work` keeps the clone and the cmake tree. Needs git + cmake + a C++ toolchain and network once |
 | The OCCT seam (`cicada-geom` feature `occt`, ON by default since WP-C) | Under the env above, the seam's tests are part of `cargo test -p cicada-geom` (kernel level `src/occt/tests.rs` + the node set `src/occt/node_set_tests.rs`; the stdlib's Solid nodes and the server's display tests run in the kernel world too). The kernel-free world belongs to two crates and CI tests both: `cargo test -p cicada-geom --no-default-features` (the seam, 81 tests) and `cargo test -p cicada-stdlib --no-default-features` (the nodes: the stdlib takes cicada-geom with `default-features = false` and forwards through its own default-on `occt` feature since the WP-C review closure of 2026-08-21; every Solid node is red with the typed refusal there and `solids/support.rs`'s `with_kernel` / `expect_red` assert it — the node is reached with a pseudo solid, so the refusal is the node's own, never a fixture's). The server and the CLI take the defaults through their edges, so a workspace-level `--no-default-features` still links the kernel (`cargo tree -e features` shows it) and cicada-server's tests have no kernel-free arm (each asserts the kernel is present rather than passing vacuously). Nothing may run `--all-features`. CI: every building job fetches the prebuilt first (ci.yml `rust`/`test-cross`/`playwright-smoke`, nightly `test-matrix`/`wall-corpus`/`playwright-heavy`). Golden hashes of the canonical bytes bless via run-once (`CICADA_OCCT_DUMP=<dir>` writes the bytes). The seam's cost table: `cargo run --release -p cicada-geom --example solid_bench [parts…]` (docs/03 quotes it). The node-set glue is cicada-geom's own (`src/occt/glue.hxx` + `glue.rs`, compiled by `build.rs` with cxx-build against `DEP_OCCT_ROOT`); the fork carries the binding patches and the first glue |
 | Carve benchmark (kernel seam, release only) | `cargo run --release -p cicada-geom --example carve_bench [parts]` — see skill `perf-check` |
 | Wall carve (stage 6, release) | `cargo run --release -p cicada-cli -- run examples/wall/wall.cic --node carved --time --cache-dir <fresh>` (cold < 10 s; MEASURED 6.5 s). Exporters: `--node bambu --node dxf` (write to `examples/wall/out/`, gitignored) |
@@ -171,9 +178,12 @@ Python 3 on PATH (or `CICADA_PYTHON`); worker protocol is dependency-free
   would otherwise quarantine as corruption). Stores are keyed by
   project path in the ONE user cache dir, whatever worktree the engine
   came from — serve scratch copies for experiments, as always.
-- **cmake for the Manifold kernel build**: `manifold-csg-sys` compiles
-  upstream Manifold via cmake. cmake is not on this machine's PATH;
-  prepend the VS Build Tools copy per shell:
+- **cmake for the Manifold kernel build** (only for the once-per-machine
+  `tools/fetch_manifold.py` build since 2026-08-24 — with the prebuilt in
+  place, no cargo context runs cmake; the script finds the VS copy itself):
+  without the prebuilt, `manifold-csg-sys` compiles upstream Manifold via
+  cmake in every target dir. cmake is not on this machine's PATH; prepend
+  the VS Build Tools copy per shell:
 
   ```powershell
   $env:Path = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;$env:Path"
@@ -222,6 +232,28 @@ Python 3 on PATH (or `CICADA_PYTHON`); worker protocol is dependency-free
 - **Scope to one crate where possible.** Crate boundaries are agent work
   boundaries. Run the touched crate's tests plus
   `cargo check --workspace` before declaring done.
+- **Iteration speed is a standing rule (decided with Ben 2026-08-24 —
+  the bottleneck is compile time multiplied by the process).**
+  (1) *Fast lane*: a finding that is one file, one token or one threshold
+  is fixed directly in the main checkout by the orchestrating session —
+  warm target, targeted tests, one commit — never a worktree, never
+  review agents. (2) *Per-track merges*: a track merges to main and is
+  pushed as soon as its own review/fix loop is green; nobody waits for
+  the rest of the wave. (3) *Review granularity*: the per-package
+  adversarial review (five lenses + critic, reproduce-or-refute) is for
+  engine, server and protocol work; pure UI/visual work gets one review
+  per track. (4) *Agents verify what they touched*: the touched crates'
+  tests, `cargo check --workspace`, the web checks and the e2e specs they
+  own; the full `cargo test --workspace` and the whole Playwright suite
+  run once, at the merge. (5) *One toolchain*: `rust-toolchain.toml` says
+  `stable`; when CI's stable moves, `rustup update stable` in a quiet
+  moment (no builds in flight) — never lint with a second toolchain side
+  by side, it doubles every compile. (6) *Prebuilt kernels*: a cold
+  worktree build compiles no C++ kernel — OCCT comes prebuilt
+  (`tools/fetch_occt.py`) and Manifold from a once-per-machine build
+  linked through `MANIFOLD_CSG_LIB_DIR` (`tools/fetch_manifold.py`, the
+  first package of wave 4's second half); a target dir is never seeded by
+  copying — at 23 GB the copy costs what the kernel-free cold build does.
 - **A worktree may hold another agent's uncommitted work.** Never clean
   by pattern — no `git clean`, no `git ls-files --others | xargs rm`, no
   `git checkout -- .` / `git stash` over files you did not touch. Delete

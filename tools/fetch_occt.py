@@ -1048,6 +1048,23 @@ def regenerate_manifest(subdirs: Iterable[str], listing_dir: Path | None, log, p
 # ---------------------------------------------------------------------------
 
 
+def manifold_env_lines(shell: str, note) -> list[str]:
+    """`tools/fetch_manifold.py`'s env for THIS platform's default prefix when it is
+    warm, else a stderr note and nothing (see `main`); `shell` may be `summary`
+    for the `VAR=value` lines of the no-flag report. Imported lazily: the two
+    scripts live side by side in tools/ and neither needs the other to load."""
+    import fetch_manifold  # noqa: PLC0415 — sibling script, same directory
+
+    try:
+        if shell == "summary":
+            lines = fetch_manifold.env_lines_if_present("bash", note)
+            return [line.removeprefix("export ").replace("'", "") for line in lines]
+        return fetch_manifold.env_lines_if_present(shell, note)
+    except fetch_manifold.FetchError as error:
+        note(f"note: prebuilt Manifold unavailable: {error}")
+        return []
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", nargs="?", choices=["fetch", "regenerate-manifest"], default="fetch")
@@ -1085,8 +1102,24 @@ def main(argv: list[str]) -> int:
                 if unresolved:
                     raise FetchError(f"{subdir}: import closure is not closed: {', '.join(unresolved)}")
                 log(f"{subdir}: import closure is closed")
+            # The other prebuilt kernel rides along in the DEV-SHELL forms
+            # (tools/fetch_manifold.py; AGENTS.md iteration-speed rule 6): when its
+            # default prefix is warm, `--print-env` and the summary also emit
+            # MANIFOLD_CSG_LIB_DIR / MANIFOLD_CSG_LIB_KIND and cargo skips the
+            # in-tree cmake build of Manifold; when it is not, one stderr line says
+            # so — even under --quiet, because the alternative is five silent
+            # minutes per target dir — and cargo compiles it from source as before.
+            # `--github-env` does NOT ride along: CI runs `fetch_manifold.py
+            # --dest … --github-env` as its own step against its own cache dir, and
+            # a note about the default prefix would be false there (review finding,
+            # 2026-08-24).
+            note = lambda message: print(message, file=sys.stderr)  # noqa: E731
             if args.print_env:
                 print("\n".join(env_lines(layout, args.print_env)))
+                if args.print_env in ("bash", "powershell") and subdir == detect_subdir():
+                    manifold_lines = manifold_env_lines(args.print_env, note)
+                    if manifold_lines:
+                        print("\n".join(manifold_lines))
             elif args.github_env:
                 env_file = os.environ.get("GITHUB_ENV")
                 path_file = os.environ.get("GITHUB_PATH")
@@ -1106,6 +1139,9 @@ def main(argv: list[str]) -> int:
                 print(f"DEP_OCCT_ROOT={layout.dep_occt_root}")
                 print(f"{layout.loader_variable}+={layout.library_dir}")
                 print(f"CMAKE_POLICY_VERSION_MINIMUM={CMAKE_POLICY_VERSION_MINIMUM}")
+                if subdir == detect_subdir():
+                    for line in manifold_env_lines("summary", note):
+                        print(line)
         return 0
     except FetchError as error:
         print(f"error: {error}", file=sys.stderr)

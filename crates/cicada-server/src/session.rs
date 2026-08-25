@@ -276,6 +276,14 @@ pub enum IntentError {
     /// Read-only observer sent a write.
     #[error("read-only observer — take the lease to edit")]
     Lease,
+    /// A client that joined with `role: observer` (the pop-out viewport)
+    /// asked for the lease: it declared at its join that it never holds
+    /// it (docs/13 §Projects, pipelines, sessions — the join hint).
+    #[error(
+        "this client joined as a declared observer (`role: observer`) and never takes the \
+         write lease — edit from the main window"
+    )]
+    DeclaredObserver,
     /// A writer gesture refused.
     #[error("{0}")]
     Writer(#[from] writer::WriterError),
@@ -350,7 +358,7 @@ impl IntentError {
     #[must_use]
     pub fn kind(&self) -> &'static str {
         match self {
-            Self::Lease => "lease",
+            Self::Lease | Self::DeclaredObserver => "lease",
             Self::Writer(_) => "writer",
             Self::Unknown(_) => "unknown",
             Self::Protocol(_) => "protocol",
@@ -661,6 +669,10 @@ struct Client {
     lanes: ClientLanes,
     role: Role,
     joined: u64,
+    /// Joined with the `role: observer` hint (docs/13 — the pop-out
+    /// viewport): never the writer — not at the join, not by promotion,
+    /// not by `take_lease`.
+    observer_only: bool,
 }
 
 /// One displayed output's last broadcast state.
@@ -1360,8 +1372,17 @@ impl Session {
     /// the first two under the same lock hold as the registration.
     #[must_use]
     pub fn connect(&self, lanes: ClientLanes) -> (u32, Role) {
+        self.connect_as(lanes, None)
+    }
+
+    /// [`Self::connect`] with the join hint: `Some(Role::Observer)` is a
+    /// DECLARED observer (docs/13 §Projects, pipelines, sessions) — it is
+    /// never made the writer, here or later; `None` / `Some(Role::Writer)`
+    /// is the default rule.
+    #[must_use]
+    pub fn connect_as(&self, lanes: ClientLanes, requested: Option<Role>) -> (u32, Role) {
         let mut inner = self.core.lock_inner();
-        register_client(&mut inner, lanes)
+        register_client(&mut inner, lanes, requested)
     }
 
     /// Register AND hydrate a client socket under ONE lock hold: `hello`
@@ -1373,10 +1394,14 @@ impl Session {
     /// the socket's write task first and the restream after — the
     /// joiner's graph is on the wire while its frames are still being
     /// encoded (docs/13 §Two lanes, one socket).
+    /// `requested` is the client's join hint (its `hello`'s `role`):
+    /// `Some(Role::Observer)` joins as a declared observer that never
+    /// holds the lease (the pop-out viewport), anything else is the default
+    /// first-client-writes rule.
     #[must_use]
-    pub fn join(&self, lanes: ClientLanes) -> (u32, Role) {
+    pub fn join(&self, lanes: ClientLanes, requested: Option<Role>) -> (u32, Role) {
         let mut inner = self.core.lock_inner();
-        let (id, role) = register_client(&mut inner, lanes);
+        let (id, role) = register_client(&mut inner, lanes, requested);
         if let Some(client) = inner.clients.get(&id) {
             client
                 .lanes
@@ -1409,13 +1434,22 @@ impl Session {
     }
 
     /// After the writer's grace period: if no writer, promote the oldest
-    /// observer (docs/13: automatic transfer, 5 s grace).
+    /// observer (docs/13: automatic transfer, 5 s grace) — never a
+    /// DECLARED one (`role: observer` at its join): the pop-out viewport
+    /// must not inherit the lease its own main window just dropped; with
+    /// only declared observers connected the lease stays free, and the
+    /// main window's reconnect takes it back at its join.
     pub fn transfer_lease_if_free(&self) {
         let mut inner = self.core.lock_inner();
         if inner.writer.is_some() {
             return;
         }
-        let Some((&oldest, _)) = inner.clients.iter().min_by_key(|(_, c)| c.joined) else {
+        let Some((&oldest, _)) = inner
+            .clients
+            .iter()
+            .filter(|(_, c)| !c.observer_only)
+            .min_by_key(|(_, c)| c.joined)
+        else {
             return;
         };
         inner.writer = Some(oldest);
@@ -1992,6 +2026,12 @@ impl Session {
             }
             ClientMessage::TakeLease {} => {
                 let mut inner = self.core.lock_inner();
+                if inner.clients.get(&client).is_some_and(|c| c.observer_only) {
+                    // Declared at the join (docs/13 — the join hint): the
+                    // pop-out viewport never takes the lease, whoever
+                    // holds it and however it asks.
+                    return Err(IntentError::DeclaredObserver);
+                }
                 let previous = inner.writer;
                 if previous != Some(client) {
                     // A handover ends the previous writer's drag: its ticks
@@ -2706,6 +2746,21 @@ impl Session {
         self.reload_from_disk_held(hold, reason, rescan_scripts)
     }
 
+    /// A `warning` notice to every client of this session, from outside it
+    /// — the watcher telling the user that a directory it should be
+    /// watching on the session's behalf could not be watched (docs/13
+    /// §External changes). Nothing else changes: no op, no seq, no delta.
+    pub fn notify_warning(&self, message: String) {
+        let inner = self.core.lock_inner();
+        broadcast(
+            &inner,
+            &ServerMessage::Notice {
+                level: "warning".to_owned(),
+                message,
+            },
+        );
+    }
+
     /// Exclude the session's own writes while a caller changes the files
     /// on disk (git revert: `checkout HEAD -- <paths>`), then hand the
     /// hold to [`Self::reload_from_disk_held`]. While the hold lives, no
@@ -3339,13 +3394,16 @@ impl Observer for ForwardObserver {
     }
 }
 
-/// Register a client's lanes: the id, the lease (first client = writer),
-/// the roster broadcast to everyone else. Under the caller's lock hold.
-fn register_client(inner: &mut Inner, lanes: ClientLanes) -> (u32, Role) {
+/// Register a client's lanes: the id, the lease (first client = writer —
+/// unless the client DECLARED itself an observer with its join hint, which
+/// leaves a free lease free), the roster broadcast to everyone else. Under
+/// the caller's lock hold.
+fn register_client(inner: &mut Inner, lanes: ClientLanes, requested: Option<Role>) -> (u32, Role) {
     inner.next_client += 1;
     inner.join_counter += 1;
     let id = inner.next_client;
-    let role = if inner.writer.is_none() {
+    let observer_only = requested == Some(Role::Observer);
+    let role = if !observer_only && inner.writer.is_none() {
         inner.writer = Some(id);
         Role::Writer
     } else {
@@ -3358,6 +3416,7 @@ fn register_client(inner: &mut Inner, lanes: ClientLanes) -> (u32, Role) {
             lanes,
             role,
             joined,
+            observer_only,
         },
     );
     let lease = lease_view(inner);
@@ -5617,6 +5676,47 @@ mod tests {
             .collect()
     }
 
+    /// The watcher's voice inside a session (docs/13 §External changes): a
+    /// directory it could not (re)watch on the session's behalf is told to
+    /// every client as a `warning` notice — and nothing else moves (no op,
+    /// no seq, no delta).
+    #[test]
+    fn a_warning_from_outside_reaches_every_client_as_a_notice() {
+        let (_dir, config) = project("# cicada 1\nsize = slider(value=2.0, min=0.5, max=5.0)\n");
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx_a, mut rx_a) = unbounded_channel();
+        let _ = session.connect(ClientLanes::merged(tx_a));
+        let (tx_b, mut rx_b) = unbounded_channel();
+        let _ = session.connect(ClientLanes::merged(tx_b));
+        drain(&mut rx_a);
+        drain(&mut rx_b);
+        let seq_before = session.core.lock_inner().seq;
+        session.notify_warning("watching scripts failed: gone".to_owned());
+        for rx in [&mut rx_a, &mut rx_b] {
+            let messages = texts(&drain(rx));
+            let notices: Vec<&serde_json::Value> =
+                messages.iter().filter(|m| m["type"] == "notice").collect();
+            assert_eq!(notices.len(), 1, "{messages:?}");
+            assert_eq!(notices[0]["payload"]["level"], "warning");
+            assert_eq!(
+                notices[0]["payload"]["message"],
+                "watching scripts failed: gone"
+            );
+            assert!(
+                messages
+                    .iter()
+                    .all(|m| m["type"] != "delta" && m["type"] != "snapshot"),
+                "a notice is not an edit: {messages:?}"
+            );
+        }
+        assert_eq!(
+            session.core.lock_inner().seq,
+            seq_before,
+            "a notice is not an op"
+        );
+    }
+
     #[test]
     #[allow(clippy::too_many_lines)] // one end-to-end story: open → frames → every gesture
     fn open_solve_and_stream_frames_then_edit_via_intents() {
@@ -5857,6 +5957,121 @@ mod tests {
                 .unwrap()
                 .contains("a = 2.0")
         );
+    }
+
+    /// The join hint (docs/13 §Projects, pipelines, sessions; wave 4 O3):
+    /// a client that declares `role: observer` never holds the lease — a
+    /// free lease stays free at its join, `take_lease` is refused (kind
+    /// `lease`, the writer keeps it, nothing is broadcast), the writer's
+    /// departure promotes nobody while only declared observers remain (the
+    /// main window's reconnect takes the lease back at its join), and an
+    /// ordinary observer IS promoted ahead of an older declared one.
+    #[test]
+    fn a_declared_observer_never_takes_the_lease() {
+        let (_dir, config) = project("# cicada 1\na = 1.0\n");
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let writer_of = || session.debug_state(false)["lease"]["writer"].clone();
+
+        // The pop-out joins FIRST, onto a free lease: still an observer.
+        let (tx_o, mut rx_o) = unbounded_channel();
+        let (o, role_o) = session.connect_as(ClientLanes::merged(tx_o), Some(Role::Observer));
+        assert_eq!(role_o, Role::Observer);
+        assert_eq!(
+            writer_of(),
+            serde_json::Value::Null,
+            "a declared observer leaves a free lease free"
+        );
+
+        // The main window joins by the default rule and takes it.
+        let (tx_w, mut rx_w) = unbounded_channel();
+        let (w, role_w) = session.connect(ClientLanes::merged(tx_w));
+        assert_eq!(role_w, Role::Writer);
+        drain(&mut rx_o);
+
+        // `take_lease` from the declared observer: refused, the lease stands.
+        session.handle(o, Some("t".into()), ClientMessage::TakeLease {});
+        let msgs = texts(&drain(&mut rx_o));
+        let error = msgs.iter().find(|m| m["type"] == "error").unwrap();
+        assert_eq!(error["payload"]["kind"], "lease");
+        assert_eq!(error["payload"]["intent_id"], "t");
+        assert!(
+            error["payload"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("declared observer"),
+            "{error}"
+        );
+        assert!(
+            msgs.iter().all(|m| m["type"] != "lease"),
+            "a refused take_lease broadcasts no lease change: {msgs:?}"
+        );
+        assert_eq!(writer_of(), w);
+        assert!(
+            texts(&drain(&mut rx_w))
+                .iter()
+                .all(|m| m["type"] != "lease"),
+            "the writer hears nothing of it"
+        );
+
+        // The writer leaves (a reconnect in flight) and the grace runs out:
+        // the declared observer is NOT promoted — the lease stays free.
+        session.disconnect(w);
+        drain(&mut rx_o);
+        session.transfer_lease_if_free();
+        assert_eq!(writer_of(), serde_json::Value::Null, "nobody to promote");
+        assert!(
+            texts(&drain(&mut rx_o))
+                .iter()
+                .all(|m| m["type"] != "lease"),
+            "no lease change is broadcast when nobody was promoted"
+        );
+        session.handle(
+            o,
+            Some("x".into()),
+            ClientMessage::SetParam {
+                node: "a".into(),
+                port: None,
+                value: "2.0".into(),
+            },
+        );
+        let msgs = texts(&drain(&mut rx_o));
+        assert_eq!(
+            msgs.iter().find(|m| m["type"] == "error").unwrap()["payload"]["kind"],
+            "lease",
+            "still read-only with the lease free"
+        );
+
+        // The main window's reconnect takes the lease back at its join.
+        let (tx_w2, _rx_w2) = unbounded_channel();
+        let (w2, role_w2) = session.connect(ClientLanes::merged(tx_w2));
+        assert_eq!(role_w2, Role::Writer);
+        assert_eq!(writer_of(), w2);
+
+        // An ordinary observer (joined later than the declared one) is the
+        // one promoted when the writer leaves again.
+        let (tx_p, mut rx_p) = unbounded_channel();
+        let (p, role_p) = session.connect(ClientLanes::merged(tx_p));
+        assert_eq!(role_p, Role::Observer);
+        drain(&mut rx_p);
+        session.disconnect(w2);
+        session.transfer_lease_if_free();
+        assert_eq!(
+            writer_of(),
+            p,
+            "the ordinary observer is promoted, not the older declared one"
+        );
+        let lease = texts(&drain(&mut rx_p))
+            .into_iter()
+            .rfind(|m| m["type"] == "lease")
+            .unwrap();
+        assert_eq!(lease["payload"]["role"], "writer");
+        let seen_by_o = texts(&drain(&mut rx_o))
+            .into_iter()
+            .rfind(|m| m["type"] == "lease")
+            .unwrap();
+        assert_eq!(seen_by_o["payload"]["role"], "observer");
+        assert_eq!(seen_by_o["payload"]["lease"]["writer"], p);
     }
 
     #[test]

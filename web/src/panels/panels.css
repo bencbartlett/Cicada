@@ -1141,6 +1141,208 @@ aside.inspector {
   color: var(--fg-dim);
 }
 
+/* ------------------------------------------- File menu · Open dialog · files */
+
+/* A generic dialog (File → Open…): the commit dialog's shell under its own name. */
+.app-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 10vh;
+}
+
+.app-dialog {
+  width: min(640px, 92vw);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.app-dialog-h {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.app-dialog-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.app-dialog-note {
+  flex: 1;
+}
+
+.app-dialog-h > .tb-esc {
+  margin-left: auto;
+}
+
+/* The File menu: a single column of items, anchored left under its button. */
+.tb-menu.tb-menu-left {
+  left: 0;
+  right: auto;
+}
+
+.tb-file-menu {
+  grid-template-columns: 1fr;
+  min-width: 220px;
+  max-width: 60vw;
+  gap: 2px;
+  padding: 6px;
+}
+
+.tb-file-menu > .menu-h {
+  margin-top: 6px;
+  padding: 0 6px;
+}
+
+.tb-menu-item {
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 3px 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tb-menu-item:hover {
+  background: var(--bg-node-header);
+  border-color: transparent;
+}
+
+.tb-menu-item.active {
+  color: var(--accent);
+}
+
+.tb-menu-note {
+  padding: 2px 8px;
+}
+
+/* The file browser (the picker and the Open dialog). */
+.files {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.files-crumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
+.files-crumb-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.files-crumb {
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--fg-dim);
+}
+
+.files-crumb:hover {
+  background: var(--bg-node-header);
+  border-color: transparent;
+}
+
+.files-crumb.current {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.files-crumb-sep {
+  color: var(--fg-faint);
+}
+
+.files-list {
+  list-style: none;
+  margin: 0;
+  padding: 2px;
+  max-height: 48vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  outline: none;
+}
+
+.files-list:focus-visible {
+  border-color: var(--accent);
+}
+
+.files-entry {
+  display: grid;
+  grid-template-columns: 1.2em 1fr auto;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  cursor: default;
+  user-select: none;
+}
+
+.files-entry:hover {
+  background: var(--bg-node-header);
+}
+
+.files-entry.cursor {
+  background: var(--accent-bg);
+}
+
+.files-list:focus-visible .files-entry.cursor {
+  outline: 1px solid var(--accent);
+}
+
+.files-entry.dir .files-name {
+  color: var(--fg);
+}
+
+.files-entry.pipeline .files-name {
+  color: var(--kind-number);
+}
+
+.files-glyph {
+  color: var(--fg-faint);
+  text-align: center;
+}
+
+.files-when {
+  font-size: 11px;
+}
+
+.files-error {
+  color: var(--error);
+  background: var(--error-bg);
+  border-radius: var(--radius);
+  padding: 4px 8px;
+}
+
+.files-empty,
+.files-hint {
+  font-size: 11px;
+  padding: 0 2px;
+}
+
 /* ----------------------------------------------------------- text tab */
 
 .text-panel {

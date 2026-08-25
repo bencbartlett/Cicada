@@ -335,6 +335,8 @@ export interface CicadaState {
   runNotice: { node: string; ok: boolean; message: string } | null;
   /** The Ctrl+S commit dialog (docs/16: there is no save — every op is already on disk). */
   commitDialog: boolean;
+  /** File → Open…: the dialog over `GET /api/files` (docs/16 §Application layout). */
+  fileDialog: boolean;
 
   // ---- actions
   /** Installed by the connection module. */
@@ -350,6 +352,20 @@ export interface CicadaState {
   markDisconnected: (message: string, reconnect: ReconnectState) => void;
   setReconnect: (reconnect: ReconnectState | null) => void;
   setIdentity: (token: string, pipeline: string) => void;
+  /**
+   * This tab moves to another pipeline, or to none (docs/16 §Application
+   * layout: File → Open / Recent / Close, the Back button): the identity is
+   * set and every pipeline-bound slice is cleared — the mirror, the read
+   * caches (git, values, probes), the transport, the selection, the drag,
+   * the dialogs — so the old file is never shown under the new name for
+   * even a frame; the join's `hello` + `snapshot` then hydrate the mirror
+   * (the one hydration path, docs/13). `displayResets` is bumped so the
+   * viewport's ledger empties at once (`viewport/liveStore.ts` watches it).
+   * What survives: the settings (per-user), the notices (transient), and
+   * the catalog (the stdlib half is the same for every pipeline; the join's
+   * snapshot re-reads it for the new pipeline's script nodes).
+   */
+  resetSession: (token: string, pipeline: string) => void;
   applyServerMessage: (envelope: ServerEnvelope) => void;
   setCatalog: (catalog: Catalog) => void;
   setDisplayGeneration: (generation: number) => void;
@@ -402,6 +418,8 @@ export interface CicadaState {
   setGitBusy: (busy: GitBusy) => void;
   openCommitDialog: () => void;
   closeCommitDialog: () => void;
+  openFileDialog: () => void;
+  closeFileDialog: () => void;
 }
 
 let noticeCounter = 0;
@@ -447,6 +465,7 @@ export const useCicada = create<CicadaState>((set, get) => ({
   search: null,
   runNotice: null,
   commitDialog: false,
+  fileDialog: false,
 
   send: (message) => {
     console.warn("cicada: no connection yet — dropped", message.type);
@@ -477,6 +496,44 @@ export const useCicada = create<CicadaState>((set, get) => ({
     }),
   setReconnect: (reconnect) => set({ reconnect }),
   setIdentity: (token, pipeline) => set({ token, pipeline }),
+  resetSession: (token, pipeline) =>
+    set((state) => ({
+      token,
+      pipeline,
+      connection: "idle",
+      connectionMessage: "",
+      reconnect: null,
+      hello: null,
+      role: "observer",
+      lease: { writer: null, clients: [] },
+      seq: 0,
+      graph: EMPTY_GRAPH,
+      text: "",
+      statuses: {},
+      summary: EMPTY_SUMMARY,
+      dirty: [],
+      lastDeltaLabel: "",
+      history: EMPTY_HISTORY,
+      lastError: null,
+      snapshots: 0,
+      displayGeneration: 0,
+      // The viewport's ledger empties on every change of this counter —
+      // the old pipeline's geometry goes with the old pipeline.
+      displayResets: state.displayResets + 1,
+      nodeValues: {},
+      wireValues: {},
+      probe: null,
+      git: EMPTY_GIT,
+      gitMarkers: {},
+      transport: null,
+      pending: null,
+      selection: { nodes: [], wire: null, element: null },
+      hoverPick: null,
+      search: null,
+      runNotice: null,
+      commitDialog: false,
+      fileDialog: false,
+    })),
 
   applyServerMessage: (envelope) => {
     const seq = envelope.seq;
@@ -787,6 +844,8 @@ export const useCicada = create<CicadaState>((set, get) => ({
   setGitBusy: (busy) => set((state) => ({ git: { ...state.git, busy } })),
   openCommitDialog: () => set({ commitDialog: true }),
   closeCommitDialog: () => set({ commitDialog: false }),
+  openFileDialog: () => set({ fileDialog: true }),
+  closeFileDialog: () => set({ fileDialog: false }),
 }));
 
 /**
