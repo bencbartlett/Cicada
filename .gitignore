@@ -45,3 +45,6 @@ web/playwright-report/
 examples/wall/out/
 examples/*.csv
 examples/*.step
+
+# The redistributable bundle `python tools/launch/bundle.py --out dist/` writes (docs/17 L3): never committed.
+/dist/

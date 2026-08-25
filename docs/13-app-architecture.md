@@ -955,6 +955,56 @@ initial load path; there is exactly one client-hydration code path.
   loudly at `/` and dev uses Vite's proxy (`cd web && npm run dev`).
   Distribution is one file; the v0.2 desktop app wraps this same server
   + a webview.
+- **`cicada app [path]`** (v0.1 wave 4, docs/17 L1) is `serve` plus the
+  window: exactly `serve`'s arguments, resolved by the same function (the
+  path rule is `serve`'s, whatever it becomes), then a Chromium-based
+  browser in `--app=<url>` mode when the machine has one — a dedicated
+  window without tabs or an address bar (Windows: Edge, then Chrome, found
+  through the registry's `App Paths` or the usual Program Files dirs;
+  macOS: `open -na "Google Chrome" --args --app=<url>`, then Edge; Linux:
+  `xdg-open`) — else the default browser on the plain URL; `--no-browser`
+  opens nothing. The URL is printed either way, the terminal is the server
+  console, Ctrl-C stops the server. The window needs a SPA to load —
+  `--web-dir` (with its `index.html`) first, else the embedded build's, the
+  server's own preference order — and with neither `app` refuses BEFORE
+  the server binds, naming both ways out: `cicada serve` is the API-only
+  shape, and the "API only" page above is never what an app window opens
+  onto (`cicada_cli::app::spa_source`, a pure function of the arguments,
+  the build and the disk; review finding 2026-08-24). The decision is a
+  pure function over a probed environment (`cicada_cli::app::choose`),
+  unit-tested per OS. A
+  browser that fails to START is reported on stderr and the server keeps
+  running with its URL on screen — the server is the product, never a dead
+  server because a window failed. The windows the browser opens are its
+  own: stopping the server leaves them showing a disconnected app, as
+  closing a tab would.
+- **No loader path at launch** (L2): a built `cicada` needs the kernel's
+  shared libraries; `tools/fetch_occt.py --bundle <dir>` copies the
+  run-time closure beside the binary (Windows) or into `<dir>/lib` with the
+  binary's rpath rewritten to `@executable_path/lib` (macOS), so the binary
+  starts from any shell, launcher or double-click without the env the build
+  needs (AGENTS.md palette).
+- **Launchers and the bundle** (L3): `tools/launch/Cicada.cmd` /
+  `Cicada.command` open a terminal (the server console) that runs
+  `tools/launch/launch.py` — builds the release binary with the SPA embedded
+  when it is missing or stale, bundles the runtime beside it and runs
+  `cicada app` under an environment from which the loader path has been
+  REMOVED, so the bundle is what makes it start. `tools/launch/bundle.py
+  --out DIR` makes the redistributable folder from an existing release
+  build — on macOS everything inside `Cicada.app/Contents/MacOS`, because
+  Gatekeeper's app translocation runs a downloaded app from a random
+  read-only copy and anything outside the bundle would be gone; the
+  launcher script there is `Cicada.command`, never `Cicada`, the binary's
+  name on a case-insensitive disk. A binary that embeds no SPA is refused
+  before anything is written (a plain `cargo build --release` would die at
+  the first double-click with `cicada app`'s refusal above) unless
+  `--allow-no-spa` asks for an engine-only bundle whose README says so.
+  `--check` verifies a bundle from a minimal environment (Windows: PATH =
+  System32 alone), holding the binary and the bundle's stamp to agree
+  about the SPA, and `--smoke` runs its `cicada app --no-browser` to
+  `/health` and `/`. The bundle removes the loader path, not the engine's
+  Python: `cicada app` starts the script host at launch, and the bundle's
+  README says so.
 
 ## Latency targets (measured, not vibed — spike criteria feed here)
 

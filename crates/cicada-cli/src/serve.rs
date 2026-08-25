@@ -70,6 +70,23 @@ pub fn resolve_root(path: Option<&Path>) -> anyhow::Result<Root> {
 ///
 /// Bad paths, bind failures, a default pipeline that fails to open.
 pub fn serve_command(args: &ServeArgs) -> anyhow::Result<()> {
+    serve_with(args, "serve", |_url| {})
+}
+
+/// [`serve_command`] with a hook: once the server is bound and its URL
+/// printed, `on_ready(url)` runs — `cicada app` opens the browser there.
+/// `command` names the subcommand in the console line. ONE resolution of
+/// the path argument serves both subcommands (`app` inherits whatever
+/// `serve` does with it).
+///
+/// # Errors
+///
+/// Bad paths, bind failures, a default pipeline that fails to open.
+pub fn serve_with(
+    args: &ServeArgs,
+    command: &str,
+    on_ready: impl FnOnce(&str),
+) -> anyhow::Result<()> {
     let root = resolve_root(args.path.as_deref())?;
     // Every path argument becomes absolute BEFORE the chdir below.
     let cache_dir = args
@@ -112,7 +129,8 @@ pub fn serve_command(args: &ServeArgs) -> anyhow::Result<()> {
             None => "the store lives in the user cache dir (never the project)".to_owned(),
         };
         let handle = serve(config).await?;
-        println!("cicada serve — {}", handle.url());
+        let url = handle.url();
+        println!("cicada {command} — {url}");
         match &root.pipeline {
             Some(pipeline) => println!("  root {} — {pipeline} open", root.dir.display()),
             None => println!(
@@ -121,6 +139,7 @@ pub fn serve_command(args: &ServeArgs) -> anyhow::Result<()> {
             ),
         }
         println!("  Ctrl-C stops the server; {cache_note}.");
+        on_ready(&url);
         let waiter = tokio::spawn(async move {
             let _ = tokio::signal::ctrl_c().await;
         });

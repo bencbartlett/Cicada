@@ -9,3 +9,7 @@
 docs/generated/** text eol=lf
 Cargo.lock text eol=lf
 web/package-lock.json text eol=lf
+
+# Windows batch files stay CRLF: cmd.exe misreads labels and multi-line
+# blocks in LF-only scripts (the launchers of docs/17 L3).
+*.cmd text eol=crlf

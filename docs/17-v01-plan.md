@@ -1257,6 +1257,40 @@ canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
   Ctrl-C stops the server. The terminal it runs in is the server
   console. Browser discovery is a pure function over a probed
   environment, unit-tested.
+  **Done 2026-08-24 (`wt/launch`)**: `crates/cicada-cli/src/app.rs` —
+  `choose(&Environment, url)` over `probe(os)`, 11 unit tests holding the
+  table above per OS; `serve::serve_with` is the ONE path resolution both
+  subcommands call (`main.rs` flattens one `ServeCli` into `Serve` and
+  `App`); `crates/cicada-cli/tests/app.rs` drives the binary with
+  `--no-browser` (the URL line, `/health` over it, `serve` and `app`
+  refusing a bad path with identical words). Recorded deviations: the
+  Windows default-browser fallback is `rundll32
+  url.dll,FileProtocolHandler <url>` (no shell between us and the URL's
+  `&`; `cmd /c start` would need escaping); a browser that fails to
+  START is a stderr warning and the server keeps running with its URL on
+  screen (the contract did not say; the server is the product); no
+  Playwright spec — the window is the browser's, not the SPA's, so the
+  evidence is the unit table, the process-level test and one live run on
+  the dev machine (the Edge app window opened, connected, and
+  `/debug/screenshot` rendered through it).
+  **Review closure 2026-08-24**: the review ran `app` the way the palette
+  row spelled it — no `--web-dir`, no embed build — and the window would
+  have opened onto the server's "API only" page. Now `app` REFUSES before
+  binding when it has no SPA to open (`app::spa_source`: `--web-dir` with
+  its `index.html` first, else the embedded SPA, else the typed `NoSpa`
+  naming `--web-dir web/dist`, `--features embed` and `cicada serve` as
+  the API-only shape; a `--web-dir` without an `index.html` is refused
+  too — the server would serve a 404 there); the palette row names
+  `--web-dir web/dist`; `tests/app.rs` serves a stand-in SPA and reads
+  `/` (never "API only") and holds the refusal. The same pass made the
+  process-level test unable to stall `cargo test`: the server child is a
+  kill-on-drop guard with both pipes ours (the review's r5 mutation left
+  an orphan holding cargo's stderr for 13 minutes) and every console
+  line is read through a 60 s bound, so a line that never comes is a red
+  test. Still not done: no Playwright spec (as above); the merge with
+  `wt/open` must keep the ONE flattened `ServeCli` and add the O1
+  assertion (no path → the home root) on `app` — that rule does not
+  exist on this branch to test.
 - **L2 — no loader path at launch.** `tools/fetch_occt.py --bundle
   <dir>` copies the kernel's run-time library closure (the set
   `--check-closure` verifies) beside a `cicada` binary so Windows finds
@@ -1266,6 +1300,52 @@ canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
   idempotent and verified by size like the prefix. AGENTS.md's palette
   states the rule: the env is for BUILDING and for dev shells; a bundled
   binary needs none.
+  **Done 2026-08-24 (`wt/launch`)**: `bundle()` + `BundlePlan`,
+  `macho_rpaths`, `rpath_edits`, `bundle_unresolved_imports` in
+  `tools/fetch_occt.py`; `tools/test_fetch_occt.py::BundleTest` (8 tests,
+  the macOS `install_name_tool` / `codesign` calls through injected
+  `run` / `which`). Proved on Windows: the unbundled release `cicada.exe`
+  exits 127 from a shell without the env; after `--bundle` (88 DLLs
+  copied, 0 on the second run) `--help` and `run examples/02-solids.cic`
+  work from the bundle directory with no loader path. Recorded
+  deviations: the macOS bundle also re-signs ad hoc (`codesign --force
+  --sign -`) because `install_name_tool` invalidates the linker's
+  signature and Apple silicon kills an invalidly signed binary at exec;
+  beyond the size check the bundle refuses, BEFORE copying, a prefix
+  whose import closure is open, a binary whose own imports it cannot
+  satisfy (the first real run found `combase.dll` missing from the
+  script's Windows system-DLL set — added) and, on macOS, a machine
+  without `install_name_tool` / `codesign` (moved ahead of the copy in
+  the 2026-08-24 verify pass, so that refusal too leaves the directory as
+  it was; the test asserts it); the re-proof of 2026-08-24 also showed
+  that the bundled binary still needs Python 3 (`CICADA_PYTHON` or PATH)
+  — `run` / `serve` start the script host at launch whether or not the
+  pipeline has script nodes — a requirement L3's launcher must state and
+  not the bundle's to remove; Linux is refused loudly (no
+  rpath comes from the build env there; `$ORIGIN/lib` is set at link
+  time, L3's or later); a stamp `<dir>/.cicada-occt-bundle.json` records
+  names + sizes for L3's `--check`; the macOS branch has run only against
+  mocked tools (no Mac here) — the first macOS bundle is the evidence
+  that remains.
+  **Review closure 2026-08-24**: the stamp is now a pure function of the
+  prefix and the manifest — the wall-clock `written` field is gone — and
+  is written only when its bytes would change, so a no-op bundle leaves
+  the directory untouched (the idempotence test holds the stamp's bytes
+  AND mtime across the second run); the `--bundle takes exactly one
+  platform` refusal is tested through `main()` with a scratch `--dest`, a
+  `fetch` that fails loudly if reached and the message read off stderr
+  (the old assertion was the exit code alone, and under mutation would
+  have fetched into the real cache dir). Recorded for the first Mac run:
+  the contract's premise ("a macOS binary already carries the rpath its
+  build env set") holds for CI builds (`--github-env` adds the
+  `-Wl,-rpath,<prefix>/lib` RUSTFLAGS); a dev-shell Mac binary (the
+  `--print-env` env sets `DYLD_LIBRARY_PATH`, no rpath) carries none,
+  and `rpath_edits([])` answers `-add_rpath @executable_path/lib` —
+  tested in isolation. L3's first macOS `bundle.py --check` is the gate:
+  it should `otool -l` the binary before and after so the rpath list is
+  in the job log, and it is where conda's `@rpath/libTK*.7.8.dylib`
+  install names and the dylibs' own `@loader_path` rpaths get their
+  first real resolution.
 - **L3 — launchers and the bundle.** `tools/launch/Cicada.cmd` (Windows)
   and `tools/launch/Cicada.command` (macOS): a visible terminal that (1)
   builds `cicada` in release with the SPA embedded when it is missing or
@@ -1282,6 +1362,128 @@ canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
   bundle with no env). README "Run it" section; AGENTS.md palette row.
   The process-level smoke: the bundle's `cicada app --no-browser`
   answers `/health`.
+  **Done 2026-08-24 (`wt/launch`)**: `tools/launch/launch.py` is the ONE
+  launcher core for both OSes (OS differences are data: the cmake
+  directories, the binary's name, the build env per OS from
+  `fetch_occt.github_env_entries`); `Cicada.cmd` / `Cicada.command` are
+  thin wrappers that open the terminal, find Python 3.9+ (`python`, then
+  `py -3`; `python3`, then `python`), run the core and keep the window
+  open on a non-zero exit. The core: tools named with install hints when
+  missing (npm, cargo, cmake — PATH, then the VS Build Tools / Homebrew
+  dirs; `%ProgramFiles(x86)%` derived when absent, Git Bash cannot export
+  a name with parentheses); `fetch_occt.fetch` for the prefix; the
+  staleness rule `decide` (the SPA when `web/dist` is missing or older
+  than a web source; the engine when the release binary is missing,
+  carries no matching launcher stamp — `cicada.launch-stamp.json` beside
+  it pins size + mtime + the feature set, so a binary anyone else built,
+  maybe without the SPA, is rebuilt rather than trusted — or is older
+  than an engine source or than `web/dist`); `npm ci` when
+  `web/node_modules` is missing; `npm run build`; `cargo build --release
+  -p cicada-cli --features embed`; `fetch_occt.bundle` INTO
+  `target/release/` (in place — "beside it"); then `cicada app` with the
+  launcher's own arguments under an env from which the loader path and
+  the build variables are REMOVED (the bundle is what makes it start;
+  the dev shell's PATH would hide a broken one) and `CICADA_PYTHON` set to
+  the launcher's interpreter (`--plan`, `--no-run`, `--launcher-help`
+  are the launcher's own flags). `bundle.py --out DIR` copies the release
+  binary (again only when the SOURCE changed — recorded in
+  `.cicada-bundle.json`, a pure function of the inputs), runs L2's
+  `bundle()`, reads `cicada --version` from the bundled copy under a
+  minimal env, writes `Cicada.cmd` (CRLF; `.gitattributes` now keeps
+  `*.cmd` CRLF against the repo's LF rule) or
+  `Cicada.app/Contents/{Info.plist, MacOS/Cicada.command}` and
+  `README.txt` (the version, the commit, what the machine still needs:
+  Python 3, the VC++ runtime, a first right-click → Open); `--check` =
+  launcher files present, the L2 stamp's libraries at their sizes, the
+  binary's imports resolved statically, the macOS rpath
+  `@executable_path/lib` with no prefix rpath left, `--help` answered from
+  inside the bundle under a minimal env (Windows PATH = System32 alone);
+  `--smoke` = the process-level proof (`cicada app --no-browser` over a
+  scratch pipeline, the URL line, `/health` → `ok`, `/` the SPA, never
+  the API-only page). CI: `ci.yml` `test-cross` and `nightly.yml`
+  `test-matrix` (Windows + macOS; Linux skipped — the bundle refuses it)
+  bundle their debug `cicada` and run `--check`; the macOS log carries
+  the rpath list before and after the rewrite (the L2 review asked for
+  `otool -l`; `macho_rpaths` reads the same load commands). Tests:
+  `tools/test_launch.py` (36: the rule, the stamp, the tables, the envs
+  per OS, make/check over synthetic PE/Mach-O binaries with injected
+  runners, the minimal env, the URL parser; the offline suite is 155).
+  Proved on Windows 2026-08-24, release + embed: `--plan`, `--no-run`
+  (built, stamped, 88 DLLs bundled) and the warm path (fresh, 0 copied);
+  `cmd /c Cicada.cmd --help` through the whole chain (exit 0) and a flag
+  `cicada app` rejects (the message, the pause, exit 2); the run step to
+  `/health` 200 ok and `/` the SPA from a dev shell whose PATH carried
+  the loader path; `bundle.py --out` then `--check --smoke` (88
+  libraries; `--help` under PATH=System32; URL, `/health` ok, `/` the
+  SPA). Recorded deviations: the launchers pass their own arguments
+  through to `cicada app` (none when double-clicked = the contract's
+  run; on this branch no path means the current directory and the home
+  root arrives with O1's merge — the pass-through is what made the run
+  step testable here); the core is Python rather than two shell scripts
+  (one tested rule, not two copies); `npm ci` when `node_modules` is
+  missing (the contract named `npm run build` alone, which cannot run
+  without it); on macOS the build env is CI's shape (an rpath in
+  `RUSTFLAGS`, never a job-wide `DYLD_LIBRARY_PATH` — the trap of
+  2026-08-21), so the bundle's rpath edit on a launcher-built Mac binary
+  is the `-rpath <prefix> @executable_path/lib` path CI exercises, and a
+  launcher build shares no artifacts with a plain dev-shell build there;
+  on macOS the whole bundle lives INSIDE `Cicada.app/Contents/MacOS` (the
+  contract listed the binary, its libraries and `Cicada.app` as siblings)
+  because Gatekeeper's app translocation runs a downloaded app from a
+  random read-only copy and anything outside the bundle would be gone,
+  and the launcher inside is `Cicada.command`, not `Cicada`, because the
+  binary is `cicada` and APFS is case-insensitive; the `.app`'s script
+  re-opens itself in Terminal when it has no tty, so the bundle has a
+  console like the `.command` does; `--smoke` is a separate flag because
+  CI's Windows and macOS binaries are debug builds without the SPA, where
+  `app` refuses by L1's rule — CI runs `--check`, the release bundle's
+  smoke ran here. UNTESTED (no Mac here): `Cicada.command`, the `.app`'s
+  Terminal re-open (`open -a Terminal "$0"`), Finder's and Gatekeeper's
+  handling of the ad-hoc-signed app, and the real `install_name_tool`
+  path — the first macOS CI `--check` (rpaths logged) is the gate, then
+  one double-click on a Mac.
+  **Review closure 2026-08-24** (verdict ship, no major; every minor
+  fixed, the notes taken): the staleness rule no longer goes "stale" for
+  good — `mark_built` touches the binary BEFORE stamping it, because the
+  rule watches files cargo does not call inputs (`Cargo.lock` after a
+  checkout, tests under `crates/`) and cargo leaves an up-to-date binary
+  untouched (reproduced: `touch Cargo.lock` → `to build` → a 0.29 s no-op
+  cargo build → fresh twice after; before the fix, `to build` on every
+  launch); `bundle.py --out` REFUSES a binary that embeds no SPA before
+  writing anything (`embeds_spa`: two lines of `web/index.html` an `embed`
+  build carries verbatim — rust-embed stores the files uncompressed with
+  `debug-embed` on — and no other build does; the debug binary carries
+  the API-only page's `<!doctype html>` but neither marker, the release
+  binary both exactly once), unless `--allow-no-spa` asks for an
+  engine-only bundle whose README says ENGINE ONLY and whose stamp records
+  `"spa": false` — CI passes it; `--check` holds the binary and the stamp
+  to agree about the SPA (a plain release build swapped in after the
+  bundle was made passed every check and would have died at the first
+  double-click) and `--out` re-copies a bundled copy whose size stopped
+  matching the recorded source; `--smoke` refuses an engine-only bundle
+  up front and took injectable `start`/`get` so its assertions (the URL
+  line, `/health` = `ok`, `/` the SPA and never the API-only page, the
+  clean env, the stop, the early-exit message) have an offline test — the
+  mutation that accepted the API-only page is KILLED, as are the review's
+  other two survivors (`observe`'s stamp wiring hard-wired true; the
+  `Info.plist` executable check dropped) and every new guard (14 of 14
+  re-applied; `Console.stop` now joins its reader threads so the
+  early-exit message carries the WHOLE stderr, and the fake pipe in the
+  test returns only at "exit" so that join is what the test proves); the
+  Windows build env carries `core.longpaths=true` through `GIT_CONFIG_*`
+  (appended after a caller's own entries; a non-numeric
+  `GIT_CONFIG_COUNT` is a loud refusal) for the oneTBB clone on a machine
+  without the global; `cicada app` runs in the CALLER's directory when
+  the launcher was given arguments and in the repository when none
+  (`app_cwd`; a relative path from `<repo>/tools` now reaches the server —
+  `/health` ok, `/api/project` naming `02-solids.cic` — where it was "os
+  error 3" before); the bundle's README.txt is ASCII like the launchers
+  (`type README.txt` in a cp1252 console and Notepad agree).
+  `tools/test_launch.py` is 41 (the offline suite 160); the real
+  evidence re-ran on the release + embed build: `--out` then `--check
+  --smoke` OK, and on the debug build: refused, then `--allow-no-spa` →
+  `--check` OK, `--smoke` refused. Still untested: everything macOS runs
+  for real.
 
 **Track B — `wt/canvas` (web canvas + viewport + docs/16).** Four
 packages in sequence, each reviewed.
