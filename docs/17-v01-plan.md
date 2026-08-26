@@ -2407,6 +2407,49 @@ proves wrong is revised here, dated, in the landing commit.
   signature — the conformance test says so). The `add-stdlib-node`
   skill and docs/14 §node file format gain the attribute. Catalog
   regenerated in the same commit.
+  *Built 2026-08-25 (`wt/menu`).* The macro requires `sub = "…"` (a
+  missing one and a blank one are trybuild cases; presence and shape are
+  the macro's, membership is the conformance test's — cicada-macros has
+  no workspace dependency to read the table from), `NodeSpec.sub`, the
+  table `spec::SUBGROUPS` (unit-tested to cover exactly
+  `CATEGORY_ORDER` + `Script`, Title Case one-or-two-word names, no
+  duplicates), `subgroups_of` / `subgroup_rank`; `CATALOG.md` renders
+  `###` sub-group headings under each category in table order (a
+  sub-group the table does not list trails; an empty one gets no
+  heading); `catalog.json` is format 3; the four conformance tests —
+  membership, every listed column of a shipped category filled (`Script`
+  the one row the stdlib never fills), docs/08's Sub-groups lines equal
+  to the table, and the ledger row unchanged by a move between columns;
+  `cicada mcp`'s `catalog_search` hits and `node_doc` carry `sub` (the
+  schema test holds the latter); the web mirror (`CatalogNode.sub`,
+  `Catalog.subgroups`) and `catalog.test.ts` against the committed
+  bytes; script nodes `Script`; docs/08, docs/13, docs/14, DECISIONS.md
+  row 23 and the skill revised; the catalog regenerated. *What the
+  contract did not foresee, recorded here as it asks:* (1) **150
+  assignments, not 159** — the registry holds 150 stdlib nodes (the
+  three `cfg(test)` fixtures in `lib.rs` are `Util`). (2) **The table as
+  built differs from the contract's sketch where a listed sub-group
+  would have been empty** — the contract's own rule ("every listed
+  sub-group non-empty") and the menu's (an empty column is a promise the
+  menu cannot keep) decide: *Params & input* → Input · **Time**
+  (`cycle` / `clock` are time params, not GH's "Primitive" containers —
+  Cicada's literals are bare bindings, so "Primitive" had no node);
+  *List & axis* → List · Tree (no set node ships; `Sets` joins with the
+  first); *Curve* → Primitive · Division · Util (`Spline` / `Analysis`
+  wait for `interpolate` / `length` & co.); *Mesh & field* → Primitive ·
+  Boolean · **Util** (`as_watertight` and `tessellate` are the mesh
+  tier's conversions, GH's Mesh › Util; `Analysis` / `Field` wait for
+  their nodes); *Output, display & export* → Display · **Text** ·
+  **Files** (`text_outlines` / `text_solids` are real geometry, neither
+  display nor export; `import_step` belongs with the STEP/OBJ file nodes
+  and "Export" would have misnamed it). Maths, Point · Vector · Plane,
+  Surface & solid, Sequences, Intersect, Transform and Script are the
+  contract's. (3) **`catalog.json` also carries the table** (top-level
+  `subgroups: [{category, subgroups}]`, additive) — M1's columns are "in
+  table order", and without it the web would hold a second copy of the
+  order (as `kinds.ts` already does for `CATEGORY_ORDER`); the contract's
+  "ONE table" is kept literally by serving it. The web's `Catalog` type
+  carries it; the ribbon of today ignores it.
 - **M1 — the menu bar.** The ribbon becomes a menu bar: one tab per
   category (label · count); a click opens a panel under it whose
   columns are the category's sub-groups in table order, each a titled

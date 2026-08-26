@@ -1,7 +1,7 @@
 /**
  * `GET /api/catalog?pipeline=…` (docs/13 §HTTP surface): the project-aware
  * node catalog — the stdlib plus the served pipeline's `scripts/*.py` — in
- * format 2 (`Catalog` in `messages.ts`; `catalog.test.ts` pins the shape to
+ * format 3 (`Catalog` in `messages.ts`; `catalog.test.ts` pins the shape to
  * the server's own rendering). A read, token-gated like every API route;
  * `fetchImpl` is injectable for tests, the app passes nothing.
  *

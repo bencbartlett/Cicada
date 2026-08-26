@@ -51,7 +51,8 @@ function snapshot(barrier: boolean, reason: string, seq = 1): ServerEnvelope {
 
 function catalogOf(...names: string[]): Catalog {
   return {
-    format: 2,
+    format: 3,
+    subgroups: [],
     nodes: names.map(
       (name): CatalogNode => ({
         name,
@@ -63,6 +64,7 @@ function catalogOf(...names: string[]): Catalog {
         pure: true,
         uses_tolerance: false,
         gh: null,
+        sub: "Util",
         examples: [],
         inputs: [],
         outputs: [],

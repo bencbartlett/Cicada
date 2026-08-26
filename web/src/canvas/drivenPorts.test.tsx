@@ -27,7 +27,8 @@ import { CicadaNode } from "./CicadaNode";
 import type { CanvasNode } from "./flow";
 
 const catalog: Catalog = {
-  format: 2,
+  format: 3,
+  subgroups: [],
   nodes: [
     {
       name: "cycle",
@@ -39,6 +40,7 @@ const catalog: Catalog = {
       pure: true,
       uses_tolerance: false,
       gh: null,
+      sub: "Util",
       examples: [],
       inputs: [
         { name: "period", type: "Number", base: "Number", list_depth: 0, optional: false, default: "4.0", doc: "Seconds per loop." },
@@ -66,6 +68,7 @@ const catalog: Catalog = {
       pure: true,
       uses_tolerance: false,
       gh: null,
+      sub: "Util",
       examples: [],
       inputs: [
         { name: "speed", type: "Number", base: "Number", list_depth: 0, optional: false, default: "1.0", doc: "Rate." },

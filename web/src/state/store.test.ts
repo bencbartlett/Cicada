@@ -656,7 +656,7 @@ describe("compute-on-release (docs/13 §Slider drags — the frozen client contr
 
 describe("resetSession (File → Open / Recent / Close, Back)", () => {
   it("sets the identity and clears every pipeline-bound slice; settings, notices and the catalog survive; the viewport's ledger is told", () => {
-    const catalog = { format: 2 as const, nodes: [] };
+    const catalog = { format: 3 as const, subgroups: [], nodes: [] };
     useCicada.setState({
       connection: "open",
       connectionMessage: "",

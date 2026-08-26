@@ -3,7 +3,8 @@
  * is rendered by the same `catalog.rs` that serves `GET /api/catalog`
  * (CI keeps it fresh), so reading it here pins `CatalogNode` / `CatalogPort`
  * to what the server actually writes — the format-2 fields search-to-place
- * and the port tooltips rely on (`gh`, `examples`, per-port `doc`).
+ * and the port tooltips rely on (`gh`, `examples`, per-port `doc`) and the
+ * format-3 ones the menu bar reads (`sub` per node, the `subgroups` table).
  */
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -15,10 +16,44 @@ const here = dirname(fileURLToPath(import.meta.url));
 const committed = resolve(here, "../../../docs/generated/catalog.json");
 const catalog = JSON.parse(readFileSync(committed, "utf8")) as Catalog;
 
-describe("CatalogNode mirrors docs/generated/catalog.json (format 2)", () => {
-  it("is format 2 with a non-empty node list", () => {
-    expect(catalog.format).toBe(2);
+describe("CatalogNode mirrors docs/generated/catalog.json (format 3)", () => {
+  it("is format 3 with a non-empty node list", () => {
+    expect(catalog.format).toBe(3);
     expect(catalog.nodes.length).toBeGreaterThan(50);
+  });
+
+  it("carries the sub-group table in menu order — one row per category, Title Case names, no row empty", () => {
+    expect(Array.isArray(catalog.subgroups)).toBe(true);
+    expect(catalog.subgroups.length).toBeGreaterThanOrEqual(12);
+    expect(catalog.subgroups[0]).toEqual({ category: "Params & input", subgroups: ["Input", "Time"] });
+    const categories = catalog.subgroups.map((row) => row.category);
+    expect(new Set(categories).size).toBe(categories.length);
+    expect(categories).toContain("Script");
+    for (const row of catalog.subgroups) {
+      expect(row.subgroups.length, row.category).toBeGreaterThan(0);
+      for (const sub of row.subgroups) expect(sub, `${row.category}/${sub}`).toMatch(/^[A-Z][a-z]+( [A-Z][a-z]+)?$/);
+    }
+  });
+
+  it("gives every node a sub-group that is a column of its category, and fills every column a shipped category lists", () => {
+    const columns = new Map(catalog.subgroups.map((row) => [row.category, row.subgroups]));
+    const filled = new Set<string>();
+    for (const node of catalog.nodes) {
+      expect(typeof node.sub, `${node.name}.sub`).toBe("string");
+      expect(columns.get(node.category), `${node.name}: ${node.category}/${node.sub}`).toContain(node.sub);
+      filled.add(`${node.category}/${node.sub}`);
+    }
+    for (const row of catalog.subgroups) {
+      if (row.category === "Script") continue; // the project's scripts fill it, not the stdlib
+      for (const sub of row.subgroups) expect(filled.has(`${row.category}/${sub}`), `${row.category}/${sub} has a node`).toBe(true);
+    }
+    // The menu's canonical probes.
+    const subOf = (name: string) => catalog.nodes.find((n) => n.name === name)?.sub;
+    expect(subOf("slider")).toBe("Input");
+    expect(subOf("add")).toBe("Operators");
+    expect(subOf("sin")).toBe("Trig");
+    expect(subOf("move")).toBe("Euclidean");
+    expect(subOf("solid_union")).toBe("Boolean");
   });
 
   it("always carries gh (string or null) and examples (strings) — never absent", () => {
