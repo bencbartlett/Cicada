@@ -2316,6 +2316,79 @@ proves wrong is revised here, dated, in the landing commit.
     `web/e2e/display.spec.ts` on a scratch pipeline with enough spheres
     to cross the budget — the spinner shows, the chip's display time is
     non-zero, the indicator reads the cache).
+
+  *Built 2026-08-25 (`wt/display`: `display.rs` — `SOLID_CACHE_BUDGET` 1
+  GiB, `SOLID_CACHE_MIN_MIB` / `MAX_MIB`, `DISPLAY_TRIANGLE_BUDGET`,
+  `choose_tier` → `BudgetStats`, `SolidCache::set_budget` / `watch` /
+  `watched_evictions`, `DisplayStats.budget`, `DisplayFrames.solids`;
+  `session.rs` — `SessionConfig.solid_cache_bytes` /
+  `display_triangle_budget` / `display_hold`, the verdict memo, the pass in
+  three phases with `display_begin` / `display_end` / `caches` and the
+  notice, `set_display_cache`, `IntentError::Invalid`; `solve.rs` —
+  `SolveLoop::superseded`; `protocol.rs` — the three messages, `CachesView`,
+  the intent; cicada-sched — `DiskStore::value_bytes` / `memo_entries`
+  (the pack's length plus the loose blobs, walked once at open and kept by
+  every write and quarantine); `cicada serve --solid-cache-mib`; the web —
+  `store.display` / `store.caches` / `settings.displayCacheMib`,
+  `summaryText` / `summaryTitle` / `cachesText` / `cachesTitle` /
+  `displayText`, the chip, the `CachesChip`, the settings select, the
+  viewport indicator; `web/e2e/display.spec.ts` on 140 spheres).* Measured
+  on the debug engine: the 140 spheres' first paint tessellated 3.0 s on
+  2 threads (the e2e's) / 1.53 s on 4 — the fine tally stopped at the
+  budget after 129 spheres, then 140 preview meshes (269 cache entries,
+  27 MB; the working set 2.9 MB) — encoded in 21 ms to 2.33 MB of frames
+  (121,240 triangles against the 8 M of U30's fine tier), painted by the
+  client 1.48 s after `display_begin`; the output is drawn at preview with
+  `budget {limit: 1000000, requested: fine, drawn: preview, triangles:
+  121240}`; a structural edit leaving the spheres alone re-sends nothing
+  and tessellates nothing (`display_end {outputs: 0}`); the chip reads
+  `gen 1 · solve 9.7 ms · display 1.55 s`, the viewport `painted 4 outputs
+  · 2.33 MB in 1.48 s`, the indicator `cache 26M / 1G · 269 solids · memo
+  160K`.
+  What the contract did not foresee, each the smaller honest deviation:
+  (1) **`display_begin` carries no bytes** — it goes out BEFORE the
+  tessellation (the spinner must start when the display work does, and
+  the tessellation is most of it), when the bytes are not known; they
+  ride `display_end`, which also carries `outputs` / `frames` as actually
+  sent (the pre-filter's count at `display_begin` can be higher: the
+  budget may find an output already on screen at the tier it chooses).
+  (2) **`display_end` rides the display lane**, behind the pass's last
+  frame, not the control lane: on the control lane it would overtake the
+  frames it closes and the client's "painted in" time would end before
+  the paint did; its meaning is its place among the frames, like
+  `display_reset`'s (docs/13 §Two lanes). (3) **The client drops no frame
+  by a `display_begin` watermark** — the rule is unsound: `display_begin`
+  on the control lane overtakes the previous pass's tail frames, which
+  the server has recorded as displayed and no later generation re-sends,
+  and a restream interleaved with a live pass carries older generations
+  by design; either way the client would keep a stale output for good.
+  The latest-wins the contract wanted is the SERVER's: the pass checks
+  `SolveLoop::superseded` (a newer job waiting, or Esc) between outputs in
+  the warm-up and in the encode, stops, and the newer generation paints
+  the newest state; the client keeps `sceneStore`'s per-output generation
+  rule (already pinned by its tests). DECISIONS.md row 2026-08-25 revised
+  in the same commit. (4) **Esc stops a display pass too** (`superseded`
+  includes the loop's `cancel_at`): "stop solving" includes the painting,
+  and the docs/15 Esc currency measures to idle. (5) **The caches chip's
+  click opens the breakdown** (the hover's text as a panel) — the
+  profiler's caches section is P1's and does not exist yet; P1 re-targets
+  the click. (6) **The fine tally's cost is paid per new value set** — a
+  structural generation over a NEW over-budget value meshes up to the
+  budget's worth of fine triangles (≈ 125 spheres, 0.3 s on 22 release
+  threads) before deciding preview; the alternative, estimating fine
+  counts from the preview tessellation, is not exact, and the contract
+  asked for a pure function of the value set. The tessellations it did
+  are cache entries (≤ ~36 MB at the default budget). (7) The chip keeps
+  the ETA beside `Solving gen N` (docs/16 asks the solve bar for it); the
+  counts moved to the hover as the contract says. (8) **`thrash`'s
+  "used"** = on screen at the end of the previous complete generation
+  (the display table), not "looked up by its pass" — the picture a redraw
+  needs is the honest working set, and the restream and the inspector
+  touch the cache too. (9) The over-budget / thrash notice has no e2e: the
+  intent's 64 MiB floor is far above 140 preview spheres' 3 MB; the
+  session's unit tests lower `solid_cache_bytes` to 100 KiB / 300 KiB to
+  make both flags bite. Not in D1: the notice's numbers in the indicator's
+  breakdown are the view's, not the notice's (P1 gets the profile).
 - **P1 — the profiler.**
   - **Server.** A read intent `profile {generation?}` (any client) →
     `profile_view {generation, kind, phases: {queued_ms, solve_ms,

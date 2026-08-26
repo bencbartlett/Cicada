@@ -7,7 +7,7 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import type { DrivenView, GraphView, ServerEnvelope, TransportView } from "../protocol/messages";
-import { EMPTY_HISTORY, errorNoticeLevel, useCicada } from "./store";
+import { EMPTY_CACHES, EMPTY_HISTORY, errorNoticeLevel, useCicada } from "./store";
 import {
   DISPLAY_TICK_MS,
   SPEED_CHOICES,
@@ -179,6 +179,7 @@ function snapshot(transport: TransportView, barrier = false): ServerEnvelope {
       reason: barrier ? "external change" : "initial",
       history: EMPTY_HISTORY,
       transport,
+      caches: EMPTY_CACHES,
     },
   };
 }

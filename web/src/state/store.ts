@@ -9,6 +9,7 @@
  */
 import { create } from "zustand";
 import type {
+  CachesView,
   Catalog,
   ClientMessage,
   ErrorKind,
@@ -31,6 +32,35 @@ import type {
   WireEnd,
 } from "../protocol/messages";
 import { nowMs, type TransportState } from "./transport";
+
+/**
+ * The newest generation's display pass as the client has heard of it
+ * (docs/13 §The display edge; v0.1 wave 5 D1): `painting` from its
+ * `display_begin` — the control lane, the moment the solve finished, before
+ * the tessellation — to its `display_end` — the display lane, behind the
+ * pass's last frame — then `painted` with the server's numbers. The chip
+ * reads `painting…` / `display T` off it, the viewport its spinner and
+ * `painted in T ms`. `paintedMs` is the CLIENT's wall from `display_begin`
+ * to the first render after the last frame was applied (the viewport marks
+ * it — `markPainted`); null until then, and for a pass that drew nothing the
+ * store marks it at `display_end` (there is nothing to render).
+ */
+export interface DisplayPass {
+  generation: number;
+  phase: "painting" | "painted";
+  /** Outputs the pass set out to draw (`display_begin`), then the count actually sent (`display_end`). */
+  outputs: number;
+  frames: number;
+  bytes: number;
+  tessellateMs: number;
+  encodeMs: number;
+  /** The pass stopped between outputs: a newer generation superseded it (latest-wins). */
+  cancelled: boolean;
+  /** `nowMs()` at `display_begin`. */
+  beganAt: number;
+  /** The client's wall from `display_begin` to the first render after the last frame, once known. */
+  paintedMs: number | null;
+}
 
 /**
  * Socket lifecycle. `reconnecting` = the socket dropped without us closing
@@ -94,6 +124,14 @@ export interface Settings {
   textPanel: boolean;
   ribbonCollapsed: boolean;
   navigation: "rhino" | "blender";
+  /**
+   * The solid display cache this user wants, MiB (docs/16 §Settings; the
+   * D1 contract): a per-user choice the WRITER re-applies on every connect
+   * with `set_display_cache` — the lease holder's preference wins; an
+   * observer's is kept for when it holds the lease. `null` = no preference:
+   * the server's (`--solid-cache-mib`, 1 GiB by default) stands.
+   */
+  displayCacheMib: number | null;
 }
 
 const SETTINGS_KEY = "cicada.settings.v1";
@@ -107,6 +145,7 @@ const DEFAULT_SETTINGS: Settings = {
   textPanel: false,
   ribbonCollapsed: false,
   navigation: "rhino",
+  displayCacheMib: null,
 };
 
 function loadSettings(): Settings {
@@ -190,6 +229,23 @@ export const EMPTY_HISTORY: HistoryView = {
   undo_label: null,
   redo_label: null,
   depth: 0,
+};
+/** The caches of a session that has drawn nothing: the default 1 GiB display budget, every counter zero (test fixtures). */
+export const EMPTY_CACHES: CachesView = {
+  display: {
+    entries: 0,
+    bytes: 0,
+    budget: 1024 * 1024 * 1024,
+    hits: 0,
+    misses: 0,
+    evictions: 0,
+    oversized: 0,
+    refusals: 0,
+    working_set: 0,
+    over_budget: false,
+    thrash: false,
+  },
+  memo: { bytes: 0, entries: 0 },
 };
 
 /** The last refused intent: the `error` payload minus its wire casing. */
@@ -290,6 +346,17 @@ export interface CicadaState {
   displayGeneration: number;
   /** Count of `display_reset` messages (a re-stream can repeat a generation). */
   displayResets: number;
+  /**
+   * The newest generation's display pass (`display_begin` / `display_end`,
+   * docs/13 §The display edge) — null before the first and after a
+   * disconnect. A begin for a newer generation replaces an older pass
+   * whatever its phase (latest-wins: the older one was superseded); an end
+   * for an older generation than the one here is ignored (its begin
+   * overtook it on the control lane).
+   */
+  display: DisplayPass | null;
+  /** The two caches as last heard — the snapshot's `caches` or a `caches` broadcast, replaced whole; null before the first. */
+  caches: CachesView | null;
 
   // ---- read caches
   catalog: Catalog | null;
@@ -393,6 +460,22 @@ export interface CicadaState {
   applyServerMessage: (envelope: ServerEnvelope) => void;
   setCatalog: (catalog: Catalog) => void;
   setDisplayGeneration: (generation: number) => void;
+  /**
+   * The viewport rendered after the pass `generation` ended (its frames
+   * applied and uploaded): the client's wall from `display_begin` to now is
+   * the pass's `paintedMs`. A no-op for any other generation or a pass
+   * already marked.
+   */
+  markPainted: (generation: number, at?: number) => void;
+  /**
+   * Ask the session for a display cache of `mib` MiB (the settings menu):
+   * remembered as this user's preference and sent now when this client
+   * holds the lease — the server answers with `caches`, or refuses
+   * (`invalid`, `lease`) — else kept for the next connect as writer.
+   * `null` forgets the preference (the server's default stands from the
+   * next session; nothing is sent).
+   */
+  chooseDisplayCache: (mib: number | null) => void;
   selectNodes: (nodes: string[], additive?: boolean) => void;
   selectWire: (wire: string | null) => void;
   selectElement: (pick: ElementPick | null) => void;
@@ -472,6 +555,8 @@ export const useCicada = create<CicadaState>((set, get) => ({
   snapshots: 0,
   displayGeneration: 0,
   displayResets: 0,
+  display: null,
+  caches: null,
 
   catalog: null,
   nodeValues: {},
@@ -524,6 +609,10 @@ export const useCicada = create<CicadaState>((set, get) => ({
       // So did our knowledge of the transport: extrapolating a playhead
       // nobody can confirm would animate a counter over a dead socket.
       transport: null,
+      // And of the display pass and the caches: a spinner over a dead
+      // socket would spin for good; the snapshot brings the caches back.
+      display: null,
+      caches: null,
     }),
   setReconnect: (reconnect) => set({ reconnect }),
   setIdentity: (token, pipeline) => set({ token, pipeline }),
@@ -551,6 +640,8 @@ export const useCicada = create<CicadaState>((set, get) => ({
       // The viewport's ledger empties on every change of this counter —
       // the old pipeline's geometry goes with the old pipeline.
       displayResets: state.displayResets + 1,
+      display: null,
+      caches: null,
       nodeValues: {},
       wireValues: {},
       probe: null,
@@ -593,6 +684,13 @@ export const useCicada = create<CicadaState>((set, get) => ({
             }`,
           );
         }
+        // The lease holder re-applies its display-cache preference on
+        // every connect (the D1 contract: the writer's preference wins);
+        // the server answers with `caches`.
+        const wanted = get().settings.displayCacheMib;
+        if (p.role === "writer" && wanted !== null) {
+          get().send({ type: "set_display_cache", payload: { mib: wanted } });
+        }
         break;
       }
       case "snapshot": {
@@ -623,6 +721,8 @@ export const useCicada = create<CicadaState>((set, get) => ({
           scrubProgress: {},
           // Every snapshot carries the transport; replace, never merge.
           transport: { view: p.transport, receivedAt: nowMs() },
+          // And the caches (additive, wave 5 D1; an older server sends none).
+          caches: p.caches ?? state.caches,
         });
         if (p.barrier) {
           get().addNotice("info", `reloaded from disk (${p.reason})`);
@@ -803,6 +903,62 @@ export const useCicada = create<CicadaState>((set, get) => ({
         set((state) => ({ scrubProgress: { ...state.scrubProgress, [p.node]: p } }));
         break;
       }
+      case "display_begin": {
+        // A newer pass replaces whatever stood (latest-wins: an older pass
+        // still `painting` was superseded — its end, if it comes, is
+        // ignored below); an older begin arriving late changes nothing.
+        const p = envelope.payload;
+        set((state) =>
+          state.display !== null && state.display.generation > p.generation
+            ? state
+            : {
+                display: {
+                  generation: p.generation,
+                  phase: "painting",
+                  outputs: p.outputs,
+                  frames: 0,
+                  bytes: 0,
+                  tessellateMs: 0,
+                  encodeMs: 0,
+                  cancelled: false,
+                  beganAt: nowMs(),
+                  paintedMs: null,
+                },
+              },
+        );
+        break;
+      }
+      case "display_end": {
+        // Behind the pass's last frame on the display lane: every frame of
+        // it has been applied by now. Only the pass standing here ends — a
+        // stale end (its begin was overtaken by a newer one) is ignored.
+        const p = envelope.payload;
+        set((state) => {
+          const pass = state.display;
+          if (pass === null || pass.generation !== p.generation) return state;
+          return {
+            display: {
+              ...pass,
+              phase: "painted",
+              outputs: p.outputs,
+              frames: p.frames,
+              bytes: p.bytes,
+              tessellateMs: p.tessellate_ms,
+              encodeMs: p.encode_ms,
+              cancelled: p.cancelled ?? false,
+              // Nothing to render for a pass that sent no frame: painted now.
+              paintedMs: p.frames === 0 ? nowMs() - pass.beganAt : pass.paintedMs,
+            },
+          };
+        });
+        break;
+      }
+      case "caches": {
+        // After every display pass and every `set_display_cache`: the whole
+        // view, replacing ours.
+        set({ caches: envelope.payload });
+        break;
+      }
       case "screenshot_request":
         // Handled by the connection module (needs the viewport).
         break;
@@ -811,6 +967,19 @@ export const useCicada = create<CicadaState>((set, get) => ({
 
   setCatalog: (catalog) => set({ catalog }),
   setDisplayGeneration: (generation) => set({ displayGeneration: generation }),
+  markPainted: (generation, at = nowMs()) =>
+    set((state) => {
+      const pass = state.display;
+      if (pass === null || pass.generation !== generation || pass.phase !== "painted" || pass.paintedMs !== null) {
+        return state;
+      }
+      return { display: { ...pass, paintedMs: Math.max(0, at - pass.beganAt) } };
+    }),
+  chooseDisplayCache: (mib) => {
+    get().updateSettings({ displayCacheMib: mib });
+    const state = get();
+    if (mib !== null && canWrite(state)) state.send({ type: "set_display_cache", payload: { mib } });
+  },
 
   selectNodes: (nodes, additive = false) =>
     set((state) => ({

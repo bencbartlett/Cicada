@@ -16,7 +16,7 @@ import { RECONNECT_CAP_MS, getClient, optionsForRoute, startConnection, stopConn
 import { stopGitStatus } from "./git";
 import { RECENT_KEY, readRecent } from "./recent";
 import { NO_ROUTE, installRouting, useRoute, type Route, type RoutingWindow } from "./route";
-import { useCicada } from "./store";
+import { EMPTY_CACHES, useCicada } from "./store";
 
 const HISTORY = { can_undo: false, can_redo: false, undo_label: null, redo_label: null, depth: 0 };
 /** No time params: the bar is hidden and playback moves nothing (`TransportView`). */
@@ -50,6 +50,7 @@ function snapshot(seq: number, barrier: boolean, reason: string): ServerEnvelope
       reason,
       history: HISTORY,
       transport: IDLE_TRANSPORT,
+      caches: EMPTY_CACHES,
     },
   };
 }

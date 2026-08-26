@@ -2,7 +2,8 @@
  * Pure formatting helpers for the panels (docs/16 §Status and progress
  * language, §Inspector contents). No React, no store — unit-tested.
  */
-import type { NodeStatus, NodeView, SolveSummary, ValueSummary } from "../protocol/messages";
+import type { CachesView, NodeStatus, NodeView, SolveSummary, ValueSummary } from "../protocol/messages";
+import type { DisplayPass } from "../state/store";
 
 // -------------------------------------------------------- param values --
 
@@ -56,22 +57,136 @@ export function pendingTitle(pending: { estimateMs: number; rough: boolean }): s
 
 // ------------------------------------------------------- solve summary --
 
-/** The top-bar solve-state text (docs/16 §Status and progress language). */
-export function summaryText(summary: SolveSummary): string {
+/**
+ * The top-bar solve chip (docs/16 §Status and progress language; v0.1 wave
+ * 5 D1): `Solving gen N` (+ the ETA) while the solve runs; `gen N ·
+ * painting…` while gen N's display pass is in flight (between its
+ * `display_begin` and `display_end`); then `gen N · solve 17 ms · display
+ * 2.4 s` — display = the server's tessellation + encode. The counts
+ * (computed / cached / red / blocked) live in the hover (`summaryTitle`).
+ * `display` is the newest pass the client heard of: one for an OLDER
+ * generation than the summary's says nothing about this one; one for a
+ * NEWER generation is the current state (its `display_begin` rides the
+ * control lane and can precede the ≤ 10 Hz status that names the
+ * generation — a sub-100 ms window in which the chip would otherwise fall
+ * back to the previous generation's idle text).
+ */
+export function summaryText(summary: SolveSummary, display: DisplayPass | null = null): string {
   if (summary.running) {
     const eta =
       summary.eta_ms === undefined
         ? ""
         : ` · ETA ${summary.eta_rough ? "~" : ""}${formatMs(summary.eta_ms)}`;
-    return `solving… pending ${summary.pending}${eta}`;
+    return `Solving gen ${summary.generation}${eta}`;
+  }
+  const pass = currentPass(summary, display);
+  if (pass !== null && pass.phase === "painting") {
+    return `gen ${pass.generation} · painting…`;
   }
   if (summary.cancelled) {
-    return `cancelled gen ${summary.generation} · ${summary.computed} computed / ${summary.cached} cached`;
+    return `cancelled gen ${summary.generation}`;
   }
+  const solve = `solve ${formatMs(summary.elapsed_ms)}`;
+  if (pass === null) return `gen ${summary.generation} · ${solve}`;
+  const display_ms = pass.tessellateMs + pass.encodeMs;
+  const cut = pass.cancelled ? " (cut)" : "";
+  if (pass.generation > summary.generation) {
+    // Painted before the generation's final status arrived: the solve
+    // time is not known yet.
+    return `gen ${pass.generation} · display ${formatMs(display_ms)}${cut}`;
+  }
+  return `gen ${summary.generation} · ${solve} · display ${formatMs(display_ms)}${cut}`;
+}
+
+/** The display pass that describes the current generation: the summary's own, or a newer one (never an older one). */
+export function currentPass(summary: SolveSummary, display: DisplayPass | null): DisplayPass | null {
+  return display !== null && display.generation >= summary.generation ? display : null;
+}
+
+/**
+ * The chip's hover: the counts the chip no longer shows, the solve time,
+ * and the display pass itemised (tessellation, encode, frames and bytes,
+ * the client's own paint time when the viewport measured it).
+ */
+export function summaryTitle(summary: SolveSummary, display: DisplayPass | null = null): string {
   const parts = [`${summary.computed} computed`, `${summary.cached} cached`];
   if (summary.red > 0) parts.push(`${summary.red} red`);
   if (summary.blocked > 0) parts.push(`${summary.blocked} blocked`);
-  return `solved gen ${summary.generation} · ${parts.join(" / ")} · ${formatMs(summary.elapsed_ms)}`;
+  if (summary.pending > 0) parts.push(`${summary.pending} pending`);
+  const lines = [`gen ${summary.generation}: ${parts.join(" / ")}`];
+  if (summary.running) {
+    lines.push(`solving for ${formatMs(summary.elapsed_ms)}`);
+    return lines.join("\n");
+  }
+  lines.push(`solve ${formatMs(summary.elapsed_ms)}${summary.cancelled ? " (cancelled)" : ""}`);
+  const pass = currentPass(summary, display);
+  if (pass === null) return lines.join("\n");
+  if (pass.phase === "painting") {
+    lines.push(`painting ${pass.outputs} ${pass.outputs === 1 ? "output" : "outputs"}…`);
+    return lines.join("\n");
+  }
+  lines.push(
+    `display ${formatMs(pass.tessellateMs + pass.encodeMs)}: tessellation ${formatMs(pass.tessellateMs)} · encode ${formatMs(pass.encodeMs)}`,
+  );
+  lines.push(
+    `${pass.outputs} ${pass.outputs === 1 ? "output" : "outputs"} · ${pass.frames} ${pass.frames === 1 ? "frame" : "frames"} · ${formatBytes(pass.bytes)}${pass.cancelled ? " · cut short by a newer generation" : ""}`,
+  );
+  if (pass.paintedMs !== null) lines.push(`painted here in ${formatMs(pass.paintedMs)}`);
+  return lines.join("\n");
+}
+
+// ------------------------------------------------------------- caches --
+
+/** Bytes as the caches indicator spells them: `612M`, `1G`, `2.1G`, `96K` (binary units). */
+export function shortBytes(bytes: number): string {
+  const KIB = 1024;
+  if (bytes >= KIB * KIB * KIB) {
+    const gib = bytes / (KIB * KIB * KIB);
+    return `${gib >= 10 ? Math.round(gib) : Number(gib.toFixed(1))}G`;
+  }
+  if (bytes >= KIB * KIB) return `${Math.round(bytes / (KIB * KIB))}M`;
+  if (bytes >= KIB) return `${Math.round(bytes / KIB)}K`;
+  return `${bytes}B`;
+}
+
+/**
+ * The top bar's caches indicator (docs/16 §Status and progress language):
+ * `cache 612M / 1G · 1,397 solids · memo 2.1G` — the display cache's bytes
+ * against its budget, the display meshes it holds (entries minus cached
+ * refusals), the memo store's footprint.
+ */
+export function cachesText(caches: CachesView): string {
+  const solids = Math.max(0, caches.display.entries - caches.display.refusals);
+  return `cache ${shortBytes(caches.display.bytes)} / ${shortBytes(caches.display.budget)} · ${solids.toLocaleString("en-US")} ${solids === 1 ? "solid" : "solids"} · memo ${shortBytes(caches.memo.bytes)}`;
+}
+
+/** The indicator's hover: the full breakdown, one fact per line, the flags spelled out. */
+export function cachesTitle(caches: CachesView): string {
+  const d = caches.display;
+  const lines = [
+    `display cache: ${formatBytes(d.bytes)} of ${formatBytes(d.budget)} held in ${d.entries} ${d.entries === 1 ? "entry" : "entries"}${d.refusals > 0 ? ` (${d.refusals} cached ${d.refusals === 1 ? "refusal" : "refusals"})` : ""}`,
+    `on screen: ${formatBytes(d.working_set)} of display meshes`,
+    `hits ${d.hits.toLocaleString("en-US")} · misses ${d.misses.toLocaleString("en-US")} · evictions ${d.evictions.toLocaleString("en-US")}${d.oversized > 0 ? ` · ${d.oversized} too large to keep` : ""}`,
+  ];
+  if (d.over_budget) lines.push("OVER BUDGET: the picture does not fit — every redraw re-tessellates part of it");
+  if (d.thrash) lines.push("THRASHING: the last pass evicted meshes the previous generation displayed");
+  if (d.over_budget || d.thrash) lines.push("raise the display cache in settings, or draw fewer solids");
+  lines.push(`memo store: ${formatBytes(caches.memo.bytes)} of value blobs in ${caches.memo.entries.toLocaleString("en-US")} ${caches.memo.entries === 1 ? "entry" : "entries"}`);
+  return lines.join("\n");
+}
+
+/** The settings menu's label for a display cache size in MiB: `256 MiB`, `1 GiB`, `1.5 GiB`. */
+export function displayCacheLabel(mib: number): string {
+  return mib >= 1024 ? `${Number((mib / 1024).toFixed(1))} GiB` : `${mib} MiB`;
+}
+
+/** The viewport's display indicator: `painting 3 outputs…` while a pass is in flight, `painted 3 outputs · 160 MB in 2.9 s` after. */
+export function displayText(display: DisplayPass): string {
+  const outputs = `${display.outputs} ${display.outputs === 1 ? "output" : "outputs"}`;
+  if (display.phase === "painting") return `painting ${outputs}…`;
+  const took = display.paintedMs === null ? "" : ` in ${formatMs(display.paintedMs)}`;
+  const cut = display.cancelled ? " · cut short" : "";
+  return `painted ${outputs} · ${formatBytes(display.bytes)}${took}${cut}`;
 }
 
 /**

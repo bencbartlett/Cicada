@@ -48,6 +48,40 @@
   width: max-content;
 }
 
+/* the display pass (docs/13 §The display edge): a spinner with `painting N
+   outputs…` between display_begin and display_end, `painted … in T ms` after */
+.viewport-display {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  background: color-mix(in srgb, var(--bg-elev) 75%, transparent);
+  border-radius: var(--radius);
+  padding: 1px 6px;
+  width: max-content;
+}
+
+.viewport-display[data-phase="painting"] {
+  color: var(--running);
+}
+
+.viewport-display > i.spin {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--running);
+  animation: viewport-spin 0.8s linear infinite;
+}
+
+@keyframes viewport-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .viewport-hover {
   position: absolute;
   left: 6px;

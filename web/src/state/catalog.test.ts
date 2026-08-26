@@ -10,7 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Catalog, CatalogNode, ServerEnvelope } from "../protocol/messages";
 import { CatalogRefreshPolicy, catalogPolicy, feedCatalogPolicy, readCatalog, startCatalogRefresh, stopCatalogRefresh } from "./catalog";
-import { useCicada } from "./store";
+import { EMPTY_CACHES, useCicada } from "./store";
 
 const HISTORY = { can_undo: false, can_redo: false, undo_label: null, redo_label: null, depth: 0 };
 /** No time params: the bar is hidden and playback moves nothing (`TransportView`). */
@@ -45,6 +45,7 @@ function snapshot(barrier: boolean, reason: string, seq = 1): ServerEnvelope {
       reason,
       history: HISTORY,
       transport: IDLE_TRANSPORT,
+      caches: EMPTY_CACHES,
     },
   };
 }

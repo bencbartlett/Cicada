@@ -1,11 +1,16 @@
 /**
  * Top bar (docs/16 §Application layout): project · pipeline · git chip
  * (branch / detached / no repo · dirty count; click → the Git tab) ·
- * engine · lease/role badge · undo/redo · solve state + ETA + Esc ·
- * connection · settings menu. Everything here reads the store mirror; the
- * only intents it sends are `undo`, `redo`, `cancel` and `take_lease`.
+ * engine · lease/role badge · undo/redo · solve chip (`Solving gen N` →
+ * `painting…` → `gen N · solve · display`, a spinner while either runs,
+ * the counts in the hover) · the caches indicator (display cache bytes /
+ * budget · solids · memo; warn tone while over budget or thrashing; click
+ * → the breakdown) · connection · settings menu (with the display cache
+ * size). Everything here reads the store mirror; the intents it sends are
+ * `undo`, `redo`, `cancel`, `take_lease` and `set_display_cache`.
  */
 import { useEffect, useRef, useState } from "react";
+import { DISPLAY_CACHE_CHOICES_MIB } from "../protocol/messages";
 import {
   canWrite,
   useCicada,
@@ -15,7 +20,17 @@ import {
   type WireMode,
 } from "../state/store";
 import { FileMenu } from "./FileMenu";
-import { basename, summaryText, withStatusCounts } from "./format";
+import {
+  basename,
+  cachesText,
+  cachesTitle,
+  currentPass,
+  displayCacheLabel,
+  shortBytes,
+  summaryText,
+  summaryTitle,
+  withStatusCounts,
+} from "./format";
 import { gitChip } from "./gitFormat";
 import { useInspectorTab } from "./inspectorTab";
 import "./panels.css";
@@ -29,6 +44,7 @@ export function TopBar() {
   const statuses = useCicada((s) => s.statuses);
   const connection = useCicada((s) => s.connection);
   const connectionMessage = useCicada((s) => s.connectionMessage);
+  const display = useCicada((s) => s.display);
   const send = useCicada((s) => s.send);
 
   const project = hello === null ? "…" : basename(hello.project);
@@ -36,15 +52,22 @@ export function TopBar() {
   // Nodes excluded by diagnostics never enter the solve, so the summary's
   // red/blocked counts miss them; the per-node statuses do not.
   const shown = withStatusCounts(summary, statuses);
+  // This generation's display pass is in flight (docs/13 §The display
+  // edge): between its `display_begin` and its `display_end` (a pass for a
+  // newer generation than the summary names counts — its begin can
+  // precede the generation's first status).
+  const painting = !summary.running && currentPass(summary, display)?.phase === "painting";
   const solveClass = shown.running
     ? "running"
-    : shown.cancelled
-      ? "cancelled"
-      : shown.red > 0
-        ? "red"
-        : shown.blocked > 0
-          ? "blocked"
-          : "";
+    : painting
+      ? "painting"
+      : shown.cancelled
+        ? "cancelled"
+        : shown.red > 0
+          ? "red"
+          : shown.blocked > 0
+            ? "blocked"
+            : "";
   // Cost-weighted progress from what the summary carries: done / (done + pending).
   const done = summary.computed + summary.cached;
   const fraction = done + summary.pending > 0 ? done / (done + summary.pending) : 0;
@@ -105,13 +128,19 @@ export function TopBar() {
 
       <span className="tb-spacer" />
 
-      <span className={`tb-solve ${solveClass}`} data-testid="tb-solve" title="solve state">
+      <span
+        className={`tb-solve ${solveClass}`}
+        data-testid="tb-solve"
+        data-phase={summary.running ? "solving" : painting ? "painting" : "idle"}
+        title={summaryTitle(shown, display)}
+      >
+        {(summary.running || painting) && <i className="tb-spin" aria-hidden data-testid="tb-solve-spinner" />}
         {summary.running && (
           <span className={`tb-progress${summary.eta_rough ? " rough" : ""}`} aria-hidden>
             <i style={{ width: `${Math.round(fraction * 100)}%` }} />
           </span>
         )}
-        <span>{summaryText(shown)}</span>
+        <span data-testid="tb-solve-text">{summaryText(shown, display)}</span>
         {summary.running && (
           <button
             className="tb-esc"
@@ -123,6 +152,8 @@ export function TopBar() {
         )}
       </span>
 
+      <CachesChip />
+
       <span className={`tb-conn ${connection}`} data-testid="tb-conn" title={connectionMessage}>
         <i />
         <span>{connection}</span>
@@ -133,6 +164,63 @@ export function TopBar() {
 
       <SettingsMenu />
     </header>
+  );
+}
+
+/**
+ * The caches indicator (docs/16 §Status and progress language; the D1
+ * contract): `cache 612M / 1G · 1,397 solids · memo 2.1G` from the
+ * session's `caches` view, in the warn tone while the display cache is
+ * over budget or thrashing; the full breakdown in the hover, and — until
+ * the profiler's caches section exists (P1) — a click opens the same
+ * breakdown as a panel under the chip.
+ */
+function CachesChip() {
+  const caches = useCicada((s) => s.caches);
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: PointerEvent) => {
+      if (wrapRef.current !== null && !wrapRef.current.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("pointerdown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  if (caches === null) return null;
+  const warn = caches.display.over_budget || caches.display.thrash;
+  const title = cachesTitle(caches);
+  return (
+    <span className="tb-menu-wrap" ref={wrapRef}>
+      <button
+        className={`tb-caches${warn ? " warn" : ""}${open ? " active" : ""}`}
+        title={title}
+        aria-label={`caches: ${cachesText(caches)}${warn ? " — attention" : ""}`}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        data-testid="tb-caches"
+        data-warn={warn}
+        data-over-budget={caches.display.over_budget}
+        data-thrash={caches.display.thrash}
+      >
+        <span className="mono" data-testid="tb-caches-text">
+          {cachesText(caches)}
+        </span>
+      </button>
+      {open && (
+        <div className="tb-menu tb-caches-menu" role="dialog" aria-label="caches" data-no-hotkeys data-testid="tb-caches-detail">
+          <pre className="mono">{title}</pre>
+        </div>
+      )}
+    </span>
   );
 }
 
@@ -244,6 +332,9 @@ const DISPLAY_MODES: [DisplayMode, string][] = [
 function SettingsMenu() {
   const settings = useCicada((s) => s.settings);
   const updateSettings = useCicada((s) => s.updateSettings);
+  const chooseDisplayCache = useCicada((s) => s.chooseDisplayCache);
+  const caches = useCicada((s) => s.caches);
+  const writer = useCicada(canWrite);
   const setTab = useInspectorTab((s) => s.setTab);
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLSpanElement>(null);
@@ -337,6 +428,34 @@ function SettingsMenu() {
             ["rhino", "rhino"],
             ["blender", "blender"],
           ])}
+          <span className="menu-h">display cache</span>
+          <label
+            title="the solid display meshes the viewport redraws from (docs/12 §Display cache) — a per-user choice the lease holder applies to the session on every connect"
+          >
+            solid meshes
+          </label>
+          <span className="tb-cache-pick">
+            <select
+              value={settings.displayCacheMib === null ? "" : String(settings.displayCacheMib)}
+              onChange={(e) => chooseDisplayCache(e.target.value === "" ? null : Number(e.target.value))}
+              title={
+                writer
+                  ? "resizes this session's display cache now and on every connect (the lease holder's preference wins)"
+                  : "kept for when you hold the write lease — only the lease holder resizes the session's cache"
+              }
+              data-testid="settings-display-cache"
+            >
+              <option value="">server default</option>
+              {DISPLAY_CACHE_CHOICES_MIB.map((mib) => (
+                <option key={mib} value={String(mib)}>
+                  {displayCacheLabel(mib)}
+                </option>
+              ))}
+            </select>
+            <span className="faint" data-testid="settings-display-cache-now">
+              {caches === null ? "session: …" : `session: ${shortBytes(caches.display.budget)}`}
+            </span>
+          </span>
         </div>
       )}
     </span>

@@ -65,6 +65,73 @@ header.topbar {
   background: var(--warn-bg);
 }
 
+/* the display pass in flight (docs/13 §The display edge): between a
+   generation's display_begin and its display_end */
+.tb-solve.painting {
+  color: var(--running);
+  background: var(--accent-bg);
+}
+
+/* the spinner the chip wears while solving or painting */
+.tb-spin {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--running);
+  animation: tb-spin 0.8s linear infinite;
+}
+
+@keyframes tb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* the caches indicator: display cache bytes / budget · solids · memo */
+.tb-caches {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 8px;
+  border: none;
+  border-radius: 999px;
+  background: var(--bg-node-header);
+  color: var(--fg-dim);
+  font-size: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
+
+.tb-caches:hover,
+.tb-caches.active {
+  color: var(--fg);
+}
+
+.tb-caches.warn {
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+
+.tb-caches-menu {
+  display: block;
+}
+
+.tb-caches-menu > pre {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.tb-cache-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .tb-progress {
   width: 90px;
   height: 4px;

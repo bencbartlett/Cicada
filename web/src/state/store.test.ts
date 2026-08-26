@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, test } from "vitest";
 import type { ClientMessage, GraphView, HistoryView, NodeView, ServerEnvelope } from "../protocol/messages";
 import {
+  EMPTY_CACHES,
   EMPTY_HISTORY,
   canWrite,
   dragStandsAfter,
@@ -188,6 +189,7 @@ test("a delta prunes dead bindings from statuses and follows renames / my placem
       reason: "initial",
       history: EMPTY_HISTORY,
       transport: TRANSPORT_AT_REST,
+      caches: EMPTY_CACHES,
     },
   });
   useCicada.getState().selectNodes(["b"]);
@@ -279,6 +281,7 @@ describe("history (docs/13 §Undo/redo)", () => {
       reason: barrier ? "external change" : "initial",
       history,
       transport: TRANSPORT_AT_REST,
+      caches: EMPTY_CACHES,
     },
   });
   const delta = (label: string, history: HistoryView): ServerEnvelope => ({
@@ -644,6 +647,7 @@ describe("compute-on-release (docs/13 §Slider drags — the frozen client contr
         reason: "external change",
         history: EMPTY_HISTORY,
         transport: TRANSPORT_AT_REST,
+        caches: EMPTY_CACHES,
       },
     });
     expect(useCicada.getState().pending, "the watcher's reload ends the drag").toBeNull();
@@ -758,5 +762,168 @@ describe("the canvas centre (U29)", () => {
     expect(useCicada.getState().canvasCenter).toEqual([4, -2]);
     useCicada.getState().setCanvasCenter(null);
     expect(useCicada.getState().canvasCenter).toBeNull();
+  });
+});
+
+describe("the display edge (wave 5 D1: display_begin / display_end / caches / set_display_cache)", () => {
+  const begin = (seq: number, generation: number, outputs: number): ServerEnvelope => ({
+    v: 1,
+    seq,
+    type: "display_begin",
+    payload: { generation, outputs },
+  });
+  const end = (seq: number, generation: number, extra: Partial<{ outputs: number; frames: number; bytes: number; cancelled: boolean }> = {}): ServerEnvelope => ({
+    v: 1,
+    seq,
+    type: "display_end",
+    payload: {
+      generation,
+      outputs: extra.outputs ?? 2,
+      frames: extra.frames ?? 3,
+      tessellate_ms: 2301.5,
+      encode_ms: 114.25,
+      bytes: extra.bytes ?? 160_100_000,
+      ...(extra.cancelled === undefined ? {} : { cancelled: extra.cancelled }),
+    },
+  });
+  const apply = (envelope: ServerEnvelope) => useCicada.getState().applyServerMessage(envelope);
+
+  beforeEach(() => {
+    useCicada.setState({
+      display: null,
+      caches: null,
+      connection: "open",
+      role: "writer",
+      lastError: null,
+      notices: [],
+      settings: { ...useCicada.getState().settings, displayCacheMib: null },
+    });
+  });
+
+  it("begin starts a painting pass; end finishes it with the server's numbers; a stale end and an older begin are ignored", () => {
+    apply(begin(1, 12, 2));
+    const painting = useCicada.getState().display;
+    expect(painting).toMatchObject({ generation: 12, phase: "painting", outputs: 2, frames: 0, bytes: 0, cancelled: false, paintedMs: null });
+    expect(painting!.beganAt).toBeGreaterThan(0);
+    // An older generation's end (its begin was overtaken) changes nothing.
+    apply(end(2, 11));
+    expect(useCicada.getState().display).toBe(painting);
+    apply(end(3, 12, { outputs: 1, frames: 3 }));
+    const done = useCicada.getState().display!;
+    expect(done).toMatchObject({
+      generation: 12,
+      phase: "painted",
+      outputs: 1,
+      frames: 3,
+      bytes: 160_100_000,
+      tessellateMs: 2301.5,
+      encodeMs: 114.25,
+      cancelled: false,
+      paintedMs: null,
+      beganAt: painting!.beganAt,
+    });
+    // A newer begin replaces it whatever its phase; an older begin does not.
+    apply(begin(4, 13, 1));
+    expect(useCicada.getState().display).toMatchObject({ generation: 13, phase: "painting", outputs: 1 });
+    apply(begin(5, 12, 9));
+    expect(useCicada.getState().display!.generation).toBe(13);
+    // A cut pass says so.
+    apply(end(6, 13, { outputs: 0, frames: 0, bytes: 0, cancelled: true }));
+    expect(useCicada.getState().display).toMatchObject({ generation: 13, phase: "painted", cancelled: true, outputs: 0 });
+  });
+
+  it("a pass that sent no frame is painted at its end; markPainted stamps the client's wall once, for the standing pass only", () => {
+    apply(begin(1, 20, 0));
+    apply(end(2, 20, { outputs: 0, frames: 0, bytes: 0 }));
+    const empty = useCicada.getState().display!;
+    expect(empty.paintedMs).not.toBeNull();
+    expect(empty.paintedMs!).toBeGreaterThanOrEqual(0);
+    // A pass with frames waits for the viewport's render.
+    apply(begin(3, 21, 2));
+    useCicada.getState().markPainted(21, 99_999);
+    expect(useCicada.getState().display!.paintedMs, "not before its end").toBeNull();
+    apply(end(4, 21));
+    const began = useCicada.getState().display!.beganAt;
+    useCicada.getState().markPainted(20, began + 5);
+    expect(useCicada.getState().display!.paintedMs, "another generation's render is not this pass's").toBeNull();
+    useCicada.getState().markPainted(21, began + 2900);
+    expect(useCicada.getState().display!.paintedMs).toBe(2900);
+    useCicada.getState().markPainted(21, began + 9000);
+    expect(useCicada.getState().display!.paintedMs, "stamped once").toBe(2900);
+  });
+
+  it("a disconnect and a session reset forget the pass and the caches", () => {
+    apply(begin(1, 30, 2));
+    apply({ v: 1, seq: 2, type: "caches", payload: EMPTY_CACHES });
+    useCicada.getState().markDisconnected("socket closed", { attempt: 1, nextAt: null });
+    expect(useCicada.getState().display).toBeNull();
+    expect(useCicada.getState().caches).toBeNull();
+    apply(begin(3, 31, 2));
+    useCicada.getState().resetSession("t", "other.cic");
+    expect(useCicada.getState().display).toBeNull();
+  });
+
+  it("the caches arrive whole — the broadcast's and the snapshot's — and replace", () => {
+    const loud = { ...EMPTY_CACHES, display: { ...EMPTY_CACHES.display, bytes: 7, entries: 1, over_budget: true } };
+    apply({ v: 1, seq: 1, type: "caches", payload: loud });
+    expect(useCicada.getState().caches).toBe(loud);
+    apply({
+      v: 1,
+      seq: 2,
+      type: "snapshot",
+      payload: {
+        graph: { nodes: [], wires: [], diagnostics: [] },
+        text: "",
+        statuses: {},
+        summary: useCicada.getState().summary,
+        lease: { writer: 7, clients: [[7, "writer"]] },
+        barrier: false,
+        reason: "initial",
+        history: EMPTY_HISTORY,
+        transport: TRANSPORT_AT_REST,
+        caches: EMPTY_CACHES,
+      },
+    });
+    expect(useCicada.getState().caches).toBe(EMPTY_CACHES);
+  });
+
+  it("chooseDisplayCache remembers the choice and sends set_display_cache only while writing; the writer's hello re-applies it", () => {
+    const sent: ClientMessage[] = [];
+    useCicada.getState().installSender((message) => {
+      sent.push(message);
+      return "1";
+    });
+    useCicada.getState().chooseDisplayCache(2048);
+    expect(useCicada.getState().settings.displayCacheMib).toBe(2048);
+    expect(sent).toEqual([{ type: "set_display_cache", payload: { mib: 2048 } }]);
+    // An observer's choice is kept, not sent.
+    useCicada.setState({ role: "observer" });
+    useCicada.getState().chooseDisplayCache(512);
+    expect(useCicada.getState().settings.displayCacheMib).toBe(512);
+    expect(sent).toHaveLength(1);
+    // Forgetting the preference sends nothing (the server's default stands from the next session).
+    useCicada.setState({ role: "writer" });
+    useCicada.getState().chooseDisplayCache(null);
+    expect(useCicada.getState().settings.displayCacheMib).toBeNull();
+    expect(sent).toHaveLength(1);
+    // The hello as writer re-applies a standing preference; as observer, never.
+    useCicada.getState().updateSettings({ displayCacheMib: 256 });
+    const hello = (role: "writer" | "observer"): ServerEnvelope => ({
+      v: 1,
+      seq: 0,
+      type: "hello",
+      payload: { client_id: 3, role, protocol: 1, engine: "x", project: "p", pipeline: "a.cic", unit_px: 24 },
+    });
+    useCicada.setState({ hello: null });
+    apply(hello("observer"));
+    expect(sent).toHaveLength(1);
+    useCicada.setState({ hello: null });
+    apply(hello("writer"));
+    expect(sent.at(-1)).toEqual({ type: "set_display_cache", payload: { mib: 256 } });
+    // Without a preference the writer's hello sends nothing.
+    useCicada.getState().updateSettings({ displayCacheMib: null });
+    useCicada.setState({ hello: null });
+    apply(hello("writer"));
+    expect(sent).toHaveLength(2);
   });
 });

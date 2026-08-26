@@ -11,7 +11,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { GraphView, NodeView, ScrubProgressPayload, ScrubView, ServerEnvelope } from "../protocol/messages";
 import { currentPosition, mergeScrub, scrubBarTitle, scrubToggle, showsScrubBar } from "./scrub";
-import { scrubProgressFor, useCicada } from "./store";
+import { EMPTY_CACHES, scrubProgressFor, useCicada } from "./store";
 
 const eligibleOff: ScrubView = { on: false, positions: 19, warmed: [], warming: false, bytes: 0 };
 const eligibleOn: ScrubView = { on: true, positions: 19, warmed: [5, 6, 7], warming: true, bytes: 1_970_000 };
@@ -295,6 +295,7 @@ describe("the store's scrub_progress overlay", () => {
         barrier: false,
         reason: "",
         transport: { playing: false, speed: 1, t_ms: 0, frame: 0, frames: 0, period_ms: 0, driven: [] },
+        caches: EMPTY_CACHES,
       },
     });
     expect(useCicada.getState().scrubProgress).toEqual({});

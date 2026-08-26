@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { SolveSummary } from "../protocol/messages";
+import type { CachesView, SolveSummary } from "../protocol/messages";
+import type { DisplayPass } from "../state/store";
 import {
   basename,
   boundsText,
+  cachesText,
+  cachesTitle,
+  displayText,
   factsList,
   formatNanos,
   highlightedLines,
@@ -11,10 +15,12 @@ import {
   paramValueText,
   pendingHint,
   pendingTitle,
+  shortBytes,
   shortHash,
   snapSlider,
   statusText,
   summaryText,
+  summaryTitle,
   valueHeadline,
   withStatusCounts,
 } from "./format";
@@ -81,34 +87,141 @@ const idle: SolveSummary = {
   eta_rough: false,
 };
 
-describe("summaryText", () => {
-  it("describes an idle solve with the doc-16 vocabulary", () => {
-    expect(summaryText(idle)).toBe("solved gen 3 · 4 computed / 6 cached · 12.4 ms");
-    expect(summaryText({ ...idle, red: 1, blocked: 2 })).toBe(
-      "solved gen 3 · 4 computed / 6 cached / 1 red / 2 blocked · 12.4 ms",
-    );
+/** A display pass as the store keeps it (`DisplayPass`), painted unless said otherwise. */
+const painted: DisplayPass = {
+  generation: 3,
+  phase: "painted",
+  outputs: 2,
+  frames: 3,
+  bytes: 160_100_000,
+  tessellateMs: 2301.5,
+  encodeMs: 114.25,
+  cancelled: false,
+  beganAt: 1000,
+  paintedMs: 2900,
+};
+
+describe("summaryText (the chip, wave 5 D1)", () => {
+  it("reads `gen N · solve T` idle and adds the display time once the pass ended", () => {
+    expect(summaryText(idle)).toBe("gen 3 · solve 12.4 ms");
+    expect(summaryText(idle, null)).toBe("gen 3 · solve 12.4 ms");
+    expect(summaryText(idle, painted)).toBe("gen 3 · solve 12.4 ms · display 2.42 s");
+    // A pass of another generation says nothing about this one.
+    expect(summaryText(idle, { ...painted, generation: 2 })).toBe("gen 3 · solve 12.4 ms");
+    // A pass cut short by a newer generation says so.
+    expect(summaryText(idle, { ...painted, cancelled: true })).toBe("gen 3 · solve 12.4 ms · display 2.42 s (cut)");
   });
-  it("shows pending + ETA while running, with ~ when rough", () => {
+  it("says `painting…` between display_begin and display_end", () => {
+    expect(summaryText(idle, { ...painted, phase: "painting" })).toBe("gen 3 · painting…");
+    // The solve itself running wins over any pass.
+    expect(summaryText({ ...idle, running: true }, { ...painted, phase: "painting" })).toBe("Solving gen 3");
+  });
+  it("a pass for a NEWER generation than the summary's is the current state (its begin precedes the status)", () => {
+    expect(summaryText(idle, { ...painted, generation: 4, phase: "painting" })).toBe("gen 4 · painting…");
+    expect(summaryText({ ...idle, cancelled: true }, { ...painted, generation: 4, phase: "painting" })).toBe("gen 4 · painting…");
+    // Painted before the generation's final status: no solve time yet.
+    expect(summaryText(idle, { ...painted, generation: 4 })).toBe("gen 4 · display 2.42 s");
+    expect(summaryTitle(idle, { ...painted, generation: 4 })).toContain("display 2.42 s");
+    // An older pass is never the current state.
+    expect(summaryText(idle, { ...painted, generation: 2, phase: "painting" })).toBe("gen 3 · solve 12.4 ms");
+  });
+  it("says `Solving gen N` + the ETA while running, with ~ when rough", () => {
     expect(summaryText({ ...idle, running: true, pending: 5, eta_ms: 2500, eta_rough: true })).toBe(
-      "solving… pending 5 · ETA ~2.50 s",
+      "Solving gen 3 · ETA ~2.50 s",
     );
     expect(summaryText({ ...idle, running: true, pending: 1, eta_ms: 80, eta_rough: false })).toBe(
-      "solving… pending 1 · ETA 80 ms",
+      "Solving gen 3 · ETA 80 ms",
     );
-    expect(summaryText({ ...idle, running: true, pending: 1 })).toBe("solving… pending 1");
+    expect(summaryText({ ...idle, running: true, pending: 1 })).toBe("Solving gen 3");
   });
-  it("lifts red/blocked to the status counts (diagnostic-excluded nodes never solve)", () => {
+  it("moved the counts to the hover, red/blocked lifted to the status counts (diagnostic-excluded nodes never solve)", () => {
     const lifted = withStatusCounts(idle, {
       a: { state: "red", generation: 1 },
       b: { state: "blocked", generation: 1 },
       c: { state: "blocked", generation: 1 },
       d: { state: "done", generation: 1 },
     });
-    expect(summaryText(lifted)).toBe("solved gen 3 · 4 computed / 6 cached / 1 red / 2 blocked · 12.4 ms");
+    expect(summaryText(lifted)).toBe("gen 3 · solve 12.4 ms");
+    expect(summaryTitle(lifted)).toBe("gen 3: 4 computed / 6 cached / 1 red / 2 blocked\nsolve 12.4 ms");
     expect(withStatusCounts({ ...idle, red: 3 }, {}).red).toBe(3);
   });
   it("says cancelled", () => {
-    expect(summaryText({ ...idle, cancelled: true })).toBe("cancelled gen 3 · 4 computed / 6 cached");
+    expect(summaryText({ ...idle, cancelled: true })).toBe("cancelled gen 3");
+    expect(summaryTitle({ ...idle, cancelled: true })).toBe("gen 3: 4 computed / 6 cached\nsolve 12.4 ms (cancelled)");
+  });
+  it("itemises the display pass in the hover", () => {
+    expect(summaryTitle(idle, painted)).toBe(
+      [
+        "gen 3: 4 computed / 6 cached",
+        "solve 12.4 ms",
+        "display 2.42 s: tessellation 2.30 s · encode 114 ms",
+        "2 outputs · 3 frames · 152.68 MB",
+        "painted here in 2.90 s",
+      ].join("\n"),
+    );
+    expect(summaryTitle(idle, { ...painted, phase: "painting" })).toBe("gen 3: 4 computed / 6 cached\nsolve 12.4 ms\npainting 2 outputs…");
+    expect(summaryTitle({ ...idle, running: true, pending: 2 })).toBe("gen 3: 4 computed / 6 cached / 2 pending\nsolving for 12.4 ms");
+    expect(summaryTitle(idle, { ...painted, paintedMs: null, cancelled: true, outputs: 1, frames: 1 })).toContain(
+      "1 output · 1 frame · 152.68 MB · cut short by a newer generation",
+    );
+  });
+});
+
+describe("the caches indicator", () => {
+  const caches: CachesView = {
+    display: {
+      entries: 1397,
+      bytes: 612 * 1024 * 1024,
+      budget: 1024 * 1024 * 1024,
+      hits: 10,
+      misses: 1400,
+      evictions: 3,
+      oversized: 0,
+      refusals: 0,
+      working_set: 600 * 1024 * 1024,
+      over_budget: false,
+      thrash: false,
+    },
+    memo: { bytes: 2.1 * 1024 * 1024 * 1024, entries: 44 },
+  };
+  it("spells bytes short in binary units", () => {
+    expect(shortBytes(0)).toBe("0B");
+    expect(shortBytes(96 * 1024)).toBe("96K");
+    expect(shortBytes(612 * 1024 * 1024)).toBe("612M");
+    expect(shortBytes(1024 * 1024 * 1024)).toBe("1G");
+    expect(shortBytes(2.1 * 1024 * 1024 * 1024)).toBe("2.1G");
+    expect(shortBytes(12 * 1024 * 1024 * 1024)).toBe("12G");
+  });
+  it("reads `cache bytes / budget · solids · memo` (docs/16 §Status and progress language)", () => {
+    expect(cachesText(caches)).toBe("cache 612M / 1G · 1,397 solids · memo 2.1G");
+    // Cached refusals are not solids.
+    expect(cachesText({ ...caches, display: { ...caches.display, entries: 2, refusals: 1 } })).toBe(
+      "cache 612M / 1G · 1 solid · memo 2.1G",
+    );
+  });
+  it("spells the flags out in the hover, with the remedy", () => {
+    const quiet = cachesTitle(caches);
+    expect(quiet).toContain("display cache: 612.00 MB of 1024.00 MB held in 1397 entries");
+    expect(quiet).toContain("hits 10 · misses 1,400 · evictions 3");
+    expect(quiet).toContain("memo store: 2150.40 MB of value blobs in 44 entries");
+    expect(quiet).not.toContain("raise the display cache");
+    const loud = cachesTitle({ ...caches, display: { ...caches.display, over_budget: true, thrash: true, oversized: 2 } });
+    expect(loud).toContain("OVER BUDGET");
+    expect(loud).toContain("THRASHING");
+    expect(loud).toContain("2 too large to keep");
+    expect(loud).toContain("raise the display cache in settings, or draw fewer solids");
+  });
+});
+
+describe("the viewport's display indicator", () => {
+  it("spins with the count while painting and reports the paint after", () => {
+    expect(displayText({ ...painted, phase: "painting", outputs: 3 })).toBe("painting 3 outputs…");
+    expect(displayText({ ...painted, phase: "painting", outputs: 1 })).toBe("painting 1 output…");
+    expect(displayText(painted)).toBe("painted 2 outputs · 152.68 MB in 2.90 s");
+    expect(displayText({ ...painted, paintedMs: null })).toBe("painted 2 outputs · 152.68 MB");
+    expect(displayText({ ...painted, cancelled: true, outputs: 0, bytes: 0, paintedMs: 3 })).toBe(
+      "painted 0 outputs · 0 B in 3 ms · cut short",
+    );
   });
 });
 

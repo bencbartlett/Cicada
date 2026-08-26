@@ -7,6 +7,7 @@
  * mount for the keyboard map, the inspector and `window.__cicada.scene`.
  */
 import { useEffect, useRef, useState } from "react";
+import { displayText } from "../panels/format";
 import { frameBus } from "../state/frameBus";
 import { useRoute } from "../state/route";
 import { nodeByName, nodeByRef, useCicada, type ElementPick } from "../state/store";
@@ -55,6 +56,7 @@ export function Viewport() {
   const displayMode = useCicada((s) => s.settings.displayMode);
   const hoverPick = useCicada((s) => s.hoverPick);
   const updateSettings = useCicada((s) => s.updateSettings);
+  const display = useCicada((s) => s.display);
   const view = useRoute((s) => s.route.view);
 
   useEffect(() => {
@@ -100,7 +102,16 @@ export function Viewport() {
             store().selectElement(toElementPick(pick, name));
             if (name !== null) store().send({ type: "inspect", payload: { node: name } });
           },
-          onRendered: () => refreshReadout(scene),
+          onRendered: () => {
+            refreshReadout(scene);
+            // The first render after a pass ended is the one that uploaded
+            // its last frames (they were applied before `display_end`, which
+            // rides the display lane behind them): the client's paint time.
+            const pass = store().display;
+            if (pass !== null && pass.phase === "painted" && pass.paintedMs === null) {
+              store().markPainted(pass.generation);
+            }
+          },
           notice: (level, message) => store().addNotice(level, message),
           solveRunning: () => store().summary.running,
         },
@@ -135,6 +146,17 @@ export function Viewport() {
       }
       if (state.settings.theme !== prev.settings.theme) {
         scene.setTheme(sampleTheme(state.settings.theme));
+      }
+      // A pass just ended: render once more so `onRendered` stamps its
+      // paint time even when the frames' own render already happened
+      // before `display_end` arrived (a redundant render is cheap).
+      if (
+        state.display !== prev.display &&
+        state.display !== null &&
+        state.display.phase === "painted" &&
+        state.display.paintedMs === null
+      ) {
+        scene.requestRender();
       }
       if (state.graph !== prev.graph) {
         scene.recolor();
@@ -222,6 +244,22 @@ export function Viewport() {
           {readout.outputs} outputs · {readout.triangles} tris · {readout.drawCalls} draws · gen{" "}
           {readout.generation}
         </div>
+        {display !== null && (
+          <div
+            className="viewport-display mono"
+            data-testid="viewport-display"
+            data-phase={display.phase}
+            data-generation={display.generation}
+            title={
+              display.phase === "painting"
+                ? `generation ${display.generation}'s display pass is in flight — the server is tessellating and encoding its frames`
+                : `generation ${display.generation}: tessellation ${display.tessellateMs.toFixed(1)} ms · encode ${display.encodeMs.toFixed(1)} ms on the server${display.paintedMs === null ? "" : ` · ${display.paintedMs.toFixed(0)} ms here from display_begin to the first render after the last frame`}`
+            }
+          >
+            {display.phase === "painting" && <i className="spin" aria-hidden />}
+            <span>{displayText(display)}</span>
+          </div>
+        )}
       </div>
       {hoverLabel !== null && (
         <div className="viewport-hover mono" data-testid="viewport-hover">

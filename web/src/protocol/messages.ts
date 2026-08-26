@@ -43,6 +43,82 @@ export interface SolveSummary {
   eta_rough: boolean;
 }
 
+/**
+ * The two caches as the app shows them (docs/13 §The display edge; docs/16
+ * §Status and progress language — the caches indicator; v0.1 wave 5 D1).
+ * Mirrors `protocol::CachesView`: the same object rides every `snapshot`
+ * and the `caches` broadcast after every generation's display pass and
+ * after `set_display_cache`; replace, never merge.
+ */
+export interface CachesView {
+  display: DisplayCacheView;
+  memo: MemoCacheView;
+}
+
+/** The solid display cache (docs/12 §Display cache): `SolidCacheStats` flattened beside the display pass's two flags. */
+export interface DisplayCacheView {
+  /** Entries held (meshes and cached refusals). */
+  entries: number;
+  /** Bytes held — never above `budget`. */
+  bytes: number;
+  /** The byte budget (`--solid-cache-mib`, `set_display_cache`). */
+  budget: number;
+  hits: number;
+  misses: number;
+  evictions: number;
+  /** Tessellations larger than the whole budget: served, never kept. */
+  oversized: number;
+  /** Cached refusals (a subset of `entries`). */
+  refusals: number;
+  /** Bytes of the display meshes every output on screen holds — what a redraw of everything needs. */
+  working_set: number;
+  /** The working set is larger than the budget: every redraw re-tessellates part of it. */
+  over_budget: boolean;
+  /** The last display pass evicted meshes the previous generation displayed (the undo/redo flip of docs/17 U30). */
+  thrash: boolean;
+}
+
+/** The memo store's footprint on disk. */
+export interface MemoCacheView {
+  /** Bytes of value blobs (the pack plus the loose blobs). */
+  bytes: number;
+  /** Memo entries. */
+  entries: number;
+}
+
+/**
+ * `display_begin` (docs/13 §The display edge): a generation's display pass
+ * begins — on the control lane the moment its solve finished, BEFORE the
+ * tessellation and the first frame, so the viewport's spinner and the
+ * chip's `painting…` start when the work does. `outputs` = how many outputs
+ * the pass set out to (re)draw; the bytes come with `display_end` (the
+ * encode is after the tessellation). Every completed generation gets one,
+ * one that draws nothing included (`outputs: 0`).
+ */
+export interface DisplayBeginPayload {
+  generation: number;
+  outputs: number;
+}
+
+/**
+ * `display_end`: the pass ended — on the DISPLAY lane, after its last
+ * frame (its place among the frames is its meaning, like `display_reset`'s),
+ * so a client that has seen it has every frame of the pass. What was sent
+ * (`outputs` / `frames` / `bytes`), the two phases' wall times (their sum
+ * is the chip's `display` time), and `cancelled` when a newer generation
+ * (or Esc) stopped the pass between outputs — the outputs it did not reach
+ * keep their previous frames until the newer generation draws them.
+ */
+export interface DisplayEndPayload {
+  generation: number;
+  outputs: number;
+  frames: number;
+  tessellate_ms: number;
+  encode_ms: number;
+  bytes: number;
+  cancelled?: boolean;
+}
+
 export interface ValueSummary {
   kind: string;
   hash: string;
@@ -136,6 +212,8 @@ export type ErrorKind =
    * a `not_found` file from Recent and returns the tab to the picker.
    */
   | "pipeline"
+  /** A value outside its documented range: `set_display_cache` below 64 MiB or above 64 GiB (docs/13 §The display edge). */
+  | "invalid"
   | (string & {});
 
 /** Why the server refused a socket's pipeline (`protocol::JoinRefusal`, snake_case; the HTTP routes' 400 / 400 / 404 / 422). */
@@ -799,6 +877,8 @@ export type ServerMessage =
         history: HistoryView;
         /** The transport's state at the moment of the snapshot (additive, v0.1 item 4). */
         transport: TransportView;
+        /** The two caches' counters and flags (additive, v0.1 wave 5 D1). */
+        caches: CachesView;
       };
     }
   | {
@@ -851,7 +931,13 @@ export type ServerMessage =
    * carries). Update that slider's `param.scrub` in place; never sent for a
    * slider without a queue.
    */
-  | { type: "scrub_progress"; payload: ScrubProgressPayload };
+  | { type: "scrub_progress"; payload: ScrubProgressPayload }
+  /** A generation's display pass begins (v0.1 wave 5 D1; the control lane, before the tessellation). */
+  | { type: "display_begin"; payload: DisplayBeginPayload }
+  /** A generation's display pass ended (the display lane, after its last frame). */
+  | { type: "display_end"; payload: DisplayEndPayload }
+  /** The two caches after a display pass or a `set_display_cache`: the same view every snapshot carries — replace, never merge. */
+  | { type: "caches"; payload: CachesView };
 
 /** The `scrub_progress` payload (`protocol::ServerMessage::ScrubProgress`). */
 export interface ScrubProgressPayload {
@@ -966,6 +1052,15 @@ export type ClientMessage =
   /** Cancel the running generation (Esc). Also pauses the transport — a `transport` broadcast with `playing: false` follows. */
   | { type: "cancel"; payload: Record<string, never> }
   | TransportMessage
+  /**
+   * Resize the session's solid display cache to `mib` MiB, live (v0.1 wave
+   * 5 D1; docs/13 §The display edge): shrinking evicts at once. Writer-only
+   * (an observer's is refused kind `lease`); outside `64 ..= 65536` refused
+   * kind `invalid`. Never an op, never a delta: the answer is the `caches`
+   * broadcast to every client. The settings menu sends it, and the lease
+   * holder re-applies its per-user choice on connect.
+   */
+  | { type: "set_display_cache"; payload: { mib: number } }
   /** Restore the last op's `before` snapshot (a write; the delta is labelled `undo: <label>`). */
   | { type: "undo"; payload: Record<string, never> }
   /** Re-apply the last undone op's `after` snapshot. */
@@ -1019,6 +1114,9 @@ export type TransportMessage =
 
 export type ClientEnvelope = { v: number; id?: string } & ClientMessage;
 
+/** The display cache sizes the settings menu offers, MiB (docs/16 §Settings; the server accepts 64 ..= 65536). */
+export const DISPLAY_CACHE_CHOICES_MIB: readonly number[] = [256, 512, 1024, 2048, 4096];
+
 /** Intents that need the write lease (mirrors `protocol::is_write`). */
 export function isWrite(message: ClientMessage): boolean {
   if (isGesture(message) || isTransport(message)) return true;
@@ -1030,6 +1128,7 @@ export function isWrite(message: ClientMessage): boolean {
     case "redo":
     case "batch":
     case "apply_text":
+    case "set_display_cache":
       return true;
     default:
       return false;
