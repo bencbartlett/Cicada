@@ -149,7 +149,7 @@ code,
 
 .app {
   display: grid;
-  /* connection banner slot (0 when hidden) · top bar · ribbon · work · transport bar (absent without time params) · status bar */
+  /* connection banner slot (0 when hidden) · top bar · menu bar · work · transport bar (absent without time params) · status bar */
   grid-template-rows: auto auto auto 1fr auto auto;
   grid-template-columns: 1fr;
   height: 100%;
@@ -159,6 +159,9 @@ code,
   display: grid;
   grid-template-columns: 1fr 320px;
   min-height: 0;
+  /* One stacking context for the work area: the canvas's own layers (its
+     search box, context menu) stay under the menu bar's dropdown panel. */
+  isolation: isolate;
 }
 
 .app-work {
@@ -193,7 +196,7 @@ code,
 
 .topbar,
 .statusbar,
-.ribbon {
+.menubar {
   background: var(--bg-elev);
   border-bottom: 1px solid var(--border);
   display: flex;

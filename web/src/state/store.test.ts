@@ -9,6 +9,7 @@ import {
   pendingFor,
   pruneKeys,
   roleChangeNotice,
+  settingsFrom,
   useCicada,
   writeBlockReason,
 } from "./store";
@@ -758,5 +759,24 @@ describe("the canvas centre (U29)", () => {
     expect(useCicada.getState().canvasCenter).toEqual([4, -2]);
     useCicada.getState().setCanvasCenter(null);
     expect(useCicada.getState().canvasCenter).toBeNull();
+  });
+});
+
+describe("settingsFrom (the stored per-user settings → this build's)", () => {
+  it("keeps the keys this build has, fills the missing ones with defaults, and DROPS a removed key — a stored `ribbonCollapsed` is ignored", () => {
+    const settings = settingsFrom({ theme: "light", ribbonCollapsed: true, split: "even" });
+    expect(settings.theme).toBe("light");
+    expect(settings.split).toBe("even");
+    expect(settings.swap).toBe(false);
+    expect(settings.navigation).toBe("rhino");
+    expect(Object.hasOwn(settings, "ribbonCollapsed")).toBe(false);
+    // And what `updateSettings` would write back carries no removed key.
+    expect(Object.keys(settings).sort()).toEqual(["displayMode", "navigation", "split", "swap", "textPanel", "theme", "wireMode"]);
+  });
+  it("anything that is not a settings object is the defaults", () => {
+    for (const raw of [null, undefined, 3, "x", [], true]) {
+      expect(settingsFrom(raw), String(raw)).toEqual(settingsFrom({}));
+    }
+    expect(settingsFrom({}).theme).toBe("dark");
   });
 });

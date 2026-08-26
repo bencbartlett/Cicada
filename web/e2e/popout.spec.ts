@@ -3,7 +3,7 @@
  * docs/13 — the join hint) against the REAL `cicada serve` from
  * `playwright.config.ts`: the viewport's button opens the same URL with
  * `view=viewport` in a window named `cicada-viewport`; that page renders the
- * viewport alone (no canvas, top bar, ribbon, no pop-out button of its own)
+ * viewport alone (no canvas, top bar, menu bar, no pop-out button of its own)
  * and joins as a DECLARED observer — the main window keeps the lease, the
  * pop-out shows the same geometry, follows the main window's writes live
  * (its text and its scene move), stays read-only throughout, and its
@@ -88,7 +88,7 @@ test("the pop-out shows the geometry as a declared observer while the main windo
   expect(url.pathname).toBe(new URL(page.url()).pathname);
   expect(await popup.evaluate(() => window.name)).toBe("cicada-viewport");
 
-  // ---- the viewport alone: no canvas, top bar, ribbon, inspector; no pop-out button of its own.
+  // ---- the viewport alone: no canvas, top bar, menu bar, inspector; no pop-out button of its own.
   await expect(popup.getByTestId("viewport-only")).toBeVisible();
   await expect(popup.getByTestId("viewport")).toBeVisible();
   await expect(popup.getByTestId("app")).toHaveCount(0);

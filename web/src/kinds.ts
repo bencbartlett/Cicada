@@ -55,7 +55,7 @@ export function depthOfType(type: string): number {
   return depth;
 }
 
-/** The docs/08 category order, for the ribbon (mirrors core::catalog::CATEGORY_ORDER). */
+/** The docs/08 category order, for the menu bar (mirrors core::catalog::CATEGORY_ORDER). */
 export const CATEGORY_ORDER = [
   "Params & input",
   "Sequences & random",
@@ -71,7 +71,7 @@ export const CATEGORY_ORDER = [
   "Script",
 ];
 
-/** Short ribbon tab label per category. */
+/** Short menu-bar tab label per category. */
 export function categoryLabel(category: string): string {
   const short: Record<string, string> = {
     "Params & input": "Params",

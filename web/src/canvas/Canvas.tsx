@@ -167,7 +167,7 @@ function CanvasInner() {
     setEdges(buildEdges(graph, state.selection.wire));
   }, [graph, unit]);
 
-  // The cell under the view's centre, for the ribbon's placements (U29):
+  // The cell under the view's centre, for the menu bar's placements (U29):
   // reported after every pan / zoom end and after the first fit; null
   // once this canvas is gone.
   const recordCenter = useCallback(() => {

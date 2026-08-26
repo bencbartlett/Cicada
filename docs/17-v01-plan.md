@@ -2498,6 +2498,47 @@ proves wrong is revised here, dated, in the landing commit.
   the view's centre cell ± 1). docs/16 §Application layout (the ribbon
   paragraph becomes the menu bar's), DECISIONS.md row 2026-08-11
   revised ("GH-style category ribbon" → a menu bar with sub-groups).
+  *Built 2026-08-25 (`wt/menu`).* `web/src/panels/MenuBar.tsx` replaces
+  `Ribbon.tsx`: one tab per category (label · count, docs/08 order, the
+  `Project` tab for script nodes); a click drops the panel under the tab
+  (pulled left when it would overrun the bar's right edge), its columns
+  the category's filled sub-groups in the catalog's `subgroups` order —
+  the model keeps the contract's name, `ribbonTabs(nodes, subgroups)`,
+  now with `columns` per tab; an empty sub-group has no column, and a
+  sub-group the table does not list for the category (a project script
+  node declaring a stdlib category keeps `Script`) trails under its own
+  name rather than folding into a listed column silently. Node buttons
+  carry title + name; the hover the description, `GH: <name>` when it
+  differs from the title (`ghHint`) and `Red when: …`. Hovering another
+  tab while a panel is open switches (`onPointerEnter`, only while open);
+  an outside `pointerdown`, Esc, a re-click of the tab and a placement
+  close it — the File / settings menus' listener pattern, so the keyboard
+  router's Esc still clears the selection alongside, as with those menus.
+  A placement is one `place_node {func, cell: canvasCenter}` (null before
+  the canvas's first fit → the server's auto-layout), then the panel
+  closes. `settings.ribbonCollapsed` is gone from `Settings`, the
+  defaults and the settings menu; `settingsFrom(raw)` builds the settings
+  from the keys this build has, so a stored `ribbonCollapsed` is dropped
+  — never carried in memory or written back. `.app-main` is an isolated
+  stacking context so the canvas's own layers (search box, context menu)
+  stay under the panel while the top bar's menus stay above the bar.
+  Tests: `ribbonTabs.test.ts` (columns in table order, the empty and
+  trailing rules, every tab of the committed catalog against its table
+  row), `MenuBar.test.tsx` (jsdom against the committed catalog: open,
+  hover-switch, the four closings, one `place_node` at the centre, the
+  observer's disabled buttons with the reason, the loading state),
+  `store.test.ts` (`settingsFrom`), `web/e2e/menu.spec.ts` (Maths opens
+  with exactly the server's row — five columns — hover switches, outside
+  click / Esc / re-click close, `add` lands within ± 1 of the centre cell
+  computed from the DOM's viewport transform and equal to the store's
+  `canvasCenter`, the settings menu offers no "ribbon collapsed").
+  docs/16 §Application layout (diagram + paragraph), docs/14's node file
+  format line and DECISIONS.md row 2026-08-11 revised in the same
+  commit. *What the contract did not foresee:* nothing of substance —
+  the test ids are the menu's (`menubar`, `menu-tab-<label>`,
+  `menu-panel`, `menu-col-<sub>`, `menu-node-<name>`; no spec had used
+  the ribbon's), and a hover's GH hint follows search-to-place's rule
+  (shown only when it says something the title does not).
 
 **Round 2** (launched as Round-1 worktrees merge and free their slots).
 

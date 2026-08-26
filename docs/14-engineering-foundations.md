@@ -214,7 +214,7 @@ stale CATALOG.md fails CI.
 
 **The node file format (v0.1, decided 2026-08-19).** One node per
 file: `crates/cicada-stdlib/src/<category>/<node>.rs`, categories =
-the ribbon tabs (docs/08), a `mod.rs` per category listing the files.
+the menu bar's tabs (docs/08), a `mod.rs` per category listing the files.
 Each file holds, in this order: the input struct (`#[derive(Ports)]`,
 one doc line per field — units where relevant — `#[port(default)]`
 for optional ports); the node doc comment with fixed sections — line 1
