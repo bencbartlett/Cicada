@@ -224,6 +224,101 @@ tick's tessellation can be cancelled like a node) is the follow-up
 named in docs/17, and the cache's key is already the one such a store
 would use.
 
+### Display (as bounded and shown — v0.1 wave 5 D1, 2026-08-25)
+
+The display edge is bounded, watched and announced (DECISIONS.md row
+2026-08-25; the evidence is docs/17 §Measurement U30 / U31: 1,000
+fine-tier spheres were 8,000 triangles each, a 160 MB frame and 2.3 s of
+tessellation per redraw, re-paid on every undo/redo because two value
+sets did not fit a 256 MiB cache).
+
+- **The triangle budget** — `display::DISPLAY_TRIANGLE_BUDGET` =
+  1,000,000 triangles per output per generation
+  (`SessionConfig::display_triangle_budget`; tests lower it). A
+  structural generation asks for the fine tier; an output whose DISTINCT
+  solids would exceed the budget at that tier is drawn at the preview
+  tier instead, and when even the preview tier exceeds it the output is
+  drawn at preview anyway and marked `over_budget`. The decision
+  (`display::choose_tier` → `BudgetStats {limit, requested, drawn,
+  triangles, over_budget}`, recorded in the output's display `stats.budget`
+  and memoized per (value hash, requested tier) in the session) is a pure
+  function of the value set, the requested tier and the limit — never of
+  timing or of the order the solids were meshed in: the fine tally meshes
+  the solids through the cache on the worker pool and **stops at the
+  budget** — once the running total is past the limit the verdict
+  "preview" is certain and the remaining solids are not meshed fine — so
+  the fine work wasted before a "too many" verdict is bounded by the
+  budget itself (plus one solid per worker), and the tessellations it did
+  are ordinary cache entries (≈ 24–36 MB at the default budget, which a
+  1 GiB cache absorbs). The preview tally then meshes every solid at
+  preview, which the emit needs anyway. Per output, so a pipeline of many
+  modest outputs is not penalised for their sum; a value without solids
+  (meshes, curves, points) has no tier and no budget. The "already
+  displayed" rule compares against the tier the budget CHOOSES for the
+  output, not the tier the generation asks for, so a structural
+  generation over an unchanged over-budget output — on screen at preview,
+  chosen preview again — re-sends nothing and tessellates nothing (the
+  verdict comes from the memo). U30's 1,000 spheres drop to 866,000
+  triangles, 17 MB and 9× less tessellation; two value sets of them are
+  2 × 21 MB and fit the cache, so the undo/redo thrash goes with it.
+- **The cache: 1 GiB, resizable, watched.** `SOLID_CACHE_BUDGET` = 1024
+  MiB (`SessionConfig::solid_cache_bytes`; `cicada serve
+  --solid-cache-mib <n>`, 64..=65536, `app` passes it through). The
+  writer-only intent `set_display_cache {mib}` resizes the session's
+  cache live (`SolidCache::set_budget`; shrinking evicts least-recently-used
+  entries at once, counted like any eviction); 64 ≤ mib ≤ 65536, else
+  refused kind `invalid`; an observer's is refused kind `lease`; never an
+  op, never the file — the answer is the `caches` broadcast. The app's
+  settings menu offers 256 MiB · 512 MiB · 1 GiB · 2 GiB · 4 GiB and shows
+  the session's current budget; the choice is a per-user setting the
+  WRITER re-applies on every connect (the lease holder's preference wins;
+  an observer's choice is kept for when it holds the lease).
+- **The working set and the two flags.** After every display pass the
+  session computes the **working set** — the display meshes every output
+  on screen holds: each displayed output's distinct solids at the tier it
+  was drawn at (`Displayed.solids`, from `DisplayFrames::solids`), unioned
+  by (value hash, tier), sized as the cache counts them. `over_budget` =
+  the working set is larger than the cache budget (the picture cannot all
+  be held, so every redraw re-tessellates part of it — a solid larger
+  than the whole budget is `oversized`: served, never kept). `thrash` = the
+  pass evicted entries the previous complete generation displayed: before
+  each pass the cache is told to **watch** the previous picture's entries
+  (`SolidCache::watch`; "used" = on screen at the end of that generation),
+  and an eviction of a watched entry during the pass — by the warm-up's
+  insertions or by the emit's — is counted (`watched_evictions`). Both
+  flags are set per pass (cleared by a pass whose picture fits and evicts
+  none of the previous one) and ride the `caches` view; when either is
+  set the pass broadcasts ONE `notice` (warning) naming the numbers and
+  the remedy ("raise the display cache in settings, or draw fewer
+  solids"). A pipeline without solids has an empty working set and never
+  raises either. `set_display_cache` re-judges `over_budget` against the
+  new budget at once; `thrash` stands until the next pass.
+- **The lifecycle and latest-wins.** A generation's display pass is
+  `display_begin` (the control lane, the moment the solve finished and
+  BEFORE the tessellation — the spinner starts when the work does;
+  `outputs` = the pre-filter's count of outputs not on screen at the
+  requested tier) → the warm-up off the session lock (load each pending
+  value, take its verdict — which IS the tessellation on the worker pool)
+  → the encode and send under the lock → `display_end` on the DISPLAY
+  lane behind the last frame (`outputs` / `frames` / `bytes` as sent,
+  `tessellate_ms` / `encode_ms`, `cancelled`) → the cache verdict, its
+  notice and `caches`. Between outputs — in the warm-up and in the encode
+  — the pass asks the solve loop whether it is **superseded** (a newer job
+  waiting, or Esc pressed: `SolveLoop::superseded`) and stops:
+  `display_end {cancelled: true}`, no further frame; the outputs it did
+  not reach keep their previous frames and table entries, so the newer
+  generation — which starts the moment the pass returns — draws them at
+  the newest state. A pass cut during its warm-up encodes nothing (its
+  tessellations stay in the cache for the newer generation). The client
+  keeps its per-output generation rule (`sceneStore`: a frame older than
+  the newest applied for its output is dropped; a restream's older
+  generations are not) — a global "older than the newest `display_begin`"
+  rule would discard the tail of a completed pass that the control lane's
+  `display_begin` overtook, or a restream interleaved with a live pass,
+  and nothing would re-send them. `/debug/state.timings` carries
+  `tessellate_ms` / `encode_ms` per generation; `/debug/state.caches` is
+  the `caches` view.
+
 ## Solve generations
 
 - An edit (text or canvas) reparses and **typechecks synchronously in

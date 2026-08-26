@@ -916,6 +916,39 @@ pub struct DiskStore {
     tick: AtomicU64,
     /// Uniquifier for temp blob files.
     temp_counter: AtomicU64,
+    /// Bytes of the loose blobs (`values/<shard>/<hash>.zst` — the ones
+    /// above [`PACK_MAX_BYTES`]) as this process knows them: walked once at
+    /// open, then kept by every write and quarantine. With the pack's
+    /// length it is [`Self::value_bytes`], the memo's footprint the app's
+    /// caches indicator shows (v0.1 wave 5 D1); another process writing
+    /// the same store is invisible to it, like the memo log's.
+    loose_bytes: AtomicU64,
+}
+
+/// The bytes of every loose blob under `values/` — each shard directory's
+/// `*.zst` files (the pack and temp files are not loose blobs). Read once,
+/// at open.
+fn loose_blob_bytes(values: &Path) -> Result<u64, StoreError> {
+    let io = |path: &Path| {
+        let path = path.to_owned();
+        move |source| StoreError::Io { path, source }
+    };
+    let mut total = 0_u64;
+    for shard in fs::read_dir(values).map_err(io(values))? {
+        let shard = shard.map_err(io(values))?;
+        if !shard.file_type().map_err(io(values))?.is_dir() {
+            continue;
+        }
+        let dir = shard.path();
+        for file in fs::read_dir(&dir).map_err(io(&dir))? {
+            let file = file.map_err(io(&dir))?;
+            let path = file.path();
+            if path.extension().is_some_and(|ext| ext == "zst") {
+                total += file.metadata().map_err(io(&path))?.len();
+            }
+        }
+    }
+    Ok(total)
 }
 
 impl DiskStore {
@@ -1027,6 +1060,7 @@ impl DiskStore {
 
         let (pack, pack_recovery) = Pack::open(&root.join("values").join("pack.bin"))?;
         let packed_values = pack.index.len();
+        let loose_bytes = loose_blob_bytes(&root.join("values"))?;
 
         Ok((
             Self {
@@ -1042,6 +1076,7 @@ impl DiskStore {
                 pack: Mutex::new(pack),
                 tick: AtomicU64::new(0),
                 temp_counter: AtomicU64::new(0),
+                loose_bytes: AtomicU64::new(loose_bytes),
             },
             OpenReport {
                 memo_entries,
@@ -1083,6 +1118,39 @@ impl DiskStore {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .index
             .len()
+    }
+
+    /// Bytes of value blobs this store holds on disk — the pack file plus
+    /// the loose blobs, as this process knows them (the memo log and the
+    /// cost samples are not counted). The memo's footprint the app's
+    /// caches indicator shows (docs/13 §The display edge; v0.1 wave 5 D1).
+    #[must_use]
+    pub fn value_bytes(&self) -> u64 {
+        let packed = self
+            .pack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len;
+        packed + self.loose_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Memo entries held (node keys with recorded outputs).
+    #[must_use]
+    pub fn memo_entries(&self) -> usize {
+        self.memo
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
+    }
+
+    /// A loose blob was moved aside (quarantined under another extension):
+    /// its bytes leave [`Self::value_bytes`].
+    fn forget_loose_bytes(&self, bytes: usize) {
+        let _ = self
+            .loose_bytes
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
+                Some(held.saturating_sub(bytes as u64))
+            });
     }
 
     /// The store root.
@@ -1563,6 +1631,10 @@ impl DiskStore {
             if !path.exists() {
                 return Err(StoreError::Io { path, source });
             }
+            // The racing writer's rename landed first: it counted the bytes.
+        } else {
+            self.loose_bytes
+                .fetch_add(compressed.len() as u64, Ordering::Relaxed);
         }
         let tick = self.tick.fetch_add(1, Ordering::Relaxed);
         self.mem
@@ -1643,6 +1715,7 @@ impl DiskStore {
                     .forget(hash);
             } else {
                 quarantine_file(&path);
+                this.forget_loose_bytes(compressed.len());
             }
         };
         let Ok(encoded) = decompress(&compressed) else {

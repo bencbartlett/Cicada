@@ -69,6 +69,11 @@ pub struct ServeConfig {
     pub web_dir: Option<PathBuf>,
     /// Project configuration (units, tolerance).
     pub project: ProjectConfig,
+    /// Every session's solid display cache budget at open, in bytes
+    /// (`--solid-cache-mib`; docs/12 §Display cache; v0.1 wave 5 D1).
+    /// Default [`crate::display::SOLID_CACHE_BUDGET`] (1 GiB); a session's
+    /// writer may resize it live (`set_display_cache`).
+    pub solid_cache_bytes: usize,
 }
 
 impl ServeConfig {
@@ -85,6 +90,7 @@ impl ServeConfig {
             threads: 0,
             web_dir: None,
             project: ProjectConfig::default(),
+            solid_cache_bytes: crate::display::SOLID_CACHE_BUDGET,
         }
     }
 }
@@ -358,6 +364,9 @@ fn open_session(state: &AppState, relative: &str) -> Result<Arc<Session>, ServeE
         restream_hold: None,
         scrub_byte_cap: crate::scrub::SCRUB_BYTE_CAP,
         scrub_gate: None,
+        solid_cache_bytes: state.config.solid_cache_bytes,
+        display_triangle_budget: crate::display::DISPLAY_TRIANGLE_BUDGET,
+        display_hold: None,
     })?;
     // Two clients racing to open the same pipeline: the second finds the
     // first's session already inserted and drops its own.
@@ -959,6 +968,7 @@ fn intent_status(error: &IntentError) -> StatusCode {
         | IntentError::PathNotAllowed(_)
         | IntentError::Refused(_)
         | IntentError::Transport(_)
+        | IntentError::Invalid(_)
         | IntentError::Writer(_)
         | IntentError::Unknown(_)
         | IntentError::NothingToUndo(_)
@@ -1989,6 +1999,9 @@ mod tests {
             restream_hold: hold,
             scrub_byte_cap: crate::scrub::SCRUB_BYTE_CAP,
             scrub_gate: None,
+            solid_cache_bytes: crate::display::SOLID_CACHE_BUDGET,
+            display_triangle_budget: crate::display::DISPLAY_TRIANGLE_BUDGET,
+            display_hold: None,
         })
         .unwrap();
         session.wait_idle();
@@ -2018,6 +2031,13 @@ mod tests {
             },
         );
         session.wait_idle();
+    }
+
+    /// The control-lane texts one generation produces (docs/13 §The display
+    /// edge): its coalesced statuses, `display_begin` as its display pass
+    /// starts, `caches` as it ends. (`display_end` rides the display lane.)
+    fn generation_text(kind: &str) -> bool {
+        matches!(kind, "status" | "display_begin" | "caches")
     }
 
     /// A read intent answered at once on the control lane (`wire_probe`):
@@ -2190,10 +2210,10 @@ mod tests {
             Seen::Binary(WALL_LARGEST_FRAME_BYTES),
             "the frame already handed to the socket goes out first"
         );
-        assert_eq!(
-            wire.release_one().await,
-            Seen::Text("status".into()),
-            "the tick's first text overtakes the remaining restream"
+        let first = wire.release_one().await;
+        assert!(
+            matches!(&first, Seen::Text(kind) if generation_text(kind)),
+            "the tick's first text overtakes the remaining restream: {first:?}"
         );
         // Not vacuous: the backlog the text overtook is the whole rest of
         // the restream (one queue per client put the text behind it).
@@ -2214,8 +2234,8 @@ mod tests {
             }
         };
         assert!(
-            texts_after.iter().all(|k| k == "status"),
-            "only statuses were pending: {texts_after:?}"
+            texts_after.iter().all(|k| generation_text(k)),
+            "only the generation's control texts were pending: {texts_after:?}"
         );
         assert_eq!(
             resumed_at, synthetic[1],
@@ -2229,7 +2249,7 @@ mod tests {
                     sent += 1;
                 }
                 // A late coalesced status may still overtake.
-                Seen::Text(kind) => assert_eq!(kind, "status"),
+                Seen::Text(kind) => assert!(generation_text(&kind), "{kind}"),
                 Seen::Frame { .. } => panic!("the tick's repaint must follow the restream"),
             }
         }
@@ -2240,7 +2260,7 @@ mod tests {
                     assert_eq!(node, block, "the box's preview frame");
                     break;
                 }
-                Seen::Text(kind) => assert_eq!(kind, "status"),
+                Seen::Text(kind) => assert!(generation_text(&kind), "{kind}"),
                 Seen::Binary(len) => panic!("a restream frame after the restream: {len}"),
             }
         }
@@ -2312,6 +2332,7 @@ mod tests {
     /// generation), so its planned frames are dropped and the client keeps
     /// the live one; the ball, unchanged, is sent.
     #[tokio::test]
+    #[allow(clippy::too_many_lines)] // one story: a parked restream, an intent, the resume
     async fn the_joiner_is_hydrated_and_the_session_answers_while_its_restream_builds() {
         let (mut hold, restream_hold) = Hold::new();
         let (_dir, session) = session(BOX_AND_BALL_PIPELINE, Some(restream_hold));
@@ -2382,8 +2403,8 @@ mod tests {
         assert!(
             texts_before_frame
                 .iter()
-                .all(|k| k == "status" || k == "wire_probe"),
-            "only the tick's statuses and the probe's answer were pending: {texts_before_frame:?}"
+                .all(|k| generation_text(k) || k == "wire_probe"),
+            "only the tick's generation texts and the probe's answer were pending: {texts_before_frame:?}"
         );
         assert!(
             texts_before_frame.iter().any(|k| k == "wire_probe"),
@@ -2398,7 +2419,12 @@ mod tests {
         let mut restreamed = Vec::new();
         loop {
             match wire.release_one().await {
-                Seen::Text(kind) => assert_eq!(kind, "status"),
+                // The tick's `display_end` rides the display lane behind its
+                // repaint (docs/13 §The display edge); a late status may
+                // still overtake on the control lane.
+                Seen::Text(kind) => {
+                    assert!(generation_text(&kind) || kind == "display_end", "{kind}");
+                }
                 Seen::Frame {
                     node, generation, ..
                 } => {

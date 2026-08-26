@@ -233,6 +233,77 @@ warming; DECISIONS.md row 39) — additive, `PROTOCOL_VERSION` unchanged:
   harness and the tests read it; `wait=true` does not wait for the
   warming, which is invisible to `wait_idle`).
 
+**The display edge** (v0.1 wave 5 D1, 2026-08-25; docs/12 §Display;
+DECISIONS.md row 2026-08-25) — additive, `PROTOCOL_VERSION` unchanged:
+
+- `display_begin {generation, outputs}` — broadcast on the CONTROL lane
+  the moment a generation's solve has finished, BEFORE its tessellation
+  and its first frame, so the chip's `painting…` and the viewport's
+  spinner start when the display work does. `outputs` = how many outputs
+  the pass set out to (re)draw (the cheap pre-filter: not on screen as
+  this value at the requested tier or finer). No bytes: the encode comes
+  after the tessellation, and `display_end` carries them. Every
+  generation the loop completes gets one — a cancelled solve and a
+  generation that draws nothing included (`outputs: 0`).
+- `display_end {generation, outputs, frames, tessellate_ms, encode_ms,
+  bytes, cancelled?}` — on the DISPLAY lane, behind the pass's last frame
+  (its meaning is its place among the frames, like `display_reset`'s; on
+  the control lane it would overtake the frames it closes and the
+  client's "painted in" time would end before the paint did), so a
+  client that has seen it has every frame of the pass. `outputs` /
+  `frames` / `bytes` are what was sent (fewer than `display_begin`'s
+  `outputs` when the triangle budget found an output already on screen at
+  the tier it chose — or when the pass was cut); `tessellate_ms` is the
+  warm-up on the worker pool, `encode_ms` the encode under the session
+  lock — their sum is the chip's `display` time; `cancelled` (omitted
+  when false) = the pass stopped between outputs because a newer
+  generation was waiting or Esc was pressed (latest-wins for the display
+  edge, `SolveLoop::superseded`): the outputs it did not reach keep their
+  previous frames until the newer generation draws them, and a pass cut
+  during its warm-up sent nothing.
+- `caches` — the payload IS `CachesView {display: {entries, bytes, budget,
+  hits, misses, evictions, oversized, refusals, working_set, over_budget,
+  thrash}, memo: {bytes, entries}}`: the display cache's counters
+  (`SolidCacheStats`, flattened) with the working set (the display meshes
+  every output on screen holds) and the two flags the display pass judges
+  (docs/12 §Display), and the memo store's footprint (`DiskStore::
+  value_bytes` — the pack plus the loose blobs — and its memo entries).
+  Rides every `snapshot`; broadcast after every generation's display pass
+  and after `set_display_cache`; `/debug/state.caches` is the same
+  object. The client replaces its copy.
+- The **notice**: when a pass leaves `over_budget` or `thrash` set, ONE
+  `notice` (level `warning`) per generation names the numbers and the
+  remedy — "display cache: the 1000 solids on screen need 183 MiB of
+  display meshes and the display cache holds 100 MiB, so every redraw
+  re-tessellates part of them; this generation evicted 912 of the meshes
+  the previous one displayed (…) — raise the display cache in settings,
+  or draw fewer solids".
+- `set_display_cache {mib}` — a write for the lease's purposes (an
+  observer's is refused kind `lease`), not a gesture, not a transport
+  control, never a drag-ender, never an op, never a delta, never the
+  file: resizes the session's display cache live to `mib` MiB (shrinking
+  evicts least-recently-used entries at once; `over_budget` is re-judged
+  against the new budget); `mib` outside `64 ..= 65536` is refused kind
+  `invalid` ("display cache must be 64 ..= 65536 MiB, got 10"). The
+  answer is the `caches` broadcast to every client. The settings menu
+  sends it (256 MiB · 512 MiB · 1 GiB · 2 GiB · 4 GiB), and the writer
+  re-applies its per-user choice on every `hello` (the lease holder's
+  preference wins).
+- `/debug/state`: `caches` (above), `timings[].tessellate_ms` /
+  `encode_ms`, and each displayed output's `stats.budget` = `{limit,
+  requested, drawn, triangles, over_budget?}` — the triangle budget's
+  verdict (docs/12 §Display; present when a solid was drawn by a live
+  emission).
+- The client's stale-frame rule is unchanged: the per-output generation
+  rule in `viewport/sceneStore.ts` (a frame older than the newest applied
+  for its output is dropped; a restream's frames, older by generation,
+  are not). The `display_begin`-watermark drop the D1 contract asked for
+  is unsound with the two lanes and the restream — `display_begin` on the
+  control lane overtakes the previous pass's tail frames, which the server
+  has recorded as displayed and no later generation re-sends, and a
+  restream interleaved with a live pass carries older generations by
+  design — so it was not built (docs/17 §Wave 5, D1).
+
 **Slider drags get a dedicated ephemeral path**: during the drag, the
 client streams `param_preview` messages (not ops, not undoable); the
 scheduler runs **latest-wins supersession with no debounce** — each

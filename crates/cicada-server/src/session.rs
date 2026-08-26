@@ -53,6 +53,7 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use cicada_core::config::ProjectConfig;
+use cicada_core::geometry::Solid;
 use cicada_core::hash::ValueHash;
 use cicada_core::spec::{NodeSpec, TransportSignal};
 use cicada_core::value::HashedValue;
@@ -75,16 +76,39 @@ use crate::lower::{
     lower_with_playhead,
 };
 use crate::protocol::{
-    Actor, ApplyTextRequest, ClientMessage, DeltaSource, DrivenSignal, DrivenView, HistoryView,
-    LeaseView, LoopView, NodeState, NodeStatus, PreviewMode, ProbeCatalogEntry, ProbeVerdict, Role,
-    ServerMessage, SolveSummary, TransportView, ValueSummary, encode, is_gesture, is_write,
-    type_tag,
+    Actor, ApplyTextRequest, CachesView, ClientMessage, DeltaSource, DisplayCacheView,
+    DrivenSignal, DrivenView, HistoryView, LeaseView, LoopView, MemoCacheView, NodeState,
+    NodeStatus, PreviewMode, ProbeCatalogEntry, ProbeVerdict, Role, ServerMessage, SolveSummary,
+    TransportView, ValueSummary, encode, is_gesture, is_write, type_tag,
 };
 use crate::scripts::ScriptCancel;
 use crate::scrub::{self, SCRUB_PORT, WarmQueue};
 use crate::sidecar::Sidecar;
 use crate::solve::{IdleError, Job, JobKind, SolveLoop, SolveSink};
 use crate::viewmodel::{self, GraphView, NodeRefs, WireEnd};
+
+/// Bytes for a notice: `612 MiB`, `1.5 GiB`, `96 KiB` — binary units, one
+/// decimal below ten.
+#[must_use]
+pub fn human_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    #[allow(clippy::cast_precision_loss)] // a label, not arithmetic
+    let value = bytes as f64;
+    let (scaled, unit) = if value >= KIB * KIB * KIB {
+        (value / (KIB * KIB * KIB), "GiB")
+    } else if value >= KIB * KIB {
+        (value / (KIB * KIB), "MiB")
+    } else if value >= KIB {
+        (value / KIB, "KiB")
+    } else {
+        return format!("{bytes} B");
+    };
+    if scaled < 10.0 {
+        format!("{scaled:.1} {unit}")
+    } else {
+        format!("{scaled:.0} {unit}")
+    }
+}
 
 /// A path for humans: Windows' `\\?\` verbatim prefix stripped, forward
 /// slashes.
@@ -206,6 +230,24 @@ pub struct SessionConfig {
     /// "miss" and BEFORE the idle-class solve is submitted; the solve
     /// proceeds when it returns. `None` (production) = no gate.
     pub scrub_gate: Option<ScrubGate>,
+    /// The solid display cache's byte budget at open (docs/12 §Display
+    /// cache; v0.1 wave 5 D1): [`display::SOLID_CACHE_BUDGET`] (1 GiB) in
+    /// production, `cicada serve --solid-cache-mib` sets it, the
+    /// `set_display_cache` intent resizes it live; tests lower it to see
+    /// the `over_budget` / `thrash` flags bite.
+    pub solid_cache_bytes: usize,
+    /// The triangle budget per displayed output per generation
+    /// ([`display::DISPLAY_TRIANGLE_BUDGET`]; docs/12 §Display): above it an
+    /// output is drawn at the preview tier. Tests lower it so a few spheres
+    /// cross it.
+    pub display_triangle_budget: u64,
+    /// A hold on a generation's display pass — the deterministic seam the
+    /// latest-wins test parks a pass on (no sleeps, no wall clock): called
+    /// during the pass's warm-up, off the session lock, after each
+    /// output's budget verdict, with the generation and how many outputs
+    /// are done; the pass proceeds when it returns. `None` (production) =
+    /// no hold. The shape of `restream_hold`.
+    pub display_hold: Option<DisplayHold>,
 }
 
 /// See [`SessionConfig::restream_hold`].
@@ -213,6 +255,9 @@ pub type RestreamHold = Arc<dyn Fn(u32) + Send + Sync>;
 
 /// See [`SessionConfig::scrub_gate`].
 pub type ScrubGate = Arc<dyn Fn(&str, usize) + Send + Sync>;
+
+/// See [`SessionConfig::display_hold`].
+pub type DisplayHold = Arc<dyn Fn(u64, usize) + Send + Sync>;
 
 impl std::fmt::Debug for SessionConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -234,6 +279,12 @@ impl std::fmt::Debug for SessionConfig {
             .field(
                 "scrub_gate",
                 &self.scrub_gate.as_ref().map_or("none", |_| "injected"),
+            )
+            .field("solid_cache_bytes", &self.solid_cache_bytes)
+            .field("display_triangle_budget", &self.display_triangle_budget)
+            .field(
+                "display_hold",
+                &self.display_hold.as_ref().map_or("none", |_| "injected"),
             )
             .finish()
     }
@@ -356,6 +407,10 @@ pub enum IntentError {
     /// is not a positive finite number.
     #[error("{0}")]
     Transport(String),
+    /// A value outside its documented range: `set_display_cache` below 64
+    /// MiB or above 64 GiB (docs/13 §The display edge).
+    #[error("{0}")]
+    Invalid(String),
     /// A `batch` element failed; the whole batch was rolled back.
     #[error("batch `{label}` failed at op {index} ({op}): {source}")]
     Batch {
@@ -391,6 +446,7 @@ impl IntentError {
             Self::PathNotAllowed(_) => "path_not_allowed",
             Self::Io(_) => "io_error",
             Self::Transport(_) => "transport",
+            Self::Invalid(_) => "invalid",
             Self::Batch { source, .. } => source.kind(),
         }
     }
@@ -704,8 +760,44 @@ struct Displayed {
     /// The tier its solids were tessellated at: a preview-tier drawing of
     /// a value is redrawn by the next fine-tier generation of the same
     /// value (docs/03 §Display tessellation), a fine one never by a
-    /// preview.
+    /// preview — unless the triangle budget chooses preview for it again
+    /// (`Core::verdict_for`; docs/12 §Display).
     tier: DisplayTier,
+    /// The distinct solids it holds in the display cache at `tier` — value
+    /// hash and display-mesh bytes — its share of the cache's working set
+    /// (the `over_budget` and `thrash` flags of the `caches` view).
+    solids: Vec<(ValueHash, usize)>,
+}
+
+/// What the last display pass concluded about the display cache
+/// (`Inner::caches`; docs/12 §Display, docs/13 §The display edge).
+#[derive(Debug, Clone, Copy, Default)]
+struct CacheFlags {
+    /// Bytes of the display meshes every output on screen holds.
+    working_set: u64,
+    /// The working set is larger than the cache budget.
+    over_budget: bool,
+    /// The pass evicted entries the previous complete generation displayed.
+    thrash: bool,
+}
+
+/// How many budget verdicts `Core::verdicts` keeps before it forgets them
+/// all (a slider drag mints one value hash per tick per output; a verdict
+/// is a few dozen bytes and recomputes from the cache's hits).
+const VERDICTS_KEPT: usize = 65_536;
+
+/// What one display pass sent under the session lock.
+#[derive(Debug, Clone, Copy, Default)]
+struct Emitted {
+    /// Frame bytes sent.
+    bytes: usize,
+    /// Outputs whose frames were sent (clears included).
+    outputs: usize,
+    /// Frames sent.
+    frames: usize,
+    /// The pass stopped between outputs: a newer generation is waiting (or
+    /// Esc) — latest-wins for the display edge.
+    cancelled: bool,
 }
 
 /// A generation's report kept for the inspector.
@@ -741,6 +833,9 @@ struct Inner {
     join_counter: u64,
     writer: Option<u32>,
     display: HashMap<(u32, u32), Displayed>,
+    /// The last display pass's verdict on the display cache (the `caches`
+    /// view's flags; v0.1 wave 5 D1).
+    caches: CacheFlags,
     last_complete: Option<Kept>,
     /// Pending screenshot requests: id → reply slot.
     screenshots: HashMap<u64, tokio::sync::oneshot::Sender<Result<Vec<u8>, String>>>,
@@ -1096,8 +1191,15 @@ struct Core {
     transport_wake: Condvar,
     /// The solid display tessellation cache (docs/12 §Display cache),
     /// keyed by value hash; its counters are in `/debug/state` →
-    /// `display_cache`.
+    /// `display_cache` and in the `caches` view.
     solids: SolidCache,
+    /// The triangle budget's verdicts by (value hash, requested tier) — a
+    /// pure function of both, memoized so a structural generation over an
+    /// unchanged over-budget output decides from the map and re-sends
+    /// nothing (docs/12 §Display). Bounded by [`VERDICTS_KEPT`]. Lock
+    /// order: `inner` → `verdicts` (the emit path decides under `inner`
+    /// when the graph changed since the warm-up); never the reverse.
+    verdicts: Mutex<HashMap<(ValueHash, DisplayTier), display::BudgetStats>>,
     /// The scrub worker's shared state ([`ScrubShared`]). Lock order:
     /// `inner` → `scrub` — the worker decides under both; everything else
     /// takes `scrub` alone or under `inner`.
@@ -1140,6 +1242,12 @@ pub struct GenerationTiming {
     pub cached: usize,
     /// Frame bytes broadcast for it.
     pub frame_bytes: usize,
+    /// Wall milliseconds of the display pass's tessellation warm-up (the
+    /// worker pool, off the session lock; v0.1 wave 5 D1 — the display
+    /// edge itemised, docs/17 finding U31). `0` for explicit runs.
+    pub tessellate_ms: f64,
+    /// Wall milliseconds of the frame encode under the session lock.
+    pub encode_ms: f64,
 }
 
 /// What an idle-class hypothetical solve did ([`Session::solve_hypothetical`]).
@@ -1313,6 +1421,7 @@ impl Session {
                 join_counter: 0,
                 writer: None,
                 display: HashMap::new(),
+                caches: CacheFlags::default(),
                 last_complete: None,
                 screenshots: HashMap::new(),
                 next_screenshot: 0,
@@ -1348,7 +1457,8 @@ impl Session {
             transport_playing: AtomicBool::new(false),
             transport_gate: Mutex::new(Instant::now()),
             transport_wake: Condvar::new(),
-            solids: SolidCache::default(),
+            solids: SolidCache::new(config.solid_cache_bytes),
+            verdicts: Mutex::new(HashMap::new()),
             scrub: Mutex::new(ScrubShared::new()),
             scrub_wake: Condvar::new(),
             config,
@@ -1932,6 +2042,34 @@ impl Session {
                     Ok(())
                 })?;
                 self.core.transport_tick(TickOrigin::Control);
+                Ok(())
+            }
+            ClientMessage::SetDisplayCache { mib } => {
+                // The lease check is the door's (a write). The range is the
+                // documented one (docs/13 §The display edge); outside it
+                // the refusal names both ends.
+                if !(display::SOLID_CACHE_MIN_MIB..=display::SOLID_CACHE_MAX_MIB).contains(&mib) {
+                    return Err(IntentError::Invalid(format!(
+                        "display cache must be {} ..= {} MiB, got {mib}",
+                        display::SOLID_CACHE_MIN_MIB,
+                        display::SOLID_CACHE_MAX_MIB
+                    )));
+                }
+                let bytes = usize::try_from(mib.saturating_mul(1024 * 1024)).map_err(|_| {
+                    IntentError::Invalid(format!(
+                        "display cache of {mib} MiB does not fit this machine's address space"
+                    ))
+                })?;
+                // Resize under `inner` so the flags re-judged below describe
+                // the cache the broadcast names: shrinking evicts at once.
+                let mut inner = self.core.lock_inner();
+                let _evicted = self.core.solids.set_budget(bytes);
+                // The working set stands; whether it fits is re-judged
+                // against the new budget (thrash is the last pass's verdict
+                // and stands until a pass clears it).
+                inner.caches.over_budget = inner.caches.working_set > bytes as u64;
+                let view = self.core.caches_view(&inner);
+                broadcast(&inner, &ServerMessage::Caches(view));
                 Ok(())
             }
             ClientMessage::Undo {} => {
@@ -3214,6 +3352,8 @@ impl Session {
                 .iter()
                 .filter(|o| matches!(o, NodeOutcome::CacheHit { .. }))
                 .count(),
+            tessellate_ms: 0.0,
+            encode_ms: 0.0,
             frame_bytes: 0,
         });
         self.core.flush_status(true);
@@ -3450,6 +3590,7 @@ impl Session {
             "display": display,
             "picks": picks,
             "display_cache": self.core.solids.stats(),
+            "caches": self.core.caches_view(&inner),
             "lease": lease_view(&inner),
             "transport": self.core.transport_view(&inner),
             "scrub": self.core.scrub_debug(&inner),
@@ -4113,6 +4254,8 @@ impl Core {
             computed,
             cached,
             frame_bytes: 0,
+            tessellate_ms: 0.0,
+            encode_ms: 0.0,
         });
         let report = HypotheticalReport {
             generation: run.generation,
@@ -4979,13 +5122,160 @@ enum TickOrigin {
 impl Core {
     /// What the display path needs from the session: the project
     /// configuration, the solid tessellation cache, and the tier of the
-    /// pass (summaries pass `Fine` and read whatever tier is cached).
+    /// pass (summaries pass `Fine` and read whatever tier is cached; a
+    /// restream passes the tier on record). No budget verdict — a live
+    /// emission uses [`Self::display_context_for`].
     fn display_context(&self, tier: DisplayTier) -> DisplayContext<'_> {
         DisplayContext {
             config: &self.config.project,
             solids: &self.solids,
             tier,
+            budget: None,
         }
+    }
+
+    /// The display context of a live emission: the tier the budget chose
+    /// for the output and its verdict, recorded in the output's stats.
+    fn display_context_for(&self, verdict: display::BudgetStats) -> DisplayContext<'_> {
+        DisplayContext {
+            config: &self.config.project,
+            solids: &self.solids,
+            tier: verdict.drawn,
+            budget: Some(verdict),
+        }
+    }
+
+    /// The triangle budget's verdict for `value` when a generation asks
+    /// for `requested` (docs/12 §Display): memoized per (value hash, tier)
+    /// — a pure function of both — and computed, when new, by
+    /// [`display::choose_tier`] on the scheduler's worker pool, which IS the
+    /// tessellation warm-up: the emit that follows only hits. A value
+    /// without solids is drawn as asked.
+    fn verdict_for(
+        &self,
+        value: &Arc<HashedValue>,
+        requested: DisplayTier,
+    ) -> display::BudgetStats {
+        let key = (value.hash(), requested);
+        if let Some(verdict) = self.lock_verdicts().get(&key) {
+            return *verdict;
+        }
+        let solids = display::distinct_solids(std::slice::from_ref(value));
+        let map = |items: Vec<(ValueHash, Solid)>,
+                   f: &(dyn Fn((ValueHash, Solid)) -> Option<u64> + Sync)| {
+            self.scheduler.map_parallel(items, f)
+        };
+        let verdict = display::choose_tier(
+            &solids,
+            requested,
+            self.config.display_triangle_budget,
+            &self.config.project,
+            &self.solids,
+            &map,
+        );
+        let mut verdicts = self.lock_verdicts();
+        if verdicts.len() >= VERDICTS_KEPT {
+            verdicts.clear();
+        }
+        verdicts.insert(key, verdict);
+        verdict
+    }
+
+    fn lock_verdicts(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<(ValueHash, DisplayTier), display::BudgetStats>> {
+        self.verdicts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Is the in-flight generation's display pass superseded — a newer job
+    /// waiting on the loop, or Esc pressed? Latest-wins for the display
+    /// edge (docs/13 §The display edge): the pass stops between outputs.
+    fn display_superseded(&self) -> bool {
+        self.solve
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .is_some_and(|solve| solve.superseded())
+    }
+
+    /// The `caches` view (docs/13 §The display edge): the display cache's
+    /// counters with the last pass's flags, and the memo store's footprint.
+    fn caches_view(&self, inner: &Inner) -> CachesView {
+        let store = self.scheduler.store();
+        CachesView {
+            display: DisplayCacheView {
+                stats: self.solids.stats(),
+                working_set: inner.caches.working_set,
+                over_budget: inner.caches.over_budget,
+                thrash: inner.caches.thrash,
+            },
+            memo: MemoCacheView {
+                bytes: store.value_bytes(),
+                entries: store.memo_entries(),
+            },
+        }
+    }
+
+    /// After a display pass (under the lock): judge the cache against what
+    /// is on screen — the working set (every displayed output's distinct
+    /// solids at the tier each was drawn at) against the budget, and the
+    /// evictions of the previous picture's entries during this pass — then
+    /// re-arm the watch with this picture's entries for the next pass.
+    /// Returns the view and the notice the verdict deserves, if any (ONE per
+    /// pass, both flags in one message).
+    fn judge_caches(&self, inner: &mut Inner) -> (CachesView, Option<String>) {
+        let mut set: HashMap<(ValueHash, DisplayTier), usize> = HashMap::new();
+        for displayed in inner.display.values() {
+            for (hash, bytes) in &displayed.solids {
+                set.entry((*hash, displayed.tier)).or_insert(*bytes);
+            }
+        }
+        let working_set: u64 = set.values().map(|bytes| *bytes as u64).sum();
+        let budget = self.solids.budget() as u64;
+        let evicted = self.solids.watched_evictions();
+        inner.caches = CacheFlags {
+            working_set,
+            over_budget: working_set > budget,
+            thrash: evicted > 0,
+        };
+        let config = &self.config.project;
+        self.solids.watch(
+            set.keys()
+                .map(|(hash, tier)| display::TessellationKey::new(*hash, tier.deflection(config))),
+        );
+        let view = self.caches_view(inner);
+        let notice = match (inner.caches.over_budget, inner.caches.thrash) {
+            (false, false) => None,
+            (over, thrash) => {
+                let mut parts = Vec::new();
+                if over {
+                    parts.push(format!(
+                        "the {} solids on screen need {} of display meshes and the display cache \
+                         holds {}, so every redraw re-tessellates part of them",
+                        set.len(),
+                        human_bytes(working_set),
+                        human_bytes(budget)
+                    ));
+                }
+                if thrash {
+                    parts.push(format!(
+                        "this generation evicted {evicted} of the meshes the previous one \
+                         displayed (the display cache holds {}, the picture needs {})",
+                        human_bytes(budget),
+                        human_bytes(working_set)
+                    ));
+                }
+                Some(format!(
+                    "display cache: {} — raise the display cache in settings, or draw fewer \
+                     solids",
+                    parts.join("; ")
+                ))
+            }
+        };
+        (view, notice)
     }
 
     fn lock_inner(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -5037,6 +5327,7 @@ impl Core {
                 reason: reason.to_owned(),
                 history: inner.oplog.view(),
                 transport: self.transport_view(inner),
+                caches: self.caches_view(inner),
             },
         )
     }
@@ -5658,7 +5949,19 @@ impl Core {
         let lowered = Arc::clone(&kept.lowered);
         let report = Arc::clone(&kept.report);
         let tier = kept.tier;
-        self.emit_frames(inner, generation, &lowered, &report, tier, &HashMap::new());
+        // A re-emission from an intent (a preview toggle): no warm-up went
+        // before it, so the verdicts are decided here, and no newer
+        // generation can supersede it — it IS the latest state.
+        let _ = self.emit_frames(
+            inner,
+            generation,
+            &lowered,
+            &report,
+            tier,
+            &HashMap::new(),
+            &HashMap::new(),
+            false,
+        );
     }
 
     /// Which `(node ref, output, value hash)` triples a generation should
@@ -5725,6 +6028,10 @@ impl Core {
 
     /// Is this output already on screen as this value, at this tier or a
     /// finer one? (The emit path skips it; the warm-up does not load it.)
+    /// The emit path asks with the tier the budget CHOSE for the output
+    /// (docs/12 §Display), so a structural generation over an unchanged
+    /// over-budget output — on screen at preview, chosen preview again —
+    /// re-sends nothing.
     fn already_displayed(
         inner: &Inner,
         node_ref: u32,
@@ -5738,80 +6045,96 @@ impl Core {
             .is_some_and(|d| d.hash == hash && d.tier >= tier)
     }
 
-    /// The values a generation will draw that are not yet on screen at its
-    /// tier, loaded from the store — what the solve loop warms the solid
-    /// cache with BEFORE the session lock is taken for the broadcast
-    /// (docs/12 §Display cache). A short lock hold: the graph and the
-    /// display map are read, nothing is sent.
-    fn display_pending(
-        &self,
-        generation_tier: DisplayTier,
+    /// The outputs a generation may have to draw — not on screen as this
+    /// value at the tier the generation asks for or a finer one — sorted,
+    /// so the warm-up decides them in a fixed order. The cheap pre-filter:
+    /// the budget's verdict (which may find an output on screen at the
+    /// tier it chooses after all) comes in the warm-up.
+    fn display_pending_locked(
+        inner: &Inner,
+        requested: DisplayTier,
         lowered: &Lowered,
         report: &SolveReport,
-    ) -> HashMap<ValueHash, Arc<HashedValue>> {
-        let wanted: Vec<(u32, u32, ValueHash)> = {
-            let inner = self.lock_inner();
-            Self::display_wants(&inner, lowered, report)
-                .into_iter()
-                .filter(|(node_ref, output, hash)| {
-                    !Self::already_displayed(&inner, *node_ref, *output, *hash, generation_tier)
-                })
-                .collect()
-        };
-        let store = self.scheduler.store();
-        let mut loaded = HashMap::new();
-        for (_, _, hash) in wanted {
-            if loaded.contains_key(&hash) {
-                continue;
-            }
-            // A value that cannot be loaded is reported by the emit path,
-            // which tries again under the lock and broadcasts the notice.
-            if let Ok(value) = store.load_value(&hash) {
-                loaded.insert(hash, value);
-            }
-        }
-        loaded
+    ) -> Vec<(u32, u32, ValueHash)> {
+        let mut pending: Vec<(u32, u32, ValueHash)> = Self::display_wants(inner, lowered, report)
+            .into_iter()
+            .filter(|(node_ref, output, hash)| {
+                !Self::already_displayed(inner, *node_ref, *output, *hash, requested)
+            })
+            .collect();
+        pending.sort_unstable();
+        pending
     }
 
-    /// Tessellate every distinct solid among `values` at `tier` on the
-    /// scheduler's worker pool, in parallel, into the solid cache — the
-    /// display edge computed by the solve loop, not the broadcaster. The
-    /// emit that follows under the lock only hits.
-    fn warm_solids(&self, values: &HashMap<ValueHash, Arc<HashedValue>>, tier: DisplayTier) {
-        let values: Vec<Arc<HashedValue>> = values.values().cloned().collect();
-        let distinct = display::distinct_solids(&values);
-        if distinct.is_empty() {
-            return;
+    /// The display pass's warm-up, off the session lock (docs/12 §Display
+    /// cache; the D1 contract): load each pending output's value from the
+    /// store and take the budget's verdict for it ([`Self::verdict_for`] —
+    /// which tessellates its distinct solids on the worker pool, so the
+    /// emit under the lock only hits). Latest-wins: between outputs the
+    /// pass checks whether a newer generation is waiting (or Esc was
+    /// pressed) and stops — the rest of this generation's picture is the
+    /// newer generation's to paint. The `display_hold` seam is called
+    /// after each output. Returns the loaded values, the verdicts by value
+    /// hash, and whether the pass was cut short.
+    #[allow(clippy::type_complexity)] // the warm-up's three results, named in the doc above
+    fn warm_display(
+        &self,
+        generation: u64,
+        pending: &[(u32, u32, ValueHash)],
+        requested: DisplayTier,
+    ) -> (
+        HashMap<ValueHash, Arc<HashedValue>>,
+        HashMap<ValueHash, display::BudgetStats>,
+        bool,
+    ) {
+        let store = self.scheduler.store();
+        let mut loaded: HashMap<ValueHash, Arc<HashedValue>> = HashMap::new();
+        let mut verdicts: HashMap<ValueHash, display::BudgetStats> = HashMap::new();
+        for (done, (_, _, hash)) in pending.iter().enumerate() {
+            if self.display_superseded() {
+                return (loaded, verdicts, true);
+            }
+            if !verdicts.contains_key(hash) {
+                // A value that cannot be loaded is reported by the emit path,
+                // which tries again under the lock and broadcasts the notice.
+                if let Ok(value) = store.load_value(hash) {
+                    let verdict = self.verdict_for(&value, requested);
+                    loaded.insert(*hash, value);
+                    verdicts.insert(*hash, verdict);
+                }
+            }
+            if let Some(hold) = &self.config.display_hold {
+                hold(generation, done + 1);
+            }
         }
-        let context = self.display_context(tier);
-        let deflection = context.deflection();
-        let cache = context.solids;
-        self.scheduler.map_parallel(distinct, |(hash, solid)| {
-            // The result — mesh or refusal — lives in the cache; the emit
-            // path reads it there and attaches the output and element.
-            let _ = cache.tessellation(hash, &solid, deflection);
-        });
+        (loaded, verdicts, false)
     }
 
     /// The core of display: for every previewed, displayable output in the
     /// graph, compare the generation's output hash to the last broadcast
     /// and send frames when it changed (or when it was last drawn at a
-    /// coarser tier); send clears for outputs that stopped drawing.
-    /// `preloaded` holds values the caller already loaded (the warm-up);
-    /// anything else is loaded here.
-    #[allow(clippy::too_many_lines)] // want-set, clears, sends: one pass in one place
+    /// coarser tier than the budget chooses now); send clears for outputs
+    /// that stopped drawing. `preloaded` and `verdicts` hold what the
+    /// warm-up loaded and decided; anything else is loaded and decided here
+    /// (the graph changed under an intent between the two). With
+    /// `latest_wins`, the pass stops between outputs once a newer
+    /// generation is waiting (docs/13 §The display edge); the outputs it
+    /// did not reach keep their previous frames and table entries, so the
+    /// newer generation draws them.
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)] // want-set, clears, sends: one pass in one place
     fn emit_frames(
         &self,
         inner: &mut Inner,
         generation: u64,
         lowered: &Lowered,
         report: &SolveReport,
-        tier: DisplayTier,
+        requested: DisplayTier,
         preloaded: &HashMap<ValueHash, Arc<HashedValue>>,
-    ) -> usize {
-        let mut bytes_sent = 0_usize;
+        verdicts: &HashMap<ValueHash, display::BudgetStats>,
+        latest_wins: bool,
+    ) -> Emitted {
+        let mut emitted = Emitted::default();
         let store = Arc::clone(self.scheduler.store());
-        let context = self.display_context(tier);
         let wanted = Self::display_wants(inner, lowered, report);
         // Clears: displayed before, not wanted now (preview off, red, gone).
         let wanted_keys: HashSet<(u32, u32)> = wanted.iter().map(|(n, o, _)| (*n, *o)).collect();
@@ -5835,14 +6158,22 @@ impl Core {
                 continue;
             }
             inner.display.remove(&key);
-            broadcast_binary(
-                inner,
-                &Bytes::from(display::clear_frame(generation, key.0, key.1)),
-            );
+            let clear = display::clear_frame(generation, key.0, key.1);
+            emitted.bytes += clear.len();
+            emitted.frames += 1;
+            emitted.outputs += 1;
+            broadcast_binary(inner, &Bytes::from(clear));
         }
         for (node_ref, output, hash) in wanted {
-            if Self::already_displayed(inner, node_ref, output, hash, tier) {
+            // The cheap pre-filter first (on screen at the requested tier or
+            // finer: nothing to decide), then the budget's verdict, then the
+            // same question at the tier it chose.
+            if Self::already_displayed(inner, node_ref, output, hash, requested) {
                 continue;
+            }
+            if latest_wins && self.display_superseded() {
+                emitted.cancelled = true;
+                break;
             }
             let loaded = match preloaded.get(&hash) {
                 Some(value) => Ok(Arc::clone(value)),
@@ -5850,6 +6181,14 @@ impl Core {
             };
             match loaded {
                 Ok(value) => {
+                    let verdict = match verdicts.get(&hash) {
+                        Some(verdict) => *verdict,
+                        None => self.verdict_for(&value, requested),
+                    };
+                    if Self::already_displayed(inner, node_ref, output, hash, verdict.drawn) {
+                        continue;
+                    }
+                    let context = self.display_context_for(verdict);
                     let frames = display::frames_for_value(
                         &value,
                         generation,
@@ -5860,8 +6199,10 @@ impl Core {
                         },
                         &context,
                     );
+                    emitted.outputs += 1;
                     for frame in frames.frames {
-                        bytes_sent += frame.len();
+                        emitted.bytes += frame.len();
+                        emitted.frames += 1;
                         broadcast_binary(inner, &Bytes::from(frame));
                     }
                     inner.display.insert(
@@ -5870,7 +6211,8 @@ impl Core {
                             hash,
                             generation,
                             stats: frames.stats,
-                            tier,
+                            tier: verdict.drawn,
+                            solids: frames.solids,
                         },
                     );
                 }
@@ -5885,7 +6227,7 @@ impl Core {
                 }
             }
         }
-        bytes_sent
+        emitted
     }
 
     /// Per-output value summaries for a node from the last complete
@@ -6278,6 +6620,80 @@ impl Core {
         }
     }
 
+    /// The display pass's third phase, under the session lock: record the
+    /// generation as the last complete one, encode and send its frames
+    /// (latest-wins between outputs), then `display_end` on the display lane
+    /// behind the last frame, the cache verdict with its notice, and the
+    /// `caches` broadcast. Returns what was sent and the encode's wall time.
+    #[allow(clippy::too_many_arguments)] // the pass's three phases hand their results along
+    fn finish_display_pass(
+        &self,
+        generation: u64,
+        job: &Job,
+        report: &Arc<SolveReport>,
+        tier: DisplayTier,
+        preloaded: &HashMap<ValueHash, Arc<HashedValue>>,
+        verdicts: &HashMap<ValueHash, display::BudgetStats>,
+        warm_cancelled: bool,
+        tessellate_ms: f64,
+    ) -> (Emitted, f64) {
+        let encode_began = Instant::now();
+        let mut emitted = Emitted::default();
+        let mut inner = self.lock_inner();
+        let newer = inner
+            .last_complete
+            .as_ref()
+            .is_none_or(|kept| generation > kept.generation);
+        if newer && !report.cancelled {
+            inner.last_complete = Some(Kept {
+                generation,
+                lowered: Arc::clone(&job.lowered),
+                report: Arc::clone(report),
+                tier,
+            });
+        }
+        if newer && !report.cancelled && !warm_cancelled {
+            emitted = self.emit_frames(
+                &mut inner,
+                generation,
+                &job.lowered,
+                report,
+                tier,
+                preloaded,
+                verdicts,
+                true,
+            );
+        }
+        let encode_ms = encode_began.elapsed().as_secs_f64() * 1000.0;
+        let end = encode(
+            inner.seq,
+            &ServerMessage::DisplayEnd {
+                generation,
+                outputs: emitted.outputs,
+                frames: emitted.frames,
+                tessellate_ms,
+                encode_ms,
+                bytes: emitted.bytes as u64,
+                cancelled: report.cancelled || warm_cancelled || emitted.cancelled,
+            },
+        );
+        for client in inner.clients.values() {
+            client.lanes.display_text(end.clone());
+        }
+        let (caches, notice) = self.judge_caches(&mut inner);
+        if let Some(message) = notice {
+            broadcast(
+                &inner,
+                &ServerMessage::Notice {
+                    level: "warning".to_owned(),
+                    message,
+                },
+            );
+        }
+        broadcast(&inner, &ServerMessage::Caches(caches));
+        (emitted, encode_ms)
+    }
+
     fn on_complete_impl(&self, generation: u64, job: &Job, report: &Arc<SolveReport>) {
         // Read the start/queue marks BEFORE the status board forgets them
         // (finishing the statuses clears `started`).
@@ -6292,56 +6708,54 @@ impl Core {
         };
         self.finish_statuses(generation, &job.lowered, report, true);
         let began = Instant::now();
-        let mut frame_bytes = 0;
         let tier = tier_of(job.kind);
-        // The display edge, off the session lock: the values this
-        // generation will draw are loaded and their distinct solids
-        // tessellated on the worker pool (docs/12 §Display cache) while
-        // intents keep flowing. A cancelled generation paints nothing and
-        // warms nothing. Between this and the broadcast below the graph may
-        // change under an intent; the broadcast recomputes what it wants
-        // and merely finds the cache warm.
-        let preloaded = if report.cancelled {
-            HashMap::new()
-        } else {
-            let pending = self.display_pending(tier, &job.lowered, report);
-            self.warm_solids(&pending, tier);
+        // The display pass (docs/12 §Display, docs/13 §The display edge).
+        // 1. Under a short lock hold: which outputs may need drawing, and
+        //    `display_begin` to every client — BEFORE the tessellation,
+        //    which is most of the edge, so the spinner starts when the work
+        //    does. A cancelled generation paints nothing (its finished
+        //    upstream outputs with the previous generation's downstream
+        //    ones would be an incoherent mix — doc 04: a cancelled solve
+        //    leaves the last coherent frame) and announces an empty pass.
+        let pending = {
+            let inner = self.lock_inner();
+            let pending = if report.cancelled {
+                Vec::new()
+            } else {
+                Self::display_pending_locked(&inner, tier, &job.lowered, report)
+            };
+            broadcast(
+                &inner,
+                &ServerMessage::DisplayBegin {
+                    generation,
+                    outputs: pending.len(),
+                },
+            );
             pending
         };
-        {
-            let mut inner = self.lock_inner();
-            let newer = inner
-                .last_complete
-                .as_ref()
-                .is_none_or(|kept| generation > kept.generation);
-            if newer && !report.cancelled {
-                inner.last_complete = Some(Kept {
-                    generation,
-                    lowered: Arc::clone(&job.lowered),
-                    report: Arc::clone(report),
-                    tier,
-                });
-            }
-            if newer && !report.cancelled {
-                // Frames for what completed. A CANCELLED generation paints
-                // nothing: its finished upstream outputs with the previous
-                // generation's downstream ones would be an incoherent mix,
-                // and doc 04 says a cancelled solve leaves the last
-                // coherent frame — the previous generation's. (It also
-                // cost the Esc latency: encoding ~100 MB of half-finished
-                // wall cutters stood between cancel() and idle — stage-6
-                // measurement.) The completed work is memoized; the next
-                // generation paints it in milliseconds.
-                frame_bytes = self.emit_frames(
-                    &mut inner,
-                    generation,
-                    &job.lowered,
-                    report,
-                    tier,
-                    &preloaded,
-                );
-            }
-        }
+        // 2. The warm-up, off the session lock: the values are loaded and
+        //    the budget decides each output's tier by tessellating its
+        //    distinct solids on the worker pool (docs/12 §Display cache)
+        //    while intents keep flowing; a newer generation waiting stops
+        //    it between outputs (latest-wins). Between this and the
+        //    broadcast below the graph may change under an intent; the
+        //    broadcast recomputes what it wants and merely finds the cache
+        //    warm.
+        let (preloaded, verdicts, warm_cancelled) = self.warm_display(generation, &pending, tier);
+        let tessellate_ms = began.elapsed().as_secs_f64() * 1000.0;
+        // 3. Under the lock: encode and send (stopping between outputs if
+        //    superseded), then `display_end` on the display lane behind the
+        //    last frame, the cache verdict, its notice, and `caches`.
+        let (emitted, encode_ms) = self.finish_display_pass(
+            generation,
+            job,
+            report,
+            tier,
+            &preloaded,
+            &verdicts,
+            warm_cancelled,
+            tessellate_ms,
+        );
         let elapsed = {
             let status = self.lock_status();
             status.summary.elapsed_ms
@@ -6368,7 +6782,9 @@ impl Core {
                 .iter()
                 .filter(|o| matches!(o, NodeOutcome::CacheHit { .. }))
                 .count(),
-            frame_bytes,
+            frame_bytes: emitted.bytes,
+            tessellate_ms,
+            encode_ms,
         });
         self.flush_status(true);
         // A real generation completed: a parked scrub worker may resume.
@@ -6424,6 +6840,9 @@ mod tests {
             restream_hold: None,
             scrub_byte_cap: SCRUB_BYTE_CAP,
             scrub_gate: None,
+            solid_cache_bytes: display::SOLID_CACHE_BUDGET,
+            display_triangle_budget: display::DISPLAY_TRIANGLE_BUDGET,
+            display_hold: None,
         };
         (dir, config)
     }
@@ -8270,6 +8689,9 @@ size = slider(value=4.0, min=0.5, max=5.0)
             restream_hold: None,
             scrub_byte_cap: SCRUB_BYTE_CAP,
             scrub_gate: None,
+            solid_cache_bytes: display::SOLID_CACHE_BUDGET,
+            display_triangle_budget: display::DISPLAY_TRIANGLE_BUDGET,
+            display_hold: None,
         };
         let session = Session::open(config).unwrap();
         session.wait_idle();
@@ -8387,6 +8809,9 @@ size = slider(value=4.0, min=0.5, max=5.0)
             restream_hold: None,
             scrub_byte_cap: SCRUB_BYTE_CAP,
             scrub_gate: None,
+            solid_cache_bytes: display::SOLID_CACHE_BUDGET,
+            display_triangle_budget: display::DISPLAY_TRIANGLE_BUDGET,
+            display_hold: None,
         };
         // Python startup included: generous, and only ever waited in full
         // when the bridge is broken — then every hold is released so the
@@ -9222,6 +9647,573 @@ size = slider(value=4.0, min=0.5, max=5.0)
             .count();
         assert_eq!(restreamed, 1);
         assert_eq!(cache_of(&session)["misses"], 3, "a restream never meshes");
+    }
+
+    /// The messages of one kind among a drain, in order.
+    fn of_kind<'a>(messages: &'a [serde_json::Value], kind: &str) -> Vec<&'a serde_json::Value> {
+        messages.iter().filter(|m| m["type"] == kind).collect()
+    }
+
+    /// The triangle budget (docs/12 §Display; the D1 contract). With the
+    /// budget lowered to 1,000 triangles: a box (12 fine triangles) stays
+    /// fine; one sphere (thousands fine, hundreds at preview) is drawn at
+    /// preview and its stats say which tier was asked and which drawn; a
+    /// list of two spheres exceeds the budget even at preview and is drawn
+    /// at preview anyway, marked `over_budget`. Then the regression the
+    /// contract names: a structural generation that leaves those outputs
+    /// alone re-sends nothing for them — the "already displayed" rule asks
+    /// with the tier the budget CHOOSES (preview again), not the tier the
+    /// generation asks for (fine), and the verdict comes from the memo, so
+    /// the pass tessellates nothing either.
+    #[test]
+    fn the_triangle_budget_drops_heavy_outputs_to_preview_and_never_resends_them() {
+        let (_dir, mut config) = project(
+            "# cicada 1\n\
+             knob = slider(value=1.0, min=0.0, max=2.0)\n\
+             span = construct_domain(start=0.0, end=2.0)\n\
+             cube = box(x=span, y=span, z=span)\n\
+             one = sphere(radius=1.0)\n\
+             radii = [1.0, 1.5]\n\
+             two = sphere(radius=each(radii))\n",
+        );
+        config.display_triangle_budget = 1_000;
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        let _ = drain(&mut rx);
+        let state = session.debug_state(false);
+        let stats_of = |name: &str| state["display"][name]["stats"].clone();
+        // The cube: 12 triangles fit; drawn fine, the verdict says so.
+        let cube = stats_of("cube.out");
+        assert_eq!(cube["tier"], "fine", "{cube}");
+        assert_eq!(
+            cube["budget"],
+            serde_json::json!({"limit": 1000, "requested": "fine", "drawn": "fine", "triangles": 12}),
+            "{cube}"
+        );
+        // One sphere: fine exceeds 1,000, preview fits → preview, in budget.
+        let one = stats_of("one.out");
+        assert_eq!(one["tier"], "preview", "{one}");
+        assert_eq!(one["budget"]["requested"], "fine");
+        assert_eq!(one["budget"]["drawn"], "preview");
+        assert!(one["budget"].get("over_budget").is_none(), "{one}");
+        let preview_sphere = one["budget"]["triangles"].as_u64().unwrap();
+        assert!(
+            (500..=1000).contains(&preview_sphere),
+            "a preview sphere is hundreds of triangles: {preview_sphere}"
+        );
+        assert_eq!(one["triangles"].as_u64().unwrap(), preview_sphere);
+        // Two spheres: even preview exceeds → preview anyway, over budget.
+        let two = stats_of("two.out");
+        assert_eq!(two["tier"], "preview", "{two}");
+        assert_eq!(two["budget"]["drawn"], "preview");
+        assert_eq!(two["budget"]["over_budget"], true, "{two}");
+        let two_preview = two["budget"]["triangles"].as_u64().unwrap();
+        assert!(two_preview > 1000, "{two}");
+        assert_eq!(two["solids"], 2);
+        // The fine tally stopped at the budget: the spheres' fine meshes
+        // were NOT all computed (3 distinct spheres would be 3 fine
+        // misses + 3 preview misses + the cube; fewer misses than that).
+        let cache = &state["display_cache"];
+        let misses = cache["misses"].as_u64().unwrap();
+        assert!(misses < 7, "the fine tally stopped short: {cache}");
+        let before = session.debug_state(false);
+        // A structural edit that leaves every solid alone: the knob moves.
+        session.handle(
+            id,
+            Some("knob".into()),
+            ClientMessage::SetParam {
+                node: "knob".into(),
+                port: Some("value".into()),
+                value: "1.5".into(),
+            },
+        );
+        session.wait_idle();
+        let got = drain(&mut rx);
+        assert!(
+            frames(&got).is_empty(),
+            "an unchanged over-budget output is not re-sent: {} frames",
+            frames(&got).len()
+        );
+        let after = session.debug_state(false);
+        assert_eq!(
+            after["display_cache"]["misses"], before["display_cache"]["misses"],
+            "nothing was tessellated for an unchanged picture"
+        );
+        for name in ["cube.out", "one.out", "two.out"] {
+            assert_eq!(
+                after["display"][name]["generation"], before["display"][name]["generation"],
+                "{name} kept its frame"
+            );
+        }
+        // The pass still announced itself: begin and end for this
+        // generation, zero outputs drawn (the pre-filter found nothing to
+        // draw at the requested tier — the verdict then found the rest on
+        // screen at the tier it chose).
+        let msgs = texts(&got);
+        let ends = of_kind(&msgs, "display_end");
+        assert_eq!(ends.len(), 1, "{msgs:?}");
+        assert_eq!(ends[0]["payload"]["outputs"], 0);
+        assert_eq!(ends[0]["payload"]["frames"], 0);
+        assert!(ends[0]["payload"].get("cancelled").is_none());
+    }
+
+    /// The cache verdicts and their notice (docs/12 §Display; docs/13 §The
+    /// display edge). A cache smaller than one fine sphere: the picture
+    /// cannot fit — `over_budget`, the entry `oversized`, ONE warning per
+    /// generation naming the numbers and the remedy; the flags ride the
+    /// `caches` broadcast and `/debug/state`.
+    #[test]
+    fn a_picture_larger_than_the_cache_raises_over_budget_once_per_generation() {
+        let (_dir, mut config) = project(
+            "# cicada 1\n\
+             r = slider(value=1.0, min=0.5, max=2.0)\n\
+             ball = sphere(radius=r)\n",
+        );
+        config.solid_cache_bytes = 100 * 1024;
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        let _ = drain(&mut rx);
+        // The view a joiner's snapshot carries IS `/debug/state.caches`.
+        let state = session.debug_state(false);
+        let caches = &state["caches"];
+        let snapshot: serde_json::Value = serde_json::from_str(&session.core.snapshot_locked(
+            &session.core.lock_inner(),
+            false,
+            "test",
+        ))
+        .unwrap();
+        assert_eq!(&snapshot["payload"]["caches"], caches, "{snapshot}");
+        assert_eq!(caches["display"]["over_budget"], true, "{caches}");
+        assert_eq!(caches["display"]["thrash"], false, "{caches}");
+        assert_eq!(caches["display"]["budget"], 100 * 1024);
+        assert!(caches["display"]["working_set"].as_u64().unwrap() > 100 * 1024);
+        assert!(
+            caches["display"]["oversized"].as_u64().unwrap() >= 1,
+            "{caches}"
+        );
+        assert_eq!(caches["display"]["entries"], 0, "too big to keep");
+        assert!(caches["memo"]["bytes"].as_u64().unwrap() > 0, "{caches}");
+        assert!(caches["memo"]["entries"].as_u64().unwrap() >= 1, "{caches}");
+        // The next generation says so — once.
+        session.handle(
+            id,
+            Some("r".into()),
+            ClientMessage::SetParam {
+                node: "r".into(),
+                port: Some("value".into()),
+                value: "1.5".into(),
+            },
+        );
+        session.wait_idle();
+        let got = texts(&drain(&mut rx));
+        let notices = of_kind(&got, "notice");
+        assert_eq!(notices.len(), 1, "{got:?}");
+        assert_eq!(notices[0]["payload"]["level"], "warning");
+        let message = notices[0]["payload"]["message"].as_str().unwrap();
+        assert!(message.contains("display cache"), "{message}");
+        assert!(message.contains("1 solids on screen need"), "{message}");
+        assert!(message.contains("100 KiB"), "{message}");
+        assert!(
+            message.contains("raise the display cache in settings, or draw fewer solids"),
+            "{message}"
+        );
+        let broadcast = of_kind(&got, "caches");
+        assert_eq!(broadcast.len(), 1, "one `caches` per pass: {got:?}");
+        assert_eq!(broadcast[0]["payload"]["display"]["over_budget"], true);
+        assert_eq!(
+            session.debug_state(false)["caches"]["display"]["over_budget"],
+            true
+        );
+        // The view and the broadcast describe the same cache.
+        assert_eq!(
+            broadcast[0]["payload"]["display"]["budget"],
+            session.debug_state(false)["caches"]["display"]["budget"]
+        );
+    }
+
+    /// Thrash (the undo/redo flip of docs/17 §Measurement U30): a cache that
+    /// holds one fine sphere but not two — each generation's picture evicts
+    /// the previous generation's, and every flip re-tessellates. The flag
+    /// is "this pass evicted entries the previous complete generation
+    /// displayed", set per pass, with one notice per generation; the
+    /// working set itself fits, so `over_budget` stays false.
+    #[test]
+    fn flipping_between_two_pictures_that_do_not_fit_together_is_thrash() {
+        let (_dir, mut config) = project(
+            "# cicada 1\n\
+             r = slider(value=1.0, min=0.5, max=2.0)\n\
+             ball = sphere(radius=r)\n",
+        );
+        config.solid_cache_bytes = 300 * 1024;
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        let _ = drain(&mut rx);
+        let state = session.debug_state(false);
+        let caches = &state["caches"];
+        assert_eq!(caches["display"]["thrash"], false, "{caches}");
+        assert_eq!(caches["display"]["over_budget"], false, "{caches}");
+        assert_eq!(
+            caches["display"]["entries"], 1,
+            "one fine sphere fits: {caches}"
+        );
+        let set = |value: &str, label: &str| {
+            session.handle(
+                id,
+                Some(label.into()),
+                ClientMessage::SetParam {
+                    node: "r".into(),
+                    port: Some("value".into()),
+                    value: value.into(),
+                },
+            );
+            session.wait_idle();
+        };
+        // The second picture evicts the first: thrash.
+        set("1.5", "b");
+        let got = texts(&drain(&mut rx));
+        let notices = of_kind(&got, "notice");
+        assert_eq!(notices.len(), 1, "{got:?}");
+        let message = notices[0]["payload"]["message"].as_str().unwrap();
+        assert!(
+            message.contains("evicted 1 of the meshes the previous one displayed"),
+            "{message}"
+        );
+        assert!(message.contains("300 KiB"), "{message}");
+        let caches = of_kind(&got, "caches");
+        assert_eq!(caches.len(), 1);
+        assert_eq!(caches[0]["payload"]["display"]["thrash"], true, "{got:?}");
+        assert_eq!(caches[0]["payload"]["display"]["over_budget"], false);
+        assert_eq!(caches[0]["payload"]["display"]["evictions"], 1);
+        // Undo: back to the first picture, which is gone — re-tessellated,
+        // evicting the second: thrash again, one notice again.
+        session.handle(id, Some("undo".into()), ClientMessage::Undo {});
+        session.wait_idle();
+        let got = texts(&drain(&mut rx));
+        assert_eq!(of_kind(&got, "notice").len(), 1, "{got:?}");
+        let state = session.debug_state(false);
+        assert_eq!(state["caches"]["display"]["thrash"], true);
+        assert_eq!(state["caches"]["display"]["evictions"], 2);
+        assert_eq!(state["display_cache"]["misses"], 3, "every flip re-meshes");
+        // A generation that evicts nothing clears the flag: the same value
+        // again draws nothing and touches nothing.
+        set("1.0", "same");
+        let got = texts(&drain(&mut rx));
+        assert!(of_kind(&got, "notice").is_empty(), "{got:?}");
+        assert_eq!(
+            of_kind(&got, "caches")[0]["payload"]["display"]["thrash"],
+            false
+        );
+    }
+
+    /// A pipeline without solids never raises either flag, however small
+    /// the cache: meshes are not cached, the working set is empty.
+    #[test]
+    fn a_pipeline_without_solids_never_raises_the_cache_flags() {
+        let (_dir, mut config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = mesh_box(x=span, y=span, z=span)\n",
+        );
+        config.solid_cache_bytes = 64 * 1024;
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        let _ = drain(&mut rx);
+        session.handle(
+            id,
+            Some("size".into()),
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "3.0".into(),
+            },
+        );
+        session.wait_idle();
+        let got = texts(&drain(&mut rx));
+        assert!(of_kind(&got, "notice").is_empty(), "{got:?}");
+        let caches = of_kind(&got, "caches");
+        assert_eq!(caches.len(), 1, "{got:?}");
+        assert_eq!(
+            caches[0]["payload"]["display"],
+            serde_json::json!({
+                "entries": 0, "bytes": 0, "budget": 64 * 1024, "hits": 0, "misses": 0,
+                "evictions": 0, "oversized": 0, "refusals": 0,
+                "working_set": 0, "over_budget": false, "thrash": false,
+            })
+        );
+    }
+
+    /// `set_display_cache` (docs/13 §The display edge): writer-only, 64 ..=
+    /// 65536 MiB, resizes the session's cache live and answers every client
+    /// with `caches`; never an op, never a delta, never the file.
+    #[test]
+    fn set_display_cache_resizes_live_for_the_writer_within_range() {
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             r = slider(value=1.0, min=0.5, max=2.0)\n\
+             ball = sphere(radius=r)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (writer, _) = session.connect(ClientLanes::merged(tx));
+        let (tx2, mut rx2) = unbounded_channel();
+        let (observer, role) = session.connect(ClientLanes::merged(tx2));
+        assert_eq!(role, Role::Observer);
+        let _ = drain(&mut rx);
+        let _ = drain(&mut rx2);
+        let seq_before = session.core.lock_inner().seq;
+        let text_before = std::fs::read_to_string(&session.core.config.pipeline).unwrap();
+        // An observer's is refused: the lease.
+        session.handle(
+            observer,
+            Some("o".into()),
+            ClientMessage::SetDisplayCache { mib: 512 },
+        );
+        let got = texts(&drain(&mut rx2));
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0]["type"], "error");
+        assert_eq!(got[0]["payload"]["kind"], "lease");
+        assert!(drain(&mut rx).is_empty(), "nobody else heard of it");
+        // Out of range: refused, naming the range.
+        for mib in [0_u64, 63, 65_537, u64::MAX] {
+            session.handle(
+                writer,
+                Some(format!("bad-{mib}")),
+                ClientMessage::SetDisplayCache { mib },
+            );
+            let got = texts(&drain(&mut rx));
+            assert_eq!(got.len(), 1, "{got:?}");
+            assert_eq!(got[0]["payload"]["kind"], "invalid", "{got:?}");
+            assert_eq!(got[0]["payload"]["intent_id"], format!("bad-{mib}"));
+            let message = got[0]["payload"]["message"].as_str().unwrap();
+            assert!(message.contains("64 ..= 65536 MiB"), "{message}");
+        }
+        assert_eq!(
+            session.debug_state(false)["display_cache"]["budget"],
+            display::SOLID_CACHE_BUDGET
+        );
+        // In range: the cache resizes, everyone hears `caches`, nothing else moves.
+        session.handle(
+            writer,
+            Some("ok".into()),
+            ClientMessage::SetDisplayCache { mib: 256 },
+        );
+        for rx in [&mut rx, &mut rx2] {
+            let got = texts(&drain(rx));
+            assert_eq!(got.len(), 1, "{got:?}");
+            assert_eq!(got[0]["type"], "caches");
+            assert_eq!(got[0]["payload"]["display"]["budget"], 256 * 1024 * 1024);
+            assert_eq!(
+                got[0]["payload"]["display"]["entries"], 1,
+                "the sphere stays"
+            );
+        }
+        let state = session.debug_state(false);
+        assert_eq!(state["display_cache"]["budget"], 256 * 1024 * 1024);
+        assert_eq!(state["caches"]["display"]["budget"], 256 * 1024 * 1024);
+        assert_eq!(session.core.lock_inner().seq, seq_before, "not an op");
+        assert_eq!(state["history"]["depth"], 0, "nothing to undo");
+        assert_eq!(
+            std::fs::read_to_string(&session.core.config.pipeline).unwrap(),
+            text_before,
+            "never the file"
+        );
+        // The timings of the display edge ride `/debug/state`.
+        let timing = state["timings"].as_array().unwrap().last().unwrap().clone();
+        assert!(timing["tessellate_ms"].is_number(), "{timing}");
+        assert!(timing["encode_ms"].is_number(), "{timing}");
+    }
+
+    /// A hold a test parks a display pass on (the `display_hold` seam):
+    /// armed once, it reports the generation it holds after its first
+    /// output's verdict and blocks — off the session lock — until released.
+    fn pass_hold() -> (
+        Arc<AtomicBool>,
+        std::sync::mpsc::Receiver<u64>,
+        std::sync::mpsc::Sender<()>,
+        DisplayHold,
+    ) {
+        let armed = Arc::new(AtomicBool::new(false));
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+        let go_rx = Mutex::new(go_rx);
+        let flag = Arc::clone(&armed);
+        let hold: DisplayHold = Arc::new(move |generation, done| {
+            if done == 1 && flag.swap(false, Ordering::SeqCst) {
+                let _ = held_tx.send(generation);
+                // A deadline, never a pass condition.
+                let _ = go_rx
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .recv_timeout(Duration::from_secs(30));
+            }
+        });
+        (armed, held_rx, go_tx, hold)
+    }
+
+    /// The display lifecycle and latest-wins (docs/13 §The display edge).
+    /// A plain generation: `display_begin` (the control lane) precedes its
+    /// first frame, `display_end` (the display lane) follows its last —
+    /// with the outputs, frames, bytes and the two phases' times — and
+    /// `caches` follows. Then a pass parked between its two outputs: a
+    /// preview tick arrives (the lock is free), the pass resumes, sees the
+    /// newer job waiting and stops — `display_end {cancelled: true}`, no
+    /// frame of it reaches the client — and the newer generation paints
+    /// both outputs; the client sees the newest state and never a queue.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one story: a plain pass in order, then a parked pass cut by a tick
+    fn the_display_pass_is_bracketed_and_a_superseded_pass_stops() {
+        let (_dir, mut config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n\
+             ball = sphere(radius=size)\n",
+        );
+        let (armed, parked_rx, go, seam) = pass_hold();
+        config.display_hold = Some(seam);
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        let _ = drain(&mut rx);
+        // ---- a plain generation, in order (merged lanes = enqueue order).
+        session.handle(
+            id,
+            Some("a".into()),
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "2.5".into(),
+            },
+        );
+        session.wait_idle();
+        let got = drain(&mut rx);
+        let kinds: Vec<String> = got
+            .iter()
+            .map(|m| match m {
+                Outgoing::Text(t) => serde_json::from_str::<serde_json::Value>(t).unwrap()["type"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+                Outgoing::Binary(_) => "<frame>".to_owned(),
+            })
+            .collect();
+        let at = |kind: &str| {
+            kinds
+                .iter()
+                .position(|k| k == kind)
+                .unwrap_or_else(|| panic!("no {kind} in {kinds:?}"))
+        };
+        let first_frame = at("<frame>");
+        let last_frame = kinds.iter().rposition(|k| k == "<frame>").unwrap();
+        assert!(at("delta") < at("display_begin"), "{kinds:?}");
+        assert!(
+            at("display_begin") < first_frame,
+            "begin before the first frame: {kinds:?}"
+        );
+        assert!(
+            last_frame < at("display_end"),
+            "end after the last frame: {kinds:?}"
+        );
+        assert!(at("display_end") < at("caches"), "{kinds:?}");
+        let msgs = texts(&got);
+        let begin = of_kind(&msgs, "display_begin");
+        let end = of_kind(&msgs, "display_end");
+        assert_eq!((begin.len(), end.len()), (1, 1), "{kinds:?}");
+        let generation = begin[0]["payload"]["generation"].as_u64().unwrap();
+        assert_eq!(begin[0]["payload"]["outputs"], 2, "{}", begin[0]);
+        assert_eq!(end[0]["payload"]["generation"], generation);
+        assert_eq!(end[0]["payload"]["outputs"], 2, "{}", end[0]);
+        let frame_count = frames(&got).len();
+        assert_eq!(end[0]["payload"]["frames"], frame_count);
+        let frame_bytes: usize = got
+            .iter()
+            .map(|m| match m {
+                Outgoing::Binary(b) => b.len(),
+                Outgoing::Text(_) => 0,
+            })
+            .sum();
+        assert_eq!(end[0]["payload"]["bytes"], frame_bytes);
+        assert!(end[0]["payload"]["tessellate_ms"].as_f64().unwrap() >= 0.0);
+        assert!(end[0]["payload"]["encode_ms"].as_f64().unwrap() >= 0.0);
+        assert!(end[0]["payload"].get("cancelled").is_none(), "{}", end[0]);
+        for frame in frames(&got) {
+            assert_eq!(frame.header().generation, generation);
+        }
+        // ---- latest-wins: park the next pass after its first output.
+        armed.store(true, Ordering::SeqCst);
+        session.handle(
+            id,
+            Some("b".into()),
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "3.0".into(),
+            },
+        );
+        let parked = parked_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the structural pass reaches its hold");
+        // The lock is free while the pass is parked: a tick lands and is
+        // queued on the loop behind this generation.
+        preview(&session, id, "3.5");
+        assert!(session.solve.is_busy(), "the tick waits on the parked pass");
+        go.send(()).unwrap();
+        session.wait_idle();
+        let got = drain(&mut rx);
+        let msgs = texts(&got);
+        let ends = of_kind(&msgs, "display_end");
+        assert_eq!(ends.len(), 2, "the cut pass and the tick's: {msgs:?}");
+        let cut = ends
+            .iter()
+            .find(|e| e["payload"]["generation"] == parked)
+            .expect("the parked generation ended");
+        assert_eq!(cut["payload"]["cancelled"], true, "{cut}");
+        assert_eq!(
+            cut["payload"]["outputs"], 0,
+            "nothing of it was sent: {cut}"
+        );
+        let newer = ends
+            .iter()
+            .find(|e| e["payload"]["generation"] != parked)
+            .unwrap();
+        let newer_generation = newer["payload"]["generation"].as_u64().unwrap();
+        assert!(newer_generation > parked);
+        assert_eq!(
+            newer["payload"]["outputs"], 2,
+            "the tick painted both: {newer}"
+        );
+        assert!(newer["payload"].get("cancelled").is_none());
+        let sent = frames(&got);
+        assert!(!sent.is_empty());
+        assert!(
+            sent.iter()
+                .all(|f| f.header().generation == newer_generation),
+            "no frame of the cut generation reached the client"
+        );
+        let state = session.debug_state(false);
+        for name in ["block.out", "ball.out"] {
+            assert_eq!(
+                state["display"][name]["generation"], newer_generation,
+                "{name}"
+            );
+            assert_eq!(state["display"][name]["stats"]["tier"], "preview", "{name}");
+        }
+        // The cut generation's timing records its phases too.
+        let timings = state["timings"].as_array().unwrap();
+        let cut_timing = timings.iter().find(|t| t["generation"] == parked).unwrap();
+        assert!(cut_timing["tessellate_ms"].as_f64().unwrap() >= 0.0);
+        assert_eq!(cut_timing["frame_bytes"], 0);
     }
 
     #[test]

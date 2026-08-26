@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::display::SolidCacheStats;
 use crate::viewmodel::{GraphView, WireEnd};
 
 /// Control-plane version. 1 = the stage-5 protocol.
@@ -864,6 +865,8 @@ pub enum ServerMessage {
         history: HistoryView,
         /// The transport's state (additive, v0.1 item 4).
         transport: TransportView,
+        /// The two caches' counters and flags (additive, v0.1 wave 5 D1).
+        caches: CachesView,
     },
     /// After an applied op: the new graph + text (the spike sends the whole
     /// view-model — hundreds of KB worst case at wall scale — plus the
@@ -1057,6 +1060,101 @@ pub enum ServerMessage {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         capped: bool,
     },
+    /// A generation's display pass begins (v0.1 wave 5 D1; docs/13 §The
+    /// display edge; additive): broadcast on the control lane the moment
+    /// the solve has finished and BEFORE the pass's first frame — before
+    /// its tessellation, which is most of the edge — so the viewport's
+    /// spinner and the chip's `painting…` start when the work does.
+    /// `outputs` = how many outputs the pass set out to (re)draw; the
+    /// bytes are not known yet (the encode comes after the tessellation)
+    /// and ride `display_end`. Every generation the loop completes gets
+    /// one, a generation that draws nothing included (`outputs: 0`).
+    DisplayBegin {
+        /// The generation.
+        generation: u64,
+        /// Outputs the pass set out to (re)draw.
+        outputs: usize,
+    },
+    /// A generation's display pass ended (additive): on the DISPLAY lane,
+    /// after the pass's last frame — its meaning is its place among the
+    /// frames, like `display_reset`'s — so a client that has seen it has
+    /// every frame of the pass. `outputs` / `frames` / `bytes` are what
+    /// was actually sent (fewer than `display_begin.outputs` when the
+    /// budget found an output already on screen at the tier it chose, or
+    /// when the pass was cut short); `tessellate_ms` is the warm-up on the
+    /// worker pool, `encode_ms` the encode under the session lock — their
+    /// sum is the chip's `display` time; `cancelled` = the pass stopped
+    /// between outputs because a newer generation superseded it (or Esc),
+    /// and the outputs it did not reach keep their previous frames until
+    /// the newer generation draws them.
+    DisplayEnd {
+        /// The generation.
+        generation: u64,
+        /// Outputs whose frames were sent.
+        outputs: usize,
+        /// Frames sent.
+        frames: usize,
+        /// Wall milliseconds of the tessellation warm-up.
+        tessellate_ms: f64,
+        /// Wall milliseconds of the frame encode.
+        encode_ms: f64,
+        /// Bytes of frames sent.
+        bytes: u64,
+        /// The pass stopped early (latest-wins). Omitted when false.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        cancelled: bool,
+    },
+    /// The two caches' counters and flags (v0.1 wave 5 D1; additive):
+    /// broadcast after every generation's display pass and after
+    /// `set_display_cache`; the same object rides every `snapshot`. The
+    /// payload IS the [`CachesView`]; the client replaces its copy.
+    Caches(CachesView),
+}
+
+/// The caches as the app shows them (docs/13 §The display edge; docs/16
+/// §Status and progress language — the top bar's caches indicator):
+/// the solid display cache's counters with the two flags the display
+/// pass raises, and the memo store's footprint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachesView {
+    /// The solid display tessellation cache (docs/12 §Display cache).
+    pub display: DisplayCacheView,
+    /// The memo store on disk (docs/12 §The store).
+    pub memo: MemoCacheView,
+}
+
+/// The display cache's counters (`SolidCacheStats`, flattened) plus the
+/// display pass's verdicts on it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DisplayCacheView {
+    /// `entries`, `bytes`, `budget`, `hits`, `misses`, `evictions`,
+    /// `oversized`, `refusals`.
+    #[serde(flatten)]
+    pub stats: SolidCacheStats,
+    /// Bytes of the display meshes every output on screen holds (distinct
+    /// solids at the tier each was drawn at) — the working set a redraw of
+    /// everything needs.
+    pub working_set: u64,
+    /// The working set is larger than the budget: it cannot all be held,
+    /// so every redraw re-tessellates part of it. Set by the last display
+    /// pass (and re-judged by `set_display_cache`), cleared by a pass whose
+    /// working set fits.
+    pub over_budget: bool,
+    /// The last display pass evicted entries the previous complete
+    /// generation displayed — the cache could not hold the last picture
+    /// and this one together (the undo/redo flip of docs/17 §Measurement
+    /// U30). Cleared by a pass that evicts none of them.
+    pub thrash: bool,
+}
+
+/// The memo store's footprint on disk.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoCacheView {
+    /// Bytes of value blobs this store holds (the pack plus the loose
+    /// blobs) — the memo log and the cost samples not counted.
+    pub bytes: u64,
+    /// Memo entries (node keys with recorded outputs).
+    pub entries: usize,
 }
 
 /// How a drag's previews are handled (`preview_policy.mode`).
@@ -1299,6 +1397,20 @@ pub enum ClientMessage {
     /// Pause and rewind to `t_ms = 0` (frame 0, `clock` at 0 — the values
     /// a headless run evaluates).
     TransportReset {},
+    /// Resize the session's solid display cache (v0.1 wave 5 D1; docs/13
+    /// §The display edge; DECISIONS.md row 2026-08-25) to `mib` MiB, live:
+    /// shrinking evicts least-recently-used entries at once, growing frees
+    /// room. Writer-only — the cache is shared session state, and the lease
+    /// is the one arbiter of shared state (an observer's is refused kind
+    /// `lease`); `mib` outside `64 ..= 65536` is refused kind `invalid`.
+    /// Never an op (nothing to undo), never the file, never a delta: the
+    /// answer is the `caches` broadcast to every client. The app's
+    /// settings menu sends it, and the lease holder re-applies its per-user
+    /// choice on connect.
+    SetDisplayCache {
+        /// The new budget in MiB.
+        mib: u64,
+    },
     /// Undo the last op (restore its `before` snapshot; docs/13
     /// §Undo/redo). A write intent; the delta's label is `undo: <label>`.
     Undo {},
@@ -1395,6 +1507,7 @@ pub fn is_write(message: &ClientMessage) -> bool {
             | ClientMessage::TransportSeek { .. }
             | ClientMessage::TransportSpeed { .. }
             | ClientMessage::TransportReset {}
+            | ClientMessage::SetDisplayCache { .. }
     )
 }
 
@@ -1464,6 +1577,117 @@ pub fn encode(seq: u64, message: &ServerMessage) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The frozen wire shapes of the display edge (v0.1 wave 5 D1; the web
+    // client mirrors exactly these in messages.ts): `display_begin`,
+    // `display_end` (its `cancelled` omitted when false), `caches` (the
+    // display cache's counters flattened beside the flags), and the
+    // `set_display_cache` intent — a write, not a gesture, not a transport
+    // control.
+    #[test]
+    fn display_lifecycle_and_caches_encode_the_documented_shapes() {
+        let begin = encode(
+            3,
+            &ServerMessage::DisplayBegin {
+                generation: 12,
+                outputs: 2,
+            },
+        );
+        let begin: serde_json::Value = serde_json::from_str(&begin).unwrap();
+        assert_eq!(
+            begin,
+            serde_json::json!({
+                "v": PROTOCOL_VERSION, "seq": 3, "type": "display_begin",
+                "payload": {"generation": 12, "outputs": 2}
+            })
+        );
+        let end = encode(
+            3,
+            &ServerMessage::DisplayEnd {
+                generation: 12,
+                outputs: 1,
+                frames: 3,
+                tessellate_ms: 2301.5,
+                encode_ms: 114.25,
+                bytes: 160_100_000,
+                cancelled: false,
+            },
+        );
+        let end: serde_json::Value = serde_json::from_str(&end).unwrap();
+        assert_eq!(
+            end["payload"],
+            serde_json::json!({
+                "generation": 12, "outputs": 1, "frames": 3,
+                "tessellate_ms": 2301.5, "encode_ms": 114.25, "bytes": 160_100_000_u64
+            }),
+            "cancelled is omitted when false: {end}"
+        );
+        let cut = encode(
+            4,
+            &ServerMessage::DisplayEnd {
+                generation: 13,
+                outputs: 0,
+                frames: 0,
+                tessellate_ms: 0.5,
+                encode_ms: 0.0,
+                bytes: 0,
+                cancelled: true,
+            },
+        );
+        let cut: serde_json::Value = serde_json::from_str(&cut).unwrap();
+        assert_eq!(cut["payload"]["cancelled"], true);
+        let caches = encode(
+            5,
+            &ServerMessage::Caches(CachesView {
+                display: DisplayCacheView {
+                    stats: SolidCacheStats {
+                        entries: 1397,
+                        bytes: 268_000_000,
+                        budget: 1 << 30,
+                        hits: 10,
+                        misses: 1400,
+                        evictions: 3,
+                        oversized: 0,
+                        refusals: 0,
+                    },
+                    working_set: 268_000_000,
+                    over_budget: false,
+                    thrash: true,
+                },
+                memo: MemoCacheView {
+                    bytes: 2_100_000_000,
+                    entries: 44,
+                },
+            }),
+        );
+        let caches: serde_json::Value = serde_json::from_str(&caches).unwrap();
+        assert_eq!(caches["type"], "caches");
+        assert_eq!(
+            caches["payload"],
+            serde_json::json!({
+                "display": {
+                    "entries": 1397, "bytes": 268_000_000_u64, "budget": 1_073_741_824_u64,
+                    "hits": 10, "misses": 1400, "evictions": 3, "oversized": 0, "refusals": 0,
+                    "working_set": 268_000_000_u64, "over_budget": false, "thrash": true
+                },
+                "memo": {"bytes": 2_100_000_000_u64, "entries": 44}
+            })
+        );
+        // The view round-trips (the client mirror and `/debug/state` read it).
+        let back: CachesView = serde_json::from_value(caches["payload"].clone()).unwrap();
+        assert_eq!(back.display.stats.entries, 1397);
+        assert!(back.display.thrash);
+        // The intent: a write for the lease's purposes, nothing else.
+        let intent: IntentEnvelope = serde_json::from_str(
+            r#"{"v":1,"id":"7","type":"set_display_cache","payload":{"mib":2048}}"#,
+        )
+        .unwrap();
+        assert_eq!(intent.message, ClientMessage::SetDisplayCache { mib: 2048 });
+        assert!(is_write(&intent.message));
+        assert!(!is_gesture(&intent.message));
+        assert!(!is_transport(&intent.message));
+        assert_eq!(type_tag(&intent.message), "set_display_cache");
+    }
 
     // The frozen wire shape of the compute-on-release announcement (v0.1
     // item 3b; the web client mirrors exactly this in messages.ts).

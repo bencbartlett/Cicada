@@ -121,6 +121,13 @@ struct ServeCli {
     /// and says so at `/`; dev uses `npm run dev`'s Vite proxy.
     #[arg(long)]
     web_dir: Option<PathBuf>,
+    /// The solid display cache per open pipeline, in MiB (docs/12
+    /// §Display cache): the tessellated display meshes the viewport
+    /// redraws from; 1024 by default, 64..=65536. The app's settings menu
+    /// resizes it live.
+    #[arg(long, default_value_t = cicada_server::display::SOLID_CACHE_BUDGET as u64 / (1024 * 1024),
+          value_parser = clap::value_parser!(u64).range(cicada_server::display::SOLID_CACHE_MIN_MIB..=cicada_server::display::SOLID_CACHE_MAX_MIB))]
+    solid_cache_mib: u64,
 }
 
 impl ServeCli {
@@ -133,6 +140,7 @@ impl ServeCli {
             cache_dir: self.cache_dir,
             threads: self.threads,
             web_dir: self.web_dir,
+            solid_cache_mib: self.solid_cache_mib,
         }
     }
 }

@@ -28,6 +28,9 @@ pub struct ServeArgs {
     pub threads: usize,
     /// Serve a built SPA from this directory.
     pub web_dir: Option<PathBuf>,
+    /// The solid display cache per open pipeline, MiB (v0.1 wave 5 D1;
+    /// `--solid-cache-mib`, default 1024; the range is clap's).
+    pub solid_cache_mib: u64,
 }
 
 /// What `cicada serve [path]` — and `cicada app [path]` — serve: the root
@@ -118,6 +121,13 @@ pub fn serve_with(
     config.cache_dir = cache_dir;
     config.threads = args.threads;
     config.web_dir = web_dir;
+    config.solid_cache_bytes = usize::try_from(args.solid_cache_mib.saturating_mul(1024 * 1024))
+        .with_context(|| {
+            format!(
+                "--solid-cache-mib {} does not fit this machine's address space",
+                args.solid_cache_mib
+            )
+        })?;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

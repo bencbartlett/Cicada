@@ -307,6 +307,20 @@ impl SolveLoop {
         state.in_flight || state.pending.is_some()
     }
 
+    /// Is the in-flight generation superseded — a newer job waiting for
+    /// it to finish, or Esc pressed during it? The display pass asks this
+    /// between outputs (docs/13 §The display edge: latest-wins for the
+    /// display edge — a superseded generation's pass stops, and the newer
+    /// generation paints the newest state instead of a queue of states).
+    /// A pending job can only be waiting while a generation is in flight
+    /// (the worker takes it the moment `on_complete` returns), so this is
+    /// exactly "someone is waiting on this one".
+    #[must_use]
+    pub fn superseded(&self) -> bool {
+        let state = self.lock();
+        state.pending.is_some() || state.cancel_at.is_some()
+    }
+
     /// Block until idle (tests and shutdown).
     pub fn wait_idle(&self) {
         let state = self.lock();
