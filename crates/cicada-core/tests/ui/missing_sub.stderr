@@ -1,5 +1,5 @@
 error: #[node] requires sub = "…" — the node's sub-group within its category, the menu bar's column (docs/08 §Catalog lists each category's sub-groups, e.g. sub = "Operators" under Maths & logic; `cicada_core::spec::SUBGROUPS` is the table)
-  --> tests/ui/missing_sub.rs:12:5
+  --> tests/ui/missing_sub.rs:20:5
    |
-12 | pub fn bad(input: In) -> f64 {
+20 | pub fn bad(input: In) -> f64 {
    |     ^^

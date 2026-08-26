@@ -2467,7 +2467,12 @@ proves wrong is revised here, dated, in the landing commit.
   documented as the same four nodes under `mesh_*` names, and a user who
   learns one tier's column must find the other in it. The
   `add-stdlib-node` skill now points at docs/08's Sub-groups lines instead
-  of carrying a third copy of the table (nothing tested that copy).
+  of carrying a third copy of the table (nothing tested that copy). The two
+  new trybuild cases carry `# Returns`, so the `sub` error is their only
+  one — a regressed macro compiles them and trybuild says "should not have
+  compiled" in every mode, the overwrite bless included (before, the cases
+  still failed on `# Returns`, and a bless would have rewritten the
+  snapshot to that error, retiring the `sub` check without a word).
 
 - **M1 — the menu bar.** The ribbon becomes a menu bar: one tab per
   category (label · count); a click opens a panel under it whose
