@@ -2472,7 +2472,16 @@ proves wrong is revised here, dated, in the landing commit.
   one — a regressed macro compiles them and trybuild says "should not have
   compiled" in every mode, the overwrite bless included (before, the cases
   still failed on `# Returns`, and a bless would have rewritten the
-  snapshot to that error, retiring the `sub` check without a word).
+  snapshot to that error, retiring the `sub` check without a word). And the web
+  REFUSES a catalog whose `format` is not the `CATALOG_FORMAT` it mirrors
+  (`web/src/protocol/version.ts`, beside `PROTOCOL_VERSION`; `fetchCatalog`
+  throws naming both numbers, the state layer raises the notice and keeps
+  the catalog it has) — a format-2 engine under a format-3 app (an older
+  engine on the proxy port, a stale embedded SPA) would otherwise have
+  been the silent category-only menu the server's bump exists to prevent;
+  and the mirror's `sub` / `subgroups` are pinned REQUIRED at the type
+  level in `catalog.test.ts` (`expectTypeOf` — `sub?: string` had passed
+  every runtime assertion).
 
 - **M1 — the menu bar.** The ribbon becomes a menu bar: one tab per
   category (label · count); a click opens a panel under it whose

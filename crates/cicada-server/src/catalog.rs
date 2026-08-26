@@ -11,7 +11,10 @@ use cicada_core::spec::{Dimension, NodeSpec, PortSpec, SUBGROUPS, Tier, Transpor
 /// changes; additive fields keep it. 3 since v0.1 wave 5 (C2c): every node
 /// carries `sub` and the catalog carries the `subgroups` table — both
 /// additive in shape, but a format-2 reader grouping a menu by category
-/// alone would show a different app, so the number says so.
+/// alone would show a different app, so the number says so. Mirrored by
+/// `web/src/protocol/version.ts::CATALOG_FORMAT`: the client refuses a body
+/// of any other format (a notice naming both numbers) instead of reading a
+/// shape it does not know.
 pub const CATALOG_FORMAT: u32 = 3;
 
 #[derive(serde::Serialize)]

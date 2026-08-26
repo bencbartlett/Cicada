@@ -245,6 +245,19 @@ describe("readCatalog", () => {
     expect(state.notices.map((n) => [n.level, n.message])).toEqual([["error", "Error: catalog: HTTP 401"]]);
   });
 
+  it("an engine of another catalog format is an error notice naming both numbers, and the previous catalog stays", async () => {
+    await readCatalog(() => Promise.resolve(new Response(JSON.stringify(catalogOf("series")), { status: 200 })));
+    // A format-2 body — no `subgroups`, no `sub` per node — is what an
+    // older engine on this port would serve; the app refuses it instead of
+    // laying the menu out from fields that are not there.
+    const formatTwo = { format: 2, nodes: [] };
+    await readCatalog(() => Promise.resolve(new Response(JSON.stringify(formatTwo), { status: 200 })));
+    const state = useCicada.getState();
+    expect(state.catalog?.nodes.map((n) => n.name), "the catalog the app can read stays").toEqual(["series"]);
+    expect(state.notices.map((n) => n.level)).toEqual(["error"]);
+    expect(state.notices[0]?.message).toMatch(/format 2 .*format 3/);
+  });
+
   it("an answer byte-identical to the one held is not re-applied — a text-only reload re-renders no canvas node", async () => {
     const same = () => Promise.resolve(new Response(JSON.stringify(catalogOf("series", "my_script")), { status: 200 }));
     const swaps = vi.fn();
