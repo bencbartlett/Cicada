@@ -1124,7 +1124,7 @@ pub enum ClientMessage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         role: Option<Role>,
     },
-    /// Place a node (search-to-place / ribbon / drag-to-empty-canvas).
+    /// Place a node (search-to-place / the menu bar / drag-to-empty-canvas).
     PlaceNode {
         /// Dialect name.
         func: String,

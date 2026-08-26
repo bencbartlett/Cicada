@@ -316,7 +316,7 @@ fn assert_catalog_search(client: &mut Client) {
     assert_eq!(addition["nodes"][1]["name"], "mass_addition");
 }
 
-/// `list_categories`: ribbon order, counts sum to the catalog.
+/// `list_categories`: menu order, counts sum to the catalog.
 fn assert_list_categories(client: &mut Client) {
     let categories = client.call("list_categories", &json!({}));
     let categories = structured(&categories);

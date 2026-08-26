@@ -103,7 +103,7 @@ an opaque protocol error; stdout carries nothing but JSON-RPC.
   `examples`, every input and output port with type / default / doc /
   dimension) plus `signature` and `effectful`. An unknown name returns
   the checker's own did-you-mean.
-- `list_categories` — the ribbon tabs with node counts.
+- `list_categories` — the menu bar's tabs with node counts.
 - `check {text | path}` — parse + typecheck + dry-lower in
   milliseconds, no geometry: `ok`, the doc-11 diagnostics (kind, node,
   span, message, expected/actual, fix with a machine-applicable

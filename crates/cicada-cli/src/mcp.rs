@@ -384,7 +384,7 @@ fn build_router() -> anyhow::Result<ToolRouter<McpServer>> {
         .with_route((
             tool::<NoArgs, CategoriesResult>(
                 "list_categories",
-                "The catalog's categories (the app's ribbon tabs, in ribbon order) with \
+                "The catalog's categories (the app's menu-bar tabs, in menu order) with \
                  the number of nodes in each — the shape of what exists. Use it to scope \
                  a `catalog_search` by `category` or to learn what the catalog covers \
                  before planning a pipeline.",
@@ -502,7 +502,7 @@ struct SearchArgs {
     /// Words to match against node names, titles, Grasshopper component
     /// names, port names and descriptions (case-insensitive; every word
     /// scores independently, the best-matching nodes come first). Empty =
-    /// list the catalog in ribbon order.
+    /// list the catalog in menu order.
     #[serde(default)]
     query: String,
     /// Restrict to one category — a name from `list_categories`.
@@ -864,7 +864,7 @@ struct CategoryCount {
 /// Result of `list_categories`.
 #[derive(Debug, Serialize, JsonSchema)]
 struct CategoriesResult {
-    /// Categories in ribbon order.
+    /// Categories in menu order.
     categories: Vec<CategoryCount>,
     /// Nodes in the whole catalog.
     total: usize,
@@ -888,7 +888,7 @@ fn list_categories(
     }))
 }
 
-/// Categories with counts, in the catalog's order (docs/08 ribbon order,
+/// Categories with counts, in the catalog's order (docs/08 menu order,
 /// unknown categories after, alphabetically).
 fn categories_of(specs: &[&'static NodeSpec]) -> Vec<(&'static str, usize)> {
     let mut counts: HashMap<&'static str, usize> = HashMap::new();
@@ -1367,7 +1367,7 @@ mod tests {
     }
 
     #[test]
-    fn categories_cover_the_registry_in_ribbon_order() {
+    fn categories_cover_the_registry_in_menu_order() {
         let specs = cicada_stdlib::registry().to_vec();
         let categories = categories_of(&specs);
         assert_eq!(categories[0].0, "Params & input");
