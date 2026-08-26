@@ -74,7 +74,7 @@ describe("ribbonTabs", () => {
     const tabs = ribbonTabs(
       [
         node("add", "Maths & logic", "Add", "Operators"),
-        // A project script node that declared a stdlib category keeps its `Script` sub-group.
+        // No shipped path makes one (the script decorator declares no category); the rule is defensive.
         node("my_fn", "Maths & logic", "My Fn", "Script"),
         node("zz", "Maths & logic", "Zz", "Bespoke"),
       ],

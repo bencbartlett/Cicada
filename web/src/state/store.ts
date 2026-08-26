@@ -309,6 +309,16 @@ export interface CicadaState {
 
   // ---- read caches
   catalog: Catalog | null;
+  /**
+   * Why the last catalog read failed — `fetchCatalog`'s refusal (another
+   * format: the engine and the app are from different builds; a non-OK
+   * answer) — or null after a good read. The menu bar and the search box
+   * render it when there is no catalog to show: a first connect to an
+   * engine of another format has nothing to keep, and without this record
+   * both would describe a pending load for a read that will never succeed
+   * once the error notice is dismissed (wave 5 M1 fix round 1).
+   */
+  catalogError: string | null;
   nodeValues: Record<string, NodeValues>;
   wireValues: Record<string, WireValues>;
   probe: ProbeState | null;
@@ -408,6 +418,7 @@ export interface CicadaState {
   resetSession: (token: string, pipeline: string) => void;
   applyServerMessage: (envelope: ServerEnvelope) => void;
   setCatalog: (catalog: Catalog) => void;
+  setCatalogError: (message: string) => void;
   setDisplayGeneration: (generation: number) => void;
   selectNodes: (nodes: string[], additive?: boolean) => void;
   selectWire: (wire: string | null) => void;
@@ -490,6 +501,7 @@ export const useCicada = create<CicadaState>((set, get) => ({
   displayResets: 0,
 
   catalog: null,
+  catalogError: null,
   nodeValues: {},
   wireValues: {},
   probe: null,
@@ -825,7 +837,8 @@ export const useCicada = create<CicadaState>((set, get) => ({
     }
   },
 
-  setCatalog: (catalog) => set({ catalog }),
+  setCatalog: (catalog) => set({ catalog, catalogError: null }),
+  setCatalogError: (message) => set({ catalogError: message }),
   setDisplayGeneration: (generation) => set({ displayGeneration: generation }),
 
   selectNodes: (nodes, additive = false) =>

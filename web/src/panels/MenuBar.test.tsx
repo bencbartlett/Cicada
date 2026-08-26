@@ -7,7 +7,9 @@
  * order; hovering another tab while open switches; a re-click, Esc, an
  * outside pointerdown and a placement close it; a placement is ONE
  * `place_node` at the store's `canvasCenter`; observers get disabled node
- * buttons with the reason in the hover, and can still browse.
+ * buttons with the reason in the hover, and can still browse. With no
+ * catalog the bar says `catalog loading…` — unless a read was refused,
+ * when it says the refusal.
  */
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
@@ -30,6 +32,7 @@ function seed(role: "writer" | "observer", center: [number, number] | null = [12
     connection: "open",
     role,
     catalog,
+    catalogError: null,
     canvasCenter: center,
     notices: [],
     hello: { clientId: 1, role, protocol: 1, engine: "x", project: "p", pipeline: "p.cic", unitPx: 24 },
@@ -178,6 +181,16 @@ describe("the menu bar", () => {
     act(() => useCicada.setState({ catalog: null }));
     render(<MenuBar />);
     expect(screen.getByText("catalog loading…")).not.toBeNull();
+    expect(screen.getByTestId("menubar").querySelectorAll("[data-testid^='menu-tab-']").length).toBe(0);
+  });
+
+  it("says why when the catalog was refused — the refusal, never a pending load for a read that will not succeed", () => {
+    seed("writer");
+    const refusal = "catalog: format 2 from the engine — this app reads format 3; the engine and the app are from different builds";
+    act(() => useCicada.setState({ catalog: null, catalogError: refusal }));
+    render(<MenuBar />);
+    expect(screen.queryByText("catalog loading…")).toBeNull();
+    expect(screen.getByTestId("menu-catalog-error").textContent).toBe(refusal);
     expect(screen.getByTestId("menubar").querySelectorAll("[data-testid^='menu-tab-']").length).toBe(0);
   });
 });

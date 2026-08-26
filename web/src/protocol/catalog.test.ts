@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, expectTypeOf, it } from "vitest";
+import { CATEGORY_ORDER } from "../kinds";
 import { fetchCatalog } from "./catalog";
 import type { Catalog, CatalogNode, CatalogSubgroups } from "./messages";
 import { CATALOG_FORMAT } from "./version";
@@ -54,6 +55,13 @@ describe("CatalogNode mirrors docs/generated/catalog.json (format 3)", () => {
       expect(row.subgroups.length, row.category).toBeGreaterThan(0);
       for (const sub of row.subgroups) expect(sub, `${row.category}/${sub}`).toMatch(/^[A-Z][a-z]+( [A-Z][a-z]+)?$/);
     }
+  });
+
+  it("serves the category order in its `subgroups` rows — the web's one copy, `kinds.ts::CATEGORY_ORDER`, is held to these bytes, not to maintenance", () => {
+    // `ribbonTabs` orders the tabs and the params panel its groups by the
+    // copy; a category the server adds or moves is red here, not a tab
+    // silently out of menu order.
+    expect(catalog.subgroups.map((row) => row.category)).toEqual(CATEGORY_ORDER);
   });
 
   it("gives every node a sub-group that is a column of its category, and fills every column a shipped category lists", () => {

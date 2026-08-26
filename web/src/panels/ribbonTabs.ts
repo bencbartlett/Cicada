@@ -5,10 +5,12 @@
  * (`cicada_core::spec::SUBGROUPS` served as format-3 `catalog.subgroups` —
  * the client keeps no copy of the order). An empty sub-group gets no column
  * (a heading over nothing is a promise the menu cannot keep — docs/17 C2c);
- * a sub-group the table does not list for the category — a project script
- * node declaring a stdlib category keeps its `Script` sub-group — trails
- * the listed ones, alphabetically, under its own name: shown, never
- * silently folded into a listed column. The function keeps the name the
+ * a sub-group the table does not list for the category trails the listed
+ * ones, alphabetically, under its own name: shown, never silently folded
+ * into a listed column. That rule is defensive — no shipped node reaches
+ * it: the script decorator declares a title and a description, never a
+ * category, so every script node is `Script` / `Script` on the Project
+ * tab. The function keeps the name the
  * ribbon gave it (the contract's word for the model — docs/17 M1).
  */
 import { CATEGORY_ORDER, categoryLabel } from "../kinds";

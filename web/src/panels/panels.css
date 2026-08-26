@@ -458,6 +458,9 @@ nav.menubar {
   color: var(--fg-faint);
   font-size: 12px;
 }
+.mb-empty.error {
+  color: var(--error);
+}
 
 /* ---------------------------------------------------------- inspector */
 

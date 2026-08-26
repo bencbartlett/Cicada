@@ -11,7 +11,11 @@
  * the centre of the canvas view (U29: the canvas keeps it in the store; the
  * user must see what a click did). Nothing below the top bar is persistent
  * any more: the wave-4 `ribbonCollapsed` setting is gone. Observers see
- * the node buttons disabled with the reason in the hover.
+ * the node buttons disabled with the reason in the hover. With no catalog
+ * the bar says why: `catalog loading…` while no read has failed, the
+ * state layer's recorded refusal (`catalogError` — an engine of another
+ * format) once one has — never a pending load for a read that will not
+ * succeed.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ghHint } from "../canvas/grid";
@@ -26,6 +30,7 @@ const PANEL_MARGIN_PX = 6;
 
 export function MenuBar() {
   const catalog = useCicada((s) => s.catalog);
+  const catalogError = useCicada((s) => s.catalogError);
   const writer = useCicada(canWrite);
   const send = useCicada((s) => s.send);
   const center = useCicada((s) => s.canvasCenter);
@@ -115,7 +120,14 @@ export function MenuBar() {
             </button>
           );
         })}
-        {tabs.length === 0 && <span className="mb-empty">catalog loading…</span>}
+        {tabs.length === 0 &&
+          (catalogError === null ? (
+            <span className="mb-empty">catalog loading…</span>
+          ) : (
+            <span className="mb-empty error" role="alert" data-testid="menu-catalog-error">
+              {catalogError}
+            </span>
+          ))}
       </div>
       {openTab !== null && (
         <div

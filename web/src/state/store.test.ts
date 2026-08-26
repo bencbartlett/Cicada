@@ -690,6 +690,7 @@ describe("resetSession (File → Open / Recent / Close, Back)", () => {
       displayGeneration: 4,
       displayResets: 2,
       catalog,
+      catalogError: "catalog: HTTP 503",
       nodeValues: { deboss: { generation: 4, outputs: [] } },
       wireValues: { "a.out->b.x": { from: { node: "a", port: "out" }, to: { node: "b", port: "x" }, summary: null, pairing: "" } },
       probe: { from: { node: "a", port: "out" }, targets: {}, catalog: [], intentId: null },
@@ -736,6 +737,7 @@ describe("resetSession (File → Open / Recent / Close, Back)", () => {
     expect(s.search).toBeNull();
     expect([s.commitDialog, s.fileDialog]).toEqual([false, false]);
     expect(s.catalog, "the catalog stays until the join's snapshot re-reads it").toBe(catalog);
+    expect(s.catalogError, "and its failure record with it — the same re-read clears or renews it").toBe("catalog: HTTP 503");
     expect(s.notices.map((n) => n.message)).toEqual(["kept"]);
     expect(s.settings).toBe(settings);
   });

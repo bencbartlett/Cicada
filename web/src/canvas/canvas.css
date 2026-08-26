@@ -1193,6 +1193,9 @@
   padding: 6px 10px;
   font-size: 11px;
 }
+.cv-search-empty.error {
+  color: var(--error);
+}
 
 /* the slider shortcut's row (wave 4 B4): `1<20` previews the slider it
    makes; an impossible range says why in the error color */
