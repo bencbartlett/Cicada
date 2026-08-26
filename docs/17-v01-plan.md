@@ -2217,62 +2217,282 @@ data: re-keying the display table, skipping fine redraws already at fine
 client time against 2.3–2.5 s of server tessellation — smoothness, not
 the seconds), and anything in the solve or the memo.
 
-### Wave 5 — PROPOSED (awaiting Ben's confirmation; contracts not yet frozen)
+### Wave 5 — work packages (contracts frozen 2026-08-25)
 
-Tracks, by the iteration-speed rules (per-track merges the moment a
-track is green; adversarial review for engine/server/protocol work, one
-review per track for pure UI; agents verify what they touched, the
-orchestrator runs the full suite at each merge; at most three worktrees
-at once — two rounds):
+Confirmed by Ben 2026-08-25 with three additions (DECISIONS.md row of the
+date): the solid display cache is **resizable in settings and 1 GiB by
+default**, a generation that **exceeds the cache raises a notice**, and a
+**caches indicator** sits beside the solve time. Instancing congruent
+solids is a follow-up (§Follow-ups). Two rounds of at most three
+worktrees (`%LOCALAPPDATA%\cicada-wt\<name>`, private target dirs,
+`CARGO_INCREMENTAL=0`); per-track merges the moment a track is green;
+adversarial review (5 lenses + critic, reproduce-or-refute) per package
+for engine/server/protocol work, one review per track for UI; agents
+verify what they touched, the orchestrator runs the full suite at each
+merge. Every package ends in commits on its branch, never pushed; the
+orchestrator merges main INTO the worktree, verifies there, then
+fast-forwards main. Nothing below widens silently: a contract that
+proves wrong is revised here, dated, in the landing commit.
 
-- **Round 1**
-  - **Track D — `wt/display`: D1 display responsiveness + P1 profiler**
-    (server + protocol + web; adversarial review). From §Measurement
-    U30 / U31: a per-output **triangle budget** for solid lists (above
-    it the output is drawn at the preview tier — or the angular
-    deflection coarsened — and the frame says so; a constant for the
-    ledger, ~1 M triangles per output as the first value), the
-    `SolidCache` budget **per tier**, the display time **in the chip**
-    (`Solving gen N` + spinner → `gen N · solve 17 ms · display 2.4 s`;
-    the counts move to the profiler), the lifecycle `display_begin
-    {generation, outputs, bytes}` / `display_end {generation, ms}` and
-    the viewport's spinner + "painted in" (U32), latest-wins for the
-    display pass — a superseded generation's pass stops at the next
-    output and the client drops its frames unread (U33; not measured
-    here, named by the "costed, cancellable display edge" follow-up);
-    P1: the `profile {generation}` read (per-node costs — computed:
-    measured, cached: the entry's last cost, marked — the server's
-    phases: lowering, solve, tessellation, encode, bytes; the client adds
-    decode, upload, first paint) and the panel: an SVG ring + a sortable
-    table, the button beside the chip (U34). Instancing congruent solids
-    stays a follow-up unless Ben pulls it in. docs/12 §Display, docs/13
-    (messages), docs/16 §Status and progress language revised;
-    `/debug/state` additive; `tools/measure` gains the browser-hosted
-    client (§Follow-ups).
-  - **Track N — `wt/face`: N1 node face** (web + a small server addition;
-    one review). The collapse chevron on the face in both states, the
-    editable collapsed value, name-first layout (track shrinks ≤ 60 %),
-    input values on the face (`inspect` answers inputs). docs/16
-    §Canvas conventions §Sliders revised.
-  - **Track M — `wt/menu`: C2c catalog `sub` + M1 menu bar** (catalog +
-    web; the catalog half is mechanical and gets one review, the UI half
-    one review). `#[node(sub)]` over every node file, docs/08 sub-groups,
-    `catalog.json` format 3, the conformance rule; the ribbon as dropdown
-    menus grouped by `sub`. docs/08, docs/14 §node file format, docs/16
-    §Application layout revised; the `add-stdlib-node` skill updated.
-- **Round 2**
-  - **Track V — `wt/viewport`: V1 viewport modes** (web; one review).
-    Split / Floating / Window with Document PiP and the observer
-    fallback. docs/16 §Viewport conventions, DECISIONS row 2026-08-24
-    revised.
-  - **Track A — `wt/about`: R1 releases + About, T1 tooltips** (cli +
-    server + web + CI; R1's server half gets the adversarial pass, the
-    rest one review). The build-time version stamp in `hello` and
-    `--version`, the About entry, `release.yml` on `v*` tags; the tooltip
-    layer.
+**Round 1.**
 
-Out of the wave, answered in place: U28 (the icon workflow — a track-C
-package when wanted).
+**Track D — `wt/display` (server + protocol + web; adversarial review per package).**
+- **D1 — the display edge, bounded and visible.** *Evidence:
+  §Measurement U30 / U31.*
+  - **Triangle budget.** `display::DISPLAY_TRIANGLE_BUDGET: u64 =
+    1_000_000` — per output, per generation: an output whose distinct
+    solids would exceed it at the tier the generation asks for is drawn
+    at the `Preview` tier instead; when even the preview tier exceeds
+    it, the output is drawn at preview anyway and marked
+    `over_budget`. The decision is a pure function of the value set
+    (order-independent, never of timing); the fine work wasted before it
+    is bounded by the budget (stop at the budget), or avoided by
+    estimating from the preview tessellation — the implementer's choice,
+    written into docs/12 §Display. `Displayed.tier` records the tier
+    actually drawn; `DisplayStats` gains `budget: {limit, triangles,
+    requested, drawn}` (additive); `already_displayed` compares against
+    the tier the budget WOULD choose for the output, so a structural
+    generation over an unchanged over-budget output re-sends nothing
+    (the regression test: a scratch pipeline with N spheres over the
+    budget, two structural generations, the second emits 0 frames for
+    it). `cicada run` is untouched (no display).
+  - **The cache: 1 GiB, resizable, watched.** `SOLID_CACHE_BUDGET` =
+    1024 MiB; `SessionConfig.solid_cache_bytes`, set from `cicada serve
+    --solid-cache-mib <n>` (default 1024; `app` passes it through). A
+    writer-only intent `set_display_cache {mib}` resizes the session's
+    cache live (64 ≤ mib ≤ 65536, else refused kind `invalid`; an
+    observer's is refused kind `lease`; shrinking evicts LRU at once);
+    never an op, never the file. The app's settings menu offers 256 MiB ·
+    512 MiB · 1 GiB · 2 GiB · 4 GiB and shows the session's current
+    value; the choice is a per-user setting the writer re-applies on
+    connect (the lease holder's preference wins; documented).
+  - **`caches` view.** `CachesView {display: {budget, bytes, entries,
+    hits, misses, evictions, oversized, over_budget, thrash}, memo:
+    {bytes, entries?}}` — the display cache's counters (`SolidCacheStats`
+    plus the two flags) and the memo store's `stored_bytes` — in every
+    snapshot, as a `caches` broadcast after every generation's display
+    pass and after `set_display_cache`, and as `/debug/state.caches`.
+  - **The notice.** After a generation's display pass: when the
+    generation's own distinct solids at the drawn tier total more than
+    the budget (`over_budget` — the working set cannot fit, every redraw
+    re-tessellates) or the pass evicted entries the previous complete
+    generation used (`thrash`), ONE `notice` (level `warning`) per
+    generation naming the numbers and the remedy ("raise the display
+    cache in settings, or draw fewer solids"), and the flags stay set in
+    `caches` until a pass clears them. Tests lower the budget to make
+    both bite; a pipeline without solids never raises either.
+  - **The indicator.** Top bar, beside the solve chip: `cache 612M / 1G
+    · 1,397 solids · memo 2.1G` (warn tone while `over_budget` or
+    `thrash`), the full breakdown in the hover, a click opens the
+    profiler's caches section (P1).
+  - **The chip.** `Solving gen N` with a spinner while `summary.running`;
+    `painting…` while gen N's frames are in flight (between
+    `display_begin` and `display_end`); then `gen N · solve 17 ms ·
+    display 2.4 s` — display = the server's tessellation + encode. The
+    counts (`computed / cached / red / blocked`) move to the hover and to
+    the profiler. `summaryText` and its tests follow.
+  - **Display lifecycle.** `display_begin {generation, outputs, bytes}`
+    on the control lane BEFORE the generation's first frame, `display_end
+    {generation, tessellate_ms, encode_ms, bytes, cancelled}` after the
+    last frame is enqueued (also for a generation that draws nothing:
+    `outputs: 0`). The viewport shows a spinner with `painting N outputs
+    · X MB` between them and `painted in T ms` after (T = the client's
+    wall from `display_begin` to the last frame applied + uploaded).
+    `/debug/state.timings` gains `tessellate_ms` / `encode_ms`.
+  - **Latest-wins for the display pass.** The pass checks the solve
+    loop's supersession between outputs; a superseded generation's pass
+    stops (no further frames), emits `display_end {cancelled: true}`; the
+    client drops every frame whose generation is older than the newest
+    `display_begin` it has seen WITHOUT decoding it, and the viewport
+    keeps the last complete generation's drawables until the new one's
+    frames land. A deterministic seam holds a pass between outputs for
+    the test (the shape of `restream_hold`); a client unit test pins the
+    drop rule.
+  - Docs: docs/12 §Display (budget, cache, lifecycle), docs/13
+    (`display_begin` / `display_end` / `caches` / `set_display_cache` /
+    the notice; `/debug/state` additive), docs/16 §Status and progress
+    language (chip, indicator, viewport indicator), DECISIONS.md row
+    2026-08-25. Tests at every layer (server unit + route, vitest,
+    `web/e2e/display.spec.ts` on a scratch pipeline with enough spheres
+    to cross the budget — the spinner shows, the chip's display time is
+    non-zero, the indicator reads the cache).
+- **P1 — the profiler.**
+  - **Server.** A read intent `profile {generation?}` (any client) →
+    `profile_view {generation, kind, phases: {queued_ms, solve_ms,
+    tessellate_ms, encode_ms, bytes}, nodes: [{name, state, nanos?,
+    last_nanos?, elements?}], display: [{node, output, triangles, bytes,
+    tier, solids, cache_hits, cache_misses}], caches: CachesView}` for
+    the last complete generation (the only one whose per-node costs are
+    kept — an honest limit, said in docs/13): `nanos` for a computed
+    node, `last_nanos` (the memo entry's recorded cost) for a cached one,
+    neither for red/blocked/cancelled. The view's renderer is held to the
+    type by a test; `/debug/state` gets the same under `profile`.
+  - **Client.** Adds its own phases to the view — `decode_ms`,
+    `upload_ms`, `first_paint_ms` — measured from `display_begin` to the
+    last frame applied, to the first render after it.
+  - **Panel.** A `profile` button beside the chip opens an inspector tab
+    (`insp-tab-profile`): an SVG ring (no chart dependency; a pure
+    `ringArcs(phases)` with a vitest) of the phases — the top 8 nodes by
+    cost + "other nodes", tessellation, encode, socket (bytes at the
+    measured rate), client decode + upload — and a sortable table (node ·
+    state · time · share · elements; display outputs with tier /
+    triangles / bytes), cached rows marked, a text filter; the caches
+    section (both caches, their counters, the budget control). Esc
+    closes; observers see it too.
+  - Tests: server unit tests (computed vs cached costs, a red node, the
+    display rows, the caches), vitest (arcs, sort, formatting),
+    `web/e2e/profile.spec.ts` on 02-solids (open → the ring has ≥ 2
+    arcs, the table lists every node, a cached row after a second
+    generation). docs/13 (the read + view), docs/16 §Inspector contents.
+
+**Track N — `wt/face` (web + one server addition; one review).**
+- **N1 — the node face.**
+  - **The collapse chevron on the face.** An expanded slider wears a
+    chevron centred on its bottom edge (an absolutely positioned button
+    over the border — no layout change, `size` is the server's; hidden at
+    the far tier with the rest of the chrome); the collapsed row wears
+    its twin at the right, before the output handle. Click → the
+    existing `set_collapsed` (an op); greyed with the server's refusal
+    reason when a bound is wired (the `collapse.ts` mirror, as the menu
+    item today); observers and `#off` ghosts show none. The menu item and
+    the inspector action stay.
+  - **The collapsed value is editable.** Double-click the collapsed
+    row's value → the literal chip's number editor in its place; Enter =
+    ONE `set_param {value}` through `paramValueText`, Esc cancels, an
+    unspellable value is a notice; a single click still selects; the
+    drag protocol, the pending chip and the scrub bar are untouched.
+  - **Name first.** The collapsed row lays out name · track · value ·
+    handle with the NAME never truncated until the track has shrunk to
+    40 % of its full width; only then does the name take an ellipsis.
+    Pinned in `web/e2e/slider.spec.ts` with a long-named collapsed
+    slider (the name's box equals its scroll width; the track ≥ 40 %).
+  - **Input values on the face.** The `inspect` answer gains
+    `inputs: [[port, ValueSummary | null]]` — for a wired input, the
+    source output's summary by the same path `node_values` takes for
+    outputs (the wire's source binding → its hash in the kept report);
+    `null` for a literal or an unwired port. `NodeValues` in
+    `messages.ts` mirrors it (additive). At every tier that shows values
+    the input row shows the compact summary (`compactValueText`, the
+    `cn-port-value` style) after the port label; the inspector's Node tab
+    lists input values in full. Tests: a server unit test
+    (wired → the source's summary, literal → null), vitest on the face,
+    an assertion in `visuals.spec.ts` (an input value appears at near).
+  - Docs: docs/16 §Canvas conventions (§Sliders — the chevron, the
+    editable value, the layout rule; inputs' values), docs/13 (`inspect`
+    additive).
+
+**Track M — `wt/menu` (catalog + web; the catalog half one review, the UI half one review).**
+- **C2c — the sub-group attribute.** `#[node(…, sub = "…")]` is
+  REQUIRED on every node, like `gh`: cicada-macros parses it (a node
+  without one is a compile error naming docs/08), `NodeSpec.sub:
+  &'static str`, `catalog.json` carries `"sub"` (**format 3**; the web
+  mirror `protocol/catalog.ts` + its test), `CATALOG.md` groups a
+  category's rows by sub-group (docs/08 order) then name. The
+  sub-groups per category are ONE table in cicada-core
+  (`spec::SUBGROUPS: &[(&str, &[&str])]`) that docs/08 mirrors (each
+  category section gains its "Sub-groups" line) and the conformance
+  test enforces (a node's `sub` must be in its category's list; every
+  listed sub-group non-empty). Names: Title Case, one or two words,
+  GH's where GH has them (Maths → Operators · Trig · Util · Domain ·
+  Logic; List → List · Tree · Sets; Point · Vector · Plane → Point ·
+  Vector · Plane; Curve → Primitive · Spline · Analysis · Division ·
+  Util; Surface & solid → Primitive · Freeform · Boolean · Analysis;
+  Mesh & field → Primitive · Boolean · Analysis · Field; Transform →
+  Affine · Euclidean · Array · Util; Output → Display · Export; Params →
+  Input · Primitive; Sequences → Sequence · Random; Intersect → Shape ·
+  Region; Script → Script) — the agent proposes the table and the 159
+  assignments, the review judges them. Script nodes default to
+  `Script`. `cicada mcp`'s `node_doc` / `catalog_search` carry `sub`
+  (additive); `signatures.tsv` is untouched (a sub-group is not a
+  signature — the conformance test says so). The `add-stdlib-node`
+  skill and docs/14 §node file format gain the attribute. Catalog
+  regenerated in the same commit.
+- **M1 — the menu bar.** The ribbon becomes a menu bar: one tab per
+  category (label · count); a click opens a panel under it whose
+  columns are the category's sub-groups in table order, each a titled
+  list of node buttons (title, name; the GH hint and the contract in the
+  hover); hovering another tab while a panel is open switches to it;
+  the panel closes on an outside pointerdown, Esc, a tab re-click, or a
+  placement — which is `place_node` at `canvasCenter` (U29). The
+  `ribbonCollapsed` setting is removed (a stored value is ignored).
+  Observers see the buttons disabled with the reason, as today. Tests:
+  vitest for the menu model (`ribbonTabs` → tabs with sub-group
+  columns), `web/e2e/menu.spec.ts` (Maths opens with ≥ 2 columns, an
+  outside click closes, Esc closes, a click places a node whose cell is
+  the view's centre cell ± 1). docs/16 §Application layout (the ribbon
+  paragraph becomes the menu bar's), DECISIONS.md row 2026-08-11
+  revised ("GH-style category ribbon" → a menu bar with sub-groups).
+
+**Round 2** (launched as Round-1 worktrees merge and free their slots).
+
+**Track V — `wt/viewport` (web; one review).**
+- **V1 — viewport modes.** `settings.viewportMode: "split" | "floating"
+  | "window"`, a three-way segmented control in the viewport toolbar
+  (replacing the pop-out button) and in settings. *Split* = today's
+  panes. *Floating* = the canvas takes the whole work area and the
+  viewport renders in a panel over it — dragged by its title strip,
+  resized from its corner, position and size per-user settings clamped
+  into the window, minimum 240 × 160, the same three.js scene (no
+  remount). *Window* = `documentPictureInPicture.requestWindow({width,
+  height})` (Chromium ≥ 116 — the `--app` window is Edge or Chrome; the
+  dev machine's Chromium 148 has it): the viewport's element is moved
+  into the PiP document with the app's stylesheets, the main window
+  shows a placeholder ("the viewport is in its own window — click to
+  bring it back"), closing the PiP window returns to split, the scene
+  and its WebGL context survive the move (verified; a remount is the
+  documented fallback if a platform loses the context). Without the
+  API the mode falls back to the wave-4 observer pop-out
+  (`popOutViewport`) with a notice saying so; the observer window
+  remains the "second monitor" path and its spec stands. Tests: vitest
+  for the mode reducer, the placeholder and the fallback decision (a
+  fake `documentPictureInPicture`); `web/e2e/viewport_modes.spec.ts` —
+  floating drag + resize persist across a reload; window mode with the
+  API stubbed out opens the observer pop-out (the `popout.spec.ts`
+  pattern). docs/16 §Viewport conventions revised, DECISIONS.md row
+  2026-08-24 revised (the observer pop-out is the fallback).
+
+**Track A — `wt/about` (cli + server + web + CI; R1's server/CI half gets the adversarial pass, the rest one review).**
+- **R1 — releases and About.** The workspace version becomes
+  `0.1.0-alpha.1`. `crates/cicada-cli/build.rs` stamps the build:
+  `CICADA_BUILD_COMMIT` (`git rev-parse --short=12 HEAD`, `-dirty` when
+  the tree is dirty; the `CICADA_GIT_SHA` env wins when set — CI
+  checkouts; with neither, `unknown`, said on stderr at build time, never
+  silently) and `CICADA_BUILD_DATE` (UTC date, `SOURCE_DATE_EPOCH` when
+  set). `cicada --version` prints `cicada 0.1.0-alpha.1 (a82eb39d1c2e,
+  2026-08-25)`; `hello` gains `version: {semver, commit, built}`
+  (additive; `engine` unchanged); `/health` answers the same JSON on
+  `/api/version`. The settings menu gains **About** — a dialog: Cicada ·
+  version · commit (click copies) · built · protocol · the engine's
+  threads · a link to the repository and to the release notes. A
+  `CHANGELOG.md` starts with `0.1.0-alpha.1` (the wave-4 and wave-5
+  landings, the user-test findings). `.github/workflows/release.yml`: on
+  `push` of a `v*` tag — build `--release --features embed` on Windows
+  and macOS, `tools/launch/bundle.py --out dist/ --check` (and `--smoke`
+  where it runs headless), zip `Cicada-<version>-<os>.zip`, the Linux
+  job ships the bare binary (the bundle refuses Linux by design) — and
+  `gh release create` with the CHANGELOG section as the body, marked
+  pre-release for `-alpha`. The orchestrator tags `v0.1.0-alpha.1` after
+  the merge; the tag's run is the workflow's proof. Tests: a cli test
+  that `--version` has the stamped shape, a server test that `hello`
+  carries `version`, a web test for the About dialog's fields.
+- **T1 — tooltips at 250 ms.** `web/src/tooltip.ts` + `Tooltip.tsx`:
+  one document-level listener set (`pointerover`, `pointerout`,
+  `pointerdown`, `keydown` Esc); entering an element whose closest
+  ancestor carries a `title` starts `TOOLTIP_DELAY_MS = 250`; then a
+  themed box with the title's text (newlines preserved) appears below
+  the element — above when there is no room — clamped to the viewport;
+  while hovered the `title` is parked in `data-title` (so the native
+  tooltip never doubles it) and restored on leave, so every
+  `toHaveAttribute("title")` in the specs, all of which read unhovered,
+  holds. The 125 `title=` sites change nothing. Disabled controls keep
+  the native tooltip (they fire no pointer events in every browser;
+  said in docs/16). Tests: vitest with fake timers (249 ms: nothing;
+  250: shown; leave: hidden, `title` back), an assertion in
+  `smoke.spec.ts` (hover the undo button → the box shows its title
+  within 400 ms). docs/16 §Theme and visual language.
+
+**Answered in place**, not in the wave: U28 (the icon workflow — a
+track-C package when Ben wants it).
 
 ## Follow-ups (found by the v0.1 reviews and measurements; scheduled, not yet placed)
 
@@ -2714,14 +2934,25 @@ package when wanted).
 - **Mixed-age stores, again** (WP-B): `LOG_FORMAT` is 3 — an engine from
   before `StoredValue::Solid` refuses a store this engine wrote; serve
   scratch copies across worktrees, as AGENTS.md says.
-- **02-solids' export tessellation sits in the slider's cone**: the
-  example's `shell = tessellate(solid=carved, deflection=0.01)` is
-  recomputed on every tick (34 ms — the cone's whole cost now that
-  display is 5 ms); it exists for the `--node dump` exporter. Either the
-  example marks it as export-time work (`#off` until export, or a
-  coarser deflection) or the docs/15 slider criterion names the scratch
-  variant without it. A one-line decision for Ben; the measurement of
-  both is in §Item 3.
+- **02-solids' export tessellation sits in the slider's cone** — **decided
+  2026-08-25** (Ben): the export chain (`shell` / `dump_list` / `dump`)
+  is `#off` by default in the committed example, so the slider's cone is
+  the display alone (5.2 / 9.1 ms, §Item 3) and the example's header
+  says how to enable the three lines before `--node dump`. (The
+  `tessellate(deflection=0.01)` node was 34 ms of every tick; the checker
+  diagnoses a reference to a disabled binding, so the whole chain is off,
+  not the one node.)
+- **Instancing congruent solids** (U30 measurement, 2026-08-25; Ben:
+  a follow-up, not wave 5): 1,000 translated spheres are 1,000 distinct
+  value hashes, so `frames_for_value` inlines each (160 KB apiece at the
+  fine tier) and tessellates each — `encode_instances` and the frame
+  format's per-instance 3×4 transform already exist but only identical
+  hashes group. Rigid-copy detection (a canonical pose per solid — the
+  kernel's bounding box + principal frame, or the `Similarity` the node
+  applied, carried as provenance) would draw one blob + N transforms and
+  tessellate once: for exactly the `each(planes)`-over-one-primitive
+  pattern it removes all three costs the measurement ranked (2.3 s
+  tessellation, 160 MB, the cache footprint). docs/13's "interner work".
 - **The doc-12 kernel worker** (WP-C measurement): Esc inside ONE
   long OCCT boolean waits for it (1,000 tools: 1.7 s to idle). Route
   kernel calls the cost model predicts above ~1 s to a cancellable

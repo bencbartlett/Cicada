@@ -3,8 +3,12 @@
 # sphere, a solid_difference in the OCCT kernel, measured, tessellated once
 # at the end for the debug OBJ exporter.
 # Solve only:        cargo run -p cicada-cli -- run examples/02-solids.cic
-# Write the OBJ:     cargo run -p cicada-cli -- run examples/02-solids.cic --node dump
-# (exporters are effectful: they NEVER run unless named with --node)
+# Write the OBJ:     enable the three `#off` lines at the end (remove the
+#                    prefix, or `D` on each node in the app), then
+#                    cargo run -p cicada-cli -- run examples/02-solids.cic --node dump
+# (exporters are effectful: they NEVER run unless named with --node; the
+# export chain is OFF by default — decided 2026-08-25 — because its
+# tessellate(deflection=0.01) sat in the slider's cone at 34 ms per tick)
 # The mesh tier (Manifold) is still here under mesh_* names — see
 # 03-voronoi.cic for a carve that stays on meshes.
 
@@ -31,7 +35,8 @@ carved = solid_difference(solid=block, cutters=cutter_list)
 # Measure it — the numbers a mesh could only approximate.
 carved_volume, carved_centroid = volume(solid=carved)
 
-# Tessellate once, at the end, for the mesh-destined exporter.
-shell = tessellate(solid=carved, deflection=0.01)
-dump_list = duplicate(item=shell, count=1)
-dump = export_obj(meshes=dump_list, path="02-solids.obj")
+# Tessellate once, at the end, for the mesh-destined exporter — export-time
+# work, off by default (see the header).
+#off shell = tessellate(solid=carved, deflection=0.01)
+#off dump_list = duplicate(item=shell, count=1)
+#off dump = export_obj(meshes=dump_list, path="02-solids.obj")

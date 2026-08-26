@@ -91,9 +91,15 @@ async function debugState(page: Page, pipeline: string, wait: boolean, timeout =
 const queueOf = (state: DebugState, node: string) => state.scrub.queues.find((q) => q.node === node);
 
 /** Every binding green — red here is the spec's environment, not the feature (the Python host for test 2). */
+/**
+ * Every solved binding green. A `#off` ghost is excluded from the solve
+ * with a red status that names the reason (the app shows it as `off`) —
+ * 02-solids keeps its export chain off by default (2026-08-25) — so the
+ * disabled ones are not failures here; a node fed by one would be.
+ */
 function expectGreen(state: DebugState, what: string): void {
   const red = Object.entries(state.statuses)
-    .filter(([, s]) => s.state === "red" || s.state === "blocked")
+    .filter(([, s]) => (s.state === "red" || s.state === "blocked") && !/disabled \(`#off`\)/.test(s.message ?? ""))
     .map(([name, s]) => `${name}: ${s.state}${s.message ? ` — ${s.message}` : ""}`);
   expect(red, `${what} must solve green:\n${red.join("\n")}`).toEqual([]);
 }
