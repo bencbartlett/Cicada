@@ -828,8 +828,20 @@ export type ServerMessage =
       };
     }
   | {
+      /**
+       * The answer to `inspect`: what sits on each output and — additive,
+       * v0.1 wave 5 N1 — what each input receives, in port order: a wired
+       * input carries its source output's summary (the same one the
+       * source's own answer has for that port); a literal kwarg and an
+       * unwired port are `null`.
+       */
       type: "node_values";
-      payload: { node: string; outputs: [string, ValueSummary | null][]; generation: number };
+      payload: {
+        node: string;
+        outputs: [string, ValueSummary | null][];
+        inputs: [string, ValueSummary | null][];
+        generation: number;
+      };
     }
   | {
       type: "wire_values";

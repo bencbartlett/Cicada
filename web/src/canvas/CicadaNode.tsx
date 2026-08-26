@@ -33,6 +33,7 @@ import type {
 } from "../protocol/messages";
 import { literalPortKind } from "../state/literals";
 import { canWrite, useCicada } from "../state/store";
+import { collapseHint } from "./collapse";
 import { sendWrite, type CanvasNode } from "./flow";
 import {
   drivenTitle,
@@ -72,6 +73,7 @@ function InputRow({
   probing,
   awaiting,
   writer,
+  value,
 }: {
   node: NodeView;
   input: InputView;
@@ -81,11 +83,21 @@ function InputRow({
   /** A wire is being dragged toward this node but its probe has not answered yet. */
   awaiting: boolean;
   writer: boolean;
+  /**
+   * What the wire feeds this port (near tier and up; wave 5 N1 — finding
+   * U23): `undefined` = not shown (the tier, or the port is not wired — a
+   * literal's value is its chip), `null` = the source has no value yet.
+   */
+  value: ValueSummary | null | undefined;
 }) {
   const color = kindColor(input.base);
   const cls = ["cn-port", "cn-in"];
+  // The wire's value: the source output's summary, compacted like an
+  // output's (four significant figures on the face; the hover keeps it).
+  const shownValue = value !== undefined && input.wired !== undefined;
+  if (shownValue) cls.push("with-value");
   // Hover: `name: type — doc` (the catalog's one-line port doc rides on the view-model).
-  let title = portTitle(input.name, input.type, input.doc);
+  let title = portTitle(input.name, input.type, input.doc) + (shownValue ? `\n← ${summaryText(value)}` : "");
   if (input.unknown) {
     cls.push("unknown");
     title = `${input.name}: unknown kwarg for this node`;
@@ -133,6 +145,11 @@ function InputRow({
         data-verdict={verdict?.verdict}
       />
       <span className="cn-port-label">{input.name}</span>
+      {shownValue && (
+        <span className="cn-port-value mono" data-testid={`in-value-${node.name}-${input.name}`}>
+          {compactValueText(summaryText(value))}
+        </span>
+      )}
       {input.lift > 0 && (
         <span className="cn-lift" title={`each() — mapped${input.lift > 1 ? ` ×${input.lift}` : ""}`}>
           map{input.lift > 1 ? ` ×${input.lift}` : ""}
@@ -314,6 +331,61 @@ function GhostNode({ view, unit }: { view: NodeView; unit: number }) {
 }
 
 /**
+ * The collapse chevron (wave 5 N1, finding U17 — "the collapse toggle
+ * should be part of the node"): a button on a slider's face — centred on
+ * the expanded face's bottom edge, over the border (absolutely positioned,
+ * so the layout and the server's `size` never change), and at the
+ * collapsed row's right, before the output handle. One click → the
+ * existing `set_collapsed` (an op the SERVER decides off the document: a
+ * wired `value` / `min` / `max` / `step` is refused with a notice); the
+ * client mirror (`collapseHint`) greys it beforehand with the server's
+ * reason — `data-blocked`, the rule in the tooltip — as the menu item and
+ * the inspector action carry it, and the click still goes to the server,
+ * the one decider. Observers and `#off` ghosts get none (the callers gate
+ * on `editable`); the far tier hides it with the rest of the chrome (CSS).
+ * Sliders are the one collapsible node today; the same control carries
+ * groups later.
+ */
+function Chevron({ view, collapsed }: { view: NodeView; collapsed: boolean }) {
+  const blocked = collapsed ? null : collapseHint(view);
+  const title = collapsed
+    ? "expand to the full node — header and one row per port"
+    : blocked === null
+      ? "collapse to one row — name, track and value"
+      : `${blocked} — a slider collapses only while value, min, max and step are literals`;
+  return (
+    <button
+      type="button"
+      className={`cn-chevron nodrag ${collapsed ? "collapsed" : "expanded"}${blocked === null ? "" : " blocked"}`}
+      title={title}
+      aria-label={collapsed ? `expand ${view.name}` : `collapse ${view.name}`}
+      data-testid={`chevron-${view.name}`}
+      data-blocked={blocked ?? undefined}
+      onClick={(event) => {
+        event.stopPropagation();
+        sendWrite({ type: "set_collapsed", payload: { node: view.name, collapsed: !collapsed } });
+      }}
+      onDoubleClick={(event) => event.stopPropagation()}
+    >
+      <svg
+        viewBox="0 0 12 12"
+        width="10"
+        height="10"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+        data-icon={collapsed ? "chevron-down" : "chevron-up"}
+      >
+        {collapsed ? <path d="M3 4.5l3 3 3-3" /> : <path d="M3 7.5l3-3 3 3" />}
+      </svg>
+    </button>
+  );
+}
+
+/**
  * The collapsed slider (docs/16 §Canvas conventions, wave 4 B4 — finding
  * U11): one grid unit tall, GH-like — the name, the same slider widget as
  * the expanded face (drag protocol, pending chip and all), and the output
@@ -321,7 +393,13 @@ function GhostNode({ view, unit }: { view: NodeView; unit: number }) {
  * collapses only a slider whose `min` / `max` / `step` are literals, so
  * nothing is wired INTO it and no input handle is owed. The state badge is
  * shown only for a problem (red, blocked, off) — the value says the rest —
- * and `data-state` carries it always.
+ * and `data-state` carries it always. Wave 5 N1 (finding U17): the row
+ * lays out NAME FIRST — a CSS grid whose name column takes its whole text
+ * while the track column keeps a floor of 40 % of its full width, so the
+ * name loses letters to an ellipsis only once the track is at the floor
+ * (`canvas.css`, pinned by `slider.spec.ts`); the value label is the chip
+ * editor on double-click (`ParamWidget`'s `valueEditor`); and the chevron
+ * sits at the right, before the output handle.
  */
 function CollapsedSlider({
   view,
@@ -357,17 +435,22 @@ function CollapsedSlider({
       data-collapsed="true"
     >
       <div className="cn-collapsed-row">
-        <span className="cn-collapsed-name" data-testid={`collapsed-${view.name}`}>
+        <span className="cn-collapsed-name" data-testid={`collapsed-${view.name}`} title={view.name}>
           {view.name}
         </span>
-        <ParamWidget view={view} param={param} writer={writer} />
-        <span className="cn-badges">
-          <GitBadge name={view.name} />
-          {problem && (
-            <span className={`cn-state ${badge.className}`} title={badge.title} data-testid={`state-${view.name}`}>
-              {badge.label}
+        <ParamWidget view={view} param={param} writer={writer} valueEditor />
+        <span className="cn-collapsed-tail">
+          {(gitChange !== undefined || problem) && (
+            <span className="cn-badges">
+              <GitBadge name={view.name} />
+              {problem && (
+                <span className={`cn-state ${badge.className}`} title={badge.title} data-testid={`state-${view.name}`}>
+                  {badge.label}
+                </span>
+              )}
             </span>
           )}
+          {writer && <Chevron view={view} collapsed />}
         </span>
         {out !== undefined && (
           <Handle
@@ -431,9 +514,11 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
   const badge = disabled
     ? { label: "off", className: "state-off", title: "disabled (#off) — D or the menu enables it" }
     : statusBadge(status, view.diagnostics.length);
-  // Near zoom and up: every output shows what is sitting on it (docs/16 LOD table).
+  // Near zoom and up: every output shows what is sitting on it, and every
+  // wired input what it receives (docs/16 LOD table; wave 5 N1).
   const outputValues =
     showsPortValues(tier) && values !== undefined ? new Map(values.outputs) : null;
+  const inputValues = showsPortValues(tier) && values !== undefined ? new Map(values.inputs) : null;
   const displayable = !disabled && view.outputs.some((o) => o.displayable);
   // A drag is heading somewhere: `probing` once the verdicts for ITS source
   // are in, `awaiting` while they are not (the gate fails closed meanwhile).
@@ -565,6 +650,7 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
                   probing={probing}
                   awaiting={awaiting}
                   writer={editable}
+                  value={inputValues === null ? undefined : (inputValues.get(input.name) ?? null)}
                 />
               ) : (
                 <span className="cn-port cn-in cn-empty" />
@@ -583,6 +669,8 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
         })}
       </div>
       {view.param && <ParamWidget view={view} param={view.param} writer={editable} />}
+      {/* The collapse chevron on the expanded slider's bottom edge (wave 5 N1) — every slider, widget or not, as the menu offers it. */}
+      {editable && view.func === "slider" && <Chevron view={view} collapsed={false} />}
       {status?.state === "running" && status.elements !== undefined && status.elements > 0 && (
         <div className="cn-progress">
           <div

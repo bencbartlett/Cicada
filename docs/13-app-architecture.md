@@ -654,6 +654,25 @@ inspected wires. Diagnostics carry the doc 11 structure — kind, span,
 expected/actual, suggested fix — so the same payload drives canvas
 error chips, the text panel, and agent loops.
 
+*(Live.)* The value reads are two intents that write nothing and answer
+the asking client alone: `inspect {node}` → `node_values {node,
+generation, outputs: [[port, summary | null]…], inputs: [[port, summary |
+null]…]}` and `inspect_wire {to}` → `wire_values {to, from, summary,
+pairing}`. Every summary is computed from the value the last complete
+generation stored — never a re-solve — by one path: the binding's hash in
+that generation's report → the stored value → its compact summary
+(`display::summarize`). `inputs` is additive (v0.1 wave 5 N1, finding
+U23 — the face shows what each input receives): one entry per input port
+in port order; a **wired** input carries its source output's summary —
+exactly the entry the source's own `node_values` answers for that port,
+since the same hash is looked up (several inputs fed by one output load
+it once); a literal kwarg and an unwired port carry `null` — their value
+is the text's or the catalog default's, not a solve result to look up,
+and the canvas shows the chip there, not a placeholder. `null` for a
+wired input means the source had no value in that generation (red,
+blocked, not yet computed). `GET /debug/state?values=true` carries the
+same `inputs` per node beside `outputs`.
+
 *(Live, v0.1 item 3b.)* A `cached` node's status carries `elements`
 and `nanos` when its memo entry recorded the cost of its last compute
 (node-level entries do, since 3b): the count is what the ETA's

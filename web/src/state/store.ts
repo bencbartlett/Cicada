@@ -130,6 +130,8 @@ export interface ProbeState {
 export interface NodeValues {
   generation: number;
   outputs: [string, ValueSummary | null][];
+  /** Per input, in port order: the wire's source value, `null` for a literal or an unwired port (wave 5 N1). */
+  inputs: [string, ValueSummary | null][];
 }
 
 export interface WireValues {
@@ -718,7 +720,7 @@ export const useCicada = create<CicadaState>((set, get) => ({
         set({
           nodeValues: {
             ...get().nodeValues,
-            [p.node]: { generation: p.generation, outputs: p.outputs },
+            [p.node]: { generation: p.generation, outputs: p.outputs, inputs: p.inputs },
           },
         });
         break;

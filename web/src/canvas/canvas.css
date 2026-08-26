@@ -736,8 +736,19 @@
   bottom: 1px;
 }
 
+/* on the collapsed row the widget's box has dissolved into the row's grid
+   (below): the bar is placed on the TRACK's column, flush with the row's
+   bottom edge, and the pending chip under the track + value */
 .cn-collapsed .cn-slider .scrub-bar {
-  bottom: -5px;
+  grid-column: 2;
+  left: 0;
+  right: 0;
+  bottom: 1px;
+}
+
+.cn-collapsed .cn-slider .cn-pending {
+  grid-column: 2 / 4;
+  top: calc(100% + 1px);
 }
 
 .cn-pending {
@@ -770,9 +781,23 @@
 }
 
 /* the collapsed slider (wave 4 B4, docs/16 §Canvas conventions): one grid
-   unit tall — name · track · value · the output handle on one row, GH-like;
-   no header, no port rows (its bounds are literals by the server's rule, so
-   nothing is wired into it) */
+   unit tall — name · track · value · (badges) · chevron · the output handle
+   on one row, GH-like; no header, no port rows (its bounds are literals by
+   the server's rule, so nothing is wired into it).
+
+   NAME FIRST (wave 5 N1, finding U17): the row is a CSS grid — name |
+   track | value | tail — because grid sizing lays the `auto` name column
+   out at its whole text BEFORE the `1fr` track column takes what is left,
+   while the track's `minmax` floor is honoured first of all; so the name
+   is never truncated until the track is at its floor, and only then does
+   the name lose letters to an ellipsis. The floor is 40 % of the track's
+   FULL width — the width it has with no name at all: the row's content
+   width minus the fixed parts (the value label's 3em = 30 px, the tail's
+   chevron 14 px, three 6 px gaps = 62 px; a wider value or a badge only
+   raises the floor). The slider widget's own box dissolves into the grid
+   (`display: contents`) so its range and value are the grid's items; its
+   absolutely positioned bar and chip are placed on the grid's columns
+   (above). Pinned by `web/e2e/slider.spec.ts` with a long-named slider. */
 .cn.cn-collapsed {
   justify-content: center;
 }
@@ -780,9 +805,10 @@
 .cn-collapsed-row {
   position: relative;
   height: var(--unit);
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(calc((100% - 62px) * 0.4), 1fr) auto auto;
   align-items: center;
-  gap: 6px;
+  column-gap: 6px;
   padding: 0 12px 0 8px;
   min-width: 0;
 }
@@ -790,20 +816,25 @@
 .cn-collapsed-name {
   font-weight: 700;
   font-size: 11px;
-  flex: 0 1 auto;
-  min-width: 2em;
-  max-width: 40%;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .cn-collapsed .cn-widget {
-  flex: 1 1 auto;
+  display: contents;
+}
+
+.cn-collapsed .cn-widget input[type="range"] {
   min-width: 0;
-  height: auto;
-  border-top: none;
-  padding: 0;
+  width: 100%;
+}
+
+.cn-collapsed-tail {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .cn-collapsed .cn-badges {
@@ -811,6 +842,72 @@
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+/* the collapse chevron (wave 5 N1, finding U17): on a slider's face. On
+   the expanded face a small tab centred on the bottom edge, over the
+   border — absolutely positioned so the face's layout (the server's
+   `size`) never changes; on the collapsed row inline at the right, before
+   the output handle. Greyed with the mirror's reason while a bound is wired
+   (`data-blocked`; the server still decides — the click is refused with a
+   notice); hidden at the far tier with the rest of the chrome. */
+.cn-chevron {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-elev);
+  color: var(--fg-dim);
+}
+
+.cn-chevron svg {
+  display: block;
+}
+
+.cn-chevron:hover,
+.cn-chevron:focus-visible {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+.cn-chevron.blocked {
+  color: var(--fg-faint);
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.cn-chevron.expanded {
+  position: absolute;
+  left: 50%;
+  bottom: -8px;
+  transform: translateX(-50%);
+  width: 22px;
+  z-index: 2;
+}
+
+.cicada-canvas[data-lod="far"] .cn-chevron {
+  visibility: hidden;
+}
+
+/* the collapsed value's editor in the label's place (wave 5 N1): the chip
+   editor, right-aligned like the label it replaces */
+.cn .cn-widget-value.editable {
+  cursor: text;
+}
+
+.cn-value-edit {
+  justify-content: flex-end;
+}
+
+.cn-value-edit .lit-input.compact {
+  width: 4.2em;
+  text-align: right;
 }
 
 /* progress bar (running nodes) */
@@ -841,6 +938,20 @@
 }
 
 .cn-port.cn-out.with-value .cn-port-label {
+  font-size: 9px;
+  line-height: 10px;
+}
+
+/* a wired input shows what it receives the same way (wave 5 N1): the
+   label over the source's value, left-aligned under the handle's row */
+.cn-port.cn-in.with-value {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0;
+}
+
+.cn-port.cn-in.with-value .cn-port-label {
   font-size: 9px;
   line-height: 10px;
 }

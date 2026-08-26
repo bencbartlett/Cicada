@@ -689,7 +689,7 @@ describe("resetSession (File → Open / Recent / Close, Back)", () => {
       displayGeneration: 4,
       displayResets: 2,
       catalog,
-      nodeValues: { deboss: { generation: 4, outputs: [] } },
+      nodeValues: { deboss: { generation: 4, outputs: [], inputs: [] } },
       wireValues: { "a.out->b.x": { from: { node: "a", port: "out" }, to: { node: "b", port: "x" }, summary: null, pairing: "" } },
       probe: { from: { node: "a", port: "out" }, targets: {}, catalog: [], intentId: null },
       transport: { view: TRANSPORT_AT_REST, receivedAt: 1 },

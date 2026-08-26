@@ -24,11 +24,17 @@ const PIPELINE = "slider.cic";
 const FILE = join(meta.scratch, "examples", PIPELINE);
 const SIDECAR = `${FILE}.layout.json`;
 
+// `long_named` and the even longer one are for the collapsed row's
+// name-first layout (wave 5 N1): a name that fits within the room the
+// track's 40 % floor leaves, and one that cannot.
 const START =
   "# cicada 1\n" +
   "size = slider(value=2.0, min=0.5, max=5.0)\n" +
   "bound = slider(value=1.0, min=0.0, max=size)\n" +
-  "driven = slider(value=size, min=0.0, max=10.0)\n";
+  "driven = slider(value=size, min=0.0, max=10.0)\n" +
+  "long_named = slider(value=2.0, min=0.5, max=5.0)\n" +
+  "an_even_longer_slider_name_that_cannot_fit_beside_the_track = slider(value=2.0, min=0.5, max=5.0)\n";
+const SLIDERS = ["size", "bound", "driven", "long_named", "an_even_longer_slider_name_that_cannot_fit_beside_the_track"];
 
 interface DebugState {
   text: string;
@@ -81,8 +87,8 @@ test("a slider collapses to one grid unit from the menu and expands from the ins
 
   await page.goto(`/?token=${TOKEN}&pipeline=${PIPELINE}`);
   await expect(page.getByTestId("app")).toBeVisible();
-  await expect(page.locator(".react-flow__node")).toHaveCount(3);
-  for (const name of ["size", "bound", "driven"]) await solvedState(page, name);
+  await expect(page.locator(".react-flow__node")).toHaveCount(SLIDERS.length);
+  for (const name of SLIDERS) await solvedState(page, name);
   expect((await debugState(page)).history.depth).toBe(0);
   expect(existsSync(SIDECAR), "nothing moved yet: no sidecar").toBe(false);
 
@@ -187,7 +193,117 @@ test("a slider collapses to one grid unit from the menu and expands from the ins
     // The inspector's action says the same before the click.
     await node(page, name).click({ position: { x: 10, y: 8 } });
     await expect(page.getByTestId("action-collapse")).toHaveAttribute("data-blocked", reason);
+    // … and so does the chevron on the face (wave 5 N1), greyed.
+    await expect(page.getByTestId(`chevron-${name}`)).toHaveAttribute("data-blocked", reason);
+    await expect(page.getByTestId(`chevron-${name}`)).toHaveClass(/blocked/);
   }
+
+  // ---- wave 5 N1 (finding U17): the chevron ON the face. The expanded
+  // `size` wears it centred on its bottom edge — an absolutely positioned
+  // tab, so the face keeps the server's seven units — and one click is ONE
+  // op `collapse size`; the collapsed row wears its twin before the output
+  // handle, and one click there is `expand size`.
+  await page.locator(".react-flow__pane").click({ position: { x: 5, y: 5 } });
+  const chevron = page.getByTestId("chevron-size");
+  await expect(chevron).toHaveClass(/expanded/);
+  expect(await heightUnits(page, "size")).toBe(7);
+  const faceBox = (await face(page, "size").boundingBox())!;
+  const tabBox = (await chevron.boundingBox())!;
+  expect(Math.abs(tabBox.x + tabBox.width / 2 - (faceBox.x + faceBox.width / 2)), "centred").toBeLessThan(2);
+  expect(Math.abs(tabBox.y + tabBox.height / 2 - (faceBox.y + faceBox.height)), "on the bottom edge").toBeLessThan(6);
+  await chevron.click();
+  await expect(face(page, "size")).toHaveAttribute("data-collapsed", "true");
+  expect((await debugState(page)).history).toMatchObject({ depth: 1, undo_label: "collapse size", can_redo: false });
+  await expect(chevron).toHaveClass(/collapsed/);
+  const handleBox = (await node(page, "size").locator(".react-flow__handle.source").boundingBox())!;
+  const rowChevron = (await chevron.boundingBox())!;
+  expect(rowChevron.x + rowChevron.width, "before the output handle").toBeLessThanOrEqual(handleBox.x + 1);
+
+  // ---- the collapsed value is editable: double-click → the chip editor in
+  // its place; Enter = ONE `set_param` through the literal rule; Esc cancels;
+  // an unspellable value is a notice and no write; a single click selects.
+  await page.getByTestId("slider-value-size").dblclick();
+  const editor = page.getByTestId("slider-value-size-input");
+  await expect(editor).toHaveValue("2.0");
+  await editor.fill("3.5");
+  await editor.press("Enter");
+  await expect.poll(async () => (await debugState(page)).text).toContain("size = slider(value=3.5, min=0.5, max=5.0)");
+  await expect(page.getByTestId("slider-value-size")).toHaveText("3.5");
+  expect((await debugState(page)).history).toMatchObject({ depth: 2, undo_label: "set size.value = 3.5" });
+  await expect(face(page, "size"), "a typed value keeps the collapse").toHaveAttribute("data-collapsed", "true");
+  await page.getByTestId("slider-value-size").dblclick();
+  await page.getByTestId("slider-value-size-input").fill("4.0");
+  await page.getByTestId("slider-value-size-input").press("Escape");
+  await expect(page.getByTestId("slider-value-size")).toHaveText("3.5");
+  await page.getByTestId("slider-value-size").dblclick();
+  await page.getByTestId("slider-value-size-input").fill("1/2");
+  await page.getByTestId("slider-value-size-input").press("Enter");
+  await expect(notices).toContainText('size.value: "1/2" is not a valid number — nothing written');
+  const afterTyping = await debugState(page);
+  expect(afterTyping.history.depth, "Esc and a refusal write nothing").toBe(2);
+  expect(afterTyping.text).toContain("value=3.5");
+  await page.getByTestId("slider-value-size").click();
+  await expect(node(page, "size")).toHaveClass(/selected/);
+  await expect(page.getByTestId("node-inspect")).toHaveAttribute("data-node", "size");
+  await chevron.click();
+  await expect(face(page, "size")).not.toHaveAttribute("data-collapsed", "true");
+  expect((await debugState(page)).history).toMatchObject({ depth: 3, undo_label: "expand size" });
+
+  // ---- name first: the collapsed row lays out name · track · value · tail
+  // with the name never truncated until the track has shrunk to 40 % of
+  // its FULL width (the width it has with no name at all), and only then
+  // with an ellipsis. `long_named` fits: its box equals its scroll width
+  // and the track is what the name leaves; the even longer name is cut at
+  // exactly the point where the track sits at its floor — no earlier.
+  for (const name of ["size", "long_named", "an_even_longer_slider_name_that_cannot_fit_beside_the_track"]) {
+    await page.getByTestId(`chevron-${name}`).click();
+    await expect(face(page, name)).toHaveAttribute("data-collapsed", "true");
+  }
+  const fits = await collapsedGeometry(page, "long_named");
+  expect(fits.nameScroll, `long_named is whole: ${JSON.stringify(fits)}`).toBeLessThanOrEqual(fits.nameClient + 1);
+  expect(fits.track, "the track shrank to make room").toBeLessThan(fits.full - 10);
+  expect(fits.track, "… and stays at or above its 40 % floor").toBeGreaterThanOrEqual(fits.floor - 1);
+  expect(Math.abs(fits.track + fits.name - fits.full), "name and track share the room").toBeLessThan(2);
+  const cut = await collapsedGeometry(page, "an_even_longer_slider_name_that_cannot_fit_beside_the_track");
+  expect(cut.nameScroll, `the long name is cut: ${JSON.stringify(cut)}`).toBeGreaterThan(cut.nameClient + 5);
+  expect(Math.abs(cut.track - cut.floor), "… only once the track is at its floor, not before").toBeLessThan(2);
+  expect(cut.track, "≥ 40 % of the full track").toBeGreaterThanOrEqual(0.4 * cut.full - 1);
+  // The short name never touches the floor.
+  const short = await collapsedGeometry(page, "size");
+  expect(short.nameScroll).toBeLessThanOrEqual(short.nameClient + 1);
+  expect(short.track).toBeGreaterThan(short.floor + 10);
 
   expect(errors, errors.join("\n")).toEqual([]);
 });
+
+/**
+ * The collapsed row's geometry in layout px (the canvas zoom divided out):
+ * the name's box and scroll width, the track's width, the FULL track width
+ * (the row's content minus the value label, the tail and the three gaps —
+ * what the track has with no name) and the 40 % floor of it.
+ */
+async function collapsedGeometry(
+  page: Page,
+  name: string,
+): Promise<{ name: number; nameScroll: number; nameClient: number; track: number; full: number; floor: number }> {
+  return face(page, name).evaluate((el) => {
+    const row = el.querySelector(".cn-collapsed-row") as HTMLElement;
+    const nameEl = row.querySelector(".cn-collapsed-name") as HTMLElement;
+    const range = row.querySelector("input[type='range']") as HTMLElement;
+    const value = row.querySelector(".cn-widget-value") as HTMLElement;
+    const tail = row.querySelector(".cn-collapsed-tail") as HTMLElement;
+    const zoom = row.getBoundingClientRect().width / row.offsetWidth;
+    const width = (e: HTMLElement) => e.getBoundingClientRect().width / zoom;
+    const style = getComputedStyle(row);
+    const content = row.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight);
+    const full = content - width(value) - width(tail) - 3 * Number.parseFloat(style.columnGap);
+    return {
+      name: width(nameEl),
+      nameScroll: nameEl.scrollWidth,
+      nameClient: nameEl.clientWidth,
+      track: width(range),
+      full,
+      floor: 0.4 * full,
+    };
+  });
+}

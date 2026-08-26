@@ -320,6 +320,31 @@ test("U7 · U18 · U19 — the face shows its values from the first full tier; t
   // The summaries arrive (an `inspect` per visible solved node): at least
   // one shows a value, not the `—` placeholder.
   await expect.poll(async () => (await values.allTextContents()).filter((t) => t !== "—").length).toBeGreaterThan(0);
+  // … and the wired INPUTS show what they receive (wave 5 N1, finding U23):
+  // 02-solids wires its slider into the cone, so at least one input row
+  // carries a value — a real one, not the `—` placeholder — and it is the
+  // same text its source output shows (one summary, one path).
+  const inputValues = page.locator(".cn-port.cn-in.with-value .cn-port-value");
+  await expect.poll(async () => inputValues.count()).toBeGreaterThan(0);
+  await expect
+    .poll(async () => (await inputValues.allTextContents()).filter((t) => t !== "—").length)
+    .toBeGreaterThan(0);
+  const inputAndSource = await page.evaluate(() => {
+    const w = window as unknown as {
+      __cicada: { state: () => { graph: { wires: { from: { node: string; port: string }; to: { node: string; port: string } }[] } } };
+    };
+    for (const wire of w.__cicada.state().graph.wires) {
+      const shown = document.querySelector(`[data-testid='in-value-${wire.to.node}-${wire.to.port}']`);
+      if (shown === null || shown.textContent === "—") continue;
+      const source = document
+        .querySelector(`.cn[data-node='${wire.from.node}']`)
+        ?.querySelector(".cn-port.cn-out.with-value .cn-port-value");
+      if (source?.textContent) return { input: shown.textContent, source: source.textContent, wire: `${wire.from.node}.${wire.from.port} → ${wire.to.node}.${wire.to.port}` };
+    }
+    return null;
+  });
+  expect(inputAndSource, "a wired input with a value whose source is on screen").not.toBeNull();
+  expect(inputAndSource!.input, inputAndSource!.wire).toBe(inputAndSource!.source);
   const nearZoom = await canvasZoom(page);
   expect(nearZoom, "the canvas zoom is inside the near band").toBeGreaterThanOrEqual(0.35);
   expect(nearZoom).toBeLessThan(1.6);

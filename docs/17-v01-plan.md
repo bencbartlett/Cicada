@@ -2381,6 +2381,43 @@ proves wrong is revised here, dated, in the landing commit.
     editable value, the layout rule; inputs' values), docs/13 (`inspect`
     additive).
 
+  *Built 2026-08-25 (`wt/face`: `CicadaNode.tsx` — `Chevron`, the input
+  value on `InputRow`, the collapsed row's tail; `ParamWidget.tsx` —
+  `valueEditor`; `LiteralChip.tsx` exports its `LiteralEditor`;
+  `canvas.css` — the collapsed row as a grid, the chevron; `Inspector.tsx`
+  — input values in full; `session.rs` — `node_input_values` over the one
+  `output_hash` path `node_values` now shares, `protocol.rs` —
+  `NodeValues.inputs`; `messages.ts` / `store.ts` mirror it;
+  `inputValues.test.tsx`, `nodeFace.test.tsx`, the server unit test
+  `inspect_answers_each_input_with_its_wire_source_value`, the protocol
+  shape test; `slider.spec.ts` + `visuals.spec.ts`; docs/13 §Solve
+  streaming, docs/16 §Sliders + the LOD table).* Built as contracted, with
+  four calls the contract left open, each the smaller honest one: (1) the
+  **greyed chevron is not a disabled one** — a wired bound greys it
+  (`blocked`, `data-blocked` = the mirror's reason, the rule in the
+  tooltip) and the click still sends `set_collapsed`, so the SERVER
+  refuses with the notice exactly as it does for the menu item and the
+  inspector action; a disabled button would have made the client the
+  decider, which the wave-4 review ruled out. (2) The **40 % floor** is
+  40 % of the track's FULL width — the width it has with no name at all
+  — and the CSS states the fixed parts it subtracts (the value label's
+  3em, the chevron, three gaps: 62 px); a value label wider than 3em or a
+  badge on the row raises the floor slightly above 40 %, never below it
+  (the e2e measures the real full width and holds the track to ≥ 40 % of
+  it, and the cut name to exactly the floor). To lay the name out first
+  the row became a CSS grid and the slider widget's box dissolves into it
+  (`display: contents`), which costs the collapsed row the widget's
+  `slider 0.5 … 5` hover (the value label's hover names the port and the
+  gesture instead; the expanded face keeps it). (3) **A literal input
+  shows no value text** — its chip IS its value, so the `null` the server
+  answers for it is not rendered as a `—` placeholder; a wired input whose
+  source has no value yet does read `—`, like an output; the inspector
+  lists a value box under wired inputs only. (4) `/debug/state?values=true`
+  carries `inputs` per node beside `outputs` (the oracle the e2e and
+  agents read; additive). What the contract did not foresee: nothing that
+  changed its shape — the `inspect` answer, the op, the intents and the
+  drag protocol are untouched.
+
 **Track M — `wt/menu` (catalog + web; the catalog half one review, the UI half one review).**
 - **C2c — the sub-group attribute.** `#[node(…, sub = "…")]` is
   REQUIRED on every node, like `gh`: cicada-macros parses it (a node

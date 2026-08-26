@@ -84,7 +84,7 @@ use crate::scripts::ScriptCancel;
 use crate::scrub::{self, SCRUB_PORT, WarmQueue};
 use crate::sidecar::Sidecar;
 use crate::solve::{IdleError, Job, JobKind, SolveLoop, SolveSink};
-use crate::viewmodel::{self, GraphView, NodeRefs, WireEnd};
+use crate::viewmodel::{self, GraphView, NodeRefs, NodeView, WireEnd};
 
 /// A path for humans: Windows' `\\?\` verbatim prefix stripped, forward
 /// slashes.
@@ -716,6 +716,45 @@ struct Kept {
     /// The display tier its generation drew at (a preview generation's
     /// re-emission — a preview toggle mid-drag — stays at its tier).
     tier: DisplayTier,
+}
+
+/// The hash of `view`'s `index`-th output in a kept generation: a literal
+/// binding IS its value; a port binding reads the node's outcome at the
+/// port the binding names (a multi-target line `a, b = …` names one port
+/// per target); a whole-node binding reads the outcome at `index`. `None`
+/// when the binding did not lower or the node has no outcome (red,
+/// blocked, cancelled). The one path under every value the inspector and
+/// the face show — outputs and, through the wires, inputs.
+fn output_hash(kept: &Kept, view: &NodeView, index: usize) -> Option<ValueHash> {
+    match kept.lowered.bindings.get(&view.name)? {
+        LoweredBinding::Value(value) => Some(value.hash()),
+        LoweredBinding::Port {
+            node: id,
+            output: port,
+        } => {
+            let port = if view.targets.len() > 1 {
+                match view
+                    .targets
+                    .get(index)
+                    .and_then(|t| kept.lowered.bindings.get(t))
+                {
+                    Some(LoweredBinding::Port { output, .. }) => *output,
+                    _ => *port,
+                }
+            } else {
+                *port
+            };
+            kept.report
+                .outcome(*id)
+                .output_hashes()
+                .and_then(|h| h.get(port).copied())
+        }
+        LoweredBinding::Node { node: id } => kept
+            .report
+            .outcome(*id)
+            .output_hashes()
+            .and_then(|h| h.get(index).copied()),
+    }
 }
 
 /// The display tier of a generation: a slider drag's generations draw
@@ -2040,12 +2079,14 @@ impl Session {
             ClientMessage::Inspect { node } => {
                 let inner = self.core.lock_inner();
                 let (generation, outputs) = self.core.node_values(&inner, &node);
+                let inputs = self.core.node_input_values(&inner, &node);
                 send_to(
                     &inner,
                     client,
                     &ServerMessage::NodeValues {
                         node,
                         outputs,
+                        inputs,
                         generation,
                     },
                 );
@@ -3408,9 +3449,10 @@ impl Session {
                 .iter()
                 .map(|node| {
                     let (generation, outputs) = self.core.node_values(&inner, &node.name);
+                    let inputs = self.core.node_input_values(&inner, &node.name);
                     (
                         node.name.clone(),
-                        serde_json::json!({ "generation": generation, "outputs": outputs }),
+                        serde_json::json!({ "generation": generation, "outputs": outputs, "inputs": inputs }),
                     )
                 })
                 .collect()
@@ -5903,48 +5945,59 @@ impl Core {
                     .collect(),
             );
         };
-        let store = self.scheduler.store();
-        let mut outputs = Vec::new();
-        for (index, output) in view.outputs.iter().enumerate() {
-            let hash = match kept.lowered.bindings.get(&view.name) {
-                Some(LoweredBinding::Value(value)) => Some(value.hash()),
-                Some(LoweredBinding::Port {
-                    node: id,
-                    output: port,
-                }) => {
-                    let port = if view.targets.len() > 1 {
-                        match view
-                            .targets
-                            .get(index)
-                            .and_then(|t| kept.lowered.bindings.get(t))
-                        {
-                            Some(LoweredBinding::Port { output, .. }) => *output,
-                            _ => *port,
-                        }
-                    } else {
-                        *port
-                    };
-                    kept.report
-                        .outcome(*id)
-                        .output_hashes()
-                        .and_then(|h| h.get(port).copied())
-                }
-                Some(LoweredBinding::Node { node: id }) => kept
-                    .report
-                    .outcome(*id)
-                    .output_hashes()
-                    .and_then(|h| h.get(index).copied()),
-                None => None,
-            };
-            let summary = hash.and_then(|hash| {
-                store
-                    .load_value(&hash)
-                    .ok()
-                    .map(|v| display::summarize(&v, &self.display_context(DisplayTier::Fine)))
-            });
-            outputs.push((output.name.clone(), summary));
-        }
+        let outputs = view
+            .outputs
+            .iter()
+            .enumerate()
+            .map(|(index, output)| {
+                let summary =
+                    output_hash(kept, view, index).and_then(|hash| self.summarize_stored(&hash));
+                (output.name.clone(), summary)
+            })
+            .collect();
         (kept.generation, outputs)
+    }
+
+    /// Per-input value summaries for a node from the last complete
+    /// generation (v0.1 wave 5 N1 — the face shows what each input
+    /// receives): a WIRED input carries its source output's summary by the
+    /// same path [`Self::node_values`] takes for that output — the wire's
+    /// source binding → its hash in the kept report → the stored value —
+    /// so the two surfaces never disagree; a literal kwarg and an unwired
+    /// port are `None` (their value is the text's or the default's, not a
+    /// solve result). Several inputs fed by one output load it once.
+    fn node_input_values(&self, inner: &Inner, node: &str) -> Vec<(String, Option<ValueSummary>)> {
+        let Some(view) = inner.graph.node(node) else {
+            return Vec::new();
+        };
+        let kept = inner.last_complete.as_ref();
+        let mut by_hash: HashMap<ValueHash, Option<ValueSummary>> = HashMap::new();
+        view.inputs
+            .iter()
+            .map(|input| {
+                let summary = input.wired.as_ref().and_then(|wire| {
+                    let kept = kept?;
+                    let source = inner.graph.node(&wire.node)?;
+                    let index = source.outputs.iter().position(|o| o.name == wire.port)?;
+                    let hash = output_hash(kept, source, index)?;
+                    by_hash
+                        .entry(hash)
+                        .or_insert_with(|| self.summarize_stored(&hash))
+                        .clone()
+                });
+                (input.name.clone(), summary)
+            })
+            .collect()
+    }
+
+    /// The compact summary of a stored value (`None` when the store has no
+    /// such value — never a re-solve).
+    fn summarize_stored(&self, hash: &ValueHash) -> Option<ValueSummary> {
+        self.scheduler
+            .store()
+            .load_value(hash)
+            .ok()
+            .map(|v| display::summarize(&v, &self.display_context(DisplayTier::Fine)))
     }
 
     /// Fill statuses from a finished report.
@@ -6495,6 +6548,81 @@ mod tests {
             seq_before,
             "a notice is not an op"
         );
+    }
+
+    /// Wave 5 N1 (docs/16 §Canvas conventions — the face shows what each
+    /// input receives): `inspect` answers `inputs` beside `outputs`, in
+    /// port order — a WIRED input carries its source output's summary, the
+    /// very one the source's own `inspect` answers for that port (one hash,
+    /// one path); a literal kwarg and an unwired optional port are `null`.
+    /// `/debug/state?values=true` carries the same per node.
+    #[test]
+    fn inspect_answers_each_input_with_its_wire_source_value() {
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             twice = construct_domain(start=size, end=size)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        drain(&mut rx);
+        for node in ["size", "span", "twice"] {
+            session.handle(id, None, ClientMessage::Inspect { node: node.into() });
+        }
+        let messages = texts(&drain(&mut rx));
+        let answers: Vec<&serde_json::Value> = messages
+            .iter()
+            .filter(|m| m["type"] == "node_values")
+            .map(|m| &m["payload"])
+            .collect();
+        assert_eq!(answers.len(), 3, "{messages:?}");
+        let (size, span, twice) = (answers[0], answers[1], answers[2]);
+        assert_eq!(size["node"], "size");
+        assert_eq!(span["node"], "span");
+
+        // The slider's five inputs are literals or unwired defaults: all null,
+        // named in port order.
+        let ports = |payload: &serde_json::Value| -> Vec<String> {
+            payload["inputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|pair| pair[0].as_str().unwrap().to_owned())
+                .collect()
+        };
+        assert_eq!(ports(size), ["value", "min", "max", "step", "scrub"]);
+        assert!(
+            size["inputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|pair| pair[1].is_null()),
+            "literals and unwired ports carry no wire value: {}",
+            size["inputs"]
+        );
+
+        // `span.start` is a literal → null; `span.end` is wired from
+        // `size.out` → exactly the summary `size`'s own answer has for `out`.
+        let size_out = &size["outputs"][0][1];
+        assert_eq!(size_out["kind"], "Number", "{size_out}");
+        assert_eq!(ports(span), ["start", "end"]);
+        assert!(span["inputs"][0][1].is_null(), "{}", span["inputs"]);
+        assert_eq!(span["inputs"][1][1], *size_out);
+        assert_eq!(span["generation"], size["generation"]);
+        // Two inputs fed by the one output: both carry it.
+        assert_eq!(twice["inputs"][0][1], *size_out);
+        assert_eq!(twice["inputs"][1][1], *size_out);
+        // The outputs keep their shape beside the new field.
+        assert_eq!(span["outputs"][0][0], "out");
+        assert_eq!(span["outputs"][0][1]["kind"], "Domain");
+
+        // The debug oracle says the same.
+        let state = session.debug_state(true);
+        assert_eq!(state["values"]["span"]["inputs"][1][1], *size_out);
+        assert!(state["values"]["span"]["inputs"][0][1].is_null());
     }
 
     #[test]
