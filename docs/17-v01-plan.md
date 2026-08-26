@@ -2129,16 +2129,93 @@ DECISIONS.md row of 2026-08-11 (UI contracts) revised for the tiers.
 | U27 | The ribbon should not be persistent: a **dropdown menu** per tab that closes on a click elsewhere, with **sub-categories** (as GH groups Maths into Operators / Trig / Util …). | Build. The catalog carries the sub-group: `#[node(…, sub = "operators")]` on every node (docs/08's category sections gain their sub-groups; `catalog.json` format 3 `sub`; the conformance test requires it), and the ribbon becomes a **menu bar** — a tab opens a panel whose columns are the sub-groups, closed by an outside click, Esc or a placement; the `ribbonCollapsed` setting goes. A mechanical catalog package (C2c, every node file) and a web package (M1) that can group by category alone until C2c lands. | C2c + M1 |
 | U28 | Icons for every node instead of the two-letter glyphs — not now, but what is a good workflow to mass-generate them? | **Answer** (docs/16 §Icons already names an AI pipeline; this is the workflow): generate SVG *code*, not raster images — a language model writes each icon from a manifest row (`catalog.json`: name, title, category, description, `gh`), a **style contract that is a lint** (24-unit viewBox, stroke-only monoline at 1.75 with round caps and joins, `currentColor` only so the category hue is the CSS's, no text, ≤ 12 elements, no `<style>`/`<image>`/scripts) and five hand-picked exemplars for consistency-by-example, batched and in parallel; a **contact sheet** (one page of all 150 on dark and light, each under its name) is the review surface — accept, or regenerate by name with a one-line note; the icons land at `web/src/icons/<name>.svg` (Vite glob), the face falls back to the glyph when one is missing, and a test holds every catalog node to an icon or an allow-list that must only shrink. Raster models cannot hold one stroke style across 150 glyphs and yield nothing themeable or lintable; GH's own icons are not ours to copy. Cost: minutes of generation, about an hour of looking at the sheet. A track-C package when Ben wants it. | (C3+) |
 | U29 | Clicking a node in the menu should add it at the **centre of the view** — it appeared below the first row, out of sight; the user must get immediate feedback. | **Done 2026-08-25** (fast lane): the canvas reports the cell under its centre to the store after every pan / zoom / fit; the ribbon's `place_node` carries it (`cell`), as search-to-place carries the click's cell. | — |
-| U30 | 09-vectors with 1,000 `sphere`s (instead of `mesh_sphere`): the canvas is sluggish, a placed node appears seconds later, undo/redo are very slow; not with `mesh_sphere`. Canvas editing should be prioritised over solver speed. | **Measured 2026-08-25** — §Measurement U30 / U31 below. | D1 |
-| U31 | With the 1,000 solids the solve reads 56 ms yet the viewport updates over seconds — the profiling is inaccurate, or the preview viewer is slow. | **Measured 2026-08-25** — §Measurement U30 / U31 below. | D1 |
+| U30 | 09-vectors with 1,000 `sphere`s (instead of `mesh_sphere`): the canvas is sluggish, a placed node appears seconds later, undo/redo are very slow; not with `mesh_sphere`. Canvas editing should be prioritised over solver speed. | **Measured 2026-08-25** (release and debug engines — §Measurement U30 / U31 below). Not the canvas, not the node refs, not the memo: a placement or undo that leaves the spheres alone re-sends nothing and reaches the DOM in 16–40 ms on both engines. What costs seconds is every **redraw of 1,000 fine-tier B-rep spheres** — 8,000 triangles each (the 0.1 rad angular deflection governs at r = 0.4), a 160 MB frame, 2.3–2.5 s of tessellation (release; 4.1 s debug) + 0.1 s encode + 0.4 s socket + 0.3–0.5 s client, against `mesh_sphere(segments=16)`'s 224 triangles, 4.5 MB and ~50 ms (36×) — paid on first paint, on every slider release, on the first structural edit after a drag (the preview-tier entry's hash differs, one redraw), and — the undo/redo symptom — on **every** undo/redo between two value sets of the spheres: the 256 MiB `SolidCache` holds 1,397 fine spheres, so two sets of 1,000 thrash it (~900 misses per flip, `computed: 0`, 2.3 s each). An insert that changes the spheres' inputs (dropped into their wire, or upstream) is such a redraw. Fixes the data supports → D1. | D1 |
+| U31 | With the 1,000 solids the solve reads 56 ms yet the viewport updates over seconds — the profiling is inaccurate, or the preview viewer is slow. | **Measured 2026-08-25**: both, in a sense — the number is accurate about what it measures and silent about the rest. The status bar's `elapsed_ms` is the **solve alone** (`finish_statuses`, stamped before the display edge begins: 17 ms release / 46 ms debug here); the display edge that follows — `warm_solids` tessellating every distinct solid on the worker pool, `emit_frames` encoding under the lock — lands only in `/debug/state.timings` (2,627 ms for the same generation), and the socket (0.35–0.45 s for 160 MB) and the client's decode + upload (0.3–0.46 s, three long tasks, the longest 243 ms) are counted nowhere. The viewer itself is not slow: the decoder is zero-copy, the edge overlay is skipped above 200k triangles, the render loop runs only while the camera moves. → D1 shows the display edge in the chip and the viewport; P1 itemises it. | D1 + P1 |
 | U32 | The viewport needs its own profiling indicator — a spinner while the preview is updating. | Build: the server brackets each generation's frames with `display_begin {generation, outputs, bytes}` / `display_end {generation, ms}`; the viewport shows a spinner between them and the time it took after; `/debug/state` carries the same. | D1 |
 | U33 | Replace "solved gen N · 2 computed / 34 cached · 56 ms" with **"Solving gen N"** + a spinner while solving; edits made while a preview is being drawn should cancel the draw (keeping the last rendered one) and start on the newest state — never a queue of states to render. | Build: the chip says `Solving gen N` with a spinner, then `gen N · 56 ms` (the counts move to the profiler); server: a superseded generation's display pass stops at the next output (the frame emission checks the loop's latest-wins token); client: frames of a superseded generation are dropped before decoding (the `display_begin` of the newer one marks them stale) — the viewport stays on the last complete generation until the new one's frames land. | D1 |
 | U34 | A **profiler** button beside the solve chip: the last solve + render aggregated — a ring chart of what took how long and a scrollable table — including the preview / rendering phases, for real benchmarks going forward. | Build: a `profile {generation}` read answering per-node costs (computed: measured `nanos`; cached: the entry's last cost, marked), the server's phases (lowering, solve, display tessellation, frame encode, bytes) and the client's own (decode, GPU upload, first paint) merged in the page; the panel: an SVG ring (no chart dependency) + a sortable table; the same numbers in `/debug/state` for agents. | P1 |
 
 ### Measurement U30 / U31 (2026-08-25)
 
-*(being measured on the release engine — this subsection is filled when
-the numbers are in)*
+Two scratch variants of `examples/09-vectors.cic` with `steps=1000`
+(1,000 posts): `post_balls = sphere(plane=each(post_frames), radius=0.4)`
+and `mesh_sphere(…, segments=16)`; default project config (mm, tol 1e-6).
+Served on a private port by the release engine (debug where noted), a
+protocol client running inside headless Chromium (Node 22's built-in
+`WebSocket` closes a frame above 16 MiB with code 1006, so the Node
+harness never sees the 160 MB frame — see §Follow-ups), and the real app
+in headless Chromium on the machine's GPU for the client side. Scripts
+and raw results were kept in the session's scratch dir; the numbers:
+
+| | solid, release | solid, debug | mesh, release |
+|---|---|---|---|
+| `post_balls` frame: triangles / bytes / tier | 8,000,000 / 160.1 MB / fine | same | 224,000 / 4.5 MB |
+| first paint, `timings.elapsed_ms` (solve + tessellation + encode) | 2,627 ms | 4,539 ms | 18 ms |
+| of which the solve (the status bar's number) | ≈ 17 ms | ≈ 46 ms | ≈ 12 ms |
+| last frame at the client after open | 2,974 ms | 4,899 ms | 52 ms |
+| encode alone (every tessellation cached) | 114 ms | — | 3.8 ms |
+| second client joining (encode + socket) | 451 ms | — | 14 ms |
+| `place_node` / `undo` / `redo` not touching the spheres (×3 each): frames re-sent | **0** | **0** | 0 |
+| … send → `delta`; → the node in the DOM (real app) | 3–33 ms; 16–33 ms | 4–14 ms; 21–34 ms | 3–17 ms; 16–29 ms |
+| slider preview tick (live policy): gen / frame | 217 ms / 17.5 MB (866 tris per sphere, preview tier) | 461 ms / 17.5 MB | 11 ms / 4.6 MB |
+| slider release: gen / frame / at the client | 2,596 ms / 160 MB / 2,993 ms | 4,588 ms / 4,990 ms | 7 ms / 4.6 MB / 60 ms |
+| first structural edit after a drag (value unchanged): frames | 160 MB re-sent (tier flip; meshes cached → 114 ms encode, 504 ms at the client) | — | 4.6 MB |
+| undo / redo between two value sets of the spheres (×4) | 2,333–2,367 ms each, 160 MB each, `computed: 0`, ~900 cache misses per flip | 4,144–4,194 ms each | 4–9 ms |
+| `SolidCache` after two value sets | 1,397 entries = the whole 256 MiB (192,048 B per fine sphere; 20,832 B at preview) | same | 0 entries (meshes are not cached) |
+| client main thread per 160 MB redraw (long tasks) | 0.30–0.46 s, longest 243 ms | 0.65 s | 0.24 s |
+
+What the code says, verified against the numbers: the display table is
+keyed by `(node_ref, output)` and `node_ref` is assigned per NAME for
+the session (`viewmodel.rs` `NodeRefs::get_or_assign`) — `post_balls`
+kept ref 30 through nine edits and re-sent nothing, so "refs shift on
+insert" is refuted; `already_displayed` compares hash and tier, so a
+drag's preview-tier entry makes the NEXT structural generation redraw
+the output at fine once (real, bounded to one redraw per drag); the
+status bar's `SolveSummary.elapsed_ms` is stamped in `finish_statuses`
+before `display_pending` → `warm_solids` → `emit_frames` run, and only
+`GenerationTiming.elapsed_ms` (`/debug/state`) adds them; at r = 0.4 the
+fine deflection (`max(0.02 mm, tol)` linear, `max(0.1 rad, tol_angle)`
+angular, the relative term changing nothing at this size) is governed by
+the ANGULAR bound — OCCT meshes the sphere at 4,002 vertices / 8,000
+triangles, confirmed byte-exactly by the frame size; the preview tier
+(0.1 / 0.3 rad) gives 435 / 866; `mesh_sphere(16)` is 114 / 224.
+
+Root cause, ranked: (1) per-value fine tessellation of 1,000 distinct
+solids — ≈ 50 ms CPU per sphere, 2.3–2.5 s per redraw on 22 threads —
+paid on first paint, every release, and every undo/redo that flips the
+spheres between two value sets because the two sets do not fit the
+cache; (2) 160 MB per redraw with no instancing — 1,000 translated
+spheres are 1,000 distinct hashes, and `frames_for_value` instances only
+identical hashes — ≈ 0.9 s of socket + client + encode; (3) the status
+bar stops its clock at the solve; (4) one extra redraw after every drag.
+Not a cause: the canvas, node refs, the memo (every slow generation had
+`computed: 0`), the near-tier `inspect` (11–13 ms for the node even while
+evicting), the GPU, the client decode, the watcher.
+
+Ben's "seconds between inserting a node and seeing it" did not reproduce
+for an insert that leaves the spheres alone; it is explained when the
+insert changed their inputs (a node dropped into the `post_frames →
+post_balls` wire, or anything upstream) or followed a drag — each such
+insert and each undo/redo of it is a full redraw, and flipping between
+the two value sets keeps paying it.
+
+Fixes the data supports (the D1 contract draws on these): **a per-output
+triangle budget that drops a large solid list to the preview tier** (or
+coarsens the angular deflection): 9× less tessellation, bytes, cache and
+client work, and two sets of 1,000 then fit the cache (2 × 20.8 MB) —
+the undo/redo thrash goes with it; **the `SolidCache` budget sized by
+tier or raised** (the stopgap; the budget above covers this case, not
+larger ones); **instancing congruent solids** — one blob plus N
+transforms, which the frame format already carries (`frames.rs`, a 3×4
+per instance) — removes all three costs for exactly this
+`each(planes)`-over-one-primitive pattern but needs rigid-copy detection
+(docs/13's interner work; a follow-up unless Ben wants it in the wave);
+**showing the display edge** — the display time folded into the chip
+and bracketed by `display_begin` / `display_end`. Not supported by this
+data: re-keying the display table, skipping fine redraws already at fine
+(already the behaviour), decoding frames in a worker (0.3–0.46 s of
+client time against 2.3–2.5 s of server tessellation — smoothness, not
+the seconds), and anything in the solve or the memo.
 
 ### Wave 5 — PROPOSED (awaiting Ben's confirmation; contracts not yet frozen)
 
@@ -2150,12 +2227,28 @@ at once — two rounds):
 
 - **Round 1**
   - **Track D — `wt/display`: D1 display responsiveness + P1 profiler**
-    (server + protocol + web; adversarial review). The fixes §Measurement
-    U30 / U31 supports; the display lifecycle (`display_begin` /
-    `display_end`), latest-wins for the display pass, the solve chip
-    (`Solving gen N` + spinner), the viewport's indicator; the `profile`
-    read + the panel. docs/12 §Display, docs/13 (messages), docs/16
-    §Status and progress language revised; `/debug/state` additive.
+    (server + protocol + web; adversarial review). From §Measurement
+    U30 / U31: a per-output **triangle budget** for solid lists (above
+    it the output is drawn at the preview tier — or the angular
+    deflection coarsened — and the frame says so; a constant for the
+    ledger, ~1 M triangles per output as the first value), the
+    `SolidCache` budget **per tier**, the display time **in the chip**
+    (`Solving gen N` + spinner → `gen N · solve 17 ms · display 2.4 s`;
+    the counts move to the profiler), the lifecycle `display_begin
+    {generation, outputs, bytes}` / `display_end {generation, ms}` and
+    the viewport's spinner + "painted in" (U32), latest-wins for the
+    display pass — a superseded generation's pass stops at the next
+    output and the client drops its frames unread (U33; not measured
+    here, named by the "costed, cancellable display edge" follow-up);
+    P1: the `profile {generation}` read (per-node costs — computed:
+    measured, cached: the entry's last cost, marked — the server's
+    phases: lowering, solve, tessellation, encode, bytes; the client adds
+    decode, upload, first paint) and the panel: an SVG ring + a sortable
+    table, the button beside the chip (U34). Instancing congruent solids
+    stays a follow-up unless Ben pulls it in. docs/12 §Display, docs/13
+    (messages), docs/16 §Status and progress language revised;
+    `/debug/state` additive; `tools/measure` gains the browser-hosted
+    client (§Follow-ups).
   - **Track N — `wt/face`: N1 node face** (web + a small server addition;
     one review). The collapse chevron on the face in both states, the
     editable collapsed value, name-first layout (track shrinks ≤ 60 %),
@@ -2603,7 +2696,21 @@ package when wanted).
   the rest: display as a costed, persisted edge in the store (the cache
   key is already the one it would use), so it is cancelled like a node,
   survives a warm reopen without the kernel, and can be routed to the
-  kernel worker below when the cost model predicts it long.
+  kernel worker below when the cost model predicts it long. *Measured
+  at scale 2026-08-25 (§Measurement U30 / U31): 1,000 fine-tier spheres
+  are 2.3–2.5 s of tessellation per redraw on the release engine, and
+  two value sets of them thrash the 256 MiB cache — the wave-5 D1
+  package carries the triangle budget and the tiered cache; the costed
+  edge and instancing stay here.*
+- **`tools/measure` cannot receive a heavy display set** (found
+  2026-08-25): Node 22's built-in `WebSocket` closes the socket with
+  code 1006 ("Payload size exceeds maximum allowed size") on a frame
+  above 16 MiB, so `slider_loop.mjs` and its siblings never see a
+  160 MB mesh frame and report a dead socket instead of a latency. Run
+  the protocol client inside headless Chromium through the Playwright
+  library (the U30 measurement's `measure-browser.mjs` pattern), or
+  take the `ws` package with `maxPayload` raised — the harness should
+  say which it is and refuse loudly on a 1006 rather than time out.
 - **Mixed-age stores, again** (WP-B): `LOG_FORMAT` is 3 — an engine from
   before `StoredValue::Solid` refuses a store this engine wrote; serve
   scratch copies across worktrees, as AGENTS.md says.
