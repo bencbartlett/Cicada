@@ -308,7 +308,7 @@ node (an empty column is a promise the menu cannot keep). The project's
 
 ### 4 · List & axis
 
-**Sub-groups:** List · Tree
+**Sub-groups:** List · Axis
 
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
@@ -406,7 +406,7 @@ it (doc 09).
 
 ### 8 · Mesh & field
 
-**Sub-groups:** Primitive · Boolean · Util
+**Sub-groups:** Primitive · Freeform · Boolean · Util
 
 | Node | Signature | Tier | Notes |
 |---|---|---|---|

@@ -38,7 +38,7 @@ pub struct CompactOut {
 /// ```
 #[node(
     category = "List & axis",
-    sub = "Tree",
+    sub = "Axis",
     tier = "S",
     version = 1,
     gh = "Clean Tree"

@@ -35,7 +35,7 @@ pub struct FlattenIn {
 /// ```
 #[node(
     category = "List & axis",
-    sub = "Tree",
+    sub = "Axis",
     tier = "S",
     version = 1,
     gh = "Flatten Tree"

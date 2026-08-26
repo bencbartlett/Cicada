@@ -2434,12 +2434,15 @@ proves wrong is revised here, dated, in the landing commit.
   menu cannot keep) decide: *Params & input* → Input · **Time**
   (`cycle` / `clock` are time params, not GH's "Primitive" containers —
   Cicada's literals are bare bindings, so "Primitive" had no node);
-  *List & axis* → List · Tree (no set node ships; `Sets` joins with the
-  first); *Curve* → Primitive · Division · Util (`Spline` / `Analysis`
-  wait for `interpolate` / `length` & co.); *Mesh & field* → Primitive ·
-  Boolean · **Util** (`as_watertight` and `tessellate` are the mesh
-  tier's conversions, GH's Mesh › Util; `Analysis` / `Field` wait for
-  their nodes); *Output, display & export* → Display · **Text** ·
+  *List & axis* → List · **Axis** (no set node ships; `Sets` joins with
+  the first; "Axis", not the sketch's "Tree" — see (4)); *Curve* →
+  Primitive · Division · Util (`Spline` / `Analysis` wait for
+  `interpolate` / `length` & co.); *Mesh & field* → Primitive ·
+  **Freeform** · Boolean · **Util** (`mesh_extrude` / `mesh_loft` sit
+  where their B-rep twins sit — see (4); `as_watertight` and
+  `tessellate` are the mesh tier's conversions, GH's Mesh › Util;
+  `Analysis` / `Field` wait for their nodes); *Output, display & export*
+  → Display · **Text** ·
   **Files** (`text_outlines` / `text_solids` are real geometry, neither
   display nor export; `import_step` belongs with the STEP/OBJ file nodes
   and "Export" would have misnamed it). Maths, Point · Vector · Plane,
@@ -2449,7 +2452,23 @@ proves wrong is revised here, dated, in the landing commit.
   table order", and without it the web would hold a second copy of the
   order (as `kinds.ts` already does for `CATEGORY_ORDER`); the contract's
   "ONE table" is kept literally by serving it. The web's `Catalog` type
-  carries it; the ribbon of today ignores it.
+  carries it; the ribbon of today ignores it. (4) **Two table revisions
+  from the catalog review (fix round 1, 2026-08-25)** — the contract hands
+  the table to the review's judgement: the sketch's "Tree" column is the
+  vocabulary DECISIONS.md's 2026-08-11 row retired ("lists are lists";
+  graft / flatten / Path Mapper replaced by typed combinators), and
+  `flatten` / `nest` / `transpose` / `chunk` / `partition` / `group_by` /
+  `concat` / `compact` are exactly those combinators, so the column is
+  **Axis** — the category's own word (each row's `gh` hint — Graft Tree,
+  Flatten Tree, Clean Tree — is the migrant's bridge; the column title
+  need not be); and `mesh_extrude` / `mesh_loft` moved from Mesh &
+  field's Primitive to a **Freeform** column beside their B-rep twins'
+  (`extrude` / `loft` under Surface & solid) — the two tiers are
+  documented as the same four nodes under `mesh_*` names, and a user who
+  learns one tier's column must find the other in it. The
+  `add-stdlib-node` skill now points at docs/08's Sub-groups lines instead
+  of carrying a third copy of the table (nothing tested that copy).
+
 - **M1 — the menu bar.** The ribbon becomes a menu bar: one tab per
   category (label · count); a click opens a panel under it whose
   columns are the category's sub-groups in table order, each a titled

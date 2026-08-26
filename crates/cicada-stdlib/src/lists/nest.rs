@@ -27,7 +27,7 @@ pub struct NestIn {
 /// ```
 #[node(
     category = "List & axis",
-    sub = "Tree",
+    sub = "Axis",
     tier = "S",
     version = 1,
     gh = "Graft Tree"

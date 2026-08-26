@@ -34,7 +34,7 @@ pub struct TransposeIn {
 /// ```
 #[node(
     category = "List & axis",
-    sub = "Tree",
+    sub = "Axis",
     tier = "S",
     version = 1,
     gh = "Flip Matrix"

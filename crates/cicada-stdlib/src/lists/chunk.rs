@@ -32,7 +32,7 @@ pub struct ChunkIn {
 /// ```
 #[node(
     category = "List & axis",
-    sub = "Tree",
+    sub = "Axis",
     tier = "S",
     version = 1,
     gh = "Partition List"

@@ -51,7 +51,7 @@ pub struct MeshExtrudeIn {
 /// ```
 #[node(
     category = "Mesh & field",
-    sub = "Primitive",
+    sub = "Freeform",
     tier = "S",
     version = 1,
     gh = "Extrude",

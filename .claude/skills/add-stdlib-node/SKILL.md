@@ -29,29 +29,32 @@ multi-line example), `src/maths/deconstruct_domain.rs` (multi-output),
 ## Layout — one node per file
 
 `crates/cicada-stdlib/src/<category>/<node>.rs`, where `<category>` is the
-menu bar tab (docs/08 §Catalog) in snake_case. Every node also names its
-**sub-group** — `sub = "…"`, the tab's column; the names per category
-are `cicada_core::spec::SUBGROUPS` (docs/08 mirrors them on each
-section's "Sub-groups" line; the conformance test refuses any other):
+menu bar tab (docs/08 §Catalog) in snake_case:
 
-| Category string in `#[node]` | Directory | Sub-groups (`sub = …`) |
-|---|---|---|
-| `Params & input` | `params/` | Input · Time |
-| `Sequences & random` | `sequences/` | Sequence · Random |
-| `Maths & logic` | `maths/` | Operators · Trig · Util · Domain · Logic |
-| `List & axis` | `lists/` | List · Tree |
-| `Point · Vector · Plane` | `points/` | Point · Vector · Plane |
-| `Curve` | `curves/` | Primitive · Division · Util |
-| `Surface & solid` | `solids/` | Primitive · Freeform · Boolean · Analysis |
-| `Mesh & field` | `meshes/` | Primitive · Boolean · Util |
-| `Intersect & regions` | `intersect/` | Shape · Region |
-| `Transform` | `transform/` | Affine · Euclidean · Array · Util |
-| `Output, display & export` | `output/` | Display · Text · Files |
+| Category string in `#[node]` | Directory |
+|---|---|
+| `Params & input` | `params/` |
+| `Sequences & random` | `sequences/` |
+| `Maths & logic` | `maths/` |
+| `List & axis` | `lists/` |
+| `Point · Vector · Plane` | `points/` |
+| `Curve` | `curves/` |
+| `Surface & solid` | `solids/` |
+| `Mesh & field` | `meshes/` |
+| `Intersect & regions` | `intersect/` |
+| `Transform` | `transform/` |
+| `Output, display & export` | `output/` |
 
-A node that fits none of its category's sub-groups is a design addition:
-add the sub-group to `spec::SUBGROUPS` AND docs/08's line in the same
-commit (a sub-group is listed only with its first node — the conformance
-test fails an empty one).
+Every node also names its **sub-group** — `sub = "…"`, the tab's column.
+The names per category are ONE table, `cicada_core::spec::SUBGROUPS`;
+read them from the **Sub-groups:** line that opens the node's category
+section in docs/08 §Catalog (the conformance test holds that line to the
+table and refuses any other name). This skill carries no copy on purpose:
+a third copy nothing tests would drift. A node that fits none of its
+category's sub-groups is a design addition: add the sub-group to
+`spec::SUBGROUPS` AND docs/08's line in the same commit (a sub-group is
+listed only with its first node — the conformance test fails an empty
+one).
 
 - The file is named after the DIALECT name (`solids/box.rs` for `fn box_`);
   keyword names are declared `pub mod r#box;` in the category's `mod.rs`.
@@ -150,8 +153,9 @@ mod tests { /* table, property, golden hash */ }
      refused at compile time (rustdoc would doctest it as Rust).
 3. **`#[node(category = "…", sub = "…", tier = "S", version = 1, gh = …)]`**
    — all five required. `sub` is the sub-group within the category (the
-   menu bar's column — one of the names in the table above; the macro
-   refuses a missing or blank one, the conformance test an unlisted one).
+   menu bar's column — one of the names on the category's **Sub-groups:**
+   line in docs/08 §Catalog; the macro refuses a missing or blank one, the
+   conformance test an unlisted one).
    `gh = "Grasshopper Component Name"` is the component the
    node replaces, spelled as Grasshopper spells it (`"Number Slider"`,
    `"Domain Box"`, `"PolyLine"`); `gh = none` for a Cicada-only node
