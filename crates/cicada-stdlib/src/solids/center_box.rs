@@ -52,6 +52,7 @@ pub struct CenterBoxIn {
 /// ```
 #[node(
     category = "Surface & solid",
+    sub = "Primitive",
     tier = "1",
     version = 1,
     gh = "Center Box",

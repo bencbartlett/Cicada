@@ -31,6 +31,7 @@ pub struct PickIn {
 /// ```
 #[node(
     category = "Maths & logic",
+    sub = "Logic",
     tier = "1",
     version = 1,
     gh = "Pick'n'Choose"

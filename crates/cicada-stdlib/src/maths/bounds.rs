@@ -22,7 +22,13 @@ use super::ReduceIn;
 /// xs = [3.0, -1.0, 2.5]
 /// span = bounds(list=xs)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Bounds")]
+#[node(
+    category = "Maths & logic",
+    sub = "Domain",
+    tier = "1",
+    version = 1,
+    gh = "Bounds"
+)]
 #[must_use]
 pub fn bounds(input: ReduceIn) -> Domain {
     assert!(

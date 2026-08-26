@@ -14,7 +14,13 @@ use super::GateIn;
 /// ```cic
 /// both = xor(a=True, b=False)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Gate Xor")]
+#[node(
+    category = "Maths & logic",
+    sub = "Logic",
+    tier = "1",
+    version = 1,
+    gh = "Gate Xor"
+)]
 #[must_use]
 pub fn xor(input: GateIn) -> bool {
     input.a ^ input.b

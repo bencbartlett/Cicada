@@ -8,7 +8,7 @@ pub struct In {
 
 /// Bad — no `gh`: every node names the Grasshopper component it replaces
 /// or says `gh = none` (DECISIONS.md stdlib row, 2026-08-19).
-#[node(category = "Maths & logic", tier = "S", version = 1)]
+#[node(category = "Maths & logic", sub = "Util", tier = "S", version = 1)]
 pub fn bad(input: In) -> f64 {
     input.x
 }

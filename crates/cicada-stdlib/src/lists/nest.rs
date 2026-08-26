@@ -25,7 +25,13 @@ pub struct NestIn {
 /// xs = [1.0, 2.0, 3.0]
 /// singletons = nest(list=xs)
 /// ```
-#[node(category = "List & axis", tier = "S", version = 1, gh = "Graft Tree")]
+#[node(
+    category = "List & axis",
+    sub = "Tree",
+    tier = "S",
+    version = 1,
+    gh = "Graft Tree"
+)]
 #[must_use]
 pub fn nest(input: NestIn) -> Vec<Vec<ElemSlot>> {
     input.list.into_iter().map(|slot| vec![slot]).collect()

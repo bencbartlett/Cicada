@@ -46,6 +46,7 @@ pub struct ClockIn {
 /// ```
 #[node(
     category = "Params & input",
+    sub = "Time",
     tier = "1",
     version = 1,
     gh = none,

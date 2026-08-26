@@ -34,7 +34,13 @@ pub struct RangeIn {
 /// span = construct_domain(start=0.0, end=1.0)
 /// ticks = range(domain=span, steps=4)
 /// ```
-#[node(category = "Sequences & random", tier = "1", version = 3, gh = "Range")]
+#[node(
+    category = "Sequences & random",
+    sub = "Sequence",
+    tier = "1",
+    version = 3,
+    gh = "Range"
+)]
 #[must_use]
 pub fn range(input: RangeIn) -> Vec<f64> {
     // The ceiling is on what the node EMITS — `steps + 1` values, the

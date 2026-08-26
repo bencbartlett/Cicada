@@ -40,6 +40,7 @@ pub struct ConstructXformIn {
 /// ```
 #[node(
     category = "Transform",
+    sub = "Util",
     tier = "1",
     version = 1,
     gh = "Construct Matrix"

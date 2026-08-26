@@ -25,6 +25,7 @@ pub struct MassAdditionOut {
 /// ```
 #[node(
     category = "Maths & logic",
+    sub = "Operators",
     tier = "1",
     version = 1,
     gh = "Mass Addition"

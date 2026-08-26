@@ -44,6 +44,7 @@ pub struct SphereIn {
 // whose ports did not, see its note).
 #[node(
     category = "Surface & solid",
+    sub = "Primitive",
     tier = "S",
     version = 2,
     gh = "Sphere",

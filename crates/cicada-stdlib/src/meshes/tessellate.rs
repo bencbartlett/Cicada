@@ -59,7 +59,13 @@ pub struct TessellateIn {
 // the dropped tolerance slot of the memo key — the node never read the
 // project tolerance, so `uses_tolerance` only invalidated every
 // tessellation on a tolerance change (review finding 6).
-#[node(category = "Mesh & field", tier = "1", version = 2, gh = "Mesh Brep")]
+#[node(
+    category = "Mesh & field",
+    sub = "Util",
+    tier = "1",
+    version = 2,
+    gh = "Mesh Brep"
+)]
 #[must_use]
 pub fn tessellate(input: TessellateIn) -> Watertight<Mesh> {
     let deflection = red(Deflection::new(input.deflection, input.angle));

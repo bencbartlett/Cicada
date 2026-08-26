@@ -38,6 +38,7 @@ pub struct SolidUnionIn {
 /// ```
 #[node(
     category = "Surface & solid",
+    sub = "Boolean",
     tier = "1",
     version = 1,
     gh = "Solid Union"

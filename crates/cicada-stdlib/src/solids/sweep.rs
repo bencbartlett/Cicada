@@ -45,6 +45,7 @@ pub struct SweepIn {
 /// ```
 #[node(
     category = "Surface & solid",
+    sub = "Freeform",
     tier = "1",
     version = 1,
     gh = "Sweep1",

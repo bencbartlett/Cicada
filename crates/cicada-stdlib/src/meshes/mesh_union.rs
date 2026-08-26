@@ -33,7 +33,13 @@ pub struct MeshUnionIn {
 /// blocks = linear_array(geometry=block, direction=shift, count=2)
 /// fused = mesh_union(meshes=blocks)
 /// ```
-#[node(category = "Mesh & field", tier = "S", version = 1, gh = "Mesh Union")]
+#[node(
+    category = "Mesh & field",
+    sub = "Boolean",
+    tier = "S",
+    version = 1,
+    gh = "Mesh Union"
+)]
 #[must_use]
 pub fn mesh_union(input: MeshUnionIn) -> Watertight<Mesh> {
     let meshes: Vec<Mesh> = input.meshes.into_iter().map(|w| w.0).collect();

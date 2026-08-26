@@ -45,6 +45,7 @@ pub struct ConstructPlaneIn {
 /// ```
 #[node(
     category = "Point · Vector · Plane",
+    sub = "Plane",
     tier = "S",
     version = 1,
     gh = "Construct Plane",

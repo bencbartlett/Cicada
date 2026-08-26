@@ -68,6 +68,7 @@ pub struct TextSolidsIn {
 /// ```
 #[node(
     category = "Output, display & export",
+    sub = "Text",
     tier = "S",
     version = 2, gh = none,
     uses_tolerance

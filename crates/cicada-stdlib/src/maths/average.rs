@@ -21,7 +21,13 @@ use super::ReduceIn;
 /// xs = [1.0, 2.0, 3.0, 6.0]
 /// mean = average(list=xs)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Average")]
+#[node(
+    category = "Maths & logic",
+    sub = "Util",
+    tier = "1",
+    version = 1,
+    gh = "Average"
+)]
 #[must_use]
 pub fn average(input: ReduceIn) -> f64 {
     assert!(

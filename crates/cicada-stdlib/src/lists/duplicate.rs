@@ -36,6 +36,7 @@ pub struct DuplicateIn {
 /// ```
 #[node(
     category = "List & axis",
+    sub = "List",
     tier = "1",
     version = 2,
     gh = "Duplicate Data"

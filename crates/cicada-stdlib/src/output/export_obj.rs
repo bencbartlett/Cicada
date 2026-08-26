@@ -37,6 +37,7 @@ pub struct ExportObjIn {
 /// ```
 #[node(
     category = "Output, display & export",
+    sub = "Files",
     tier = "S",
     version = 1, gh = none,
     effectful

@@ -54,6 +54,7 @@ pub struct VoronoiOut {
 /// ```
 #[node(
     category = "Intersect & regions",
+    sub = "Region",
     tier = "S",
     version = 2,
     gh = "Voronoi",

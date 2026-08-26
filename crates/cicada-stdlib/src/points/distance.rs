@@ -27,6 +27,7 @@ pub struct DistanceIn {
 /// ```
 #[node(
     category = "Point · Vector · Plane",
+    sub = "Point",
     tier = "1",
     version = 1,
     gh = "Distance"

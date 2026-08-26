@@ -19,7 +19,13 @@ pub struct NotIn {
 /// ```cic
 /// inverted = not(x=True)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Gate Not")]
+#[node(
+    category = "Maths & logic",
+    sub = "Logic",
+    tier = "1",
+    version = 1,
+    gh = "Gate Not"
+)]
 #[must_use]
 pub fn not(input: NotIn) -> bool {
     !input.x

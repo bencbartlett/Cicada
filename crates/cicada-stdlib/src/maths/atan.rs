@@ -14,7 +14,13 @@ use super::UnaryIn;
 /// ```cic
 /// angle = atan(x=0.5)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "ArcTangent")]
+#[node(
+    category = "Maths & logic",
+    sub = "Trig",
+    tier = "1",
+    version = 1,
+    gh = "ArcTangent"
+)]
 #[must_use]
 pub fn atan(input: UnaryIn) -> f64 {
     input.x.atan()

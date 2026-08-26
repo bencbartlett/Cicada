@@ -15,7 +15,13 @@ use super::UnaryIn;
 /// ```cic
 /// growth = exp(x=2.0)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Power of E")]
+#[node(
+    category = "Maths & logic",
+    sub = "Util",
+    tier = "1",
+    version = 1,
+    gh = "Power of E"
+)]
 #[must_use]
 pub fn exp(input: UnaryIn) -> f64 {
     input.x.exp()

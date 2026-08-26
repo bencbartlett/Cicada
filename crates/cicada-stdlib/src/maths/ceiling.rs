@@ -16,7 +16,13 @@ use super::UnaryIn;
 /// ```cic
 /// whole = ceiling(x=2.2)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Round")]
+#[node(
+    category = "Maths & logic",
+    sub = "Util",
+    tier = "1",
+    version = 1,
+    gh = "Round"
+)]
 #[must_use]
 pub fn ceiling(input: UnaryIn) -> f64 {
     input.x.ceil()

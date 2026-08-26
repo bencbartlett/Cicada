@@ -25,6 +25,7 @@ pub struct CustomPreviewIn {
 /// ```
 #[node(
     category = "Output, display & export",
+    sub = "Display",
     tier = "S",
     version = 1,
     gh = "Custom Preview"

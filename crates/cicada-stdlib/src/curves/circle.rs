@@ -38,6 +38,7 @@ pub struct CircleIn {
 /// ```
 #[node(
     category = "Curve",
+    sub = "Primitive",
     tier = "S",
     version = 1,
     gh = "Circle",

@@ -32,7 +32,13 @@ pub struct EqualsIn {
 /// same = equals(a=0.1, b=0.1)
 /// close = equals(a=0.1, b=0.1000001, tolerance=0.001)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Equality")]
+#[node(
+    category = "Maths & logic",
+    sub = "Logic",
+    tier = "1",
+    version = 1,
+    gh = "Equality"
+)]
 #[must_use]
 #[allow(clippy::float_cmp)] // exact equality IS the contract at tolerance 0 (pure maths)
 pub fn equals(input: EqualsIn) -> bool {

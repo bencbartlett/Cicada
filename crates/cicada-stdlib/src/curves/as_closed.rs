@@ -37,7 +37,7 @@ pub struct AsClosedIn {
 /// chain = polyline(vertices=corners)
 /// ring = as_closed(curve=chain)
 /// ```
-#[node(category = "Curve", tier = "S", version = 1, gh = none, uses_tolerance)]
+#[node(category = "Curve", sub = "Util", tier = "S", version = 1, gh = none, uses_tolerance)]
 #[must_use]
 pub fn as_closed(config: &ProjectConfig, input: AsClosedIn) -> Closed<Curve> {
     Closed(red(cicada_geom::curve::close_curve(

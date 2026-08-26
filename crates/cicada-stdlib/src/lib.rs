@@ -254,7 +254,7 @@ mod naming_fixtures {
     /// # Returns
     ///
     /// The truthy value.
-    #[node(category = "Maths & logic", tier = "S", version = 1, gh = none)]
+    #[node(category = "Maths & logic", sub = "Util", tier = "S", version = 1, gh = none)]
     pub fn loop_(input: FixtureIn) -> f64 {
         input.r#true
     }
@@ -266,6 +266,7 @@ mod naming_fixtures {
     /// The truthy value.
     #[node(
         category = "Maths & logic",
+        sub = "Util",
         tier = "S",
         version = 1,
         gh = none,
@@ -283,7 +284,7 @@ mod naming_fixtures {
     /// # Returns
     ///
     /// The truthy value.
-    #[node(category = "Maths & logic", tier = "S", version = 1, gh = none, volatile)]
+    #[node(category = "Maths & logic", sub = "Util", tier = "S", version = 1, gh = none, volatile)]
     pub fn fixture_volatile(input: FixtureIn) -> f64 {
         input.r#true
     }

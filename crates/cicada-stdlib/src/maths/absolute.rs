@@ -14,7 +14,13 @@ use super::UnaryIn;
 /// ```cic
 /// magnitude = absolute(x=-2.5)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Absolute")]
+#[node(
+    category = "Maths & logic",
+    sub = "Operators",
+    tier = "1",
+    version = 1,
+    gh = "Absolute"
+)]
 #[must_use]
 pub fn absolute(input: UnaryIn) -> f64 {
     input.x.abs()

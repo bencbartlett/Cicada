@@ -396,6 +396,10 @@ fn build_node(
         title: leak(&desc.title),
         description: leak(&desc.description),
         category: "Script",
+        // The project's scripts are one menu column under their tab
+        // (`spec::SUBGROUPS`' `Script` row; v0.1 wave 5, C2c) — the
+        // decorator has no sub-group field, and a second column needs one.
+        sub: "Script",
         tier: Tier::S,
         version: 1, // source changes ride body_hash, not the version
         // Scripts are pure BY CONTRACT (docs/08 rule 1; stated in the
@@ -714,6 +718,13 @@ def liar(x: "Number") -> "Number":
         assert!(note.spec.outputs.is_empty(), "-> None → no output ports");
         assert_eq!(note.spec.inputs.len(), 2);
         assert_eq!(note.spec.category, "Script");
+        // Script nodes default to the one `Script` sub-group — and that
+        // sub-group is in the table the menu bar reads, so the column exists.
+        assert_eq!(note.spec.sub, "Script");
+        assert_eq!(
+            cicada_core::spec::subgroups_of(note.spec.category),
+            Some(&[note.spec.sub][..])
+        );
     }
 
     #[test]

@@ -26,6 +26,7 @@ pub struct TextTagIn {
 /// ```
 #[node(
     category = "Output, display & export",
+    sub = "Display",
     tier = "S",
     version = 1,
     gh = "Text Tag 3D"

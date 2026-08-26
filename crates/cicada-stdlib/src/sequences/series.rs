@@ -37,6 +37,7 @@ pub struct SeriesIn {
 /// ```
 #[node(
     category = "Sequences & random",
+    sub = "Sequence",
     tier = "S",
     version = 2,
     gh = "Series"

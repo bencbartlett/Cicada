@@ -15,7 +15,13 @@ use super::BinaryIn;
 /// ```cic
 /// ratio = divide(a=7.0, b=2.0)
 /// ```
-#[node(category = "Maths & logic", tier = "S", version = 1, gh = "Division")]
+#[node(
+    category = "Maths & logic",
+    sub = "Operators",
+    tier = "S",
+    version = 1,
+    gh = "Division"
+)]
 #[must_use]
 pub fn divide(input: BinaryIn) -> f64 {
     input.a / input.b

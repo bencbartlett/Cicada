@@ -19,6 +19,7 @@ use super::WorldPlaneIn;
 /// ```
 #[node(
     category = "Point · Vector · Plane",
+    sub = "Plane",
     tier = "S",
     version = 1,
     gh = "YZ Plane"

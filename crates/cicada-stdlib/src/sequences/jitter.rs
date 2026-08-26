@@ -47,6 +47,7 @@ pub struct JitterOut {
 /// ```
 #[node(
     category = "Sequences & random",
+    sub = "Random",
     tier = "1",
     version = 1,
     gh = "Jitter"

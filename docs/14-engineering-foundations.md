@@ -224,11 +224,18 @@ semantics, `# Returns` (one line: the doc of a bare single `out` port
 multi-output node returns a second `Ports` struct whose fields carry
 their own doc lines, so every port is documented either way),
 `# Panics` (rendered as "Red when"), `# Examples` (a runnable `.cic`
-snippet CI solves — REQUIRED); the `#[node(category, tier, version,
-gh = "Move" | none)]` function (`gh` = the Grasshopper component it
-replaces, carried in the catalog and `/api/catalog` for the docs and
-for search-to-place, which matches it beside the name and title and
-shows it on the row — doc 17 Track C, web lane); and the
+snippet CI solves — REQUIRED); the `#[node(category, sub, tier,
+version, gh = "Move" | none)]` function (`gh` = the Grasshopper
+component it replaces, carried in the catalog and `/api/catalog` for
+the docs and for search-to-place, which matches it beside the name and
+title and shows it on the row — doc 17 Track C, web lane; `sub` = the
+node's sub-group within its category, REQUIRED since v0.1 wave 5 (C2c):
+one of the names `cicada_core::spec::SUBGROUPS` lists for the category
+— the ONE table, which docs/08 §Catalog mirrors on each section's
+"Sub-groups" line and the conformance test enforces — the menu bar's
+column, `CATALOG.md`'s `###` heading, `catalog.json` format 3's `sub`
+beside its `subgroups` table; the project's script nodes are `Script`);
+and the
 three tests — table cases, a property test, a determinism test — IN
 THAT FILE (a test spanning two nodes, like a construct/deconstruct
 round-trip, may live with the primary node in addition, never
