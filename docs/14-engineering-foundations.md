@@ -195,7 +195,8 @@ One source of truth: the doc comments on nodes and ports. The
 from it, and nothing is hand-maintained in parallel:
 
 - **`docs/generated/CATALOG.md`** — the condensed reference: one line
-  per registered node (signature + title line), grouped by category,
+  per registered node (signature + title line), grouped by category
+  (`##`), then by sub-group (`###`, `spec::SUBGROUPS` order), then name,
   **committed to the repo and CI-checked** (regenerate + diff, like a
   lockfile). This is what agents read while building — signatures
   without grepping crates, a few KB of context instead of thousands
