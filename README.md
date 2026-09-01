@@ -1,5 +1,8 @@
 # Cicada
 
+<img width="1918" height="1025" alt="image" src="https://github.com/user-attachments/assets/0a4fa0fb-154d-4e4d-9e64-31515bf95789" />
+
+
 > ## ⚠️ Work in progress
 >
 > Cicada is pre-release software under active, daily development. Nothing
