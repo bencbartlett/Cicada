@@ -19,11 +19,24 @@ import {
   statusBadge,
   stepDecimals,
   transportDrivenSignal,
+  wantsValues,
   wireStrokeWidth,
   wireStyle,
   durationLabel,
   durationTitle,
 } from "./grid";
+
+describe("wantsValues — which nodes the canvas inspects", () => {
+  it("asks for solved nodes and, since the answer carries inputs, red and blocked ones; never the unsettled", () => {
+    for (const state of ["done", "cached", "red", "blocked"] as const) {
+      expect(wantsValues({ state, generation: 3 }), state).toBe(true);
+    }
+    for (const state of ["idle", "queued", "running", "cancelled"] as const) {
+      expect(wantsValues({ state, generation: 3 }), state).toBe(false);
+    }
+    expect(wantsValues(undefined)).toBe(false);
+  });
+});
 
 describe("grid maths", () => {
   it("maps cells to pixels and back", () => {

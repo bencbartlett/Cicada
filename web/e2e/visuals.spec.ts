@@ -19,9 +19,10 @@
  */
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import config from "../playwright.config";
 
-const meta = config.metadata as { token: string };
+const meta = config.metadata as { token: string; scratch: string };
 const TOKEN = meta.token;
 const PIPELINE = "02-solids.cic";
 
@@ -355,9 +356,12 @@ test("U7 · U18 · U19 — the face shows its values from the first full tier; t
 
   // … and the title alone at far: no values, no labels — and every handle
   // exactly where it was, in node units, so the wires still meet the dots.
+  // The slider's collapse chevron (wave 5 N1) hides with the chrome.
+  await expect(page.getByTestId("chevron-size")).toBeVisible();
   await zoomToTier(page, "far");
   await expect(page.locator(".cn-port-value")).toHaveCount(0);
   await expect(page.locator(".cn-port-label").first()).toBeHidden();
+  await expect(page.getByTestId("chevron-size"), "the chevron hides at far (review L2-4 / C-5)").toBeHidden();
   await evidence(page, testInfo, "title-only-at-far.png");
   const atFar = await handlePlaces(page);
   expect(Object.keys(atFar).sort()).toEqual(Object.keys(atNear).sort());
@@ -370,4 +374,74 @@ test("U7 · U18 · U19 — the face shows its values from the first full tier; t
   // Back to the face: the values return at once (nothing in between).
   await zoomToTier(page, "near");
   await expect.poll(async () => values.count()).toBeGreaterThan(0);
+  await expect(page.getByTestId("chevron-size")).toBeVisible();
+});
+
+// Unpacked values, a red node and a blocked one — the shapes the N1 review
+// found blank on the face (findings C-1 / C-7 / C-2, 2026-09-19).
+const MULTI =
+  "# cicada 1\n" +
+  "s = series(count=3)\n" +
+  "a, b = split_list(list=s, index=1)\n" +
+  "r = reverse(list=b)\n" +
+  "ra = reverse(list=a)\n" +
+  "bad_a, bad_b = split_list(list=s, index=7)\n" +
+  "down = reverse(list=bad_a)\n" +
+  "size = slider(value=2.0, min=0.5, max=5.0)\n" +
+  "span = construct_domain(start=0.0, end=size)\n" +
+  "lo, hi = deconstruct_domain(domain=span)\n" +
+  "m = negative(x=hi)\n" +
+  "n = negative(x=lo)\n" +
+  "dbl = hi * 2.0\n";
+
+interface MultiState {
+  statuses: Record<string, { state: string }>;
+  graph: {
+    nodes: { name: string; outputs: { name: string }[] }[];
+    wires: { id: string; from: { node: string; port: string }; to: { node: string; port: string } }[];
+  };
+  values: Record<string, { inputs: [string, { samples?: string[] } | null][] }>;
+}
+
+test("wave 5 N1 fix round — every wire out of a multi-target line is drawn from its node's port and its consumers show the unpacked value; a red node shows its inputs, a blocked one reads `—`", async ({
+  page,
+}, testInfo) => {
+  const pipeline = "multi.cic";
+  writeFileSync(join(meta.scratch, "examples", pipeline), MULTI);
+  await page.goto(`/?token=${TOKEN}&pipeline=${pipeline}`);
+  await expect(page.getByTestId("app")).toBeVisible();
+  const response = await page.request.get(`/debug/state?token=${TOKEN}&pipeline=${pipeline}&values=true&wait=true`);
+  expect(response.ok(), await response.text()).toBeTruthy();
+  const state = (await response.json()) as MultiState;
+  expect(state.statuses["bad_a"]?.state).toBe("red");
+  expect(state.statuses["down"]?.state).toBe("blocked");
+  expect(state.statuses["m"]?.state).toBe("done");
+
+  // Every wire leaves a port its node has (the view-model's spelling), and
+  // the canvas draws every one of them — the multi-target line's included.
+  const nodes = new Map(state.graph.nodes.map((n) => [n.name, n]));
+  for (const wire of state.graph.wires) {
+    const source = nodes.get(wire.from.node);
+    expect(source, `${wire.id} leaves a node the canvas has`).toBeDefined();
+    expect(source!.outputs.map((o) => o.name), `${wire.id} leaves a port its node has`).toContain(wire.from.port);
+  }
+  expect(state.graph.wires.map((w) => w.id)).toEqual(
+    expect.arrayContaining(["a.b->r.list", "a.a->ra.list", "bad_a.a->down.list", "lo.end->m.x", "lo.start->n.x", "lo.end->dbl.hi"]),
+  );
+  await expect(page.locator(".react-flow__edge")).toHaveCount(state.graph.wires.length);
+
+  // The face: each consumer of an unpacked value shows THAT target's value
+  // (the second target's differs from the first's); the free variable too.
+  await zoomToTier(page, "near");
+  await expect(page.getByTestId("in-value-r-list")).toHaveText("List ×2 · 1");
+  await expect(page.getByTestId("in-value-ra-list")).toHaveText("List ×1 · 0");
+  await expect(page.getByTestId("in-value-m-x")).toHaveText("2");
+  await expect(page.getByTestId("in-value-n-x")).toHaveText("0");
+  await expect(page.getByTestId("in-value-dbl-hi")).toHaveText("2");
+  // The red node's input is the computed source it choked on; the blocked
+  // consumer's wired input has no value and says so.
+  expect(state.values["bad_a"]?.inputs[0]?.[1]?.samples).toEqual(["0", "1", "2"]);
+  await expect(page.getByTestId("in-value-bad_a-list")).toHaveText("List ×3 · 0");
+  await expect(page.getByTestId("in-value-down-list")).toHaveText("—");
+  await evidence(page, testInfo, "unpacked-values-at-near.png");
 });
