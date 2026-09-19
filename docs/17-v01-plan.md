@@ -2422,6 +2422,59 @@ proves wrong is revised here, dated, in the landing commit.
   changed its shape — the `inspect` answer, the op, the intents and the
   drag protocol are untouched.
 
+  *Fix round 2026-09-19 (the wave 5 N1 review — four lenses, then a
+  critic; `wt/face`).* (a) **Wires out of a multi-target line** (L1-1 /
+  L2-1 / L5-1 / C-1 critical, C-7 major, CR-1): the view-model spelled a
+  reference to a target of `lo, hi = deconstruct_domain(…)` as `{node:
+  hi, port: out}`, which named no node — the canvas drew no edge for it
+  (React Flow drops an edge whose source is no node; 06-lists lost four
+  wires), `inspect_wire` answered nothing and N1's `inputs` answered
+  `null` — the docs' "the source has no value" — for every consumer of an
+  unpacked value, the commonest wire shape in the examples. A wire's ends
+  are NODES of the view and their ports now (`WireEnd`): `hi` is `{lo,
+  end}`, an expression's free variable the same, a `#off` ghost's targets
+  too; `connect` / `probe_wire` from that node's `end` handle write `hi`
+  into the text (they wrote the first target for every port before) and
+  refuse a port the node has not by name. `node_input_values` needed no
+  change once the wire was spelled right — it resolves the source node +
+  output index → `output_hash`, the binding → its hash in the kept
+  report, as contracted; its unit test now reads a multi-target source
+  from its second AND first target and a port selection, with distinct
+  values (the review's `index = 0` mutation fails it), plus
+  `inspect_wire` and `connect` on such a wire; a view-model test holds
+  every wire to a port its node has. (b) **The inspect cost** (CR-2 / C-4
+  major): `inspect` summarized every wired source's value under the
+  session lock, per consumer, per generation — and a summary of a solid
+  the display never meshed computed the FINE tessellation on the spot, so
+  a consumer's auto-inspect of a 1,001-sphere list hidden with the eye
+  (the U30 remedy) stalled the session 41 s. Now (i) the summary READS
+  the display cache and never the kernel — an undrawn solid says
+  `tessellation: "not displayed"`, a list `not_displayed: k` beside the
+  drawn ones' facts (docs/12 §Display cache); (ii) each distinct value is
+  summarized once per kept generation whichever node asks (`Core::
+  summaries`, a memo by value hash emptied when a newer generation is
+  kept, never keeping a summary that read undisplayed solids; `/debug/
+  state.summaries`); (iii) the ports are resolved under the lock and the
+  loads + summaries run off it (docs/13 §Solve streaming). Measured
+  (debug build, 150 B-rep spheres behind `count = length(list=balls)`,
+  the scratch probe `inspect_probe.mjs` over the WebSocket): displayed —
+  `inspect count` 15.8 ms once, then 0.5 / 0.3 ms from the memo and
+  `inspect balls` 0.4 ms (the verifier measured 14.6–15.1 ms on every
+  inspect of either); hidden (`balls` eye-off, a new radius) — `inspect
+  count` 0.5 ms with `not_displayed: 150` and `display_cache.misses`
+  unchanged at 150 (the verifier: 6,153 ms and +150 misses, ≈41 s at the
+  reviewer's 1,001); a second client's `set_param` landed its delta
+  14.6 ms after an observer's in-flight `inspect balls` (6,009 ms
+  before). Server tests: the display's `a_summary_reads_the_cache_and_
+  never_meshes`, the session's `inspect_reads_the_display_cache_and_
+  memoizes_each_value_once_per_generation`. (c) **The collapsed row's
+  scrub bar** (L1-2 / L5-2 / C-3 major) ran to the row's right edge — an
+  absolutely positioned grid child's `auto` end line is the container's
+  padding edge — so its ringed notch sat right of the thumb; `grid-column:
+  2 / 3` names the track's column, and `slider.spec.ts` holds the
+  collapsed bar's box to the range input's (a scrub-cached `long_named`).
+  The 40 % floor's observer case is call 2's revision above.
+
 **Track M — `wt/menu` (catalog + web; the catalog half one review, the UI half one review).**
 - **C2c — the sub-group attribute.** `#[node(…, sub = "…")]` is
   REQUIRED on every node, like `gh`: cicada-macros parses it (a node
