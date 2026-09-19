@@ -625,8 +625,8 @@ struct Applied {
     dirty: Vec<String>,
     /// The `.cic` text was edited (else sidecar only: no solve).
     text_changed: bool,
-    /// The display set may have changed (preview toggles): re-emit frames
-    /// from the last complete generation after the commit.
+    /// The display set may have changed (preview toggles): a display-only
+    /// structural generation repaints after the commit.
     refresh_display: bool,
 }
 
@@ -879,9 +879,6 @@ struct Kept {
     generation: u64,
     lowered: Arc<Lowered>,
     report: Arc<SolveReport>,
-    /// The display tier its generation drew at (a preview generation's
-    /// re-emission — a preview toggle mid-drag — stays at its tier).
-    tier: DisplayTier,
 }
 
 /// The display tier of a generation: a slider drag's generations draw
@@ -2667,8 +2664,9 @@ impl Session {
 
     /// Persist text (when it changed) + sidecar after a write, recheck,
     /// relower, rebuild the view, bump `seq`, record the op, broadcast the
-    /// delta, and schedule the structural solve (text changes) or re-emit
-    /// frames (preview toggles). THE one path every edit — gesture, batch,
+    /// delta, and schedule the structural solve (text changes, and the
+    /// display-only generation a preview toggle repaints through). THE one
+    /// path every edit — gesture, batch,
     /// undo, redo — takes to disk and to the clients.
     ///
     /// `before` is the state the disk holds as the call starts (memory ==
@@ -2716,11 +2714,18 @@ impl Session {
         if applied.text_changed {
             self.core.seed_statuses_locked(inner);
             self.schedule_structural();
-        }
-        if applied.refresh_display {
-            // The display set changed: send frames (from the last complete
-            // generation) or clears for the toggled nodes.
-            self.core.refresh_display(inner, None);
+        } else if applied.refresh_display {
+            // The display set changed (a preview toggle): the redraw is a
+            // DISPLAY-ONLY structural generation — every node a memo hit,
+            // the statuses left as they are — so it takes the same
+            // three-phase pass as any edit (docs/13 §The display edge):
+            // announced by `display_begin` / `display_end`, its tessellation
+            // on the worker pool off the session lock, latest-wins, visible
+            // to `wait_idle`. Re-emitting from the last complete generation
+            // here, under the lock, tessellated a cold output with no
+            // spinner, no `caches` and nothing supersedable, every intent
+            // and Esc waiting (review finding 2026-08-25).
+            self.schedule_structural();
         }
         Ok(())
     }
@@ -3000,10 +3005,10 @@ impl Session {
         }
         if new_text.is_some() || scripts_changed {
             self.core.seed_statuses_locked(&inner);
-            self.schedule_structural();
-        } else {
-            self.core.refresh_display(&mut inner, None);
         }
+        // A sidecar-only apply (preview flags, layout) repaints through a
+        // display-only generation like a preview toggle (`commit`).
+        self.schedule_structural();
         Ok(serde_json::json!({
             "ok": true,
             "seq": inner.seq,
@@ -4605,8 +4610,8 @@ fn restore_state(inner: &mut Inner, target: &StateSnapshot, label: String) -> Ap
         dirty,
         text_changed,
         // A text change repaints through the structural solve; a
-        // sidecar-only restore (preview toggles) re-emits from the last
-        // complete generation.
+        // sidecar-only restore (preview toggles) through a display-only
+        // generation.
         refresh_display: sidecar_changed && !text_changed,
     }
 }
@@ -6081,31 +6086,6 @@ impl Core {
         status.dirty = true;
     }
 
-    /// Frames for outputs whose hash changed since the last broadcast
-    /// (or every displayed output when `only` is `None` after a preview
-    /// toggle). Uses the last complete generation's report.
-    fn refresh_display(&self, inner: &mut Inner, _only: Option<&str>) {
-        let Some(kept) = inner.last_complete.as_ref() else {
-            return;
-        };
-        let generation = kept.generation;
-        let lowered = Arc::clone(&kept.lowered);
-        let report = Arc::clone(&kept.report);
-        let tier = kept.tier;
-        // A re-emission from an intent (a preview toggle): no warm-up went
-        // before it, so the verdicts are decided here, and no newer
-        // generation can supersede it — it IS the latest state.
-        let _ = self.emit_frames(
-            inner,
-            generation,
-            &lowered,
-            &report,
-            tier,
-            &Warm::default(),
-            false,
-        );
-    }
-
     /// Which `(node ref, output, value hash)` triples a generation should
     /// draw: every previewed, displayable output the report produced a
     /// value for. A pure read of the graph and the report — the emit path
@@ -6283,11 +6263,14 @@ impl Core {
     /// changed under an intent between the two — a structural edit, whose
     /// pending job normally cuts the pass before this output is reached;
     /// inside the debounce window this path tessellates under the lock).
-    /// With `latest_wins`, the pass stops between outputs once an edit is
-    /// waiting or Esc was pressed (docs/13 §The display edge); the outputs
-    /// it did not reach keep their previous frames and table entries, so
-    /// the edit's generation draws them.
-    #[allow(clippy::too_many_lines, clippy::too_many_arguments)] // want-set, clears, sends: one pass in one place
+    /// Latest-wins: the pass stops between outputs once an edit is waiting
+    /// or Esc was pressed (docs/13 §The display edge); the outputs it did
+    /// not reach keep their previous frames and table entries, so the
+    /// edit's generation draws them. Every display emission is a
+    /// generation's pass — a preview toggle schedules a display-only
+    /// generation (`Session::commit`) rather than re-emitting under the
+    /// lock.
+    #[allow(clippy::too_many_lines)] // want-set, clears, sends: one pass in one place
     fn emit_frames(
         &self,
         inner: &mut Inner,
@@ -6296,7 +6279,6 @@ impl Core {
         report: &SolveReport,
         requested: DisplayTier,
         warm: &Warm,
-        latest_wins: bool,
     ) -> Emitted {
         let mut emitted = Emitted::default();
         let store = Arc::clone(self.scheduler.store());
@@ -6336,7 +6318,7 @@ impl Core {
             if Self::already_displayed(inner, node_ref, output, hash, requested) {
                 continue;
             }
-            if latest_wins && let Some(why) = self.display_superseded() {
+            if let Some(why) = self.display_superseded() {
                 emitted.cut = Some(why);
                 break;
             }
@@ -6812,19 +6794,10 @@ impl Core {
                 generation,
                 lowered: Arc::clone(&job.lowered),
                 report: Arc::clone(report),
-                tier,
             });
         }
         if newer && !report.cancelled && warm.cut.is_none() {
-            emitted = self.emit_frames(
-                &mut inner,
-                generation,
-                &job.lowered,
-                report,
-                tier,
-                warm,
-                true,
-            );
+            emitted = self.emit_frames(&mut inner, generation, &job.lowered, report, tier, warm);
         }
         let cut = warm.cut.or(emitted.cut);
         let encode_ms = encode_began.elapsed().as_secs_f64() * 1000.0;
@@ -11223,6 +11196,159 @@ size = slider(value=4.0, min=0.5, max=5.0)
         for name in ["block.out", "ball.out"] {
             assert_eq!(state["display"][name]["generation"], repainted, "{name}");
         }
+    }
+
+    /// A preview toggle (the eye) repaints through a DISPLAY-ONLY structural
+    /// generation — every node a memo hit — so the redraw of a cold output
+    /// is announced (`display_begin` / `display_end` bracket its frames),
+    /// tessellates on the worker pool OFF the session lock (an intent sent
+    /// while the pass is parked in its warm-up is answered before the
+    /// frames), and is visible to `wait_idle`. Before, the toggle re-emitted
+    /// from the last complete generation under the lock: the whole display
+    /// edge — the fine tally and the tessellation — ran with every intent,
+    /// `/debug/state` and Esc waiting, with no spinner, no `caches` and
+    /// nothing supersedable (review finding 2026-08-25). Toggling off sends
+    /// the clear through the same pass.
+    #[test]
+    #[allow(clippy::too_many_lines)] // off, a hidden edit, on while parked, the answer, the paint: one story
+    fn a_preview_toggle_repaints_through_an_announced_display_only_generation() {
+        let (_dir, mut config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             ball = sphere(radius=size)\n",
+        );
+        let hold = PassHold::new();
+        config.display_hold = Some(hold.seam());
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        let _ = drain(&mut rx);
+        let misses = || {
+            session.debug_state(false)["display_cache"]["misses"]
+                .as_u64()
+                .unwrap()
+        };
+        let ball_ref = {
+            let inner = session.core.lock_inner();
+            inner.graph.node("ball").unwrap().node_ref
+        };
+        // Eye off: a display-only generation clears the ball.
+        let generations_before = session.debug_state(false)["timings"]
+            .as_array()
+            .unwrap()
+            .len();
+        session.handle(
+            id,
+            Some("off".into()),
+            ClientMessage::SetPreview {
+                node: "ball".into(),
+                on: Some(false),
+            },
+        );
+        session.wait_idle();
+        let got = drain(&mut rx);
+        let msgs = texts(&got);
+        let ends = of_kind(&msgs, "display_end");
+        assert_eq!(ends.len(), 1, "one announced pass: {msgs:?}");
+        assert!(
+            frames(&got)
+                .iter()
+                .any(|f| f.header().kind == FrameKind::Clear && f.header().node == ball_ref),
+            "the toggle-off's pass cleared the ball"
+        );
+        let state = session.debug_state(false);
+        assert!(
+            state["display"].get("ball.out").is_none(),
+            "{}",
+            state["display"]
+        );
+        let timings = state["timings"].as_array().unwrap();
+        assert_eq!(timings.len(), generations_before + 1, "one generation");
+        let toggle = timings.last().unwrap();
+        assert_eq!(toggle["kind"], "structural");
+        assert_eq!(
+            toggle["computed"], 0,
+            "display-only: every node a hit: {toggle}"
+        );
+        // A new value while the eye is off: solved, never tessellated.
+        let before = misses();
+        session.handle(
+            id,
+            Some("grow".into()),
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "3.0".into(),
+            },
+        );
+        session.wait_idle();
+        let msgs = texts(&drain(&mut rx));
+        assert_eq!(of_kind(&msgs, "display_end")[0]["payload"]["outputs"], 0);
+        assert_eq!(misses(), before, "a hidden output is not tessellated");
+        // Eye on, the pass parked in its warm-up: `display_begin` is on the
+        // wire, no frame is, the cache took the miss on the pool — and the
+        // lock is free: an intent is answered while the pass is parked.
+        hold.arm(1);
+        session.handle(
+            id,
+            Some("on".into()),
+            ClientMessage::SetPreview {
+                node: "ball".into(),
+                on: Some(true),
+            },
+        );
+        let parked = hold.parked();
+        let got = drain(&mut rx);
+        let msgs = texts(&got);
+        let begins = of_kind(&msgs, "display_begin");
+        assert_eq!(begins.len(), 1, "{msgs:?}");
+        assert_eq!(begins[0]["payload"]["generation"], parked);
+        assert_eq!(begins[0]["payload"]["outputs"], 1);
+        assert!(frames(&got).is_empty(), "nothing encoded yet");
+        assert_eq!(
+            misses(),
+            before + 1,
+            "meshed on the pool during the warm-up"
+        );
+        session.handle(
+            id,
+            Some("peek".into()),
+            ClientMessage::Inspect {
+                node: "ball".into(),
+            },
+        );
+        let msgs = texts(&drain(&mut rx));
+        assert_eq!(
+            of_kind(&msgs, "node_values").len(),
+            1,
+            "answered while the pass is parked: {msgs:?}"
+        );
+        hold.release();
+        session.wait_idle();
+        let got = drain(&mut rx);
+        let msgs = texts(&got);
+        let ends = of_kind(&msgs, "display_end");
+        assert_eq!(ends.len(), 1, "{msgs:?}");
+        assert_eq!(ends[0]["payload"]["generation"], parked);
+        assert_eq!(ends[0]["payload"]["outputs"], 1, "{}", ends[0]);
+        assert!(ends[0]["payload"].get("cancelled").is_none());
+        let sent = frames(&got);
+        assert!(
+            sent.iter()
+                .any(|f| f.header().kind == FrameKind::Mesh && f.header().node == ball_ref),
+            "the ball's frame"
+        );
+        assert!(sent.iter().all(|f| f.header().generation == parked));
+        assert_eq!(misses(), before + 1, "the encode drew the pinned mesh");
+        let state = session.debug_state(false);
+        assert_eq!(state["display"]["ball.out"]["generation"], parked);
+        assert_eq!(state["display"]["ball.out"]["stats"]["tier"], "fine");
+        assert!(
+            state["text"].as_str().unwrap().contains("value=3.0"),
+            "the value the eye reveals is the current one"
+        );
+        assert_eq!(state["summary"]["cancelled"], false);
     }
 
     #[test]

@@ -272,6 +272,17 @@ DECISIONS.md row 2026-08-25) — additive, `PROTOCOL_VERSION` unchanged:
   pass — it waits, as it waits for the solve (fix round 2026-08-25: the
   first build cut every pass a tick was pending behind, so a drag or a
   playback whose pass outlasted a tick painted nothing).
+- **A preview toggle (the eye) is a display-only generation** (fix round
+  2026-08-25): `set_preview` — and a sidecar-only `apply_text`, and the
+  undo/redo of either — schedules a structural generation whose solve is
+  all memo hits, so the redraw of a cold output takes the same three-phase
+  pass as any edit: announced by `display_begin` / `display_end`,
+  tessellated on the worker pool off the session lock, latest-wins,
+  visible to `wait_idle` and `/debug/state?wait=true`, one `timings` row
+  (kind `structural`, `computed: 0`). The first build re-emitted from the
+  last complete generation under the lock — the whole display edge with
+  every intent, `/debug/state` and Esc waiting, no spinner, nothing
+  supersedable (review finding CR-2).
 - `caches` — the payload IS `CachesView {display: {entries, bytes, budget,
   hits, misses, evictions, oversized, refusals, working_set, over_budget,
   thrash}, memo: {bytes, entries}}`: the display cache's counters
