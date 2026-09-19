@@ -19,7 +19,7 @@
  *     for them (the `already displayed` rule asks with the tier the budget
  *     chooses);
  *   - the caches indicator reads the session's `caches` view (`cache … /
- *     1G · N meshes · memo …`), its click opens the breakdown, and the bar
+ *     1G · N meshes`), its click opens the breakdown, and the bar
  *     still fits the window (the gear is reachable, nothing scrolls
  *     sideways);
  *   - the settings menu's display-cache select resizes the session's cache
@@ -196,7 +196,7 @@ test("a heavy output is drawn at preview, the chip and the viewport show the dis
   const caches = page.getByTestId("tb-caches");
   await expect(caches).toHaveAttribute("data-warn", "false");
   const cachesText = (await page.getByTestId("tb-caches-text").textContent()) ?? "";
-  expect(cachesText).toMatch(/^cache \S+ \/ 1G · [\d,]+ meshes · memo \S+$/);
+  expect(cachesText).toMatch(/^cache \S+ \/ 1G · [\d,]+ meshes$/);
   const meshes = Number((/· ([\d,]+) meshes/.exec(cachesText)?.[1] ?? "NaN").replace(/,/g, ""));
   expect(meshes).toBe(first.caches.display.entries - first.caches.display.refusals);
   expect(first.caches.display.budget).toBe(1024 * 1024 * 1024);
@@ -251,6 +251,12 @@ test("a heavy output is drawn at preview, the chip and the viewport show the dis
   expect(fit.barRight, `the bar fits: ${JSON.stringify(fit)}`).toBeLessThanOrEqual(fit.innerWidth);
   expect(fit.gearRight, `the gear is on screen: ${JSON.stringify(fit)}`).toBeLessThanOrEqual(fit.innerWidth);
   expect(fit.gearLeft).toBeGreaterThanOrEqual(0);
+  // And the solve chip is whole at the reference width: its text is not clipped.
+  const chipWhole = await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="tb-solve-text"]')!;
+    return el.scrollWidth <= el.clientWidth + 1;
+  });
+  expect(chipWhole, "the solve chip's text is not truncated at 1400 px").toBe(true);
 
   // ---- the settings menu resizes the cache live; the choice is per user.
   await page.getByTestId("tb-settings").click();

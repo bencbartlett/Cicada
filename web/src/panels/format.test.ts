@@ -205,12 +205,13 @@ describe("the caches indicator", () => {
     expect(shortBytes(2.1 * 1024 * 1024 * 1024)).toBe("2.1G");
     expect(shortBytes(12 * 1024 * 1024 * 1024)).toBe("12G");
   });
-  it("reads `cache bytes / budget · meshes · memo` (docs/16 §Status and progress language) — meshes, not solids: an entry is one solid at one tier", () => {
-    expect(cachesText(caches)).toBe("cache 612M / 1G · 1,397 meshes · memo 2.1G");
+  it("reads `cache bytes / budget · meshes` (docs/16 §Status and progress language) — meshes, not solids: an entry is one solid at one tier; the memo footprint is the hover's", () => {
+    expect(cachesText(caches)).toBe("cache 612M / 1G · 1,397 meshes");
     // Cached refusals are not meshes.
     expect(cachesText({ ...caches, display: { ...caches.display, entries: 2, refusals: 1 } })).toBe(
-      "cache 612M / 1G · 1 mesh · memo 2.1G",
+      "cache 612M / 1G · 1 mesh",
     );
+    expect(cachesTitle(caches)).toContain("memo store: 2150.40 MB");
   });
   it("spells the flags out in the hover, with the remedy", () => {
     const quiet = cachesTitle(caches);

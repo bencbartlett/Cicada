@@ -32,6 +32,23 @@ header.topbar > .tb-caches-wrap {
   min-width: 0;
 }
 
+/* The caches indicator gives way first and by far the most: the solve
+   chip's `gen N · solve · display` is the bar's headline. */
+header.topbar > .tb-caches-wrap {
+  flex-shrink: 8;
+}
+
+/* Below 1500 px the engine item (`cicada 0.0.1 · protocol 1`, with its
+   separator) goes — the inspector's session facts and the About dialog
+   carry it: at the reference 1400 px the bar was ~60 px short of holding
+   both chips whole. */
+@media (max-width: 1500px) {
+  /* out-ranks `.tb-item`'s `display: inline-flex`, declared later */
+  header.topbar > .tb-engine {
+    display: none;
+  }
+}
+
 .tb-chip-text {
   min-width: 0;
   overflow: hidden;

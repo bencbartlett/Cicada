@@ -90,8 +90,8 @@ export function TopBar() {
       </span>
       <span className="tb-sep">·</span>
       <GitChip />
-      <span className="tb-sep">·</span>
-      <span className="tb-item faint" title="engine">
+      <span className="tb-sep tb-engine">·</span>
+      <span className="tb-item faint tb-engine" title="engine">
         {hello?.engine ?? "engine…"}
         {hello !== null && <span className="faint">· protocol {hello.protocol}</span>}
       </span>

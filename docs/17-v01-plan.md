@@ -2432,12 +2432,27 @@ proves wrong is revised here, dated, in the landing commit.
   (asked for 10)"; the lifecycle test pins `display_begin` on the wire
   while the pass is parked in its warm-up (a begin after the tessellation
   had passed every assertion) and no longer pins `display_end < caches`
-  (control-lane texts may precede it on a real socket). Not changed: the
-  cut is still between OUTPUTS — one heavy output's tally runs to its
-  end before Esc lands (docs/17 §Follow-ups: the costed cancellable
+  (control-lane texts may precede it on a real socket). **The eye
+  repaints through a display-only generation** (CR-2: the toggle
+  re-emitted under the session lock, unannounced). **The app**: the hover
+  names what cut a pass (`cutBy`), the indicator counts `meshes` (an entry
+  is a mesh per solid per tier — `solids` was wrong for the number shown)
+  and reads `cache 26M / 1G · 269 meshes` — the `· memo 2.1G` segment
+  moved to the hover and the breakdown, since at the reference 1400 px
+  the bar had no room for it beside a whole solve chip (L5-1: the caches
+  chip had pushed the settings gear off-screen; only the two chips shrink
+  now, the engine item hides below 1500 px, and the e2e asserts the
+  geometry); a client that becomes the writer by a lease change applies
+  its cache preference (CR-4); no ETA below a millisecond. Not changed:
+  the cut is still between OUTPUTS — one heavy output's tally runs to its
+  end before Esc lands (measured in the app: Esc 25 ms into the 140-sphere
+  pass landed 2.1 s later; docs/17 §Follow-ups: the costed cancellable
   display edge); `DisplayStats.budget.over_budget` keeps the contract's
   name (the triangle budget's flag; the `caches` view's `over_budget` is
-  the cache's).
+  the cache's); a client joining at rest sees no display part until the
+  next pass (L5-7, open); an output drawn at preview because it is over
+  the budget is said in `/debug/state` and the inspector's tier, not in a
+  notice (L5-4, open).
 - **P1 — the profiler.**
   - **Server.** A read intent `profile {generation?}` (any client) →
     `profile_view {generation, kind, phases: {queued_ms, solve_ms,

@@ -166,14 +166,16 @@ export function shortBytes(bytes: number): string {
 
 /**
  * The top bar's caches indicator (docs/16 §Status and progress language):
- * `cache 612M / 1G · 1,397 meshes · memo 2.1G` — the display cache's bytes
- * against its budget, the display MESHES it holds (entries minus cached
- * refusals: a mesh per solid per tier, past value sets included — not the
- * solids on screen), the memo store's footprint.
+ * `cache 612M / 1G · 1,397 meshes` — the display cache's bytes against its
+ * budget and the display MESHES it holds (entries minus cached refusals: a
+ * mesh per solid per tier, past value sets included — not the solids on
+ * screen). The memo store's footprint is in the hover and the breakdown
+ * (`cachesTitle`), not the pill: at the reference 1400 px the bar had no
+ * room for `· memo 2.1G` beside a whole solve chip.
  */
 export function cachesText(caches: CachesView): string {
   const meshes = Math.max(0, caches.display.entries - caches.display.refusals);
-  return `cache ${shortBytes(caches.display.bytes)} / ${shortBytes(caches.display.budget)} · ${meshes.toLocaleString("en-US")} ${meshes === 1 ? "mesh" : "meshes"} · memo ${shortBytes(caches.memo.bytes)}`;
+  return `cache ${shortBytes(caches.display.bytes)} / ${shortBytes(caches.display.budget)} · ${meshes.toLocaleString("en-US")} ${meshes === 1 ? "mesh" : "meshes"}`;
 }
 
 /** The indicator's hover: the full breakdown, one fact per line, the flags spelled out. */
