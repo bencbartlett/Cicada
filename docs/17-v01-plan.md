@@ -2399,17 +2399,19 @@ proves wrong is revised here, dated, in the landing commit.
   refuses with the notice exactly as it does for the menu item and the
   inspector action; a disabled button would have made the client the
   decider, which the wave-4 review ruled out. (2) The **40 % floor** is
-  40 % of the track's FULL width — the width it has with no name at all
-  — and the CSS states the fixed parts it subtracts (the value label's
-  3em and three gaps, 48 px, plus the chevron's 14 px on a row that wears
-  one — `has-chevron`, a writer's; an observer's row and a `#off` ghost's
-  have no chevron and subtract none: *fix round 2026-09-19, review
-  findings L1-2 / C-9 — a fixed 62 px had put the observer's floor 5.6 px
-  UNDER 40 %*); a value label wider than 3em or a badge on the row raises
-  the floor slightly above 40 %, never below it (the e2e measures the real
-  full width and holds the track to ≥ 40 % of it, and the cut name to
-  exactly the floor — as the writer and as an observer). To lay the name out first
-  the row became a CSS grid and the slider widget's box dissolves into it
+  40 % of the track's FULL width — the width it has with no name at all.
+  *Revised in the fix round of 2026-09-19 (review findings L1-2 / C-9,
+  and the whole-suite run):* the first cut was one grid over the whole
+  row subtracting a fixed 62 px (the value label's 3em, the chevron, three
+  gaps), so an observer's chevron-less row sat 5.6 px UNDER 40 % and a
+  badge in the tail — every node's `+` once git.spec has made the shared
+  scratch a repository — raised the floor 7 px and cut `long_named` while
+  its track had room. Now the row is body | tail and the body name |
+  track | value, and the floor is 40 % of the body minus the value label
+  and two gaps — exact whatever the tail holds; only a value label wider
+  than 3em still raises it (the e2e holds the cut name to exactly the
+  floor for a plain, a red-badged and an observer's row). To lay the name
+  out first the slider widget's box dissolves into the body's grid
   (`display: contents`), which costs the collapsed row the widget's
   `slider 0.5 … 5` hover (the value label's hover names the port and the
   gesture instead; the expanded face keeps it). (3) **A literal input

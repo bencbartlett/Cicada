@@ -791,43 +791,53 @@
    on one row, GH-like; no header, no port rows (its bounds are literals by
    the server's rule, so nothing is wired into it).
 
-   NAME FIRST (wave 5 N1, finding U17): the row is a CSS grid — name |
-   track | value | tail — because grid sizing lays the `auto` name column
-   out at its whole text BEFORE the `1fr` track column takes what is left,
-   while the track's `minmax` floor is honoured first of all; so the name
-   is never truncated until the track is at its floor, and only then does
-   the name lose letters to an ellipsis. The floor is 40 % of the track's
-   FULL width — the width it has with no name at all: the row's content
-   width minus the fixed parts (the value label's 3em = 30 px, the tail's
-   chevron 14 px, three 6 px gaps = 62 px; a wider value or a badge only
-   raises the floor). The slider widget's own box dissolves into the grid
-   (`display: contents`) so its range and value are the grid's items; its
-   absolutely positioned bar and chip are placed on the grid's columns
-   (above). The fixed parts the floor subtracts are the ones the row really
-   carries: the value label and the gaps always (48 px), the chevron's
-   14 px only on a row that wears one (`has-chevron` — a writer's; an
-   observer's row and a `#off` ghost's have none, and a fixed 62 px put
-   their floor 5 px UNDER 40 % — wave 5 N1 review L1-2 / C-9, 2026-09-19).
-   Pinned by `web/e2e/slider.spec.ts` with a long-named slider, as the
-   writer and as an observer. */
+   NAME FIRST (wave 5 N1, finding U17): two nested CSS grids. The ROW is
+   body | tail: the tail (badges, the chevron) takes its own width and the
+   body the rest. The BODY is name | track | value: grid sizing lays the
+   `auto` name column out at its whole text BEFORE the `1fr` track column
+   takes what is left, while the track's `minmax` floor is honoured first
+   of all — so the name is never truncated until the track is at its
+   floor, and only then does the name lose letters to an ellipsis. The
+   floor is 40 % of the track's FULL width — the width it has with no name
+   at all — and inside the body that is `100%` minus the value label's
+   30 px and the two gaps, nothing else: whatever the tail holds (a git
+   badge, a state badge, the chevron, or nothing on an observer's row) is
+   OUTSIDE the body and never enters the arithmetic. (The first cut was
+   one grid over the whole row with a fixed 62 px for the tail: an
+   observer's chevron-less row sat 5 px under 40 %, and a badge — every
+   node's `+` once the suite's git spec had made the scratch a repository —
+   raised the floor 7 px and cut a name the track had room for; wave 5 N1
+   review L1-2 / C-9 and the whole-suite run, 2026-09-19.) The slider
+   widget's own box dissolves into the body's grid (`display: contents`) so
+   its range and value are the grid's items; its absolutely positioned bar
+   and chip are placed on the body's columns (above). Pinned by
+   `web/e2e/slider.spec.ts` with long-named sliders — plain, red (a badge
+   in the tail) and as an observer (no chevron). */
 .cn.cn-collapsed {
   justify-content: center;
 }
 
 .cn-collapsed-row {
-  --tail: 0px;
   position: relative;
   height: var(--unit);
   display: grid;
-  grid-template-columns: minmax(0, auto) minmax(calc((100% - 48px - var(--tail)) * 0.4), 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   column-gap: 6px;
   padding: 0 12px 0 8px;
   min-width: 0;
 }
 
-.cn-collapsed-row.has-chevron {
-  --tail: 14px;
+/* 42 px = the value label's `min-width: 3em` at ITS 10 px font (30 px — an
+   `em` here would be the body's font) plus the two 6 px gaps */
+.cn-collapsed-body {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(calc((100% - 42px) * 0.4), 1fr) auto;
+  align-items: center;
+  column-gap: 6px;
+  min-width: 0;
+  height: 100%;
 }
 
 .cn-collapsed-name {

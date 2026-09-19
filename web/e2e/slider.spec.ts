@@ -28,15 +28,19 @@ const SIDECAR = `${FILE}.layout.json`;
 // name-first layout (wave 5 N1): a name that fits within the room the
 // track's 40 % floor leaves, and one that cannot. `long_named` is also
 // scrub-cached (10 positions), so its collapsed row wears the buffer bar.
+// The red one (its value outside its bounds) wears a state badge in the
+// tail: the floor must not move for it.
 const START =
   "# cicada 1\n" +
   "size = slider(value=2.0, min=0.5, max=5.0)\n" +
   "bound = slider(value=1.0, min=0.0, max=size)\n" +
   "driven = slider(value=size, min=0.0, max=10.0)\n" +
   "long_named = slider(value=2.0, min=0.5, max=5.0, step=0.5, scrub=True)\n" +
-  "an_even_longer_slider_name_that_cannot_fit_beside_the_track = slider(value=2.0, min=0.5, max=5.0)\n";
-const SLIDERS = ["size", "bound", "driven", "long_named", "an_even_longer_slider_name_that_cannot_fit_beside_the_track"];
+  "an_even_longer_slider_name_that_cannot_fit_beside_the_track = slider(value=2.0, min=0.5, max=5.0)\n" +
+  "a_red_slider_whose_long_name_cannot_fit_either = slider(value=9.0, min=0.5, max=5.0)\n";
 const LONGEST = "an_even_longer_slider_name_that_cannot_fit_beside_the_track";
+const RED = "a_red_slider_whose_long_name_cannot_fit_either";
+const SLIDERS = ["size", "bound", "driven", "long_named", LONGEST, RED];
 
 interface DebugState {
   text: string;
@@ -53,13 +57,13 @@ async function debugState(page: Page): Promise<DebugState> {
   return (await response.json()) as DebugState;
 }
 
-/** Wait until `node` has SOLVED; returns `done` or `cached`. */
+/** Wait until `node` has SETTLED — solved (`done` / `cached`), or `red` for the one slider written red; returns the state. */
 async function solvedState(page: Page, node: string): Promise<string> {
   let state = "";
   await expect
     .poll(async () => {
       state = (await debugState(page)).statuses[node]?.state ?? "";
-      return state === "done" || state === "cached";
+      return state === "done" || state === "cached" || (node === RED && state === "red");
     })
     .toBe(true);
   return state;
@@ -267,7 +271,7 @@ test("a slider collapses to one grid unit from the menu and expands from the ins
   // with an ellipsis. `long_named` fits: its box equals its scroll width
   // and the track is what the name leaves; the even longer name is cut at
   // exactly the point where the track sits at its floor — no earlier.
-  for (const name of ["size", "long_named", "an_even_longer_slider_name_that_cannot_fit_beside_the_track"]) {
+  for (const name of ["size", "long_named", LONGEST, RED]) {
     await page.getByTestId(`chevron-${name}`).click();
     await expect(face(page, name)).toHaveAttribute("data-collapsed", "true");
   }
@@ -276,7 +280,7 @@ test("a slider collapses to one grid unit from the menu and expands from the ins
   expect(fits.track, "the track shrank to make room").toBeLessThan(fits.full - 10);
   expect(fits.track, "… and stays at or above its 40 % floor").toBeGreaterThanOrEqual(fits.floor - 1);
   expect(Math.abs(fits.track + fits.name - fits.full), "name and track share the room").toBeLessThan(2);
-  const cut = await collapsedGeometry(page, "an_even_longer_slider_name_that_cannot_fit_beside_the_track");
+  const cut = await collapsedGeometry(page, LONGEST);
   expect(cut.nameScroll, `the long name is cut: ${JSON.stringify(cut)}`).toBeGreaterThan(cut.nameClient + 5);
   expect(Math.abs(cut.track - cut.floor), "… only once the track is at its floor, not before").toBeLessThan(2);
   expect(cut.track, "≥ 40 % of the full track").toBeGreaterThanOrEqual(0.4 * cut.full - 1);
@@ -284,6 +288,16 @@ test("a slider collapses to one grid unit from the menu and expands from the ins
   const short = await collapsedGeometry(page, "size");
   expect(short.nameScroll).toBeLessThanOrEqual(short.nameClient + 1);
   expect(short.track).toBeGreaterThan(short.floor + 10);
+  // A badge in the tail (the red slider's state badge — a git marker is the
+  // same shape) takes its own room and moves the floor NOT AT ALL: the cut
+  // sits exactly at 40 % of the room the name and the track share. (The
+  // first cut's row-wide constant put it 7 px higher and cut `long_named`
+  // whenever the suite's git spec had made the scratch a repository.)
+  await expect(page.getByTestId(`state-${RED}`), "the red badge sits in the tail").toHaveClass(/state-red/);
+  const badged = await collapsedGeometry(page, RED);
+  expect(badged.nameScroll, `the red name is cut: ${JSON.stringify(badged)}`).toBeGreaterThan(badged.nameClient + 5);
+  expect(Math.abs(badged.track - badged.floor), "… exactly at its floor, badge or no badge").toBeLessThan(2);
+  expect(badged.full, "the badge took its room from the body").toBeLessThan(cut.full - 8);
 
   // ---- the buffer bar on the collapsed row rides the TRACK's column
   // (docs/16 §Sliders; item 5 S2's bar, untouched by N1's grid): its box is
@@ -384,7 +398,8 @@ async function scrubBarGeometry(
  * The collapsed row's geometry in layout px (the canvas zoom divided out):
  * the name's box and scroll width, the track's width, the FULL track width
  * (the row's content minus the value label, the tail and the three gaps —
- * what the track has with no name) and the 40 % floor of it.
+ * what the track has with no name; measured off the ROW so the CSS's own
+ * arithmetic, inside the body, is held to it) and the 40 % floor of it.
  */
 async function collapsedGeometry(
   page: Page,

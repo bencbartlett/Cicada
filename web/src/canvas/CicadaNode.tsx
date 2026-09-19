@@ -442,12 +442,17 @@ function CollapsedSlider({
       data-git={gitChange}
       data-collapsed="true"
     >
-      {/* `has-chevron`: the track's 40 % floor subtracts the chevron only when the row wears one (canvas.css). */}
-      <div className={`cn-collapsed-row${writer ? " has-chevron" : ""}`}>
-        <span className="cn-collapsed-name" data-testid={`collapsed-${view.name}`} title={view.name}>
-          {view.name}
+      <div className="cn-collapsed-row">
+        {/* The body is the room the name and the track share (plus the value
+            label): its own grid, so the track's 40 % floor is 40 % of THAT
+            room whatever the tail beside it holds — badges, the chevron, or
+            nothing for an observer (canvas.css). */}
+        <span className="cn-collapsed-body">
+          <span className="cn-collapsed-name" data-testid={`collapsed-${view.name}`} title={view.name}>
+            {view.name}
+          </span>
+          <ParamWidget view={view} param={param} writer={writer} valueEditor />
         </span>
-        <ParamWidget view={view} param={param} writer={writer} valueEditor />
         <span className="cn-collapsed-tail">
           {(gitChange !== undefined || problem) && (
             <span className="cn-badges">

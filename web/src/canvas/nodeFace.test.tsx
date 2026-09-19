@@ -174,10 +174,14 @@ describe("the collapse chevron on the face", () => {
     expect(chevron.querySelector("svg")!.getAttribute("data-icon")).toBe("chevron-down");
     const row = container.querySelector(".cn-collapsed-row")!;
     const order = Array.from(row.children).map((el) => el.className.split(" ")[0]);
-    // name · the widget (its range and value) · the tail (badges + chevron) · the handle
-    expect(order.indexOf("cn-collapsed-name")).toBeLessThan(order.indexOf("cn-widget"));
-    expect(order.indexOf("cn-widget")).toBeLessThan(order.indexOf("cn-collapsed-tail"));
+    // the body (name · the widget's range and value) · the tail (badges +
+    // chevron) · the handle — the tail OUTSIDE the body, so the track's
+    // floor is measured against the room the name and track share alone.
+    expect(order.indexOf("cn-collapsed-body")).toBeLessThan(order.indexOf("cn-collapsed-tail"));
     expect(order.indexOf("cn-collapsed-tail")).toBeLessThan(order.indexOf("react-flow__handle"));
+    const body = Array.from(row.querySelector(".cn-collapsed-body")!.children).map((el) => el.className.split(" ")[0]);
+    expect(body.indexOf("cn-collapsed-name")).toBeLessThan(body.indexOf("cn-widget"));
+    expect(row.querySelector(".cn-collapsed-body .cn-chevron")).toBeNull();
     expect(row.querySelector(".cn-collapsed-tail .cn-chevron")).toBe(chevron);
     fireEvent.click(chevron);
     expect(sent).toEqual([{ type: "set_collapsed", payload: { node: "size", collapsed: false } }]);
@@ -200,13 +204,13 @@ describe("the collapse chevron on the face", () => {
     cleanup();
     const observed = renderNode(collapsed);
     expect(screen.queryByTestId("chevron-size")).toBeNull();
-    // … and the row says so to the CSS: the track's floor subtracts the
-    // chevron only where there is one (review findings L1-2 / C-9).
-    expect(observed.container.querySelector(".cn-collapsed-row")!.classList.contains("has-chevron")).toBe(false);
-    cleanup();
-    seed("writer", [collapsed]);
-    const written = renderNode(collapsed);
-    expect(written.container.querySelector(".cn-collapsed-row")!.classList.contains("has-chevron")).toBe(true);
+    // … and the body (name · track · value) is the same box as the writer's:
+    // the tail beside it is empty, and the floor never knew about it
+    // (review findings L1-2 / C-9).
+    const observedBody = observed.container.querySelector(".cn-collapsed-body")!;
+    expect(observedBody.querySelector(".cn-collapsed-name")).not.toBeNull();
+    expect(observedBody.querySelector("input[type='range']")).not.toBeNull();
+    expect(observed.container.querySelector(".cn-collapsed-tail")!.children).toHaveLength(0);
     cleanup();
     seed("writer", [off, domain]);
     renderNode(off);
