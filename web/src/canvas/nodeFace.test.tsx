@@ -156,6 +156,16 @@ describe("the collapse chevron on the face", () => {
     expect(sent).toEqual([{ type: "set_collapsed", payload: { node: "size", collapsed: true } }]);
   });
 
+  it("hands the focus back after a click, so Space stays the transport's (review C-8)", () => {
+    renderNode(expanded);
+    const chevron = screen.getByTestId("chevron-size");
+    chevron.focus();
+    expect(document.activeElement).toBe(chevron);
+    fireEvent.click(chevron);
+    expect(sent).toHaveLength(1);
+    expect(document.activeElement, "a focused button would swallow the next Space").not.toBe(chevron);
+  });
+
   it("sits at the collapsed row's right, before the output handle, and expands with one op", () => {
     const { container } = renderNode(collapsed);
     const chevron = screen.getByTestId("chevron-size");

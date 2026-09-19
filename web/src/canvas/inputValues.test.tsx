@@ -86,6 +86,23 @@ const moved: NodeView = {
   outputs: [{ name: "out", type: "[Point]", base: "Point", displayable: true }],
 };
 
+/** `dbl = size * 2.0`: an expression whose free variable is the wire. */
+const dbl: NodeView = {
+  ...span,
+  ref: 4,
+  name: "dbl",
+  targets: ["dbl"],
+  line: 4,
+  text: "dbl = size * 2.0",
+  kind: "expression",
+  func: undefined,
+  title: "Expression",
+  category: "Maths & logic",
+  description: "size * 2.0",
+  inputs: [input("size", { wired: { node: "size", port: "out" }, doc: "" })],
+  outputs: [{ name: "out", type: "Number", base: "Number", displayable: false }],
+};
+
 function propsFor(v: NodeView) {
   return {
     id: v.name,
@@ -118,7 +135,7 @@ function seed(selected: string) {
     connection: "open",
     role: "writer",
     catalog: null,
-    graph: { nodes: [size, span, moved], wires: [], diagnostics: [] },
+    graph: { nodes: [size, span, moved, dbl], wires: [], diagnostics: [] },
     selection: { nodes: [selected], wire: null, element: null },
     transport: null,
     statuses: { size: { state: "done", generation: 4 }, span: { state: "done", generation: 4 } },
@@ -126,6 +143,7 @@ function seed(selected: string) {
       size: { generation: 4, outputs: [["out", number]], inputs: [["value", null]] },
       span: { generation: 4, outputs: [["out", domain]], inputs: [["start", null], ["end", number]] },
       moved: { generation: 4, outputs: [["out", null]], inputs: [["geometry", points], ["vector", null]] },
+      dbl: { generation: 4, outputs: [["out", { ...number, samples: ["5"] }]], inputs: [["size", number]] },
     },
     notices: [],
     hello: { clientId: 1, role: "writer", protocol: 1, engine: "x", project: "p", pipeline: "p.cic", unitPx: 24 },
@@ -159,6 +177,15 @@ describe("input values on the node face (near tier — the provider's default zo
     renderNode(moved);
     expect(screen.getByTestId("in-value-moved-geometry").textContent).toBe("Point ×3 · (0.1235, 1, 2)");
     expect(screen.getByTestId("in-value-moved-vector").textContent).toBe("—");
+  });
+
+  it("an expression's free variable shows the value too, and its hover keeps both the rule and the value (review L5-3)", () => {
+    renderNode(dbl);
+    const shown = screen.getByTestId("in-value-dbl-size");
+    expect(shown.textContent).toBe("2.5");
+    const title = shown.closest(".cn-port.cn-in")!.getAttribute("title")!;
+    expect(title).toContain("size: free variable of the expression — edit the text to change it");
+    expect(title).toContain("\n← 2.5");
   });
 
   it("shows no input value until the answer for the node is in", () => {

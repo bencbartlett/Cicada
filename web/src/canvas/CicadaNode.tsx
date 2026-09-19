@@ -97,7 +97,7 @@ function InputRow({
   const shownValue = value !== undefined && input.wired !== undefined;
   if (shownValue) cls.push("with-value");
   // Hover: `name: type — doc` (the catalog's one-line port doc rides on the view-model).
-  let title = portTitle(input.name, input.type, input.doc) + (shownValue ? `\n← ${summaryText(value)}` : "");
+  let title = portTitle(input.name, input.type, input.doc);
   if (input.unknown) {
     cls.push("unknown");
     title = `${input.name}: unknown kwarg for this node`;
@@ -106,6 +106,10 @@ function InputRow({
   // itself, so it cannot be redrawn — edit the expression instead.
   const freeVar = node.kind === "expression";
   if (freeVar) title = `${input.name}: free variable of the expression — edit the text to change it`;
+  // The wire's value in full, LAST — on every row that shows one, a free
+  // variable's included (review finding L5-3: the expression's line used
+  // to replace it).
+  if (shownValue) title += `\n← ${summaryText(value)}`;
   // The gate fails closed (docs/09): no verdict = no wire, and the hover says why.
   if (awaiting && !freeVar) {
     cls.push("probe-none");
@@ -364,6 +368,10 @@ function Chevron({ view, collapsed }: { view: NodeView; collapsed: boolean }) {
       onClick={(event) => {
         event.stopPropagation();
         sendWrite({ type: "set_collapsed", payload: { node: view.name, collapsed: !collapsed } });
+        // Hand the focus back to the canvas: a focused button keeps its
+        // plain keys (docs/16 keyboard map), so the next Space would toggle
+        // the collapse again instead of the transport (review C-8).
+        event.currentTarget.blur();
       }}
       onDoubleClick={(event) => event.stopPropagation()}
     >
