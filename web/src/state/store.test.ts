@@ -252,6 +252,56 @@ test("a delta prunes dead bindings from statuses and follows renames / my placem
   expect(useCicada.getState().selection.nodes).toEqual(["add_1"]);
 });
 
+describe("node_values (the inspect answer; wave 5 N1 carries inputs beside outputs)", () => {
+  const number = { kind: "Number", hash: "ab".repeat(32), samples: ["2.5"] };
+  it("stores outputs AND inputs per node, and an older engine's answer without inputs as none (review L2-5, C-6)", () => {
+    useCicada.setState({ nodeValues: {} });
+    useCicada.getState().applyServerMessage({
+      v: 1,
+      seq: 4,
+      type: "node_values",
+      payload: { node: "span", generation: 4, outputs: [["out", null]], inputs: [["start", null], ["end", number]] },
+    });
+    expect(useCicada.getState().nodeValues.span).toEqual({
+      generation: 4,
+      outputs: [["out", null]],
+      inputs: [["start", null], ["end", number]],
+    });
+    useCicada.getState().applyServerMessage({
+      v: 1,
+      seq: 5,
+      type: "node_values",
+      payload: { node: "old", generation: 4, outputs: [["out", number]] },
+    });
+    expect(useCicada.getState().nodeValues.old).toEqual({ generation: 4, outputs: [["out", number]], inputs: [] });
+    expect(useCicada.getState().nodeValues.span, "other nodes' answers stay").toBeDefined();
+  });
+  it("a snapshot clears every answer (the values are re-asked)", () => {
+    useCicada.setState({
+      nodeValues: { span: { generation: 4, outputs: [], inputs: [["end", number]] } },
+      selection: { nodes: [], wire: null, element: null },
+      snapshots: 0,
+    });
+    useCicada.getState().applyServerMessage({
+      v: 1,
+      seq: 6,
+      type: "snapshot",
+      payload: {
+        graph: graph("span"),
+        text: "# cicada 1\nspan = 1.0\n",
+        statuses: {},
+        summary: useCicada.getState().summary,
+        lease: { writer: null, clients: [] },
+        barrier: false,
+        reason: "initial",
+        history: EMPTY_HISTORY,
+        transport: TRANSPORT_AT_REST,
+      },
+    });
+    expect(useCicada.getState().nodeValues).toEqual({});
+  });
+});
+
 describe("history (docs/13 §Undo/redo)", () => {
   const summary = {
     generation: 1,

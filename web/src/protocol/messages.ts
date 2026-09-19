@@ -833,13 +833,16 @@ export type ServerMessage =
        * v0.1 wave 5 N1 — what each input receives, in port order: a wired
        * input carries its source output's summary (the same one the
        * source's own answer has for that port); a literal kwarg and an
-       * unwired port are `null`.
+       * unwired port are `null`. Optional here because it is ADDITIVE at
+       * protocol 1: an engine from before N1 answers without it (a dev SPA
+       * on an older `cicada serve`), and the store reads that as "no input
+       * values" rather than throwing (review C-6).
        */
       type: "node_values";
       payload: {
         node: string;
         outputs: [string, ValueSummary | null][];
-        inputs: [string, ValueSummary | null][];
+        inputs?: [string, ValueSummary | null][];
         generation: number;
       };
     }

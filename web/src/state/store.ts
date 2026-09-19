@@ -717,10 +717,12 @@ export const useCicada = create<CicadaState>((set, get) => ({
       }
       case "node_values": {
         const p = envelope.payload;
+        // `inputs` is additive (wave 5 N1): an older engine's answer has
+        // none, which is "no input values", never a missing field downstream.
         set({
           nodeValues: {
             ...get().nodeValues,
-            [p.node]: { generation: p.generation, outputs: p.outputs, inputs: p.inputs },
+            [p.node]: { generation: p.generation, outputs: p.outputs, inputs: p.inputs ?? [] },
           },
         });
         break;
