@@ -10,6 +10,7 @@
 import { create } from "zustand";
 import type {
   CachesView,
+  CutBy,
   Catalog,
   ClientMessage,
   ErrorKind,
@@ -54,8 +55,10 @@ export interface DisplayPass {
   bytes: number;
   tessellateMs: number;
   encodeMs: number;
-  /** The pass stopped between outputs: a newer generation superseded it (latest-wins). */
+  /** The pass stopped between outputs (latest-wins), or its solve was cancelled. */
   cancelled: boolean;
+  /** What cut it: an edit's newer generation, or Esc (docs/13 §The display edge); null when nothing did. */
+  cutBy: CutBy | null;
   /** `nowMs()` at `display_begin`. */
   beganAt: number;
   /** The client's wall from `display_begin` to the first render after the last frame, once known. */
@@ -785,6 +788,14 @@ export const useCicada = create<CicadaState>((set, get) => ({
         set({ lease: p.lease, role: p.role });
         const change = roleChangeNotice(before, p.role, p.lease);
         if (change !== null) get().addNotice(change.level, change.message);
+        // A client that BECOMES the writer — `take_lease`, or inheriting the
+        // lease when the writer left — applies its display-cache preference
+        // like the writer's `hello` does: the lease holder's preference wins
+        // (docs/16 §Settings; review finding 2026-08-25).
+        const wanted = get().settings.displayCacheMib;
+        if (before !== "writer" && p.role === "writer" && wanted !== null) {
+          get().send({ type: "set_display_cache", payload: { mib: wanted } });
+        }
         break;
       }
       case "error": {
@@ -921,6 +932,7 @@ export const useCicada = create<CicadaState>((set, get) => ({
                   tessellateMs: 0,
                   encodeMs: 0,
                   cancelled: false,
+                  cutBy: null,
                   beganAt: nowMs(),
                   paintedMs: null,
                 },
@@ -946,6 +958,7 @@ export const useCicada = create<CicadaState>((set, get) => ({
               tessellateMs: p.tessellate_ms,
               encodeMs: p.encode_ms,
               cancelled: p.cancelled ?? false,
+              cutBy: p.cut_by ?? null,
               // Nothing to render for a pass that sent no frame: painted now.
               paintedMs: p.frames === 0 ? nowMs() - pass.beganAt : pass.paintedMs,
             },

@@ -97,6 +97,7 @@ const painted: DisplayPass = {
   tessellateMs: 2301.5,
   encodeMs: 114.25,
   cancelled: false,
+  cutBy: null,
   beganAt: 1000,
   paintedMs: 2900,
 };
@@ -108,8 +109,9 @@ describe("summaryText (the chip, wave 5 D1)", () => {
     expect(summaryText(idle, painted)).toBe("gen 3 · solve 12.4 ms · display 2.42 s");
     // A pass of another generation says nothing about this one.
     expect(summaryText(idle, { ...painted, generation: 2 })).toBe("gen 3 · solve 12.4 ms");
-    // A pass cut short by a newer generation says so.
-    expect(summaryText(idle, { ...painted, cancelled: true })).toBe("gen 3 · solve 12.4 ms · display 2.42 s (cut)");
+    // A pass cut short says so, whatever cut it (the hover says which).
+    expect(summaryText(idle, { ...painted, cancelled: true, cutBy: "edit" })).toBe("gen 3 · solve 12.4 ms · display 2.42 s (cut)");
+    expect(summaryText(idle, { ...painted, cancelled: true, cutBy: "esc" })).toBe("gen 3 · solve 12.4 ms · display 2.42 s (cut)");
   });
   it("says `painting…` between display_begin and display_end", () => {
     expect(summaryText(idle, { ...painted, phase: "painting" })).toBe("gen 3 · painting…");
@@ -133,6 +135,9 @@ describe("summaryText (the chip, wave 5 D1)", () => {
       "Solving gen 3 · ETA 80 ms",
     );
     expect(summaryText({ ...idle, running: true, pending: 1 })).toBe("Solving gen 3");
+    // A sub-millisecond ETA is noise, not information.
+    expect(summaryText({ ...idle, running: true, pending: 1, eta_ms: 0.004, eta_rough: true })).toBe("Solving gen 3");
+    expect(summaryText({ ...idle, running: true, pending: 1, eta_ms: 1, eta_rough: false })).toBe("Solving gen 3 · ETA 1 ms");
   });
   it("moved the counts to the hover, red/blocked lifted to the status counts (diagnostic-excluded nodes never solve)", () => {
     const lifted = withStatusCounts(idle, {
@@ -161,8 +166,16 @@ describe("summaryText (the chip, wave 5 D1)", () => {
     );
     expect(summaryTitle(idle, { ...painted, phase: "painting" })).toBe("gen 3: 4 computed / 6 cached\nsolve 12.4 ms\npainting 2 outputs…");
     expect(summaryTitle({ ...idle, running: true, pending: 2 })).toBe("gen 3: 4 computed / 6 cached / 2 pending\nsolving for 12.4 ms");
-    expect(summaryTitle(idle, { ...painted, paintedMs: null, cancelled: true, outputs: 1, frames: 1 })).toContain(
+    // What cut the pass is named — an edit's newer generation, Esc, or a
+    // cancelled solve with nothing to paint (never "a newer generation" for Esc).
+    expect(summaryTitle(idle, { ...painted, paintedMs: null, cancelled: true, cutBy: "edit", outputs: 1, frames: 1 })).toContain(
       "1 output · 1 frame · 152.68 MB · cut short by a newer generation",
+    );
+    expect(summaryTitle(idle, { ...painted, paintedMs: null, cancelled: true, cutBy: "esc", outputs: 0, frames: 0, bytes: 0 })).toContain(
+      "0 outputs · 0 frames · 0 B · cut short by Esc — the previous picture stays until the next edit",
+    );
+    expect(summaryTitle(idle, { ...painted, paintedMs: null, cancelled: true, outputs: 0, frames: 0, bytes: 0 })).toContain(
+      "0 outputs · 0 frames · 0 B · nothing to paint: the solve was cancelled",
     );
   });
 });
@@ -192,11 +205,11 @@ describe("the caches indicator", () => {
     expect(shortBytes(2.1 * 1024 * 1024 * 1024)).toBe("2.1G");
     expect(shortBytes(12 * 1024 * 1024 * 1024)).toBe("12G");
   });
-  it("reads `cache bytes / budget · solids · memo` (docs/16 §Status and progress language)", () => {
-    expect(cachesText(caches)).toBe("cache 612M / 1G · 1,397 solids · memo 2.1G");
-    // Cached refusals are not solids.
+  it("reads `cache bytes / budget · meshes · memo` (docs/16 §Status and progress language) — meshes, not solids: an entry is one solid at one tier", () => {
+    expect(cachesText(caches)).toBe("cache 612M / 1G · 1,397 meshes · memo 2.1G");
+    // Cached refusals are not meshes.
     expect(cachesText({ ...caches, display: { ...caches.display, entries: 2, refusals: 1 } })).toBe(
-      "cache 612M / 1G · 1 solid · memo 2.1G",
+      "cache 612M / 1G · 1 mesh · memo 2.1G",
     );
   });
   it("spells the flags out in the hover, with the remedy", () => {
@@ -219,8 +232,11 @@ describe("the viewport's display indicator", () => {
     expect(displayText({ ...painted, phase: "painting", outputs: 1 })).toBe("painting 1 output…");
     expect(displayText(painted)).toBe("painted 2 outputs · 152.68 MB in 2.90 s");
     expect(displayText({ ...painted, paintedMs: null })).toBe("painted 2 outputs · 152.68 MB");
-    expect(displayText({ ...painted, cancelled: true, outputs: 0, bytes: 0, paintedMs: 3 })).toBe(
+    expect(displayText({ ...painted, cancelled: true, cutBy: "edit", outputs: 0, bytes: 0, paintedMs: 3 })).toBe(
       "painted 0 outputs · 0 B in 3 ms · cut short",
+    );
+    expect(displayText({ ...painted, cancelled: true, cutBy: "esc", outputs: 0, bytes: 0, paintedMs: 3 })).toBe(
+      "painted 0 outputs · 0 B in 3 ms · cut short by Esc",
     );
   });
 });

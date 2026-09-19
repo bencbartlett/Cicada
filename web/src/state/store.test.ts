@@ -772,7 +772,11 @@ describe("the display edge (wave 5 D1: display_begin / display_end / caches / se
     type: "display_begin",
     payload: { generation, outputs },
   });
-  const end = (seq: number, generation: number, extra: Partial<{ outputs: number; frames: number; bytes: number; cancelled: boolean }> = {}): ServerEnvelope => ({
+  const end = (
+    seq: number,
+    generation: number,
+    extra: Partial<{ outputs: number; frames: number; bytes: number; cancelled: boolean; cut_by: "edit" | "esc" }> = {},
+  ): ServerEnvelope => ({
     v: 1,
     seq,
     type: "display_end",
@@ -784,6 +788,7 @@ describe("the display edge (wave 5 D1: display_begin / display_end / caches / se
       encode_ms: 114.25,
       bytes: extra.bytes ?? 160_100_000,
       ...(extra.cancelled === undefined ? {} : { cancelled: extra.cancelled }),
+      ...(extra.cut_by === undefined ? {} : { cut_by: extra.cut_by }),
     },
   });
   const apply = (envelope: ServerEnvelope) => useCicada.getState().applyServerMessage(envelope);
@@ -803,7 +808,7 @@ describe("the display edge (wave 5 D1: display_begin / display_end / caches / se
   it("begin starts a painting pass; end finishes it with the server's numbers; a stale end and an older begin are ignored", () => {
     apply(begin(1, 12, 2));
     const painting = useCicada.getState().display;
-    expect(painting).toMatchObject({ generation: 12, phase: "painting", outputs: 2, frames: 0, bytes: 0, cancelled: false, paintedMs: null });
+    expect(painting).toMatchObject({ generation: 12, phase: "painting", outputs: 2, frames: 0, bytes: 0, cancelled: false, cutBy: null, paintedMs: null });
     expect(painting!.beganAt).toBeGreaterThan(0);
     // An older generation's end (its begin was overtaken) changes nothing.
     apply(end(2, 11));
@@ -819,6 +824,7 @@ describe("the display edge (wave 5 D1: display_begin / display_end / caches / se
       tessellateMs: 2301.5,
       encodeMs: 114.25,
       cancelled: false,
+      cutBy: null,
       paintedMs: null,
       beganAt: painting!.beganAt,
     });
@@ -827,9 +833,16 @@ describe("the display edge (wave 5 D1: display_begin / display_end / caches / se
     expect(useCicada.getState().display).toMatchObject({ generation: 13, phase: "painting", outputs: 1 });
     apply(begin(5, 12, 9));
     expect(useCicada.getState().display!.generation).toBe(13);
-    // A cut pass says so.
-    apply(end(6, 13, { outputs: 0, frames: 0, bytes: 0, cancelled: true }));
-    expect(useCicada.getState().display).toMatchObject({ generation: 13, phase: "painted", cancelled: true, outputs: 0 });
+    // A cut pass says so, and by what.
+    apply(end(6, 13, { outputs: 0, frames: 0, bytes: 0, cancelled: true, cut_by: "esc" }));
+    expect(useCicada.getState().display).toMatchObject({ generation: 13, phase: "painted", cancelled: true, cutBy: "esc", outputs: 0 });
+    apply(begin(7, 14, 1));
+    apply(end(8, 14, { outputs: 0, frames: 0, bytes: 0, cancelled: true, cut_by: "edit" }));
+    expect(useCicada.getState().display).toMatchObject({ generation: 14, cancelled: true, cutBy: "edit" });
+    // A cancelled solve's empty pass: cancelled, nothing cut it.
+    apply(begin(9, 15, 0));
+    apply(end(10, 15, { outputs: 0, frames: 0, bytes: 0, cancelled: true }));
+    expect(useCicada.getState().display).toMatchObject({ generation: 15, cancelled: true, cutBy: null });
   });
 
   it("a pass that sent no frame is painted at its end; markPainted stamps the client's wall once, for the standing pass only", () => {
@@ -925,5 +938,35 @@ describe("the display edge (wave 5 D1: display_begin / display_end / caches / se
     useCicada.setState({ hello: null });
     apply(hello("writer"));
     expect(sent).toHaveLength(2);
+  });
+
+  it("a client that becomes the writer by a lease change applies its preference too (the lease holder's wins)", () => {
+    const sent: ClientMessage[] = [];
+    useCicada.getState().installSender((message) => {
+      sent.push(message);
+      return "1";
+    });
+    useCicada.getState().updateSettings({ displayCacheMib: 512 });
+    const lease = (role: "writer" | "observer", writer: number | null): ServerEnvelope => ({
+      v: 1,
+      seq: 0,
+      type: "lease",
+      payload: { role, lease: { writer, clients: [[3, role]] } },
+    });
+    // An observer stays an observer: nothing sent.
+    useCicada.setState({ role: "observer" });
+    apply(lease("observer", 7));
+    expect(sent).toHaveLength(0);
+    // Becoming the writer (take_lease, or the writer left) applies it.
+    apply(lease("writer", 3));
+    expect(sent).toEqual([{ type: "set_display_cache", payload: { mib: 512 } }]);
+    // A lease broadcast that leaves the client the writer sends nothing more.
+    apply(lease("writer", 3));
+    expect(sent).toHaveLength(1);
+    // Without a preference, becoming the writer sends nothing.
+    useCicada.getState().updateSettings({ displayCacheMib: null });
+    useCicada.setState({ role: "observer" });
+    apply(lease("writer", 3));
+    expect(sent).toHaveLength(1);
   });
 });

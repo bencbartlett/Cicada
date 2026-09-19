@@ -53,6 +53,8 @@ const writesNotGestures: ClientMessage[] = [
   { type: "redo", payload: {} },
   { type: "batch", payload: { ops: gestures.slice(0, 2), label: "two" } },
   { type: "apply_text", payload: applyText },
+  // The display cache resize (wave 5 D1): lease-gated, never an op.
+  { type: "set_display_cache", payload: { mib: 512 } },
 ];
 
 /**

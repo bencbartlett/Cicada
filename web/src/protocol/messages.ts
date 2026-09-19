@@ -105,9 +105,13 @@ export interface DisplayBeginPayload {
  * frame (its place among the frames is its meaning, like `display_reset`'s),
  * so a client that has seen it has every frame of the pass. What was sent
  * (`outputs` / `frames` / `bytes`), the two phases' wall times (their sum
- * is the chip's `display` time), and `cancelled` when a newer generation
- * (or Esc) stopped the pass between outputs — the outputs it did not reach
- * keep their previous frames until the newer generation draws them.
+ * is the chip's `display` time), `cancelled` when the pass stopped between
+ * outputs (or the solve was cancelled), and `cut_by` saying what stopped it
+ * (docs/13 §The display edge): `edit` — a structural job was waiting, and
+ * its generation redraws the outputs the pass did not reach; `esc` — the
+ * generation is reported cancelled and the outputs the pass did not reach
+ * keep the previous picture until the next edit. A pending preview or
+ * transport tick never cuts a pass.
  */
 export interface DisplayEndPayload {
   generation: number;
@@ -117,7 +121,11 @@ export interface DisplayEndPayload {
   encode_ms: number;
   bytes: number;
   cancelled?: boolean;
+  cut_by?: CutBy;
 }
+
+/** What cut a display pass between outputs (`protocol::CutBy`). */
+export type CutBy = "edit" | "esc";
 
 export interface ValueSummary {
   kind: string;

@@ -73,8 +73,10 @@ export function pendingTitle(pending: { estimateMs: number; rough: boolean }): s
  */
 export function summaryText(summary: SolveSummary, display: DisplayPass | null = null): string {
   if (summary.running) {
+    // No ETA below a millisecond: `ETA ~0.00 ms` beside a running solve is
+    // noise (the cost model has nothing yet for never-seen nodes).
     const eta =
-      summary.eta_ms === undefined
+      summary.eta_ms === undefined || summary.eta_ms < 1
         ? ""
         : ` · ETA ${summary.eta_rough ? "~" : ""}${formatMs(summary.eta_ms)}`;
     return `Solving gen ${summary.generation}${eta}`;
@@ -96,6 +98,19 @@ export function summaryText(summary: SolveSummary, display: DisplayPass | null =
     return `gen ${pass.generation} · display ${formatMs(display_ms)}${cut}`;
   }
   return `gen ${summary.generation} · ${solve} · display ${formatMs(display_ms)}${cut}`;
+}
+
+/**
+ * Why a cut pass stopped, for the hover and the viewport (docs/13 §The
+ * display edge): an edit's newer generation redraws what it did not reach;
+ * Esc leaves the previous picture until the next edit; a pass whose solve
+ * was cancelled had nothing to paint.
+ */
+export function cutShort(pass: DisplayPass): string {
+  if (!pass.cancelled) return "";
+  if (pass.cutBy === "esc") return " · cut short by Esc — the previous picture stays until the next edit";
+  if (pass.cutBy === "edit") return " · cut short by a newer generation";
+  return " · nothing to paint: the solve was cancelled";
 }
 
 /** The display pass that describes the current generation: the summary's own, or a newer one (never an older one). */
@@ -129,7 +144,7 @@ export function summaryTitle(summary: SolveSummary, display: DisplayPass | null 
     `display ${formatMs(pass.tessellateMs + pass.encodeMs)}: tessellation ${formatMs(pass.tessellateMs)} · encode ${formatMs(pass.encodeMs)}`,
   );
   lines.push(
-    `${pass.outputs} ${pass.outputs === 1 ? "output" : "outputs"} · ${pass.frames} ${pass.frames === 1 ? "frame" : "frames"} · ${formatBytes(pass.bytes)}${pass.cancelled ? " · cut short by a newer generation" : ""}`,
+    `${pass.outputs} ${pass.outputs === 1 ? "output" : "outputs"} · ${pass.frames} ${pass.frames === 1 ? "frame" : "frames"} · ${formatBytes(pass.bytes)}${cutShort(pass)}`,
   );
   if (pass.paintedMs !== null) lines.push(`painted here in ${formatMs(pass.paintedMs)}`);
   return lines.join("\n");
@@ -151,13 +166,14 @@ export function shortBytes(bytes: number): string {
 
 /**
  * The top bar's caches indicator (docs/16 §Status and progress language):
- * `cache 612M / 1G · 1,397 solids · memo 2.1G` — the display cache's bytes
- * against its budget, the display meshes it holds (entries minus cached
- * refusals), the memo store's footprint.
+ * `cache 612M / 1G · 1,397 meshes · memo 2.1G` — the display cache's bytes
+ * against its budget, the display MESHES it holds (entries minus cached
+ * refusals: a mesh per solid per tier, past value sets included — not the
+ * solids on screen), the memo store's footprint.
  */
 export function cachesText(caches: CachesView): string {
-  const solids = Math.max(0, caches.display.entries - caches.display.refusals);
-  return `cache ${shortBytes(caches.display.bytes)} / ${shortBytes(caches.display.budget)} · ${solids.toLocaleString("en-US")} ${solids === 1 ? "solid" : "solids"} · memo ${shortBytes(caches.memo.bytes)}`;
+  const meshes = Math.max(0, caches.display.entries - caches.display.refusals);
+  return `cache ${shortBytes(caches.display.bytes)} / ${shortBytes(caches.display.budget)} · ${meshes.toLocaleString("en-US")} ${meshes === 1 ? "mesh" : "meshes"} · memo ${shortBytes(caches.memo.bytes)}`;
 }
 
 /** The indicator's hover: the full breakdown, one fact per line, the flags spelled out. */
@@ -185,7 +201,7 @@ export function displayText(display: DisplayPass): string {
   const outputs = `${display.outputs} ${display.outputs === 1 ? "output" : "outputs"}`;
   if (display.phase === "painting") return `painting ${outputs}…`;
   const took = display.paintedMs === null ? "" : ` in ${formatMs(display.paintedMs)}`;
-  const cut = display.cancelled ? " · cut short" : "";
+  const cut = display.cancelled ? (display.cutBy === "esc" ? " · cut short by Esc" : " · cut short") : "";
   return `painted ${outputs} · ${formatBytes(display.bytes)}${took}${cut}`;
 }
 
