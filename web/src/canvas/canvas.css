@@ -738,9 +738,15 @@
 
 /* on the collapsed row the widget's box has dissolved into the row's grid
    (below): the bar is placed on the TRACK's column, flush with the row's
-   bottom edge, and the pending chip under the track + value */
+   bottom edge, and the pending chip under the track + value. Both are
+   absolutely positioned grid children, and for those an `auto` END line
+   resolves to the grid container's padding edge (CSS Grid §9.1) — so the
+   end line is named explicitly: `2 / 3` is the track alone, and the bar's
+   segments map the positions onto the track's own width, its ringed notch
+   under the thumb (the first cut wrote `grid-column: 2` and the bar ran on
+   under the value and the chevron — wave 5 N1 review, 2026-09-19). */
 .cn-collapsed .cn-slider .scrub-bar {
-  grid-column: 2;
+  grid-column: 2 / 3;
   left: 0;
   right: 0;
   bottom: 1px;
@@ -797,20 +803,31 @@
    raises the floor). The slider widget's own box dissolves into the grid
    (`display: contents`) so its range and value are the grid's items; its
    absolutely positioned bar and chip are placed on the grid's columns
-   (above). Pinned by `web/e2e/slider.spec.ts` with a long-named slider. */
+   (above). The fixed parts the floor subtracts are the ones the row really
+   carries: the value label and the gaps always (48 px), the chevron's
+   14 px only on a row that wears one (`has-chevron` — a writer's; an
+   observer's row and a `#off` ghost's have none, and a fixed 62 px put
+   their floor 5 px UNDER 40 % — wave 5 N1 review L1-2 / C-9, 2026-09-19).
+   Pinned by `web/e2e/slider.spec.ts` with a long-named slider, as the
+   writer and as an observer. */
 .cn.cn-collapsed {
   justify-content: center;
 }
 
 .cn-collapsed-row {
+  --tail: 0px;
   position: relative;
   height: var(--unit);
   display: grid;
-  grid-template-columns: minmax(0, auto) minmax(calc((100% - 62px) * 0.4), 1fr) auto auto;
+  grid-template-columns: minmax(0, auto) minmax(calc((100% - 48px - var(--tail)) * 0.4), 1fr) auto auto;
   align-items: center;
   column-gap: 6px;
   padding: 0 12px 0 8px;
   min-width: 0;
+}
+
+.cn-collapsed-row.has-chevron {
+  --tail: 14px;
 }
 
 .cn-collapsed-name {

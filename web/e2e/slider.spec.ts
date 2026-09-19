@@ -26,15 +26,17 @@ const SIDECAR = `${FILE}.layout.json`;
 
 // `long_named` and the even longer one are for the collapsed row's
 // name-first layout (wave 5 N1): a name that fits within the room the
-// track's 40 % floor leaves, and one that cannot.
+// track's 40 % floor leaves, and one that cannot. `long_named` is also
+// scrub-cached (10 positions), so its collapsed row wears the buffer bar.
 const START =
   "# cicada 1\n" +
   "size = slider(value=2.0, min=0.5, max=5.0)\n" +
   "bound = slider(value=1.0, min=0.0, max=size)\n" +
   "driven = slider(value=size, min=0.0, max=10.0)\n" +
-  "long_named = slider(value=2.0, min=0.5, max=5.0)\n" +
+  "long_named = slider(value=2.0, min=0.5, max=5.0, step=0.5, scrub=True)\n" +
   "an_even_longer_slider_name_that_cannot_fit_beside_the_track = slider(value=2.0, min=0.5, max=5.0)\n";
 const SLIDERS = ["size", "bound", "driven", "long_named", "an_even_longer_slider_name_that_cannot_fit_beside_the_track"];
+const LONGEST = "an_even_longer_slider_name_that_cannot_fit_beside_the_track";
 
 interface DebugState {
   text: string;
@@ -42,6 +44,7 @@ interface DebugState {
   ops: { label: string }[];
   graph: { nodes: { name: string; size: [number, number]; collapsed?: boolean; manual: boolean }[] };
   statuses: Record<string, { state: string; message?: string }>;
+  scrub: { queues: { node: string; positions: number; warmed: number[]; warming: boolean }[] };
 }
 
 async function debugState(page: Page): Promise<DebugState> {
@@ -76,6 +79,7 @@ async function heightUnits(page: Page, name: string): Promise<number> {
 
 test("a slider collapses to one grid unit from the menu and expands from the inspector — one op each, sidecar only; a wired bound is refused by the server with a notice", async ({
   page,
+  browser,
 }) => {
   writeFileSync(FILE, START);
 
@@ -200,9 +204,11 @@ test("a slider collapses to one grid unit from the menu and expands from the ins
 
   // ---- wave 5 N1 (finding U17): the chevron ON the face. The expanded
   // `size` wears it centred on its bottom edge — an absolutely positioned
-  // tab, so the face keeps the server's seven units — and one click is ONE
-  // op `collapse size`; the collapsed row wears its twin before the output
-  // handle, and one click there is `expand size`.
+  // tab (the geometry below is what pins that: a tab laid out in flow would
+  // sit inside the face, not on its edge; the face's declared height is the
+  // server's seven units either way) — and one click is ONE op `collapse
+  // size`; the collapsed row wears its twin before the output handle, and
+  // one click there is `expand size`.
   await page.locator(".react-flow__pane").click({ position: { x: 5, y: 5 } });
   const chevron = page.getByTestId("chevron-size");
   await expect(chevron).toHaveClass(/expanded/);
@@ -242,8 +248,14 @@ test("a slider collapses to one grid unit from the menu and expands from the ins
   const afterTyping = await debugState(page);
   expect(afterTyping.history.depth, "Esc and a refusal write nothing").toBe(2);
   expect(afterTyping.text).toContain("value=3.5");
+  // A single click on the label selects the node and opens no editor —
+  // from a DESELECTED state, or the assertion is vacuous (the double-clicks
+  // above selected it already; review finding L2-3).
+  await page.locator(".react-flow__pane").click({ position: { x: 5, y: 5 } });
+  await expect(node(page, "size")).not.toHaveClass(/selected/);
   await page.getByTestId("slider-value-size").click();
   await expect(node(page, "size")).toHaveClass(/selected/);
+  await expect(page.getByTestId("slider-value-size-input")).toHaveCount(0);
   await expect(page.getByTestId("node-inspect")).toHaveAttribute("data-node", "size");
   await chevron.click();
   await expect(face(page, "size")).not.toHaveAttribute("data-collapsed", "true");
@@ -273,8 +285,100 @@ test("a slider collapses to one grid unit from the menu and expands from the ins
   expect(short.nameScroll).toBeLessThanOrEqual(short.nameClient + 1);
   expect(short.track).toBeGreaterThan(short.floor + 10);
 
+  // ---- the buffer bar on the collapsed row rides the TRACK's column
+  // (docs/16 §Sliders; item 5 S2's bar, untouched by N1's grid): its box is
+  // the range input's, so its segments map the positions onto the track
+  // and the ringed notch sits under the thumb — never on under the value
+  // label and the chevron (review finding C-3: an absolutely positioned
+  // grid child with an `auto` end line ran to the row's edge).
+  await expect
+    .poll(async () => (await debugState(page)).scrub.queues.find((q) => q.node === "long_named")?.warmed.length ?? 0, {
+      timeout: 60_000,
+      message: "long_named's 10 positions warm",
+    })
+    .toBe(10);
+  const bar = node(page, "long_named").getByTestId("scrub-bar-long_named");
+  await expect(bar).toBeVisible();
+  await expect(bar.locator(".scrub-seg")).toHaveCount(10);
+  const scrubbed = await scrubBarGeometry(page, "long_named");
+  expect(Math.abs(scrubbed.bar.left - scrubbed.track.left), `bar vs track: ${JSON.stringify(scrubbed)}`).toBeLessThan(1.5);
+  expect(Math.abs(scrubbed.bar.right - scrubbed.track.right), "the bar ends with the track").toBeLessThan(1.5);
+  expect(scrubbed.bar.right, "… before the value label").toBeLessThanOrEqual(scrubbed.value.left);
+  expect(scrubbed.current, "2.0 of 0.5…5.0 by 0.5 is the fourth notch").toBe(3);
+  expect(Math.abs(scrubbed.currentCentre - scrubbed.thumbCentre), "the ringed notch under the thumb").toBeLessThan(
+    scrubbed.segment,
+  );
+
+  // ---- an OBSERVER's row wears no chevron, and its floor is 40 % of ITS
+  // full track — the fixed parts the floor subtracts are the ones the row
+  // carries (review findings L1-2 / C-9: a constant that assumed the
+  // chevron put the observer's floor 5 px under 40 %).
+  const observer = await browser.newContext({ baseURL: config.use?.baseURL, viewport: config.use?.viewport });
+  const other = await observer.newPage();
+  await other.goto(`/?token=${TOKEN}&pipeline=${PIPELINE}`);
+  await expect(other.getByTestId("app")).toBeVisible();
+  await expect(face(other, LONGEST)).toHaveAttribute("data-collapsed", "true");
+  await expect(other.getByTestId(`chevron-${LONGEST}`)).toHaveCount(0);
+  const observed = await collapsedGeometry(other, LONGEST);
+  expect(observed.nameScroll, `the observer's long name is cut too: ${JSON.stringify(observed)}`).toBeGreaterThan(
+    observed.nameClient + 5,
+  );
+  expect(Math.abs(observed.track - observed.floor), "… exactly at its floor").toBeLessThan(2);
+  expect(observed.track, "≥ 40 % of the observer's full track").toBeGreaterThanOrEqual(0.4 * observed.full - 1);
+  expect(observed.full, "the observer's track has the chevron's room").toBeGreaterThan(cut.full + 10);
+  await observer.close();
+
   expect(errors, errors.join("\n")).toEqual([]);
 });
+
+/**
+ * The collapsed row's buffer bar against its track, in layout px: the two
+ * boxes, the value label's left edge, the ringed (`current`) segment's
+ * centre and the thumb's — the range's thumb centre for its value, with
+ * the thumb's own half-width of travel taken off each end — and one
+ * segment's width (the tolerance the notch is held to).
+ */
+async function scrubBarGeometry(
+  page: Page,
+  name: string,
+): Promise<{
+  bar: { left: number; right: number };
+  track: { left: number; right: number };
+  value: { left: number };
+  current: number;
+  currentCentre: number;
+  thumbCentre: number;
+  segment: number;
+}> {
+  return face(page, name).evaluate((el) => {
+    const row = el.querySelector(".cn-collapsed-row") as HTMLElement;
+    const zoom = row.getBoundingClientRect().width / row.offsetWidth;
+    const box = (e: Element) => {
+      const r = e.getBoundingClientRect();
+      return { left: r.left / zoom, right: r.right / zoom, width: r.width / zoom };
+    };
+    const bar = row.querySelector(".scrub-bar") as HTMLElement;
+    const range = row.querySelector("input[type='range']") as HTMLInputElement;
+    const value = row.querySelector(".cn-widget-value") as HTMLElement;
+    const current = Number(bar.dataset.current);
+    const segment = bar.querySelector(`.scrub-seg[data-index='${current}']`) as HTMLElement;
+    const fraction = (Number(range.value) - Number(range.min)) / (Number(range.max) - Number(range.min));
+    const track = box(range);
+    // Chromium's default range thumb is ~16 px wide: its centre travels the
+    // track minus one thumb width.
+    const thumb = 16;
+    const seg = box(segment);
+    return {
+      bar: box(bar),
+      track,
+      value: box(value),
+      current,
+      currentCentre: (seg.left + seg.right) / 2,
+      thumbCentre: track.left + thumb / 2 + fraction * (track.width - thumb),
+      segment: seg.width,
+    };
+  });
+}
 
 /**
  * The collapsed row's geometry in layout px (the canvas zoom divided out):

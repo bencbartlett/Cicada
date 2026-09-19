@@ -2401,10 +2401,14 @@ proves wrong is revised here, dated, in the landing commit.
   decider, which the wave-4 review ruled out. (2) The **40 % floor** is
   40 % of the track's FULL width — the width it has with no name at all
   — and the CSS states the fixed parts it subtracts (the value label's
-  3em, the chevron, three gaps: 62 px); a value label wider than 3em or a
-  badge on the row raises the floor slightly above 40 %, never below it
-  (the e2e measures the real full width and holds the track to ≥ 40 % of
-  it, and the cut name to exactly the floor). To lay the name out first
+  3em and three gaps, 48 px, plus the chevron's 14 px on a row that wears
+  one — `has-chevron`, a writer's; an observer's row and a `#off` ghost's
+  have no chevron and subtract none: *fix round 2026-09-19, review
+  findings L1-2 / C-9 — a fixed 62 px had put the observer's floor 5.6 px
+  UNDER 40 %*); a value label wider than 3em or a badge on the row raises
+  the floor slightly above 40 %, never below it (the e2e measures the real
+  full width and holds the track to ≥ 40 % of it, and the cut name to
+  exactly the floor — as the writer and as an observer). To lay the name out first
   the row became a CSS grid and the slider widget's box dissolves into it
   (`display: contents`), which costs the collapsed row the widget's
   `slider 0.5 … 5` hover (the value label's hover names the port and the

@@ -434,7 +434,8 @@ function CollapsedSlider({
       data-git={gitChange}
       data-collapsed="true"
     >
-      <div className="cn-collapsed-row">
+      {/* `has-chevron`: the track's 40 % floor subtracts the chevron only when the row wears one (canvas.css). */}
+      <div className={`cn-collapsed-row${writer ? " has-chevron" : ""}`}>
         <span className="cn-collapsed-name" data-testid={`collapsed-${view.name}`} title={view.name}>
           {view.name}
         </span>

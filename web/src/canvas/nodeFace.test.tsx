@@ -188,8 +188,15 @@ describe("the collapse chevron on the face", () => {
     renderNode(expanded);
     expect(screen.queryByTestId("chevron-size")).toBeNull();
     cleanup();
-    renderNode(collapsed);
+    const observed = renderNode(collapsed);
     expect(screen.queryByTestId("chevron-size")).toBeNull();
+    // … and the row says so to the CSS: the track's floor subtracts the
+    // chevron only where there is one (review findings L1-2 / C-9).
+    expect(observed.container.querySelector(".cn-collapsed-row")!.classList.contains("has-chevron")).toBe(false);
+    cleanup();
+    seed("writer", [collapsed]);
+    const written = renderNode(collapsed);
+    expect(written.container.querySelector(".cn-collapsed-row")!.classList.contains("has-chevron")).toBe(true);
     cleanup();
     seed("writer", [off, domain]);
     renderNode(off);
