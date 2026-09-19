@@ -184,8 +184,9 @@ session (`Core.solids`), NOT in the value store and NOT in the value:
   one is not re-sent, one showing it at the preview tier is redrawn by
   the next fine generation (the release), and a joining client is
   restreamed at whatever tier is on screen — all hits.
-- **Bound**: bytes of mesh buffers as uploaded, default 256 MiB,
-  evicted least-recently-used — a recency index (touch stamp → key in a
+- **Bound**: bytes of mesh buffers as uploaded, default 1 GiB
+  (`SOLID_CACHE_BUDGET`, resizable at run time — §Display below; it was
+  256 MiB until v0.1 wave 5 D1), evicted least-recently-used — a recency index (touch stamp → key in a
   `BTreeMap`) makes every touch and every eviction O(log entries), so a
   display pass over N distinct solids costs O(N log entries) however
   full the cache is, never O(N × entries). Eviction costs a
@@ -317,7 +318,16 @@ sets did not fit a 256 MiB cache).
   the resize (its `caches` turns the indicator; the pass after it raises
   no notice) — and re-arms the watch on the picture that survived the
   resize, so the resize's own evictions are never reported as the next
-  generation's thrash; `thrash` stands until the next pass.
+  generation's thrash; a resize that HOLDS the working set clears
+  `thrash` at once (the condition it warns about is gone — the user did
+  what the remedy said), otherwise `thrash` stands until the next pass.
+  **Not bounded: the sum over outputs.** The budget is per output, so a
+  picture of ten outputs of 900,000 fine triangles each is drawn fine —
+  9 M triangles, the frame U30 measured — with nothing said unless the
+  working set exceeds the cache; the per-output choice keeps a pipeline
+  of many modest outputs from being penalised for their sum, and the
+  profiler (P1) shows the sum. A soft per-generation ceiling is a
+  follow-up if it ever bites (review note CR-3).
 - **The lifecycle and latest-wins.** A generation's display pass is
   `display_begin` (the control lane, the moment the solve finished and
   BEFORE the tessellation — the spinner starts when the work does;

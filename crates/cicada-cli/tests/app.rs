@@ -297,6 +297,82 @@ fn app_resolves_its_path_exactly_as_serve_does() {
     }
 }
 
+/// `--solid-cache-mib` reaches the session (`ServeCli` → `ServeArgs` →
+/// `ServeConfig.solid_cache_bytes` → `SessionConfig`): `/debug/state.caches`
+/// reports the budget it names; below the floor it is refused by the flag
+/// itself, before anything binds (review finding CR-5, D1, 2026-08-25:
+/// dropping the plumbing left the 1 GiB default with every test green).
+#[test]
+fn the_solid_cache_flag_sizes_the_session_and_its_range_is_refused() {
+    let dir = scratch();
+    let mut server = Server::start(
+        cicada()
+            .args([
+                "app",
+                "--no-browser",
+                "--port",
+                "0",
+                "--token",
+                "t",
+                "--threads",
+                "2",
+                "--solid-cache-mib",
+                "64",
+                "--web-dir",
+            ])
+            .arg(dir.path().join("dist"))
+            .arg("--cache-dir")
+            .arg(dir.path().join("cache"))
+            .arg(dir.path().join("demo.cic")),
+    );
+    let header = server.line("the URL line");
+    let url = header.split(" — ").nth(1).unwrap().to_owned();
+    let addr = url
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap()
+        .to_owned();
+    let state = get(&addr, "/debug/state?token=t&pipeline=demo.cic&wait=true");
+    assert!(state.starts_with("HTTP/1.1 200"), "{state}");
+    let body = state.split("\r\n\r\n").nth(1).unwrap_or("");
+    let json: serde_json::Value = serde_json::from_str(body.trim()).unwrap_or_else(|e| {
+        panic!("{e}: {body}");
+    });
+    assert_eq!(
+        json["caches"]["display"]["budget"],
+        64 * 1024 * 1024,
+        "{}",
+        json["caches"]
+    );
+    server.finish();
+
+    for args in [
+        &["serve", "--solid-cache-mib", "63", "--port", "0"][..],
+        &[
+            "app",
+            "--no-browser",
+            "--solid-cache-mib",
+            "63",
+            "--port",
+            "0",
+        ][..],
+    ] {
+        let subcommand = args[0];
+        let output = cicada()
+            .args(args)
+            .arg(dir.path().join("demo.cic"))
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{subcommand}: 63 MiB came up");
+        let text = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            text.contains("63") && text.contains("64..=65536"),
+            "{subcommand}: the flag names its range:\n{text}"
+        );
+    }
+}
+
 #[test]
 fn help_carries_serve_flags_and_the_browser_switch() {
     let output = cicada().args(["app", "--help"]).output().unwrap();

@@ -10,6 +10,10 @@ header.topbar {
   flex-wrap: nowrap;
   white-space: nowrap;
   font-size: 12px;
+  /* A grid item's `min-width: auto` is its min-content width: without this
+     the `.app` column grew to the bar's full text and the whole app
+     scrolled sideways while the bar itself still showed free space. */
+  min-width: 0;
 }
 
 /* The bar never overflows the window: only the two chips — the solve chip

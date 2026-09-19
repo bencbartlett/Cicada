@@ -2035,7 +2035,10 @@ mod tests {
 
     /// The control-lane texts one generation produces (docs/13 §The display
     /// edge): its coalesced statuses, `display_begin` as its display pass
-    /// starts, `caches` as it ends. (`display_end` rides the display lane.)
+    /// starts, `caches` as it ends. `display_end` must NEVER join this
+    /// list: it rides the display lane behind the pass's last frame, and
+    /// the two lane tests below are what pin it there — admitting it here
+    /// would un-pin the lane silently (review note 2026-08-25).
     fn generation_text(kind: &str) -> bool {
         matches!(kind, "status" | "display_begin" | "caches")
     }

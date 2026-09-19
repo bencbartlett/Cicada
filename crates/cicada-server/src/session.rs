@@ -5346,15 +5346,22 @@ impl Core {
 
     /// Resize the display cache under the lock (`set_display_cache`):
     /// shrinking evicts at once; `over_budget` is re-judged against the
-    /// new budget (thrash is the last pass's verdict and stands until a
-    /// pass clears it); and the watch is RE-ARMED on the picture that
-    /// survived, so the resize's own evictions are not counted against
-    /// the next pass as "this generation evicted N of the meshes the
-    /// previous one displayed" (review finding 2026-08-25). Returns how
-    /// many entries the resize evicted.
+    /// new budget; `thrash` — the last pass's verdict — is cleared when the
+    /// new budget holds the working set (the condition it warns about is
+    /// gone; the user did what the remedy said, and the indicator stayed
+    /// amber until the next pass — review finding 2026-08-25) and stands
+    /// otherwise; and the watch is RE-ARMED on the picture that survived,
+    /// so the resize's own evictions are not counted against the next pass
+    /// as "this generation evicted N of the meshes the previous one
+    /// displayed" (review finding 2026-08-25). Returns how many entries
+    /// the resize evicted.
     fn resize_display_cache(&self, inner: &mut Inner, bytes: usize) -> u64 {
         let evicted = self.solids.set_budget(bytes);
-        inner.caches.over_budget = inner.caches.working_set > bytes as u64;
+        let holds = inner.caches.working_set <= bytes as u64;
+        inner.caches.over_budget = !holds;
+        if holds {
+            inner.caches.thrash = false;
+        }
         let (set, _) = Self::working_set(inner);
         self.watch_working_set(&set);
         evicted
@@ -10354,6 +10361,36 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let caches = of_kind(&got, "caches");
         assert_eq!(caches[0]["payload"]["display"]["thrash"], true, "{got:?}");
         assert_eq!(caches[0]["payload"]["display"]["over_budget"], true);
+        // Thrash stands after the pass that raised it — through a resize
+        // that still does not hold the picture — and a resize that holds
+        // it clears BOTH flags at once: the remedy worked, and the indicator
+        // says so without waiting for another pass.
+        let flags = |session: &Session| {
+            let state = session.debug_state(false);
+            (
+                state["caches"]["display"]["over_budget"] == true,
+                state["caches"]["display"]["thrash"] == true,
+            )
+        };
+        session
+            .core
+            .resize_display_cache(&mut session.core.lock_inner(), 150 * 1024);
+        assert_eq!(
+            flags(&session),
+            (true, true),
+            "150 KiB still too small: both stand"
+        );
+        session
+            .core
+            .resize_display_cache(&mut session.core.lock_inner(), 64 * 1024 * 1024);
+        assert_eq!(flags(&session), (false, false), "cleared by the resize");
+        // Back to too small: `over_budget` rises at the resize, thrash does
+        // not (nothing was evicted from the picture) — and the ticks after
+        // it, over the standing flag, raise nothing.
+        session
+            .core
+            .resize_display_cache(&mut session.core.lock_inner(), 200 * 1024);
+        assert_eq!(flags(&session), (true, false));
         for value in ["1.4", "1.5"] {
             let got = tick(value);
             assert!(
@@ -10883,6 +10920,12 @@ size = slider(value=4.0, min=0.5, max=5.0)
             at("display_begin") < first_frame,
             "begin before the first frame: {kinds:?}"
         );
+        // (`ClientLanes::merged` delivers in enqueue order, so this holds
+        // whichever lane `display_end` rides; that it rides the DISPLAY
+        // lane behind the frames on a real socket is pinned by http.rs's
+        // `a_control_text_overtakes_the_restream_behind_at_most_the_frame_in_flight`
+        // and `the_joiner_is_hydrated_and_the_session_answers_while_its_restream_builds`,
+        // whose `generation_text` allow-list excludes it.)
         assert!(
             last_frame < at("display_end"),
             "end after the last frame: {kinds:?}"
@@ -10905,8 +10948,18 @@ size = slider(value=4.0, min=0.5, max=5.0)
             })
             .sum();
         assert_eq!(end[0]["payload"]["bytes"], frame_bytes);
-        assert!(end[0]["payload"]["tessellate_ms"].as_f64().unwrap() >= 0.0);
-        assert!(end[0]["payload"]["encode_ms"].as_f64().unwrap() >= 0.0);
+        // Two new solids were meshed and encoded: both phases took time
+        // (a constant 0 would pass `>= 0`).
+        assert!(
+            end[0]["payload"]["tessellate_ms"].as_f64().unwrap() > 0.0,
+            "{}",
+            end[0]
+        );
+        assert!(
+            end[0]["payload"]["encode_ms"].as_f64().unwrap() > 0.0,
+            "{}",
+            end[0]
+        );
         assert!(end[0]["payload"].get("cancelled").is_none(), "{}", end[0]);
         for frame in frames(&got) {
             assert_eq!(frame.header().generation, generation);
