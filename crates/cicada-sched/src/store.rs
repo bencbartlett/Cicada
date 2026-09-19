@@ -1121,9 +1121,13 @@ impl DiskStore {
     }
 
     /// Bytes of value blobs this store holds on disk — the pack file plus
-    /// the loose blobs, as this process knows them (the memo log and the
-    /// cost samples are not counted). The memo's footprint the app's
-    /// caches indicator shows (docs/13 §The display edge; v0.1 wave 5 D1).
+    /// the loose blobs, as THIS store instance knows them (the memo log and
+    /// the cost samples are not counted; a second process — or a second
+    /// session in one server, each opening its own store over the same
+    /// root — writing the same directory is invisible to it until a
+    /// reopen, like the memo log's entries). The memo's footprint the
+    /// app's caches indicator shows (docs/13 §The display edge; v0.1 wave 5
+    /// D1): one session's view, not the directory's.
     #[must_use]
     pub fn value_bytes(&self) -> u64 {
         let packed = self
@@ -1913,6 +1917,86 @@ mod stored_bytes_tests {
             matches!(missing, Err(StoreError::MissingValue { .. })),
             "{missing:?}"
         );
+    }
+
+    /// A text whose compressed frame is above [`super::PACK_MAX_BYTES`] —
+    /// so it lands as a LOOSE blob — built from a 64-symbol alphabet drawn
+    /// with an xorshift generator: 6 bits of entropy per byte, so zstd
+    /// keeps ~75 % of it.
+    fn big_text(seed: u64, bytes: usize) -> Arc<HashedValue> {
+        const ALPHABET: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut state = seed | 1;
+        let mut text = String::with_capacity(bytes);
+        for _ in 0..bytes {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            text.push(ALPHABET[(state % 64) as usize] as char);
+        }
+        HashedValue::new(ValueData::Text(Arc::from(text))).unwrap()
+    }
+
+    /// `value_bytes` (the app's memo footprint; v0.1 wave 5 D1) is the
+    /// pack's length plus every loose blob's size on disk — kept by the
+    /// write path, walked once by a cold open, and reduced by a quarantine.
+    /// (The accounting had no test: a store that counted the pack alone
+    /// passed the suite — review finding 2026-08-25.)
+    #[test]
+    fn value_bytes_counts_the_pack_and_the_loose_blobs_and_forgets_a_quarantined_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = DiskStore::open(dir.path()).unwrap();
+        assert_eq!(store.value_bytes(), 0, "an empty store");
+        // One small value packs; one big one lands loose.
+        let small = number(4.0);
+        let big = big_text(7, 2 * super::PACK_MAX_BYTES);
+        store.store_value(&small).unwrap();
+        store.store_value(&big).unwrap();
+        let loose_path = match store.locate_value(&big.hash()).unwrap() {
+            BlobLocation::File(path) => path,
+            BlobLocation::Packed { .. } => panic!("the big text should be a loose blob"),
+        };
+        assert!(matches!(
+            store.locate_value(&small.hash()).unwrap(),
+            BlobLocation::Packed { .. }
+        ));
+        let pack_len = std::fs::metadata(dir.path().join("values").join("pack.bin"))
+            .unwrap()
+            .len();
+        let loose_len = std::fs::metadata(&loose_path).unwrap().len();
+        assert!(pack_len > 0 && loose_len > super::PACK_MAX_BYTES as u64);
+        assert_eq!(
+            store.value_bytes(),
+            pack_len + loose_len,
+            "kept by the write path"
+        );
+        // Storing the same big value again adds nothing.
+        store.store_value(&big).unwrap();
+        assert_eq!(store.value_bytes(), pack_len + loose_len);
+        // A cold open walks the loose blobs and agrees.
+        drop(store);
+        let (cold, _) = DiskStore::open(dir.path()).unwrap();
+        assert_eq!(cold.value_bytes(), pack_len + loose_len, "walked at open");
+        // Corrupt the loose blob in place (same length): the load refuses,
+        // quarantines it, and its bytes leave the count.
+        let mut bytes = std::fs::read(&loose_path).unwrap();
+        for byte in bytes.iter_mut().skip(16).take(64) {
+            *byte ^= 0xFF;
+        }
+        std::fs::write(&loose_path, &bytes).unwrap();
+        assert!(
+            cold.load_value(&big.hash()).is_err(),
+            "corrupt bytes refuse"
+        );
+        assert!(!loose_path.exists(), "moved aside");
+        assert_eq!(
+            cold.value_bytes(),
+            pack_len,
+            "the quarantined blob's bytes left the count"
+        );
+        // Re-storing heals the address and counts it again.
+        cold.store_value(&big).unwrap();
+        assert_eq!(cold.value_bytes(), pack_len + loose_len);
     }
 }
 
