@@ -83,12 +83,24 @@ pub enum NodeKind {
     Disabled,
 }
 
-/// One end of a wire.
+/// One end of a wire: a NODE of the view and one of its ports — the pair
+/// the canvas draws between, the probe and `connect` come back with, and
+/// `inspect_wire` / the `inspect` answer's `inputs` resolve by.
+///
+/// A multi-target line `lo, hi = deconstruct_domain(…)` is ONE node named
+/// by its first target, whose outputs are the spec's ports; a reference to
+/// any of its targets is spelled as that node and the port the target
+/// unpacks — `hi` is `{node: lo, port: end}`. (The first cut spelled the
+/// target's own name with port `out`, which no node carried: the edge was
+/// never drawn and every consumer of an unpacked value answered `null` —
+/// wave 5 N1 review, fixed 2026-09-19.) A reference to a single-target
+/// binding is `{name, out}`; a port selection `d.end` is `{d, end}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct WireEnd {
-    /// Binding name.
+    /// The node's view name (a binding name; a multi-target line's first
+    /// target).
     pub node: String,
-    /// Port name.
+    /// The node's output port (`out` for a single-output binding).
     pub port: String,
 }
 
@@ -397,6 +409,7 @@ pub fn build(
 ) -> GraphView {
     let spec_by_name: HashMap<&str, &'static NodeSpec> =
         specs.iter().map(|spec| (spec.name, *spec)).collect();
+    let target_owner = target_owners(document, &spec_by_name);
     let mut nodes: Vec<NodeView> = Vec::new();
     let mut wires: Vec<WireView> = Vec::new();
     let mut pending_comment: Vec<String> = Vec::new();
@@ -417,6 +430,7 @@ pub fn build(
                     resolution,
                     &spec_by_name,
                     lowered,
+                    &target_owner,
                     &mut wires,
                 );
                 node.comment = comment;
@@ -438,6 +452,7 @@ pub fn build(
                     resolution,
                     &spec_by_name,
                     lowered,
+                    &target_owner,
                     &mut wires,
                 );
                 debug_assert_eq!(name.as_deref(), Some(node.name.as_str()));
@@ -741,7 +756,43 @@ fn text_list_kwarg(call: &cicada_lang::ast::Call, name: &str) -> Option<Vec<Stri
         })
 }
 
+/// Where each target of a multi-target line lives on the canvas: the
+/// target's name → the node (the line's first target) and the output port
+/// it unpacks, in the spec's order — so a reference to `hi` of `lo, hi =
+/// deconstruct_domain(…)` becomes the wire end `{lo, end}` ([`WireEnd`]).
+/// Live and `#off` lines alike (a ghost keeps its ports); a target with no
+/// output behind it (an unpack past the spec's arity — the checker's red)
+/// or a call of an unknown node has no entry and keeps the bare spelling.
+fn target_owners(
+    document: &Document,
+    spec_by_name: &HashMap<&str, &'static NodeSpec>,
+) -> HashMap<String, WireEnd> {
+    let mut owners = HashMap::new();
+    for (_, statement, _, _) in document.statements_including_disabled() {
+        if statement.targets.len() < 2 {
+            continue;
+        }
+        let Rhs::Call(call) = &statement.rhs else {
+            continue;
+        };
+        let Some(spec) = spec_by_name.get(call.func.name.as_str()) else {
+            continue;
+        };
+        for (target, output) in statement.targets.iter().zip(spec.outputs.iter()) {
+            owners.insert(
+                target.name.clone(),
+                WireEnd {
+                    node: statement.name().to_owned(),
+                    port: output.name.to_owned(),
+                },
+            );
+        }
+    }
+    owners
+}
+
 #[allow(clippy::too_many_lines)] // one statement → one node, all cases in one place
+#[allow(clippy::too_many_arguments)] // the document's one-pass inputs, named
 fn statement_node(
     line: usize,
     statement: &Statement,
@@ -749,6 +800,7 @@ fn statement_node(
     resolution: &Resolution,
     spec_by_name: &HashMap<&str, &'static NodeSpec>,
     lowered: &Lowered,
+    target_owner: &HashMap<String, WireEnd>,
     wire_sink: &mut Vec<WireView>,
 ) -> NodeView {
     let name = statement.name().to_owned();
@@ -782,46 +834,55 @@ fn statement_node(
         manual: false,
         collapsed: false,
     };
-    // A wire from a kwarg / free-var reference; red when a diagnostic
-    // sits on it.
-    let mut wire_for = |target_port: &str, value: &ValueExpr, lift: u8| -> Option<WireEnd> {
-        let ValueExpr::Ref(port_ref) = value.unlifted() else {
-            return None;
+    // A wire from a kwarg / free-var reference — its source end (the node
+    // and port the canvas draws from, [`WireEnd`]) and the carried type as
+    // the checker resolved it for the REFERENCED binding (a target's own
+    // type, `hi`'s, not its node's); red when a diagnostic sits on it.
+    let mut wire_for =
+        |target_port: &str, value: &ValueExpr, lift: u8| -> Option<(WireEnd, Option<WireType>)> {
+            let ValueExpr::Ref(port_ref) = value.unlifted() else {
+                return None;
+            };
+            let binding = &port_ref.binding.name;
+            let (source_ty, from) = match &port_ref.port {
+                Some(port) => (
+                    node_port_type(resolution, binding, &port.name),
+                    WireEnd {
+                        node: binding.clone(),
+                        port: port.name.clone(),
+                    },
+                ),
+                None => (
+                    binding_type(resolution, binding),
+                    target_owner
+                        .get(binding)
+                        .cloned()
+                        .unwrap_or_else(|| WireEnd {
+                            node: binding.clone(),
+                            port: "out".to_owned(),
+                        }),
+                ),
+            };
+            let span = value.span();
+            let red = resolution
+                .diagnostics
+                .iter()
+                .find(|diagnostic| hits(diagnostic, line, span));
+            wire_sink.push(WireView {
+                id: format!("{}.{}->{}.{}", from.node, from.port, name, target_port),
+                from: from.clone(),
+                to: WireEnd {
+                    node: name.clone(),
+                    port: target_port.to_owned(),
+                },
+                lift,
+                depth: source_ty.as_ref().map_or(0, |ty| ty.depth),
+                ty: source_ty.as_ref().map(WireType::render),
+                red: red.is_some(),
+                reason: red.map(|diagnostic| diagnostic.message.clone()),
+            });
+            Some((from, source_ty))
         };
-        let (source_ty, source_port) = match &port_ref.port {
-            Some(port) => (
-                node_port_type(resolution, &port_ref.binding.name, &port.name),
-                port.name.clone(),
-            ),
-            None => (
-                binding_type(resolution, &port_ref.binding.name),
-                "out".to_owned(),
-            ),
-        };
-        let span = value.span();
-        let red = resolution
-            .diagnostics
-            .iter()
-            .find(|diagnostic| hits(diagnostic, line, span));
-        let from = WireEnd {
-            node: port_ref.binding.name.clone(),
-            port: source_port,
-        };
-        wire_sink.push(WireView {
-            id: format!("{}.{}->{}.{}", from.node, from.port, name, target_port),
-            from: from.clone(),
-            to: WireEnd {
-                node: name.clone(),
-                port: target_port.to_owned(),
-            },
-            lift,
-            depth: source_ty.as_ref().map_or(0, |ty| ty.depth),
-            ty: source_ty.map(|ty| ty.render()),
-            red: red.is_some(),
-            reason: red.map(|diagnostic| diagnostic.message.clone()),
-        });
-        Some(from)
-    };
 
     match &statement.rhs {
         Rhs::Literal(lit) => {
@@ -869,7 +930,7 @@ fn statement_node(
                     port: None,
                     span: ident.span,
                 });
-                let wired = wire_for(&ident.name, &value, 0);
+                let wired = wire_for(&ident.name, &value, 0).map(|(end, _)| end);
                 node.inputs.push(InputView {
                     name: ident.name.clone(),
                     ty: source_ty
@@ -930,19 +991,12 @@ fn statement_node(
                                 let unlifted = kwarg.value.unlifted();
                                 let wired = wire_for(port.name, &kwarg.value, lift);
                                 if port.ty.base == VAR_TRANSFORMABLE
-                                    && let Some(end) = &wired
+                                    && let Some((_, Some(source_ty))) = &wired
+                                    && TRANSFORMABLE_KINDS.contains(&source_ty.base.as_str())
                                 {
-                                    let source_ty = if end.port == "out" {
-                                        binding_type(resolution, &end.node)
-                                    } else {
-                                        node_port_type(resolution, &end.node, &end.port)
-                                    };
-                                    if let Some(source_ty) = source_ty
-                                        && TRANSFORMABLE_KINDS.contains(&source_ty.base.as_str())
-                                    {
-                                        bound_var = Some(source_ty.base);
-                                    }
+                                    bound_var = Some(source_ty.base.clone());
                                 }
+                                let wired = wired.map(|(end, _)| end);
                                 let (literal, literal_value) = match unlifted {
                                     ValueExpr::Literal(literal) => (
                                         Some(literal.span.slice(raw).to_owned()),
@@ -989,7 +1043,8 @@ fn statement_node(
                             continue;
                         }
                         let lift = kwarg.value.each_depth();
-                        let wired = wire_for(&kwarg.name.name, &kwarg.value, lift);
+                        let wired =
+                            wire_for(&kwarg.name.name, &kwarg.value, lift).map(|(end, _)| end);
                         let span = kwarg.value.span();
                         node.inputs.push(InputView {
                             name: kwarg.name.name.clone(),
@@ -1123,7 +1178,8 @@ fn statement_node(
                     node.category = String::new();
                     for kwarg in &call.kwargs {
                         let lift = kwarg.value.each_depth();
-                        let wired = wire_for(&kwarg.name.name, &kwarg.value, lift);
+                        let wired =
+                            wire_for(&kwarg.name.name, &kwarg.value, lift).map(|(end, _)| end);
                         let span = kwarg.value.span();
                         node.inputs.push(InputView {
                             name: kwarg.name.name.clone(),
@@ -1417,6 +1473,79 @@ mod tests {
         assert_eq!(size.cell[0], 0);
         assert!(block.cell[0] > g.node("span").unwrap().cell[0]);
         assert!(g.nodes.iter().all(|node| node.node_ref > 0));
+    }
+
+    /// A wire out of a multi-target line names the NODE (the first target)
+    /// and the output port the referenced target unpacks — for every
+    /// target, the first included, and for an expression's free variable
+    /// — carrying the target's own type; a port selection and a
+    /// single-target binding keep their spellings; a `#off` ghost's targets
+    /// map like a live line's. Wave 5 N1 review (2026-09-19): the first
+    /// cut spelled `{hi, out}`, which named no node — the canvas drew no
+    /// edge and `inputs` answered `null` for every unpacked value.
+    #[test]
+    fn a_wire_from_an_unpacked_target_names_its_node_and_port() {
+        let g = view(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             lo, hi = deconstruct_domain(domain=span)\n\
+             m = negative(x=hi)\n\
+             n = negative(x=lo)\n\
+             dbl = hi * 2.0\n\
+             d = deconstruct_domain(domain=span)\n\
+             e = add(a=d.end, b=1.0)\n\
+             #off p, q = deconstruct_domain(domain=span)\n\
+             r = negative(x=q)\n",
+        );
+        let end = |node: &str, port: &str| WireEnd {
+            node: node.into(),
+            port: port.into(),
+        };
+        let wire_into = |node: &str, port: &str| {
+            g.wires
+                .iter()
+                .find(|w| w.to == end(node, port))
+                .unwrap_or_else(|| panic!("no wire into {node}.{port}"))
+        };
+        assert!(g.node("hi").is_none(), "the line is ONE node, named `lo`");
+        assert_eq!(g.node("lo").unwrap().targets, ["lo", "hi"]);
+        let m = wire_into("m", "x");
+        assert_eq!(m.from, end("lo", "end"));
+        assert_eq!(m.id, "lo.end->m.x");
+        assert_eq!(m.ty.as_deref(), Some("Number"));
+        assert!(!m.red);
+        assert_eq!(wire_into("n", "x").from, end("lo", "start"));
+        assert_eq!(
+            g.node("m").unwrap().inputs[0].wired,
+            Some(end("lo", "end")),
+            "the input's wired end is the wire's source"
+        );
+        assert_eq!(
+            g.node("dbl").unwrap().inputs[0].wired,
+            Some(end("lo", "end"))
+        );
+        assert_eq!(wire_into("e", "a").from, end("d", "end"));
+        assert_eq!(wire_into("span", "end").from, end("size", "out"));
+        assert_eq!(
+            wire_into("r", "x").from,
+            end("p", "end"),
+            "a ghost's targets are its node's ports too"
+        );
+        assert_eq!(g.node("p").unwrap().kind, NodeKind::Disabled);
+        // Every drawn wire leaves a port its node has: the canvas can draw
+        // all of them.
+        for wire in &g.wires {
+            let source = g
+                .node(&wire.from.node)
+                .unwrap_or_else(|| panic!("wire {} leaves no node", wire.id));
+            assert!(
+                source.outputs.iter().any(|o| o.name == wire.from.port),
+                "wire {} leaves a port `{}` has not",
+                wire.id,
+                wire.from.node
+            );
+        }
     }
 
     // Wave 4 B3 (finding U9): an unconnected literal-typed port's chip

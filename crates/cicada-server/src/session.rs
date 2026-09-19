@@ -4286,13 +4286,41 @@ fn broadcast_lease(inner: &Inner) {
 
 /// The reference text for a wire source: a bare name for value bindings
 /// (single-output calls, literals, expressions), `name.port` for a port
-/// of a multi-output node.
+/// of a multi-output node — and, for a port of a multi-target line's node
+/// (`{lo, end}` of `lo, hi = deconstruct_domain(…)`, the spelling the
+/// view-model draws and the canvas hands back), the TARGET that unpacks
+/// it (`hi`): the first target's name is the node's, never the port's.
 fn reference_text(inner: &Inner, from: &WireEnd) -> Result<String, IntentError> {
     if inner.loaded.document.find_binding(&from.node).is_none() {
         return Err(IntentError::Unknown(format!(
             "no node named `{}`",
             from.node
         )));
+    }
+    if let Some(view) = inner.graph.node(&from.node)
+        && view.targets.len() > 1
+    {
+        let Some(index) = view.outputs.iter().position(|o| o.name == from.port) else {
+            return Err(IntentError::Unknown(format!(
+                "`{}` has no output `{}` (outputs: {})",
+                from.node,
+                from.port,
+                view.outputs
+                    .iter()
+                    .map(|o| o.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        };
+        return match view.targets.get(index) {
+            Some(target) => Ok(target.clone()),
+            None => Err(IntentError::Refused(format!(
+                "`{}.{}` is not unpacked by `{} = …` — add a target for it in the text first",
+                from.node,
+                from.port,
+                view.targets.join(", ")
+            ))),
+        };
     }
     match inner.loaded.resolution.bindings.get(&from.node) {
         Some(BindingType::Node { .. }) => Ok(format!("{}.{}", from.node, from.port)),
@@ -6555,21 +6583,34 @@ mod tests {
     /// port order — a WIRED input carries its source output's summary, the
     /// very one the source's own `inspect` answers for that port (one hash,
     /// one path); a literal kwarg and an unwired optional port are `null`.
-    /// `/debug/state?values=true` carries the same per node.
+    /// `/debug/state?values=true` carries the same per node. The sources
+    /// that pin WHICH output and WHICH node (the review's false-PASS lens,
+    /// 2026-09-19): a multi-target line consumed from its second AND its
+    /// first target, and a port selection on a multi-output node — two
+    /// distinct values each, so a lookup that always reads the first
+    /// output, or one that cannot find a target's node, fails here.
     #[test]
+    #[allow(clippy::too_many_lines)] // one fixture, every source shape
     fn inspect_answers_each_input_with_its_wire_source_value() {
         let (_dir, config) = project(
             "# cicada 1\n\
              size = slider(value=2.0, min=0.5, max=5.0)\n\
              span = construct_domain(start=0.0, end=size)\n\
-             twice = construct_domain(start=size, end=size)\n",
+             twice = construct_domain(start=size, end=size)\n\
+             lo, hi = deconstruct_domain(domain=span)\n\
+             m = negative(x=hi)\n\
+             n = negative(x=lo)\n\
+             d = deconstruct_domain(domain=span)\n\
+             e = add(a=d.end, b=1.0)\n\
+             f = add(a=d.start, b=1.0)\n",
         );
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
         let (id, _) = session.connect(ClientLanes::merged(tx));
         drain(&mut rx);
-        for node in ["size", "span", "twice"] {
+        let nodes = ["size", "span", "twice", "lo", "m", "n", "d", "e", "f"];
+        for node in nodes {
             session.handle(id, None, ClientMessage::Inspect { node: node.into() });
         }
         let messages = texts(&drain(&mut rx));
@@ -6578,10 +6619,122 @@ mod tests {
             .filter(|m| m["type"] == "node_values")
             .map(|m| &m["payload"])
             .collect();
-        assert_eq!(answers.len(), 3, "{messages:?}");
-        let (size, span, twice) = (answers[0], answers[1], answers[2]);
+        assert_eq!(answers.len(), nodes.len(), "{messages:?}");
+        let answer = |name: &str| answers[nodes.iter().position(|n| *n == name).unwrap()];
+        let (size, span, twice) = (answer("size"), answer("span"), answer("twice"));
         assert_eq!(size["node"], "size");
         assert_eq!(span["node"], "span");
+
+        // The multi-target line `lo, hi = …` is ONE node `lo` with the
+        // spec's two outputs; `m ← hi` reads the SECOND, `n ← lo` the
+        // first — distinct values (0 and 2), each the entry the node's own
+        // answer carries for that port.
+        let lo = answer("lo");
+        assert_eq!(lo["outputs"][0][0], "start");
+        assert_eq!(lo["outputs"][1][0], "end");
+        assert_eq!(lo["outputs"][0][1]["samples"][0], "0");
+        assert_eq!(lo["outputs"][1][1]["samples"][0], "2");
+        assert_eq!(answer("m")["inputs"][0][0], "x");
+        assert_eq!(
+            answer("m")["inputs"][0][1],
+            lo["outputs"][1][1],
+            "{}",
+            answer("m")
+        );
+        assert_eq!(
+            answer("n")["inputs"][0][1],
+            lo["outputs"][0][1],
+            "{}",
+            answer("n")
+        );
+        assert_ne!(answer("m")["inputs"][0][1], answer("n")["inputs"][0][1]);
+        // A port selection on a multi-output node: `e ← d.end`, `f ← d.start`.
+        let d = answer("d");
+        assert_eq!(
+            answer("e")["inputs"][0][1],
+            d["outputs"][1][1],
+            "{}",
+            answer("e")
+        );
+        assert_eq!(
+            answer("f")["inputs"][0][1],
+            d["outputs"][0][1],
+            "{}",
+            answer("f")
+        );
+        assert_ne!(answer("e")["inputs"][0][1], answer("f")["inputs"][0][1]);
+        // `inspect_wire` answers the same entry, from the same end.
+        session.handle(
+            id,
+            None,
+            ClientMessage::InspectWire {
+                to: WireEnd {
+                    node: "m".into(),
+                    port: "x".into(),
+                },
+            },
+        );
+        let wire = texts(&drain(&mut rx))
+            .into_iter()
+            .find(|m| m["type"] == "wire_values")
+            .unwrap();
+        assert_eq!(
+            wire["payload"]["from"],
+            serde_json::json!({"node": "lo", "port": "end"})
+        );
+        assert_eq!(wire["payload"]["summary"], lo["outputs"][1][1]);
+        // … and the other direction: a wire dragged from that node's `end`
+        // handle is written as the target that unpacks it, `hi`; from
+        // `start`, `lo`; a port the node has not is refused by name.
+        for (port, into, spelled) in [
+            ("start", "m", "m = negative(x=lo)"),
+            ("end", "n", "n = negative(x=hi)"),
+        ] {
+            session.handle(
+                id,
+                Some(format!("connect-{port}")),
+                ClientMessage::Connect {
+                    from: WireEnd {
+                        node: "lo".into(),
+                        port: port.into(),
+                    },
+                    to: WireEnd {
+                        node: into.into(),
+                        port: "x".into(),
+                    },
+                    lift: false,
+                },
+            );
+            let text = session.debug_state(false)["text"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            assert!(text.contains(spelled), "{text}");
+        }
+        session.handle(
+            id,
+            Some("connect-nope".into()),
+            ClientMessage::Connect {
+                from: WireEnd {
+                    node: "lo".into(),
+                    port: "out".into(),
+                },
+                to: WireEnd {
+                    node: "m".into(),
+                    port: "x".into(),
+                },
+                lift: false,
+            },
+        );
+        let refused = texts(&drain(&mut rx))
+            .into_iter()
+            .find(|m| m["type"] == "error")
+            .unwrap();
+        assert_eq!(
+            refused["payload"]["message"],
+            "`lo` has no output `out` (outputs: start, end)"
+        );
+        session.wait_idle();
 
         // The slider's five inputs are literals or unwired defaults: all null,
         // named in port order.

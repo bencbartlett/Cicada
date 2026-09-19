@@ -671,7 +671,17 @@ is the text's or the catalog default's, not a solve result to look up,
 and the canvas shows the chip there, not a placeholder. `null` for a
 wired input means the source had no value in that generation (red,
 blocked, not yet computed). `GET /debug/state?values=true` carries the
-same `inputs` per node beside `outputs`.
+same `inputs` per node beside `outputs`. A wire's ends are NODES of the
+view and their ports (`WireEnd`): a multi-target line `lo, hi =
+deconstruct_domain(…)` is one node named `lo` with the spec's outputs, and
+a reference to any of its targets is spelled as that node and the port the
+target unpacks — `hi` is `from: {node: lo, port: end}` — the one spelling
+the canvas draws, `connect` / `probe_wire` hand back (the server writes
+the target's name, `hi`, into the text for it) and `inspect_wire` and
+`inputs` resolve by. *(Fix round 2026-09-19, wave 5 N1 review: the first
+cut spelled the target's own name with port `out`, which named no node —
+the edge was never drawn and every consumer of an unpacked value read `—`;
+the view-model, session and the e2e pin the spelling now.)*
 
 *(Live, v0.1 item 3b.)* A `cached` node's status carries `elements`
 and `nanos` when its memo entry recorded the cost of its last compute
