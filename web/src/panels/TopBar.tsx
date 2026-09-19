@@ -140,7 +140,9 @@ export function TopBar() {
             <i style={{ width: `${Math.round(fraction * 100)}%` }} />
           </span>
         )}
-        <span data-testid="tb-solve-text">{summaryText(shown, display)}</span>
+        <span className="tb-chip-text" data-testid="tb-solve-text">
+          {summaryText(shown, display)}
+        </span>
         {summary.running && (
           <button
             className="tb-esc"
@@ -169,7 +171,7 @@ export function TopBar() {
 
 /**
  * The caches indicator (docs/16 §Status and progress language; the D1
- * contract): `cache 612M / 1G · 1,397 solids · memo 2.1G` from the
+ * contract): `cache 612M / 1G · 1,397 meshes · memo 2.1G` from the
  * session's `caches` view, in the warn tone while the display cache is
  * over budget or thrashing; the full breakdown in the hover, and — until
  * the profiler's caches section exists (P1) — a click opens the same
@@ -198,7 +200,7 @@ function CachesChip() {
   const warn = caches.display.over_budget || caches.display.thrash;
   const title = cachesTitle(caches);
   return (
-    <span className="tb-menu-wrap" ref={wrapRef}>
+    <span className="tb-menu-wrap tb-caches-wrap" ref={wrapRef}>
       <button
         className={`tb-caches${warn ? " warn" : ""}${open ? " active" : ""}`}
         title={title}
@@ -211,7 +213,7 @@ function CachesChip() {
         data-over-budget={caches.display.over_budget}
         data-thrash={caches.display.thrash}
       >
-        <span className="mono" data-testid="tb-caches-text">
+        <span className="mono tb-chip-text" data-testid="tb-caches-text">
           {cachesText(caches)}
         </span>
       </button>

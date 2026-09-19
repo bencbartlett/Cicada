@@ -19,7 +19,9 @@
  *     for them (the `already displayed` rule asks with the tier the budget
  *     chooses);
  *   - the caches indicator reads the session's `caches` view (`cache … /
- *     1G · N solids · memo …`), its click opens the breakdown;
+ *     1G · N meshes · memo …`), its click opens the breakdown, and the bar
+ *     still fits the window (the gear is reachable, nothing scrolls
+ *     sideways);
  *   - the settings menu's display-cache select resizes the session's cache
  *     live (the indicator and `/debug/state` follow), the choice is kept
  *     per user, and the WRITER re-applies it on connect (a preference
@@ -194,9 +196,9 @@ test("a heavy output is drawn at preview, the chip and the viewport show the dis
   const caches = page.getByTestId("tb-caches");
   await expect(caches).toHaveAttribute("data-warn", "false");
   const cachesText = (await page.getByTestId("tb-caches-text").textContent()) ?? "";
-  expect(cachesText).toMatch(/^cache \S+ \/ 1G · [\d,]+ solids · memo \S+$/);
-  const solids = Number((/· ([\d,]+) solids/.exec(cachesText)?.[1] ?? "NaN").replace(/,/g, ""));
-  expect(solids).toBe(first.caches.display.entries - first.caches.display.refusals);
+  expect(cachesText).toMatch(/^cache \S+ \/ 1G · [\d,]+ meshes · memo \S+$/);
+  const meshes = Number((/· ([\d,]+) meshes/.exec(cachesText)?.[1] ?? "NaN").replace(/,/g, ""));
+  expect(meshes).toBe(first.caches.display.entries - first.caches.display.refusals);
   expect(first.caches.display.budget).toBe(1024 * 1024 * 1024);
   expect(first.caches.display.over_budget).toBe(false);
   expect(first.caches.display.thrash).toBe(false);
@@ -235,6 +237,21 @@ test("a heavy output is drawn at preview, the chip and the viewport show the dis
   expect(redrawn.stats.budget!.drawn).toBe("preview");
   await expect(indicator).toHaveText(/painted \d+ outputs? · .+ in .+/);
 
+  // ---- the bar fits the window with both chips carrying their idle text:
+  // the gear is inside the viewport and the app does not scroll sideways
+  // (at 1400 px the caches chip pushed it off-screen — review finding
+  // 2026-08-25). Playwright would scroll the gear into view to click it, so
+  // the geometry is asserted before the click.
+  const fit = await page.evaluate(() => {
+    const gear = document.querySelector('[data-testid="tb-settings"]')!.getBoundingClientRect();
+    const bar = document.querySelector('[data-testid="topbar"]')!.getBoundingClientRect();
+    return { innerWidth: window.innerWidth, scrollWidth: document.documentElement.scrollWidth, barRight: bar.right, gearLeft: gear.left, gearRight: gear.right };
+  });
+  expect(fit.scrollWidth, `no horizontal scroll: ${JSON.stringify(fit)}`).toBeLessThanOrEqual(fit.innerWidth);
+  expect(fit.barRight, `the bar fits: ${JSON.stringify(fit)}`).toBeLessThanOrEqual(fit.innerWidth);
+  expect(fit.gearRight, `the gear is on screen: ${JSON.stringify(fit)}`).toBeLessThanOrEqual(fit.innerWidth);
+  expect(fit.gearLeft).toBeGreaterThanOrEqual(0);
+
   // ---- the settings menu resizes the cache live; the choice is per user.
   await page.getByTestId("tb-settings").click();
   const select = page.getByTestId("settings-display-cache");
@@ -263,7 +280,7 @@ test("a heavy output is drawn at preview, the chip and the viewport show the dis
 
   // ---- an out-of-range ask is refused with its reason; the budget stands.
   await send(page, { type: "set_display_cache", payload: { mib: 10 } });
-  await expect(page.getByTestId("notices")).toContainText("display cache must be 64 ..= 65536 MiB");
+  await expect(page.getByTestId("notices")).toContainText("display cache must be between 64 MiB and 65536 MiB (asked for 10)");
   expect((await debugState(page)).caches.display.budget).toBe(2048 * 1024 * 1024);
 
   expect(errors, errors.join("\n")).toEqual([]);

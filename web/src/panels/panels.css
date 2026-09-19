@@ -12,6 +12,29 @@ header.topbar {
   font-size: 12px;
 }
 
+/* The bar never overflows the window: only the two chips — the solve chip
+   and the caches indicator — shrink (an ellipsis on their text), every
+   other item keeps its width. At 1400 px the caches chip pushed the
+   settings gear off-screen and the whole app scrolled sideways (review
+   finding 2026-08-25). `overflow: hidden` on the bar itself is not an
+   option: the menus drop below it. */
+header.topbar > * {
+  flex-shrink: 0;
+}
+
+header.topbar > .tb-solve,
+header.topbar > .tb-caches-wrap {
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.tb-chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tb-brand {
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -90,11 +113,13 @@ header.topbar {
   }
 }
 
-/* the caches indicator: display cache bytes / budget · solids · memo */
+/* the caches indicator: display cache bytes / budget · meshes · memo */
 .tb-caches {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+  max-width: 100%;
   padding: 1px 8px;
   border: none;
   border-radius: 999px;
