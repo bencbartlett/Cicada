@@ -206,7 +206,26 @@ pub struct DisplayContext<'a> {
     /// emission); `None` for a restream (which redraws at the tier on
     /// record) and for summaries.
     pub budget: Option<BudgetStats>,
+    /// The display meshes the pass's warm-up fetched for its outputs at
+    /// the tier each is drawn at, PINNED for the encode (a live emission;
+    /// docs/12 §Display): a solid found here is drawn from it and the
+    /// cache is not asked, so the encode under the session lock never
+    /// tessellates — however the cache's eviction went between the
+    /// warm-up and the encode (a working set larger than the budget
+    /// evicts the warm-up's own first entries; review finding
+    /// 2026-08-25). `None` for a restream and for summaries, which read
+    /// the cache.
+    pub pinned: Option<&'a PinnedMeshes>,
 }
+
+/// The meshes a display pass pinned for its encode ([`DisplayContext::
+/// pinned`]), by the cache's own key — a solid drawn at two tiers by two
+/// outputs of one pass is two entries.
+pub type PinnedMeshes = HashMap<TessellationKey, Arc<DisplayMesh>>;
+
+/// One value's distinct solids' display meshes at one tier, as the tally
+/// fetched them through the cache ([`Chosen::meshes`], [`fetch_meshes`]).
+pub type DrawnMeshes = Vec<(ValueHash, Arc<DisplayMesh>)>;
 
 impl DisplayContext<'_> {
     /// The display deflection of this pass (the tier's, for this project;
@@ -463,14 +482,31 @@ impl SolidCache {
         self.evictions.load(Ordering::Relaxed) - before
     }
 
-    /// Watch `keys`: from now on an eviction of any of them counts in
-    /// [`Self::watched_evictions`] (the previous count is reset). The
-    /// session sets it to the entries the last complete generation
-    /// displayed before the next generation's pass, and reads the count
-    /// after — the `thrash` flag (docs/12 §Display).
+    /// Watch `keys` — the picture on screen: from now on an eviction of
+    /// any of them counts in [`Self::watched_evictions`] (the previous
+    /// count is reset), and each of them held is TOUCHED, so the on-screen
+    /// picture is the newest thing in the cache and the least recently
+    /// used entries — past value sets nobody draws, the fine meshes of an
+    /// output the budget dropped to preview — go first. Without the touch
+    /// a stable output's meshes, never looked up again once displayed,
+    /// were the OLDEST entries and left before any garbage, and the flag
+    /// called it thrash although the picture fit with room to spare
+    /// (review finding 2026-08-25). The session sets it after every pass
+    /// and after a resize, and reads the count after the next pass — the
+    /// `thrash` flag (docs/12 §Display): now exactly "the previous
+    /// picture and this one do not fit together".
     pub fn watch(&self, keys: impl IntoIterator<Item = TessellationKey>) {
         let mut state = self.lock();
-        state.watched = keys.into_iter().collect();
+        let watched: HashSet<TessellationKey> = keys.into_iter().collect();
+        for key in &watched {
+            let stamp = state.stamp();
+            if let Some(entry) = state.entries.get_mut(key) {
+                let previous = std::mem::replace(&mut entry.touched, stamp);
+                state.recency.remove(&previous);
+                state.recency.insert(stamp, *key);
+            }
+        }
+        state.watched = watched;
         state.watched_evictions = 0;
     }
 
@@ -730,9 +766,23 @@ pub struct BudgetStats {
     /// The distinct solids' triangles at the drawn tier (exact).
     pub triangles: u64,
     /// Even the preview tier exceeds the limit: drawn at preview anyway,
-    /// and said so. Omitted when false.
+    /// and said so. Omitted when false. (The TRIANGLE budget's flag — the
+    /// `caches` view's `over_budget` is the cache's: the working set's
+    /// bytes against the cache budget; the two are different budgets and
+    /// the profiler will show both.)
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub over_budget: bool,
+}
+
+/// [`choose_tier`]'s answer: the verdict, and the drawn tier's display
+/// meshes as the tally fetched them through the cache — for the pass to
+/// pin ([`DisplayContext::pinned`]). A refused solid has no mesh here; the
+/// emit reports it.
+pub struct Chosen {
+    /// The verdict.
+    pub stats: BudgetStats,
+    /// The distinct solids' meshes at `stats.drawn`.
+    pub meshes: DrawnMeshes,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if signature
@@ -755,32 +805,62 @@ pub type ParallelMap<'a> = &'a (
 /// triangles; with a `limit`, stop meshing once the running total is past
 /// it (the verdict "exceeds" is already certain, and the work wasted
 /// before it is bounded by the limit plus one solid per worker). A refusal
-/// counts no triangles — the emit reports it. Returns the total and
-/// whether the limit was exceeded: when the true total fits, nothing is
-/// skipped and the total is exact; when it does not, the total is a
-/// partial sum already past the limit — either way the verdict is the
-/// value set's, never the meshing order's.
+/// counts no triangles — the emit reports it. Returns the total, whether
+/// the limit was exceeded, and the meshes fetched (every solid's when
+/// nothing was skipped): when the true total fits, nothing is skipped and
+/// the total is exact; when it does not, the total is a partial sum
+/// already past the limit — either way the verdict is the value set's,
+/// never the meshing order's.
 fn tally(
     solids: &[(ValueHash, Solid)],
     deflection: Deflection,
     cache: &SolidCache,
     limit: Option<u64>,
     map: ParallelMap<'_>,
-) -> (u64, bool) {
+) -> (u64, bool, DrawnMeshes) {
     let total = AtomicU64::new(0);
+    let fetched = std::sync::Mutex::new(Vec::with_capacity(solids.len()));
     let _ = map(solids.to_vec(), &|(hash, solid): (ValueHash, Solid)| {
         if limit.is_some_and(|limit| total.load(Ordering::Relaxed) > limit) {
             return None;
         }
         let triangles = match cache.tessellation(hash, &solid, deflection) {
-            Ok(mesh) => u64::try_from(mesh.mesh().triangle_count()).unwrap_or(u64::MAX),
+            Ok(mesh) => {
+                let triangles = u64::try_from(mesh.mesh().triangle_count()).unwrap_or(u64::MAX);
+                fetched
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push((hash, mesh));
+                triangles
+            }
             Err(_) => 0,
         };
         total.fetch_add(triangles, Ordering::Relaxed);
         Some(triangles)
     });
     let total = total.load(Ordering::Relaxed);
-    (total, limit.is_some_and(|limit| total > limit))
+    let fetched = fetched
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    (total, limit.is_some_and(|limit| total > limit), fetched)
+}
+
+/// The display meshes of `solids` at `tier`, through the cache on the
+/// caller's pool — a hash lookup each when warm, the kernel for an
+/// evicted one: what a pass fetches and pins for an output whose verdict
+/// the memo already knew (the verdict says which tier; the meshes may
+/// have left the cache since — an undo/redo flip after a shrink, or
+/// enough other value sets through it; review finding 2026-08-25). A
+/// refused solid is absent.
+#[must_use]
+pub fn fetch_meshes(
+    solids: &[(ValueHash, Solid)],
+    tier: DisplayTier,
+    config: &ProjectConfig,
+    cache: &SolidCache,
+    map: ParallelMap<'_>,
+) -> DrawnMeshes {
+    tally(solids, tier.deflection(config), cache, None, map).2
 }
 
 /// The triangle budget's decision for one output (docs/12 §Display; the
@@ -789,9 +869,10 @@ fn tally(
 /// drawn at [`DisplayTier::Preview`] instead, and when even the preview
 /// tier exceeds the limit it is drawn at preview anyway and marked
 /// `over_budget`. Every tessellation goes through `cache` — the decision
-/// IS the warm-up: the emit that follows only hits. A value without solids
-/// is drawn as asked (meshes and curves have no tier and no budget —
-/// `triangles` is 0 and nothing is measured).
+/// IS the warm-up — and the drawn tier's meshes come back with the
+/// verdict for the pass to pin, so the emit that follows tessellates
+/// nothing. A value without solids is drawn as asked (meshes and curves
+/// have no tier and no budget — `triangles` is 0 and nothing is measured).
 #[must_use]
 pub fn choose_tier(
     solids: &[(ValueHash, Solid)],
@@ -800,7 +881,7 @@ pub fn choose_tier(
     config: &ProjectConfig,
     cache: &SolidCache,
     map: ParallelMap<'_>,
-) -> BudgetStats {
+) -> Chosen {
     let verdict = |drawn: DisplayTier, triangles: u64| BudgetStats {
         limit,
         requested,
@@ -809,10 +890,13 @@ pub fn choose_tier(
         over_budget: triangles > limit,
     };
     if solids.is_empty() {
-        return verdict(requested, 0);
+        return Chosen {
+            stats: verdict(requested, 0),
+            meshes: Vec::new(),
+        };
     }
     if requested == DisplayTier::Fine {
-        let (fine, exceeded) = tally(
+        let (fine, exceeded, meshes) = tally(
             solids,
             DisplayTier::Fine.deflection(config),
             cache,
@@ -820,17 +904,23 @@ pub fn choose_tier(
             map,
         );
         if !exceeded {
-            return verdict(DisplayTier::Fine, fine);
+            return Chosen {
+                stats: verdict(DisplayTier::Fine, fine),
+                meshes,
+            };
         }
     }
-    let (preview, _) = tally(
+    let (preview, _, meshes) = tally(
         solids,
         DisplayTier::Preview.deflection(config),
         cache,
         None,
         map,
     );
-    verdict(DisplayTier::Preview, preview)
+    Chosen {
+        stats: verdict(DisplayTier::Preview, preview),
+        meshes,
+    }
 }
 
 /// A serial [`ParallelMap`] (tests, and any caller without a pool): pass
@@ -1012,9 +1102,12 @@ pub fn frames_for_value(
         }
     }
 
-    // Solids: tessellated through the cache at this pass's tier (a hit
-    // when the session warmed the cache on the solve loop's workers), then
-    // drawn as meshes under the DISPLAY MESH's value hash — identical
+    // Solids: the mesh the pass pinned for this solid at this tier (a live
+    // emission: the warm-up fetched it on the solve loop's workers — the
+    // encode under the lock never tessellates), else the cache's (a
+    // restream, a pass whose graph changed under an intent between its
+    // warm-up and its encode), then drawn as meshes under the DISPLAY
+    // MESH's value hash — identical
     // solids at one deflection instance like identical meshes, and the same
     // solid at another deflection is another blob. A mesh that did not
     // close draws all the same, with a warning on record; a solid that
@@ -1029,7 +1122,15 @@ pub fn frames_for_value(
             let ValueData::Solid(solid) = value.data() else {
                 continue;
             };
-            match context.solids.tessellation(value.hash(), solid, deflection) {
+            let pinned = context
+                .pinned
+                .and_then(|pinned| pinned.get(&TessellationKey::new(value.hash(), deflection)))
+                .map(Arc::clone);
+            let tessellated_mesh = match pinned {
+                Some(mesh) => Ok(mesh),
+                None => context.solids.tessellation(value.hash(), solid, deflection),
+            };
+            match tessellated_mesh {
                 Ok(mesh) => {
                     if !mesh.watertight {
                         out.stats.warnings.push(format!(
@@ -1538,6 +1639,7 @@ mod tests {
                 solids: &self.solids,
                 tier,
                 budget: None,
+                pinned: None,
             }
         }
     }
@@ -2479,7 +2581,10 @@ mod tests {
     /// evicts least-recently-used entries AT ONCE until the held bytes fit,
     /// growing evicts nothing — and evictions of WATCHED entries (what the
     /// previous complete generation displayed) are counted apart, which is
-    /// the `thrash` flag (docs/12 §Display).
+    /// the `thrash` flag (docs/12 §Display). Watching TOUCHES: the picture
+    /// on screen is the newest thing in the cache, so a shrink (or a
+    /// pass's insertions) evicts unwatched entries first — the thrash
+    /// count moves only when the picture itself has to go.
     #[test]
     fn the_cache_resizes_live_and_counts_watched_evictions() {
         let cache = SolidCache::new(700);
@@ -2488,19 +2593,22 @@ mod tests {
         }
         assert_eq!((cache.stats().entries, cache.stats().bytes), (3, 432));
         assert_eq!(cache.budget(), 700);
-        // Watch 1 and 2 — "the previous picture".
+        // Watch 1 and 2 — "the previous picture": touched, so tag 3 — the
+        // newest insert, but unwatched — is now the least recently used.
         cache.watch([synthetic_key(1), synthetic_key(2)]);
         assert_eq!(cache.watched_evictions(), 0);
-        // Shrink to 300: 432 > 300 → the LRU (tag 1, inserted first, never
-        // touched since) goes; 288 fits. One eviction, and it was watched.
+        // Shrink to 300: 432 > 300 → the unwatched tag 3 goes; 288 fits.
+        // One eviction, none of the picture.
         assert_eq!(cache.set_budget(300), 1);
         let stats = cache.stats();
         assert_eq!((stats.entries, stats.bytes, stats.budget), (2, 288, 300));
         assert_eq!(stats.evictions, 1);
-        assert_eq!(cache.watched_evictions(), 1);
-        assert!(!cache.contains(synthetic_key(1)));
+        assert_eq!(cache.watched_evictions(), 0);
+        assert!(!cache.contains(synthetic_key(3)));
+        assert!(cache.contains(synthetic_key(1)));
         assert!(cache.contains(synthetic_key(2)));
-        // Shrink to 100: both remaining go — tag 2 was watched, tag 3 not.
+        // Shrink to 100: both remaining go — both watched: the picture
+        // itself had to leave.
         assert_eq!(cache.set_budget(100), 2);
         assert_eq!(cache.stats().bytes, 0);
         assert_eq!(cache.watched_evictions(), 2);
@@ -2515,13 +2623,34 @@ mod tests {
         assert_eq!(cache.set_budget(100), 1);
         cache.insert(synthetic_key(5), synthetic(5));
         assert_eq!(cache.stats().oversized, 1, "144 B never fits 100 B");
-        // An insert's own eviction counts a watched entry too.
+        // An insert's own eviction takes the unwatched entry first (tag 2,
+        // inserted after tag 1 but not on screen), and only when nothing
+        // unwatched is left does the picture go — a watched eviction, the
+        // honest thrash: the previous picture and this one do not fit
+        // together. (Under plain recency tag 1, never looked up once
+        // displayed, left first and a fitting picture read as thrash.)
         let lru = SolidCache::new(300);
         lru.insert(synthetic_key(1), synthetic(1));
         lru.insert(synthetic_key(2), synthetic(2));
         lru.watch([synthetic_key(1)]);
         lru.insert(synthetic_key(3), synthetic(3));
-        assert_eq!((lru.stats().evictions, lru.watched_evictions()), (1, 1));
+        assert_eq!((lru.stats().evictions, lru.watched_evictions()), (1, 0));
+        assert!(
+            lru.contains(synthetic_key(1)),
+            "the picture outlives the garbage"
+        );
+        assert!(!lru.contains(synthetic_key(2)));
+        lru.insert(synthetic_key(4), synthetic(4));
+        assert_eq!((lru.stats().evictions, lru.watched_evictions()), (2, 1));
+        assert!(
+            !lru.contains(synthetic_key(1)),
+            "now the picture itself had to go"
+        );
+        // Watching a key the cache does not hold touches nothing and counts
+        // nothing; re-watching resets the count.
+        lru.watch([synthetic_key(99), synthetic_key(4)]);
+        assert_eq!(lru.watched_evictions(), 0);
+        assert_eq!(lru.stats().entries, 2);
     }
 
     /// The triangle budget's verdict (docs/12 §Display; the D1 contract) is
@@ -2531,6 +2660,7 @@ mod tests {
     /// not; the same for either order of the solids; a preview request
     /// never meshes anything fine; no solids → as asked.
     #[test]
+    #[allow(clippy::too_many_lines)] // one verdict table: fits, dropped, over, asked, reversed, none, fetched
     fn the_triangle_budget_chooses_the_tier_from_the_value_set() {
         let test = TestContext::new();
         let config = &test.config;
@@ -2556,12 +2686,13 @@ mod tests {
             preview > 12,
             "the cylinder's preview mesh is more than the cube"
         );
-        let choose =
-            |requested, limit| choose_tier(&solids, requested, limit, config, &test.solids, &map);
-        // Fits: fine, exact.
-        let fits = choose(DisplayTier::Fine, fine);
+        let choose = |requested, limit| {
+            choose_tier(&solids, requested, limit, config, &test.solids, &map).stats
+        };
+        // Fits: fine, exact — and the fine meshes come back for the pin.
+        let fits = choose_tier(&solids, DisplayTier::Fine, fine, config, &test.solids, &map);
         assert_eq!(
-            fits,
+            fits.stats,
             BudgetStats {
                 limit: fine,
                 requested: DisplayTier::Fine,
@@ -2570,10 +2701,28 @@ mod tests {
                 over_budget: false,
             }
         );
-        // One short of the fine total: preview, exact, within budget.
-        let dropped = choose(DisplayTier::Fine, fine - 1);
+        assert_eq!(fits.meshes.len(), 2);
+        let fine_deflection = DisplayTier::Fine.deflection(config);
+        for (hash, mesh) in &fits.meshes {
+            let body = solids.iter().find(|(h, _)| h == hash).unwrap();
+            let cached = test
+                .solids
+                .tessellation(*hash, &body.1, fine_deflection)
+                .unwrap();
+            assert!(Arc::ptr_eq(mesh, &cached), "the pinned mesh IS the cache's");
+        }
+        // One short of the fine total: preview, exact, within budget — the
+        // PREVIEW meshes come back, never the fine ones the tally paid for.
+        let dropped = choose_tier(
+            &solids,
+            DisplayTier::Fine,
+            fine - 1,
+            config,
+            &test.solids,
+            &map,
+        );
         assert_eq!(
-            dropped,
+            dropped.stats,
             BudgetStats {
                 limit: fine - 1,
                 requested: DisplayTier::Fine,
@@ -2581,6 +2730,15 @@ mod tests {
                 triangles: preview,
                 over_budget: false,
             }
+        );
+        assert_eq!(dropped.meshes.len(), 2);
+        assert_eq!(
+            dropped
+                .meshes
+                .iter()
+                .map(|(_, m)| m.mesh().triangle_count() as u64)
+                .sum::<u64>(),
+            preview
         );
         // Below even the preview total: preview anyway, and said so.
         let over = choose(DisplayTier::Fine, preview - 1);
@@ -2604,17 +2762,22 @@ mod tests {
             (DisplayTier::Preview, fine),
         ] {
             assert_eq!(
-                choose_tier(&reversed, requested, limit, config, &test.solids, &map),
+                choose_tier(&reversed, requested, limit, config, &test.solids, &map).stats,
                 choose(requested, limit),
                 "{requested:?} at {limit}"
             );
         }
-        // No solids: as asked, nothing measured.
+        // No solids: as asked, nothing measured, nothing to pin.
         let none = choose_tier(&[], DisplayTier::Fine, 1, config, &test.solids, &map);
         assert_eq!(
-            (none.drawn, none.triangles, none.over_budget),
+            (
+                none.stats.drawn,
+                none.stats.triangles,
+                none.stats.over_budget
+            ),
             (DisplayTier::Fine, 0, false)
         );
+        assert!(none.meshes.is_empty());
         // A preview request on a fresh cache meshes the two solids at
         // preview and nothing at fine: two kernel calls, not four.
         let fresh = TestContext::new();
@@ -2626,8 +2789,108 @@ mod tests {
             &fresh.solids,
             &map,
         );
-        assert_eq!(verdict.drawn, DisplayTier::Preview);
+        assert_eq!(verdict.stats.drawn, DisplayTier::Preview);
         assert_eq!(fresh.solids.stats().misses, 2);
+        // `fetch_meshes` at that tier is two hits — what a pass does for an
+        // output whose verdict the memo knew; after an eviction it is the
+        // kernel again, on the pool, never under the session lock.
+        let again = fetch_meshes(
+            &solids,
+            DisplayTier::Preview,
+            &fresh.config,
+            &fresh.solids,
+            &map,
+        );
+        assert_eq!(again.len(), 2);
+        assert_eq!(
+            (fresh.solids.stats().hits, fresh.solids.stats().misses),
+            (2, 2)
+        );
+        fresh.solids.set_budget(1);
+        assert_eq!(fresh.solids.stats().entries, 0);
+        let refetched = fetch_meshes(
+            &solids,
+            DisplayTier::Preview,
+            &fresh.config,
+            &fresh.solids,
+            &map,
+        );
+        assert_eq!(refetched.len(), 2, "served although too big to keep");
+        assert_eq!(fresh.solids.stats().misses, 4);
+    }
+
+    /// The encode draws a pinned mesh without asking the cache: a pass that
+    /// hands `frames_for_value` the meshes its warm-up fetched tessellates
+    /// nothing under the session lock — even on a cache that has since
+    /// dropped every entry (the cascade of a working set larger than the
+    /// budget; review finding 2026-08-25). Without the pin the same call
+    /// misses and calls the kernel.
+    #[test]
+    fn a_pinned_mesh_is_drawn_without_the_cache() {
+        let test = TestContext::new();
+        let solid = probe_box();
+        let body = solid_of(&solid);
+        let tier = DisplayTier::Fine;
+        let deflection = tier.deflection(&test.config);
+        let mesh = test
+            .solids
+            .tessellation(solid.hash(), body, deflection)
+            .unwrap();
+        assert_eq!(test.solids.stats().misses, 1);
+        // Everything leaves the cache; the pass still holds the mesh.
+        test.solids.set_budget(1);
+        assert_eq!(test.solids.stats().entries, 0);
+        let mut pinned = PinnedMeshes::new();
+        pinned.insert(
+            TessellationKey::new(solid.hash(), deflection),
+            Arc::clone(&mesh),
+        );
+        let context = DisplayContext {
+            pinned: Some(&pinned),
+            ..test.at(tier)
+        };
+        let mut picks = PickTable::default();
+        let out = frames_for_value(
+            &solid,
+            1,
+            0,
+            0,
+            &mut |e: &[u32]| picks.ids_for(0, 0, e),
+            &context,
+        );
+        assert_eq!(out.stats.solids, 1);
+        assert_eq!(out.stats.triangles, mesh.mesh().triangle_count());
+        assert_eq!(
+            (test.solids.stats().hits, test.solids.stats().misses),
+            (0, 1),
+            "the cache was not asked"
+        );
+        // The same call without the pin goes to the kernel (a miss: the
+        // entry is gone), so the pin is what keeps the encode off it.
+        let plain = frames_for_value(
+            &solid,
+            1,
+            0,
+            0,
+            &mut |e: &[u32]| picks.ids_for(0, 0, e),
+            &test.at(tier),
+        );
+        assert_eq!(plain.stats.solids, 1);
+        assert_eq!(test.solids.stats().misses, 2);
+        // A pin at another tier is not this tier's: the cache is asked.
+        let other = DisplayContext {
+            pinned: Some(&pinned),
+            ..test.at(DisplayTier::Preview)
+        };
+        let _ = frames_for_value(
+            &solid,
+            1,
+            0,
+            0,
+            &mut |e: &[u32]| picks.ids_for(0, 0, e),
+            &other,
+        );
+        assert_eq!(test.solids.stats().misses, 3);
     }
 
     /// The fine tally stops at the budget: once the running total is past
@@ -2654,6 +2917,7 @@ mod tests {
             &test.solids,
             &map,
         );
+        let verdict = verdict.stats;
         assert_eq!(verdict.drawn, DisplayTier::Preview);
         assert!(
             verdict.over_budget,

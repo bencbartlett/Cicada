@@ -246,21 +246,32 @@ DECISIONS.md row 2026-08-25) — additive, `PROTOCOL_VERSION` unchanged:
   generation the loop completes gets one — a cancelled solve and a
   generation that draws nothing included (`outputs: 0`).
 - `display_end {generation, outputs, frames, tessellate_ms, encode_ms,
-  bytes, cancelled?}` — on the DISPLAY lane, behind the pass's last frame
-  (its meaning is its place among the frames, like `display_reset`'s; on
-  the control lane it would overtake the frames it closes and the
-  client's "painted in" time would end before the paint did), so a
-  client that has seen it has every frame of the pass. `outputs` /
-  `frames` / `bytes` are what was sent (fewer than `display_begin`'s
-  `outputs` when the triangle budget found an output already on screen at
-  the tier it chose — or when the pass was cut); `tessellate_ms` is the
-  warm-up on the worker pool, `encode_ms` the encode under the session
-  lock — their sum is the chip's `display` time; `cancelled` (omitted
-  when false) = the pass stopped between outputs because a newer
-  generation was waiting or Esc was pressed (latest-wins for the display
-  edge, `SolveLoop::superseded`): the outputs it did not reach keep their
-  previous frames until the newer generation draws them, and a pass cut
-  during its warm-up sent nothing.
+  bytes, cancelled?, cut_by?}` — on the DISPLAY lane, behind the pass's
+  last frame (its meaning is its place among the frames, like
+  `display_reset`'s; on the control lane it would overtake the frames it
+  closes and the client's "painted in" time would end before the paint
+  did), so a client that has seen it has every frame of the pass.
+  `outputs` / `frames` / `bytes` are what was sent (fewer than
+  `display_begin`'s `outputs` when the triangle budget found an output
+  already on screen at the tier it chose — or when the pass was cut);
+  `tessellate_ms` is the warm-up on the worker pool, `encode_ms` the
+  encode under the session lock (which never tessellates: the warm-up
+  pins the meshes — docs/12 §Display) — their sum is the chip's `display`
+  time; `cancelled` (omitted when false) = the pass stopped between
+  outputs, or the generation's solve was cancelled (then no `cut_by`:
+  there was no pass to cut); `cut_by` (omitted otherwise) says what
+  stopped it — `"edit"`: a structural job was waiting on the loop
+  (latest-wins for the display edge, `SolveLoop::superseded`), the
+  outputs the pass did not reach keep their previous frames until the
+  edit's generation draws them, and a pass cut during its warm-up sent
+  nothing; `"esc"`: Esc was pressed during the pass, the generation is
+  reported cancelled (the summary, `timings[].cancelled`, the chip's
+  `cancelled gen N`), and the outputs the pass did not reach keep the
+  previous generation's picture until the next edit repaints them (Esc
+  schedules nothing). A pending preview or transport tick never cuts a
+  pass — it waits, as it waits for the solve (fix round 2026-08-25: the
+  first build cut every pass a tick was pending behind, so a drag or a
+  playback whose pass outlasted a tick painted nothing).
 - `caches` — the payload IS `CachesView {display: {entries, bytes, budget,
   hits, misses, evictions, oversized, refusals, working_set, over_budget,
   thrash}, memo: {bytes, entries}}`: the display cache's counters
@@ -271,20 +282,28 @@ DECISIONS.md row 2026-08-25) — additive, `PROTOCOL_VERSION` unchanged:
   Rides every `snapshot`; broadcast after every generation's display pass
   and after `set_display_cache`; `/debug/state.caches` is the same
   object. The client replaces its copy.
-- The **notice**: when a pass leaves `over_budget` or `thrash` set, ONE
-  `notice` (level `warning`) per generation names the numbers and the
-  remedy — "display cache: the 1000 solids on screen need 183 MiB of
+- The **notice**: ONE `notice` (level `warning`) naming the numbers and
+  the remedy — "display cache: the 1000 solids on screen need 183 MiB of
   display meshes and the display cache holds 100 MiB, so every redraw
   re-tessellates part of them; this generation evicted 912 of the meshes
   the previous one displayed (…) — raise the display cache in settings,
-  or draw fewer solids".
+  or draw fewer solids" — when a pass RAISES `over_budget` or `thrash`,
+  and when a STRUCTURAL generation redraws part of the picture while
+  either stands; never per preview / transport tick over a standing flag
+  (a drag re-broadcast it at the tick rate — fix round 2026-08-25), never
+  from a generation that drew nothing, and never from the pass after a
+  `set_display_cache` raised the flag (the resize's own `caches` said so).
+  The flags ride every `caches`; a client reads them there — `caches` and
+  the notice are control-lane texts and may reach a socket before the
+  pass's `display_end` and frames.
 - `set_display_cache {mib}` — a write for the lease's purposes (an
   observer's is refused kind `lease`), not a gesture, not a transport
   control, never a drag-ender, never an op, never a delta, never the
   file: resizes the session's display cache live to `mib` MiB (shrinking
   evicts least-recently-used entries at once; `over_budget` is re-judged
-  against the new budget); `mib` outside `64 ..= 65536` is refused kind
-  `invalid` ("display cache must be 64 ..= 65536 MiB, got 10"). The
+  against the new budget and the thrash watch is re-armed on the picture
+  that survived); `mib` outside `64 ..= 65536` is refused kind `invalid`
+  ("display cache must be between 64 MiB and 65536 MiB (asked for 10)"). The
   answer is the `caches` broadcast to every client. The settings menu
   sends it (256 MiB · 512 MiB · 1 GiB · 2 GiB · 4 GiB), and the writer
   re-applies its per-user choice on every `hello` (the lease holder's

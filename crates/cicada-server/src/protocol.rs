@@ -1084,9 +1084,14 @@ pub enum ServerMessage {
     /// when the pass was cut short); `tessellate_ms` is the warm-up on the
     /// worker pool, `encode_ms` the encode under the session lock — their
     /// sum is the chip's `display` time; `cancelled` = the pass stopped
-    /// between outputs because a newer generation superseded it (or Esc),
-    /// and the outputs it did not reach keep their previous frames until
-    /// the newer generation draws them.
+    /// between outputs (`cut_by` says why: an `edit` waiting on the loop,
+    /// whose generation redraws the outputs the pass did not reach, or
+    /// `esc`, after which the outputs it did not reach keep the previous
+    /// generation's picture until the next edit — the generation is
+    /// reported cancelled) or because the generation's solve was cancelled
+    /// (no `cut_by`: there was no pass to cut). A pending preview or
+    /// transport tick never cuts a pass: it waits, as it waits for the
+    /// solve (docs/12 §Display).
     DisplayEnd {
         /// The generation.
         generation: u64,
@@ -1100,15 +1105,33 @@ pub enum ServerMessage {
         encode_ms: f64,
         /// Bytes of frames sent.
         bytes: u64,
-        /// The pass stopped early (latest-wins). Omitted when false.
+        /// The pass stopped early (latest-wins), or the solve was cancelled.
+        /// Omitted when false.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         cancelled: bool,
+        /// What cut the pass between outputs, when something did. Omitted
+        /// otherwise.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cut_by: Option<CutBy>,
     },
     /// The two caches' counters and flags (v0.1 wave 5 D1; additive):
     /// broadcast after every generation's display pass and after
     /// `set_display_cache`; the same object rides every `snapshot`. The
     /// payload IS the [`CachesView`]; the client replaces its copy.
     Caches(CachesView),
+}
+
+/// What cut a display pass between outputs (`display_end.cut_by`; docs/13
+/// §The display edge): the two supersessions of `SolveLoop::superseded`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CutBy {
+    /// A structural job — an edit — was waiting on the loop; its
+    /// generation redraws what the pass did not reach.
+    Edit,
+    /// Esc: the generation is reported cancelled, and the outputs the pass
+    /// did not reach keep the previous picture until the next edit.
+    Esc,
 }
 
 /// The caches as the app shows them (docs/13 §The display edge; docs/16
@@ -1585,6 +1608,7 @@ mod tests {
     // `set_display_cache` intent — a write, not a gesture, not a transport
     // control.
     #[test]
+    #[allow(clippy::too_many_lines)] // every documented shape of the D1 messages, in one place
     fn display_lifecycle_and_caches_encode_the_documented_shapes() {
         let begin = encode(
             3,
@@ -1611,6 +1635,7 @@ mod tests {
                 encode_ms: 114.25,
                 bytes: 160_100_000,
                 cancelled: false,
+                cut_by: None,
             },
         );
         let end: serde_json::Value = serde_json::from_str(&end).unwrap();
@@ -1620,7 +1645,7 @@ mod tests {
                 "generation": 12, "outputs": 1, "frames": 3,
                 "tessellate_ms": 2301.5, "encode_ms": 114.25, "bytes": 160_100_000_u64
             }),
-            "cancelled is omitted when false: {end}"
+            "cancelled and cut_by are omitted when false / none: {end}"
         );
         let cut = encode(
             4,
@@ -1632,10 +1657,27 @@ mod tests {
                 encode_ms: 0.0,
                 bytes: 0,
                 cancelled: true,
+                cut_by: Some(CutBy::Esc),
             },
         );
         let cut: serde_json::Value = serde_json::from_str(&cut).unwrap();
         assert_eq!(cut["payload"]["cancelled"], true);
+        assert_eq!(cut["payload"]["cut_by"], "esc");
+        let by_edit = encode(
+            4,
+            &ServerMessage::DisplayEnd {
+                generation: 14,
+                outputs: 1,
+                frames: 1,
+                tessellate_ms: 9.0,
+                encode_ms: 1.0,
+                bytes: 40,
+                cancelled: true,
+                cut_by: Some(CutBy::Edit),
+            },
+        );
+        let by_edit: serde_json::Value = serde_json::from_str(&by_edit).unwrap();
+        assert_eq!(by_edit["payload"]["cut_by"], "edit");
         let caches = encode(
             5,
             &ServerMessage::Caches(CachesView {

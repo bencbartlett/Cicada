@@ -71,6 +71,21 @@ pub struct Job {
     pub submitted: Instant,
 }
 
+/// Why an in-flight generation's display pass must stop (docs/13 §The
+/// display edge; [`SolveLoop::superseded`]): the two things that make the
+/// picture it is painting stale from the user's seat. A pending PREVIEW or
+/// TRANSPORT job is neither — it waits for the pass as it waits for the
+/// solve (latest-wins over COMPLETED generations, docs/12 §Solve
+/// generations), or a drag whose pass outlasts a tick would never paint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Superseded {
+    /// Esc was pressed during this generation.
+    Esc,
+    /// A structural job — an edit — is waiting on the loop (it already
+    /// cancelled the in-flight solve's token; the pass follows).
+    Edit,
+}
+
 /// The session's hooks — called on the loop thread (events also arrive on
 /// rayon worker threads via the observer). Implementations must be cheap
 /// and must never call back into [`SolveLoop::submit`] while holding locks
@@ -307,18 +322,31 @@ impl SolveLoop {
         state.in_flight || state.pending.is_some()
     }
 
-    /// Is the in-flight generation superseded — a newer job waiting for
-    /// it to finish, or Esc pressed during it? The display pass asks this
-    /// between outputs (docs/13 §The display edge: latest-wins for the
-    /// display edge — a superseded generation's pass stops, and the newer
-    /// generation paints the newest state instead of a queue of states).
-    /// A pending job can only be waiting while a generation is in flight
-    /// (the worker takes it the moment `on_complete` returns), so this is
-    /// exactly "someone is waiting on this one".
+    /// Is the in-flight generation superseded — Esc pressed during it, or
+    /// a STRUCTURAL job (an edit) waiting for it to finish? The display
+    /// pass asks this between outputs (docs/13 §The display edge:
+    /// latest-wins for the display edge — a superseded generation's pass
+    /// stops, and the newer generation paints the newest state instead of
+    /// a queue of states). The rule mirrors [`Self::submit`]'s for the
+    /// solve: a structural job cancels what is in flight, a preview or
+    /// transport job lets it finish — so a pending tick is NOT a
+    /// supersession (review finding 2026-08-25: with every pending job a
+    /// supersession, a drag or a playback whose pass outlasts a tick cut
+    /// every pass before its first frame and painted nothing until the
+    /// input stopped). A pending job can only be waiting while a
+    /// generation is in flight (the worker takes it the moment
+    /// `on_complete` returns). Esc wins when both hold.
     #[must_use]
-    pub fn superseded(&self) -> bool {
+    pub fn superseded(&self) -> Option<Superseded> {
         let state = self.lock();
-        state.pending.is_some() || state.cancel_at.is_some()
+        if state.cancel_at.is_some() {
+            return Some(Superseded::Esc);
+        }
+        state
+            .pending
+            .as_ref()
+            .is_some_and(|job| job.kind == JobKind::Structural)
+            .then_some(Superseded::Edit)
     }
 
     /// Block until idle (tests and shutdown).
@@ -721,6 +749,95 @@ mod tests {
         // The first generation completed (1 run) and the newest ran (1 run);
         // intermediates were superseded before starting: exactly 2 runs.
         assert_eq!(runs.load(Ordering::SeqCst), 2);
+    }
+
+    /// `superseded` mirrors `submit`'s rule (docs/13 §The display edge): a
+    /// pending PREVIEW job is not a supersession — it waits for the
+    /// in-flight generation, display pass included — a pending STRUCTURAL
+    /// job is (`Edit`), and Esc is (`Esc`, and it wins over a pending edit).
+    /// Deterministic: the first generation's node holds a gate until the
+    /// test has asked every question.
+    #[test]
+    fn a_pending_tick_is_no_supersession_an_edit_or_esc_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = DiskStore::open(dir.path()).unwrap();
+        let scheduler = Arc::new(
+            Scheduler::new(
+                Arc::new(store),
+                Arc::new(MonotonicClock::new()),
+                SchedulerConfig {
+                    threads: 1,
+                    ..SchedulerConfig::default()
+                },
+            )
+            .unwrap(),
+        );
+        let last = Last::new();
+        let runs = Arc::new(AtomicUsize::new(0));
+        let gate = Arc::new(AtomicBool::new(false));
+        let solve = SolveLoop::new(scheduler, last.clone());
+        let gated = |x: f64, kind: JobKind, runs: Arc<AtomicUsize>, gate: Arc<AtomicBool>| -> Job {
+            let run: cicada_sched::NodeFn =
+                Arc::new(move |_ctx, inputs: &[Option<Arc<HashedValue>>]| {
+                    if runs.fetch_add(1, Ordering::SeqCst) == 0 {
+                        while !gate.load(Ordering::SeqCst) {
+                            std::thread::yield_now();
+                        }
+                    }
+                    let a = inputs[0].as_ref().unwrap();
+                    let ValueData::Number(a) = a.data() else {
+                        panic!()
+                    };
+                    Ok(vec![HashedValue::new(ValueData::Number(a + 1.0)).unwrap()])
+                });
+            let decl = NodeDecl {
+                name: "gated".to_owned(),
+                op: "gated".to_owned(),
+                version: 1,
+                body_hash: None,
+                tolerance: None,
+                inputs: vec![Input::Value(
+                    HashedValue::new(ValueData::Number(x)).unwrap(),
+                )],
+                fan: vec![0],
+                output_count: 1,
+                effectful: false,
+                volatile: false,
+                run,
+            };
+            Job {
+                lowered: Arc::new(Lowered {
+                    graph: SolveGraph::new(vec![decl]).unwrap(),
+                    bindings: HashMap::new(),
+                    output_names: vec![vec!["out".to_owned()]],
+                    excluded: BTreeMap::new(),
+                    driven: Vec::new(),
+                }),
+                targets: vec![NodeId(0)],
+                kind,
+                submitted: Instant::now(),
+            }
+        };
+        assert_eq!(solve.superseded(), None, "nothing in flight");
+        solve.submit(gated(1.0, JobKind::Preview, runs.clone(), gate.clone()));
+        while runs.load(Ordering::SeqCst) == 0 {
+            std::thread::yield_now();
+        }
+        assert_eq!(solve.superseded(), None, "in flight, nobody waiting");
+        // A tick waits: not a supersession. A transport frame is a tick too.
+        solve.submit(gated(2.0, JobKind::Preview, runs.clone(), gate.clone()));
+        assert_eq!(solve.superseded(), None, "a pending preview tick waits");
+        solve.submit(gated(3.0, JobKind::Transport, runs.clone(), gate.clone()));
+        assert_eq!(solve.superseded(), None, "a pending transport frame waits");
+        // An edit supersedes.
+        solve.submit(gated(4.0, JobKind::Structural, runs.clone(), gate.clone()));
+        assert_eq!(solve.superseded(), Some(Superseded::Edit));
+        // Esc supersedes, and wins over the pending edit (which it drops).
+        assert!(solve.cancel(), "the pending edit was dropped");
+        assert_eq!(solve.superseded(), Some(Superseded::Esc));
+        gate.store(true, Ordering::SeqCst);
+        solve.wait_idle();
+        assert_eq!(solve.superseded(), None, "idle again");
     }
 
     #[test]

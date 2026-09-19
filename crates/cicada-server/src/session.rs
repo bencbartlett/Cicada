@@ -70,13 +70,15 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::atomic::write_atomic;
 use crate::compile::{self, Loaded};
-use crate::display::{self, DisplayContext, DisplayStats, DisplayTier, PickTable, SolidCache};
+use crate::display::{
+    self, DisplayContext, DisplayStats, DisplayTier, PickTable, PinnedMeshes, SolidCache,
+};
 use crate::lower::{
     DrivenPort, Exclusion, Lowered, LoweredBinding, Playhead, lower_partial_with_playhead,
     lower_with_playhead,
 };
 use crate::protocol::{
-    Actor, ApplyTextRequest, CachesView, ClientMessage, DeltaSource, DisplayCacheView,
+    Actor, ApplyTextRequest, CachesView, ClientMessage, CutBy, DeltaSource, DisplayCacheView,
     DrivenSignal, DrivenView, HistoryView, LeaseView, LoopView, MemoCacheView, NodeState,
     NodeStatus, PreviewMode, ProbeCatalogEntry, ProbeVerdict, Role, ServerMessage, SolveSummary,
     TransportView, ValueSummary, encode, is_gesture, is_write, type_tag,
@@ -84,7 +86,7 @@ use crate::protocol::{
 use crate::scripts::ScriptCancel;
 use crate::scrub::{self, SCRUB_PORT, WarmQueue};
 use crate::sidecar::Sidecar;
-use crate::solve::{IdleError, Job, JobKind, SolveLoop, SolveSink};
+use crate::solve::{IdleError, Job, JobKind, SolveLoop, SolveSink, Superseded};
 use crate::viewmodel::{self, GraphView, NodeRefs, WireEnd};
 
 /// Bytes for a notice: `612 MiB`, `1.5 GiB`, `96 KiB` — binary units, one
@@ -781,10 +783,49 @@ struct CacheFlags {
     thrash: bool,
 }
 
-/// How many budget verdicts `Core::verdicts` keeps before it forgets them
-/// all (a slider drag mints one value hash per tick per output; a verdict
-/// is a few dozen bytes and recomputes from the cache's hits).
+/// How many budget verdicts `Core::verdicts` keeps, in two halves
+/// ([`VerdictMemo`]; a slider drag mints one value hash per tick per
+/// output; a verdict is a few dozen bytes).
 const VERDICTS_KEPT: usize = 65_536;
+
+/// The triangle budget's verdicts by (value hash, requested tier), bounded
+/// without a cliff: two halves — when the newer one holds half of
+/// [`VERDICTS_KEPT`] it becomes the older and the older is forgotten; a
+/// lookup that finds its verdict in the older half promotes it. So a
+/// verdict asked for since the last turnover survives it (the on-screen
+/// outputs' fine verdicts, which every structural generation asks for),
+/// and what is forgotten is what nobody asked for in half a memo's worth
+/// of new verdicts — a drag's per-tick hashes. (A clear-all at the cap
+/// re-paid the fine tally of every unchanged over-budget output on the
+/// next structural generation — review finding 2026-08-25.)
+#[derive(Default)]
+struct VerdictMemo {
+    newer: HashMap<(ValueHash, DisplayTier), display::BudgetStats>,
+    older: HashMap<(ValueHash, DisplayTier), display::BudgetStats>,
+}
+
+impl VerdictMemo {
+    fn get(&mut self, key: &(ValueHash, DisplayTier)) -> Option<display::BudgetStats> {
+        if let Some(verdict) = self.newer.get(key) {
+            return Some(*verdict);
+        }
+        let verdict = self.older.remove(key)?;
+        self.newer.insert(*key, verdict);
+        Some(verdict)
+    }
+
+    fn insert(&mut self, key: (ValueHash, DisplayTier), verdict: display::BudgetStats) {
+        if self.newer.len() >= VERDICTS_KEPT / 2 {
+            self.older = std::mem::take(&mut self.newer);
+        }
+        self.newer.insert(key, verdict);
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.newer.len() + self.older.len()
+    }
+}
 
 /// What one display pass sent under the session lock.
 #[derive(Debug, Clone, Copy, Default)]
@@ -795,9 +836,42 @@ struct Emitted {
     outputs: usize,
     /// Frames sent.
     frames: usize,
-    /// The pass stopped between outputs: a newer generation is waiting (or
-    /// Esc) — latest-wins for the display edge.
-    cancelled: bool,
+    /// The pass stopped between outputs, and why: an edit is waiting on
+    /// the loop, or Esc — latest-wins for the display edge.
+    cut: Option<Superseded>,
+}
+
+/// One output a generation's display pass may have to draw
+/// ([`Core::display_pending_locked`]).
+#[derive(Debug, Clone, Copy)]
+struct PendingOutput {
+    node_ref: u32,
+    output: u32,
+    hash: ValueHash,
+    /// The tier this output is on screen at with THIS value, when it is
+    /// — coarser than the pass asks for, or the pre-filter would have
+    /// dropped it: the warm-up fetches and pins nothing for it when the
+    /// budget chooses that tier again (nothing will be encoded).
+    on_screen: Option<DisplayTier>,
+}
+
+/// What a display pass's warm-up produced ([`Core::warm_display`]) and the
+/// encode reads.
+#[derive(Default)]
+struct Warm {
+    /// The pending outputs' values, by hash.
+    loaded: HashMap<ValueHash, Arc<HashedValue>>,
+    /// The budget's verdict per value.
+    verdicts: HashMap<ValueHash, display::BudgetStats>,
+    /// The drawn tier's display meshes of every output to encode, PINNED
+    /// so the encode under the session lock never tessellates — the
+    /// cache may have evicted them between the warm-up and the encode
+    /// (docs/12 §Display).
+    pinned: PinnedMeshes,
+    /// The (value hash, drawn tier) pairs already pinned.
+    pinned_for: HashSet<(ValueHash, DisplayTier)>,
+    /// The warm-up stopped between outputs, and why.
+    cut: Option<Superseded>,
 }
 
 /// A generation's report kept for the inspector.
@@ -1196,10 +1270,11 @@ struct Core {
     /// The triangle budget's verdicts by (value hash, requested tier) — a
     /// pure function of both, memoized so a structural generation over an
     /// unchanged over-budget output decides from the map and re-sends
-    /// nothing (docs/12 §Display). Bounded by [`VERDICTS_KEPT`]. Lock
-    /// order: `inner` → `verdicts` (the emit path decides under `inner`
-    /// when the graph changed since the warm-up); never the reverse.
-    verdicts: Mutex<HashMap<(ValueHash, DisplayTier), display::BudgetStats>>,
+    /// nothing (docs/12 §Display). Bounded by [`VERDICTS_KEPT`] in two
+    /// halves ([`VerdictMemo`]). Lock order: `inner` → `verdicts` (the
+    /// emit path decides under `inner` when the graph changed since the
+    /// warm-up); never the reverse.
+    verdicts: Mutex<VerdictMemo>,
     /// The scrub worker's shared state ([`ScrubShared`]). Lock order:
     /// `inner` → `scrub` — the worker decides under both; everything else
     /// takes `scrub` alone or under `inner`.
@@ -1458,7 +1533,7 @@ impl Session {
             transport_gate: Mutex::new(Instant::now()),
             transport_wake: Condvar::new(),
             solids: SolidCache::new(config.solid_cache_bytes),
-            verdicts: Mutex::new(HashMap::new()),
+            verdicts: Mutex::new(VerdictMemo::default()),
             scrub: Mutex::new(ScrubShared::new()),
             scrub_wake: Condvar::new(),
             config,
@@ -2050,7 +2125,7 @@ impl Session {
                 // the refusal names both ends.
                 if !(display::SOLID_CACHE_MIN_MIB..=display::SOLID_CACHE_MAX_MIB).contains(&mib) {
                     return Err(IntentError::Invalid(format!(
-                        "display cache must be {} ..= {} MiB, got {mib}",
+                        "display cache must be between {} MiB and {} MiB (asked for {mib})",
                         display::SOLID_CACHE_MIN_MIB,
                         display::SOLID_CACHE_MAX_MIB
                     )));
@@ -2060,14 +2135,10 @@ impl Session {
                         "display cache of {mib} MiB does not fit this machine's address space"
                     ))
                 })?;
-                // Resize under `inner` so the flags re-judged below describe
-                // the cache the broadcast names: shrinking evicts at once.
+                // Resize under `inner` so the flags re-judged describe the
+                // cache the broadcast names: shrinking evicts at once.
                 let mut inner = self.core.lock_inner();
-                let _evicted = self.core.solids.set_budget(bytes);
-                // The working set stands; whether it fits is re-judged
-                // against the new budget (thrash is the last pass's verdict
-                // and stands until a pass clears it).
-                inner.caches.over_budget = inner.caches.working_set > bytes as u64;
+                let _evicted = self.core.resize_display_cache(&mut inner, bytes);
                 let view = self.core.caches_view(&inner);
                 broadcast(&inner, &ServerMessage::Caches(view));
                 Ok(())
@@ -5131,17 +5202,24 @@ impl Core {
             solids: &self.solids,
             tier,
             budget: None,
+            pinned: None,
         }
     }
 
     /// The display context of a live emission: the tier the budget chose
-    /// for the output and its verdict, recorded in the output's stats.
-    fn display_context_for(&self, verdict: display::BudgetStats) -> DisplayContext<'_> {
+    /// for the output and its verdict, recorded in the output's stats, and
+    /// the meshes the warm-up pinned for the encode.
+    fn display_context_for<'a>(
+        &'a self,
+        verdict: display::BudgetStats,
+        pinned: &'a PinnedMeshes,
+    ) -> DisplayContext<'a> {
         DisplayContext {
             config: &self.config.project,
             solids: &self.solids,
             tier: verdict.drawn,
             budget: Some(verdict),
+            pinned: Some(pinned),
         }
     }
 
@@ -5149,23 +5227,26 @@ impl Core {
     /// for `requested` (docs/12 §Display): memoized per (value hash, tier)
     /// — a pure function of both — and computed, when new, by
     /// [`display::choose_tier`] on the scheduler's worker pool, which IS the
-    /// tessellation warm-up: the emit that follows only hits. A value
-    /// without solids is drawn as asked.
+    /// tessellation warm-up. Returns the verdict and, when it was just
+    /// computed, the drawn tier's meshes for the pass to pin; on a memo
+    /// hit `None` — the caller fetches them through the cache
+    /// ([`Self::drawn_meshes`]) if it is going to encode the output. A
+    /// value without solids is drawn as asked.
     fn verdict_for(
         &self,
         value: &Arc<HashedValue>,
         requested: DisplayTier,
-    ) -> display::BudgetStats {
+    ) -> (display::BudgetStats, Option<display::DrawnMeshes>) {
         let key = (value.hash(), requested);
         if let Some(verdict) = self.lock_verdicts().get(&key) {
-            return *verdict;
+            return (verdict, None);
         }
         let solids = display::distinct_solids(std::slice::from_ref(value));
         let map = |items: Vec<(ValueHash, Solid)>,
                    f: &(dyn Fn((ValueHash, Solid)) -> Option<u64> + Sync)| {
             self.scheduler.map_parallel(items, f)
         };
-        let verdict = display::choose_tier(
+        let chosen = display::choose_tier(
             &solids,
             requested,
             self.config.display_triangle_budget,
@@ -5173,32 +5254,44 @@ impl Core {
             &self.solids,
             &map,
         );
-        let mut verdicts = self.lock_verdicts();
-        if verdicts.len() >= VERDICTS_KEPT {
-            verdicts.clear();
-        }
-        verdicts.insert(key, verdict);
-        verdict
+        self.lock_verdicts().insert(key, chosen.stats);
+        (chosen.stats, Some(chosen.meshes))
     }
 
-    fn lock_verdicts(
-        &self,
-    ) -> std::sync::MutexGuard<'_, HashMap<(ValueHash, DisplayTier), display::BudgetStats>> {
+    /// The display meshes of `value`'s distinct solids at `tier`, through
+    /// the cache on the worker pool — a hash lookup each when warm, the
+    /// kernel for an evicted one: what the warm-up pins for an output whose
+    /// verdict the memo knew (a memo hit used to skip the warm-up, and the
+    /// encode then re-tessellated every evicted mesh serially under the
+    /// session lock — 17 s for 400 spheres in a 64 MiB cache, every intent
+    /// and Esc waiting; review finding 2026-08-25).
+    fn drawn_meshes(&self, value: &Arc<HashedValue>, tier: DisplayTier) -> display::DrawnMeshes {
+        let solids = display::distinct_solids(std::slice::from_ref(value));
+        let map = |items: Vec<(ValueHash, Solid)>,
+                   f: &(dyn Fn((ValueHash, Solid)) -> Option<u64> + Sync)| {
+            self.scheduler.map_parallel(items, f)
+        };
+        display::fetch_meshes(&solids, tier, &self.config.project, &self.solids, &map)
+    }
+
+    fn lock_verdicts(&self) -> std::sync::MutexGuard<'_, VerdictMemo> {
         self.verdicts
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Is the in-flight generation's display pass superseded — a newer job
-    /// waiting on the loop, or Esc pressed? Latest-wins for the display
-    /// edge (docs/13 §The display edge): the pass stops between outputs.
-    fn display_superseded(&self) -> bool {
+    /// Is the in-flight generation's display pass superseded — an edit
+    /// waiting on the loop, or Esc pressed — and by which? Latest-wins for
+    /// the display edge (docs/13 §The display edge): the pass stops
+    /// between outputs. A pending preview or transport tick is not a
+    /// supersession: it waits for the pass as it waits for the solve.
+    fn display_superseded(&self) -> Option<Superseded> {
         self.solve
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .and_then(std::sync::Weak::upgrade)
-            .is_some_and(|solve| solve.superseded())
+            .and_then(|solve| solve.superseded())
     }
 
     /// The `caches` view (docs/13 §The display edge): the display cache's
@@ -5219,37 +5312,87 @@ impl Core {
         }
     }
 
-    /// After a display pass (under the lock): judge the cache against what
-    /// is on screen — the working set (every displayed output's distinct
-    /// solids at the tier each was drawn at) against the budget, and the
-    /// evictions of the previous picture's entries during this pass — then
-    /// re-arm the watch with this picture's entries for the next pass.
-    /// Returns the view and the notice the verdict deserves, if any (ONE per
-    /// pass, both flags in one message).
-    fn judge_caches(&self, inner: &mut Inner) -> (CachesView, Option<String>) {
+    /// The working set — the display meshes every output on screen holds:
+    /// each displayed output's distinct solids at the tier it was drawn
+    /// at, unioned by (value hash, tier) and sized as the cache counts
+    /// them — and its total bytes.
+    fn working_set(inner: &Inner) -> (HashMap<(ValueHash, DisplayTier), usize>, u64) {
         let mut set: HashMap<(ValueHash, DisplayTier), usize> = HashMap::new();
         for displayed in inner.display.values() {
             for (hash, bytes) in &displayed.solids {
                 set.entry((*hash, displayed.tier)).or_insert(*bytes);
             }
         }
-        let working_set: u64 = set.values().map(|bytes| *bytes as u64).sum();
-        let budget = self.solids.budget() as u64;
-        let evicted = self.solids.watched_evictions();
-        inner.caches = CacheFlags {
-            working_set,
-            over_budget: working_set > budget,
-            thrash: evicted > 0,
-        };
+        let bytes = set.values().map(|bytes| *bytes as u64).sum();
+        (set, bytes)
+    }
+
+    /// Arm the cache's watch on the picture on screen (`set`, from
+    /// [`Self::working_set`]): its entries are touched — the newest in the
+    /// cache, so past value sets go first — and their evictions until the
+    /// next arming are the `thrash` count.
+    fn watch_working_set(&self, set: &HashMap<(ValueHash, DisplayTier), usize>) {
         let config = &self.config.project;
         self.solids.watch(
             set.keys()
                 .map(|(hash, tier)| display::TessellationKey::new(*hash, tier.deflection(config))),
         );
+    }
+
+    /// Resize the display cache under the lock (`set_display_cache`):
+    /// shrinking evicts at once; `over_budget` is re-judged against the
+    /// new budget (thrash is the last pass's verdict and stands until a
+    /// pass clears it); and the watch is RE-ARMED on the picture that
+    /// survived, so the resize's own evictions are not counted against
+    /// the next pass as "this generation evicted N of the meshes the
+    /// previous one displayed" (review finding 2026-08-25). Returns how
+    /// many entries the resize evicted.
+    fn resize_display_cache(&self, inner: &mut Inner, bytes: usize) -> u64 {
+        let evicted = self.solids.set_budget(bytes);
+        inner.caches.over_budget = inner.caches.working_set > bytes as u64;
+        let (set, _) = Self::working_set(inner);
+        self.watch_working_set(&set);
+        evicted
+    }
+
+    /// After a display pass (under the lock): judge the cache against what
+    /// is on screen — the working set against the budget, and the
+    /// evictions of the previous picture's entries during this pass — then
+    /// re-arm the watch with this picture's entries for the next pass.
+    /// Returns the view and the notice the verdict deserves, if any — ONE
+    /// message, both flags — raised when a flag RISES in this pass, and
+    /// when a STRUCTURAL generation redrew part of the picture (`drew`)
+    /// while a flag stands (the user changed the picture; it still does
+    /// not fit): never on a preview or transport pass over a standing flag
+    /// — a drag re-raised the same warning at the tick rate (review
+    /// finding 2026-08-25) — and never on a generation that drew nothing.
+    /// A flag a `set_display_cache` raised rose at the resize (its `caches`
+    /// turns the indicator), not in the pass after it. The flags
+    /// themselves ride every `caches`; the indicator reads them.
+    fn judge_caches(
+        &self,
+        inner: &mut Inner,
+        structural: bool,
+        drew: bool,
+    ) -> (CachesView, Option<String>) {
+        let (set, working_set) = Self::working_set(inner);
+        let budget = self.solids.budget() as u64;
+        let evicted = self.solids.watched_evictions();
+        let previous = inner.caches;
+        inner.caches = CacheFlags {
+            working_set,
+            over_budget: working_set > budget,
+            thrash: evicted > 0,
+        };
+        self.watch_working_set(&set);
         let view = self.caches_view(inner);
-        let notice = match (inner.caches.over_budget, inner.caches.thrash) {
-            (false, false) => None,
-            (over, thrash) => {
+        let flagged = inner.caches.over_budget || inner.caches.thrash;
+        let rising = (inner.caches.over_budget && !previous.over_budget)
+            || (inner.caches.thrash && !previous.thrash);
+        let due = if structural { flagged && drew } else { rising };
+        let notice = match (due, inner.caches.over_budget, inner.caches.thrash) {
+            (false, _, _) | (true, false, false) => None,
+            (true, over, thrash) => {
                 let mut parts = Vec::new();
                 if over {
                     parts.push(format!(
@@ -5958,8 +6101,7 @@ impl Core {
             &lowered,
             &report,
             tier,
-            &HashMap::new(),
-            &HashMap::new(),
+            &Warm::default(),
             false,
         );
     }
@@ -6055,72 +6197,96 @@ impl Core {
         requested: DisplayTier,
         lowered: &Lowered,
         report: &SolveReport,
-    ) -> Vec<(u32, u32, ValueHash)> {
-        let mut pending: Vec<(u32, u32, ValueHash)> = Self::display_wants(inner, lowered, report)
+    ) -> Vec<PendingOutput> {
+        let mut pending: Vec<PendingOutput> = Self::display_wants(inner, lowered, report)
             .into_iter()
             .filter(|(node_ref, output, hash)| {
                 !Self::already_displayed(inner, *node_ref, *output, *hash, requested)
             })
+            .map(|(node_ref, output, hash)| PendingOutput {
+                node_ref,
+                output,
+                hash,
+                on_screen: inner
+                    .display
+                    .get(&(node_ref, output))
+                    .filter(|d| d.hash == hash)
+                    .map(|d| d.tier),
+            })
             .collect();
-        pending.sort_unstable();
+        pending.sort_unstable_by_key(|p| (p.node_ref, p.output, p.hash));
         pending
     }
 
     /// The display pass's warm-up, off the session lock (docs/12 §Display
     /// cache; the D1 contract): load each pending output's value from the
-    /// store and take the budget's verdict for it ([`Self::verdict_for`] —
-    /// which tessellates its distinct solids on the worker pool, so the
-    /// emit under the lock only hits). Latest-wins: between outputs the
-    /// pass checks whether a newer generation is waiting (or Esc was
-    /// pressed) and stops — the rest of this generation's picture is the
-    /// newer generation's to paint. The `display_hold` seam is called
-    /// after each output. Returns the loaded values, the verdicts by value
-    /// hash, and whether the pass was cut short.
-    #[allow(clippy::type_complexity)] // the warm-up's three results, named in the doc above
+    /// store, take the budget's verdict for it ([`Self::verdict_for`] —
+    /// which tessellates its distinct solids on the worker pool), and PIN
+    /// the drawn tier's meshes for the encode — the verdict's own when it
+    /// was just computed, else fetched through the cache
+    /// ([`Self::drawn_meshes`]: hits when warm, the kernel on the pool for
+    /// an evicted one) — so the encode under the lock tessellates nothing
+    /// whatever the cache evicted meanwhile. An output already on screen
+    /// at the tier the budget chooses gets no fetch: nothing of it will
+    /// be encoded. Latest-wins: between outputs the pass asks whether an
+    /// edit is waiting (or Esc was pressed) and stops — the rest of this
+    /// generation's picture is the edit's generation's to paint; a
+    /// pending preview or transport tick waits. The `display_hold` seam
+    /// is called after each output.
     fn warm_display(
         &self,
         generation: u64,
-        pending: &[(u32, u32, ValueHash)],
+        pending: &[PendingOutput],
         requested: DisplayTier,
-    ) -> (
-        HashMap<ValueHash, Arc<HashedValue>>,
-        HashMap<ValueHash, display::BudgetStats>,
-        bool,
-    ) {
+    ) -> Warm {
         let store = self.scheduler.store();
-        let mut loaded: HashMap<ValueHash, Arc<HashedValue>> = HashMap::new();
-        let mut verdicts: HashMap<ValueHash, display::BudgetStats> = HashMap::new();
-        for (done, (_, _, hash)) in pending.iter().enumerate() {
-            if self.display_superseded() {
-                return (loaded, verdicts, true);
+        let mut warm = Warm::default();
+        let config = &self.config.project;
+        for (done, pending) in pending.iter().enumerate() {
+            if let Some(why) = self.display_superseded() {
+                warm.cut = Some(why);
+                return warm;
             }
-            if !verdicts.contains_key(hash) {
-                // A value that cannot be loaded is reported by the emit path,
-                // which tries again under the lock and broadcasts the notice.
-                if let Ok(value) = store.load_value(hash) {
-                    let verdict = self.verdict_for(&value, requested);
-                    loaded.insert(*hash, value);
-                    verdicts.insert(*hash, verdict);
+            // A value that cannot be loaded is reported by the emit path,
+            // which tries again under the lock and broadcasts the notice.
+            let value = match warm.loaded.get(&pending.hash) {
+                Some(value) => Some(Arc::clone(value)),
+                None => store.load_value(&pending.hash).ok(),
+            };
+            if let Some(value) = value {
+                let (verdict, fresh) = self.verdict_for(&value, requested);
+                let encodes = pending.on_screen.is_none_or(|tier| tier < verdict.drawn);
+                if encodes && warm.pinned_for.insert((pending.hash, verdict.drawn)) {
+                    let meshes = fresh.unwrap_or_else(|| self.drawn_meshes(&value, verdict.drawn));
+                    let deflection = verdict.drawn.deflection(config);
+                    for (hash, mesh) in meshes {
+                        warm.pinned
+                            .insert(display::TessellationKey::new(hash, deflection), mesh);
+                    }
                 }
+                warm.loaded.insert(pending.hash, value);
+                warm.verdicts.insert(pending.hash, verdict);
             }
             if let Some(hold) = &self.config.display_hold {
                 hold(generation, done + 1);
             }
         }
-        (loaded, verdicts, false)
+        warm
     }
 
     /// The core of display: for every previewed, displayable output in the
     /// graph, compare the generation's output hash to the last broadcast
     /// and send frames when it changed (or when it was last drawn at a
     /// coarser tier than the budget chooses now); send clears for outputs
-    /// that stopped drawing. `preloaded` and `verdicts` hold what the
-    /// warm-up loaded and decided; anything else is loaded and decided here
-    /// (the graph changed under an intent between the two). With
-    /// `latest_wins`, the pass stops between outputs once a newer
-    /// generation is waiting (docs/13 §The display edge); the outputs it
-    /// did not reach keep their previous frames and table entries, so the
-    /// newer generation draws them.
+    /// that stopped drawing. `warm` holds what the warm-up loaded, decided
+    /// and pinned; anything else is loaded and decided here (the graph
+    /// changed under an intent between the two — a structural edit, whose
+    /// pending job normally cuts the pass before this output is reached;
+    /// inside the debounce window this path tessellates under the lock).
+    /// With `latest_wins`, the pass stops between outputs once an edit is
+    /// waiting or Esc was pressed (docs/13 §The display edge); the outputs
+    /// it did not reach keep their previous frames and table entries, so
+    /// the edit's generation draws them.
     #[allow(clippy::too_many_lines, clippy::too_many_arguments)] // want-set, clears, sends: one pass in one place
     fn emit_frames(
         &self,
@@ -6129,8 +6295,7 @@ impl Core {
         lowered: &Lowered,
         report: &SolveReport,
         requested: DisplayTier,
-        preloaded: &HashMap<ValueHash, Arc<HashedValue>>,
-        verdicts: &HashMap<ValueHash, display::BudgetStats>,
+        warm: &Warm,
         latest_wins: bool,
     ) -> Emitted {
         let mut emitted = Emitted::default();
@@ -6171,24 +6336,24 @@ impl Core {
             if Self::already_displayed(inner, node_ref, output, hash, requested) {
                 continue;
             }
-            if latest_wins && self.display_superseded() {
-                emitted.cancelled = true;
+            if latest_wins && let Some(why) = self.display_superseded() {
+                emitted.cut = Some(why);
                 break;
             }
-            let loaded = match preloaded.get(&hash) {
+            let loaded = match warm.loaded.get(&hash) {
                 Some(value) => Ok(Arc::clone(value)),
                 None => store.load_value(&hash),
             };
             match loaded {
                 Ok(value) => {
-                    let verdict = match verdicts.get(&hash) {
+                    let verdict = match warm.verdicts.get(&hash) {
                         Some(verdict) => *verdict,
-                        None => self.verdict_for(&value, requested),
+                        None => self.verdict_for(&value, requested).0,
                     };
                     if Self::already_displayed(inner, node_ref, output, hash, verdict.drawn) {
                         continue;
                     }
-                    let context = self.display_context_for(verdict);
+                    let context = self.display_context_for(verdict, &warm.pinned);
                     let frames = display::frames_for_value(
                         &value,
                         generation,
@@ -6624,19 +6789,17 @@ impl Core {
     /// generation as the last complete one, encode and send its frames
     /// (latest-wins between outputs), then `display_end` on the display lane
     /// behind the last frame, the cache verdict with its notice, and the
-    /// `caches` broadcast. Returns what was sent and the encode's wall time.
-    #[allow(clippy::too_many_arguments)] // the pass's three phases hand their results along
+    /// `caches` broadcast. Returns what was sent, the encode's wall time,
+    /// and what cut the pass, if anything did.
     fn finish_display_pass(
         &self,
         generation: u64,
         job: &Job,
         report: &Arc<SolveReport>,
         tier: DisplayTier,
-        preloaded: &HashMap<ValueHash, Arc<HashedValue>>,
-        verdicts: &HashMap<ValueHash, display::BudgetStats>,
-        warm_cancelled: bool,
+        warm: &Warm,
         tessellate_ms: f64,
-    ) -> (Emitted, f64) {
+    ) -> (Emitted, f64, Option<Superseded>) {
         let encode_began = Instant::now();
         let mut emitted = Emitted::default();
         let mut inner = self.lock_inner();
@@ -6652,18 +6815,18 @@ impl Core {
                 tier,
             });
         }
-        if newer && !report.cancelled && !warm_cancelled {
+        if newer && !report.cancelled && warm.cut.is_none() {
             emitted = self.emit_frames(
                 &mut inner,
                 generation,
                 &job.lowered,
                 report,
                 tier,
-                preloaded,
-                verdicts,
+                warm,
                 true,
             );
         }
+        let cut = warm.cut.or(emitted.cut);
         let encode_ms = encode_began.elapsed().as_secs_f64() * 1000.0;
         let end = encode(
             inner.seq,
@@ -6674,13 +6837,21 @@ impl Core {
                 tessellate_ms,
                 encode_ms,
                 bytes: emitted.bytes as u64,
-                cancelled: report.cancelled || warm_cancelled || emitted.cancelled,
+                cancelled: report.cancelled || cut.is_some(),
+                cut_by: cut.map(|why| match why {
+                    Superseded::Edit => CutBy::Edit,
+                    Superseded::Esc => CutBy::Esc,
+                }),
             },
         );
         for client in inner.clients.values() {
             client.lanes.display_text(end.clone());
         }
-        let (caches, notice) = self.judge_caches(&mut inner);
+        let (caches, notice) = self.judge_caches(
+            &mut inner,
+            job.kind == JobKind::Structural,
+            emitted.outputs > 0,
+        );
         if let Some(message) = notice {
             broadcast(
                 &inner,
@@ -6691,7 +6862,7 @@ impl Core {
             );
         }
         broadcast(&inner, &ServerMessage::Caches(caches));
-        (emitted, encode_ms)
+        (emitted, encode_ms, cut)
     }
 
     fn on_complete_impl(&self, generation: u64, job: &Job, report: &Arc<SolveReport>) {
@@ -6733,29 +6904,34 @@ impl Core {
             );
             pending
         };
-        // 2. The warm-up, off the session lock: the values are loaded and
-        //    the budget decides each output's tier by tessellating its
-        //    distinct solids on the worker pool (docs/12 §Display cache)
-        //    while intents keep flowing; a newer generation waiting stops
-        //    it between outputs (latest-wins). Between this and the
-        //    broadcast below the graph may change under an intent; the
-        //    broadcast recomputes what it wants and merely finds the cache
-        //    warm.
-        let (preloaded, verdicts, warm_cancelled) = self.warm_display(generation, &pending, tier);
+        // 2. The warm-up, off the session lock: the values are loaded, the
+        //    budget decides each output's tier by tessellating its distinct
+        //    solids on the worker pool (docs/12 §Display cache), and the
+        //    drawn tier's meshes are pinned for the encode, while intents
+        //    keep flowing; an edit waiting on the loop (or Esc) stops it
+        //    between outputs (latest-wins) — a pending tick waits. Between
+        //    this and the broadcast below the graph may change under an
+        //    intent; the broadcast recomputes what it wants.
+        let warm = self.warm_display(generation, &pending, tier);
         let tessellate_ms = began.elapsed().as_secs_f64() * 1000.0;
         // 3. Under the lock: encode and send (stopping between outputs if
         //    superseded), then `display_end` on the display lane behind the
         //    last frame, the cache verdict, its notice, and `caches`.
-        let (emitted, encode_ms) = self.finish_display_pass(
-            generation,
-            job,
-            report,
-            tier,
-            &preloaded,
-            &verdicts,
-            warm_cancelled,
-            tessellate_ms,
-        );
+        let (emitted, encode_ms, cut) =
+            self.finish_display_pass(generation, job, report, tier, &warm, tessellate_ms);
+        // Esc cut the pass: the generation is reported cancelled — the
+        // chip's `cancelled gen N`, the timing — as its solve would be.
+        // The solve finished and the memo holds its values, but its
+        // picture did not land: the outputs the pass did not reach keep
+        // the previous generation's until the next edit repaints them
+        // (docs/13 §The display edge). A cut by an edit is no
+        // cancellation: the edit's generation follows at once.
+        let esc = cut == Some(Superseded::Esc);
+        if esc {
+            let mut status = self.lock_status();
+            status.summary.cancelled = true;
+            status.dirty = true;
+        }
         let elapsed = {
             let status = self.lock_status();
             status.summary.elapsed_ms
@@ -6770,7 +6946,7 @@ impl Core {
             started_ms,
             queued_ms,
             elapsed_ms: Some(elapsed),
-            cancelled: report.cancelled,
+            cancelled: report.cancelled || esc,
             cancel_to_idle_ms: None,
             computed: report
                 .outcomes
@@ -9562,17 +9738,18 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let stats_of =
             |session: &Session| session.debug_state(false)["display"]["ball.out"]["stats"].clone();
         let cache_of = |session: &Session| session.debug_state(false)["display_cache"].clone();
-        // The load is structural: fine tier, warmed once (one miss), then
-        // read by the broadcast under the lock (a hit).
+        // The load is structural: fine tier, warmed once (one miss) and
+        // PINNED for the encode, which drew the pinned mesh and asked the
+        // cache nothing (no hit either — docs/12 §Display).
         let loaded = stats_of(&session);
         assert_eq!(loaded["tier"], "fine", "{loaded}");
         assert_eq!(loaded["solids"], 1);
         let fine_triangles = loaded["triangles"].as_u64().unwrap();
         let cache = cache_of(&session);
         assert_eq!(cache["misses"], 1, "{cache}");
-        assert!(
-            cache["hits"].as_u64().unwrap() >= 1,
-            "the emit hit the warmed entry: {cache}"
+        assert_eq!(
+            cache["hits"], 0,
+            "the encode drew the warm-up's pinned mesh, not the cache's: {cache}"
         );
         assert_eq!(cache["entries"], 1);
         // A preview tick: a new value, drawn at the preview tier — coarser.
@@ -9712,12 +9889,11 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let two_preview = two["budget"]["triangles"].as_u64().unwrap();
         assert!(two_preview > 1000, "{two}");
         assert_eq!(two["solids"], 2);
-        // The fine tally stopped at the budget: the spheres' fine meshes
-        // were NOT all computed (3 distinct spheres would be 3 fine
-        // misses + 3 preview misses + the cube; fewer misses than that).
-        let cache = &state["display_cache"];
-        let misses = cache["misses"].as_u64().unwrap();
-        assert!(misses < 7, "the fine tally stopped short: {cache}");
+        // (That the fine tally STOPS at the budget is pinned by
+        // `display::tests::the_fine_tally_stops_at_the_budget`, with a serial
+        // map; here the tally runs on two workers and the miss count depends
+        // on which sphere finished first — a bound on it could not tell the
+        // stop from its absence, so none is asserted.)
         let before = session.debug_state(false);
         // A structural edit that leaves every solid alone: the knob moves.
         session.handle(
@@ -9833,6 +10009,62 @@ size = slider(value=4.0, min=0.5, max=5.0)
             broadcast[0]["payload"]["display"]["budget"],
             session.debug_state(false)["caches"]["display"]["budget"]
         );
+        // `memo.bytes` IS the store's footprint on disk as this session's
+        // store knows it: the pack file plus the loose blobs.
+        let root =
+            std::path::PathBuf::from(session.debug_state(false)["cache_dir"].as_str().unwrap());
+        let on_disk = store_value_bytes_on_disk(&root);
+        assert!(on_disk > 0, "{}", root.display());
+        assert_eq!(
+            session.debug_state(false)["caches"]["memo"]["bytes"],
+            on_disk,
+            "the indicator's memo bytes are the files' sizes"
+        );
+        // `set_display_cache` re-judges `over_budget` against the new budget
+        // at once — the remedy the notice names — with no new generation.
+        let generations = session.debug_state(false)["timings"]
+            .as_array()
+            .unwrap()
+            .len();
+        session.handle(
+            id,
+            Some("raise".into()),
+            ClientMessage::SetDisplayCache { mib: 64 },
+        );
+        let got = texts(&drain(&mut rx));
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0]["type"], "caches");
+        assert_eq!(got[0]["payload"]["display"]["budget"], 64 * 1024 * 1024);
+        assert_eq!(
+            got[0]["payload"]["display"]["over_budget"], false,
+            "re-judged at once: {}",
+            got[0]
+        );
+        let state = session.debug_state(false);
+        assert_eq!(state["caches"]["display"]["over_budget"], false);
+        assert_eq!(
+            state["timings"].as_array().unwrap().len(),
+            generations,
+            "a resize is no generation"
+        );
+    }
+
+    /// The store's value bytes as the files say: `values/pack.bin` plus
+    /// every loose `<shard>/<hash>.zst`.
+    fn store_value_bytes_on_disk(root: &std::path::Path) -> u64 {
+        let values = root.join("values");
+        let mut total = std::fs::metadata(values.join("pack.bin")).map_or(0, |m| m.len());
+        for shard in std::fs::read_dir(&values).unwrap().flatten() {
+            if !shard.file_type().unwrap().is_dir() {
+                continue;
+            }
+            for file in std::fs::read_dir(shard.path()).unwrap().flatten() {
+                if file.path().extension().is_some_and(|e| e == "zst") {
+                    total += file.metadata().unwrap().len();
+                }
+            }
+        }
+        total
     }
 
     /// Thrash (the undo/redo flip of docs/17 §Measurement U30): a cache that
@@ -9846,6 +10078,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let (_dir, mut config) = project(
             "# cicada 1\n\
              r = slider(value=1.0, min=0.5, max=2.0)\n\
+             knob = slider(value=1.0, min=0.0, max=2.0)\n\
              ball = sphere(radius=r)\n",
         );
         config.solid_cache_bytes = 300 * 1024;
@@ -9908,6 +10141,520 @@ size = slider(value=4.0, min=0.5, max=5.0)
         assert_eq!(
             of_kind(&got, "caches")[0]["payload"]["display"]["thrash"],
             false
+        );
+        // A resize's own evictions are the resize's, not the next pass's:
+        // shrinking below the picture evicts it (watched), the watch is
+        // re-armed on what survived, and a generation that then draws
+        // nothing is not thrash and raises nothing — `over_budget` stands
+        // (the picture no longer fits) but did not rise in this pass.
+        let evicted = session
+            .core
+            .resize_display_cache(&mut session.core.lock_inner(), 100 * 1024);
+        assert_eq!(evicted, 1, "the sphere left");
+        assert_eq!(session.core.solids.watched_evictions(), 0, "re-armed");
+        assert_eq!(
+            session.debug_state(false)["caches"]["display"]["over_budget"],
+            true
+        );
+        session.handle(
+            id,
+            Some("knob".into()),
+            ClientMessage::SetParam {
+                node: "knob".into(),
+                port: Some("value".into()),
+                value: "1.5".into(),
+            },
+        );
+        session.wait_idle();
+        let got = texts(&drain(&mut rx));
+        let ends = of_kind(&got, "display_end");
+        assert_eq!(ends.len(), 1);
+        assert_eq!(ends[0]["payload"]["outputs"], 0, "the knob draws nothing");
+        assert!(
+            of_kind(&got, "notice").is_empty(),
+            "the resize's evictions are not this generation's: {got:?}"
+        );
+        let caches = of_kind(&got, "caches");
+        assert_eq!(caches[0]["payload"]["display"]["thrash"], false, "{got:?}");
+        assert_eq!(caches[0]["payload"]["display"]["over_budget"], true);
+    }
+
+    /// The notice is raised when a STRUCTURAL generation redraws part of a
+    /// picture a flag stands over — never on a preview tick over a standing
+    /// flag (a drag re-raised the same warning at the tick rate: 45 ticks,
+    /// 45 identical warnings — review finding 2026-08-25), never on a
+    /// generation that draws nothing, and not in the pass after a resize
+    /// raised the flag (the resize's own `caches` said so). The flags
+    /// themselves ride every `caches`. The picture: three fine spheres that
+    /// never change (≈ 190 KiB each) and one the slider moves, in a 250 KiB
+    /// cache — over budget at every tier, while a tick's preview mesh
+    /// (≈ 20 KiB) never has to evict a watched entry.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one drag, two structural edits, a resize each way
+    fn the_cache_notice_is_raised_per_structural_redraw_never_per_tick_over_a_standing_flag() {
+        let (_dir, mut config) = project(
+            "# cicada 1\n\
+             radii = [1.0, 1.1, 1.2]\n\
+             still = sphere(radius=each(radii))\n\
+             r = slider(value=1.3, min=0.5, max=2.0)\n\
+             knob = slider(value=1.0, min=0.0, max=2.0)\n\
+             ball = sphere(radius=r)\n",
+        );
+        config.solid_cache_bytes = 250 * 1024;
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        let _ = drain(&mut rx);
+        let flags = |session: &Session| {
+            let state = session.debug_state(false);
+            (
+                state["caches"]["display"]["over_budget"] == true,
+                state["caches"]["display"]["thrash"] == true,
+            )
+        };
+        assert_eq!(
+            flags(&session),
+            (true, false),
+            "the picture is over budget from the first paint"
+        );
+        let tick = |node: &str, value: &str| {
+            session.handle(
+                id,
+                None,
+                ClientMessage::ParamPreview {
+                    node: node.into(),
+                    port: Some("value".into()),
+                    value: value.into(),
+                },
+            );
+            session.wait_idle();
+        };
+        let set = |node: &str, value: &str| {
+            session.handle(
+                id,
+                Some(format!("{node}={value}")),
+                ClientMessage::SetParam {
+                    node: node.into(),
+                    port: Some("value".into()),
+                    value: value.into(),
+                },
+            );
+            session.wait_idle();
+        };
+        // Five preview ticks redraw the moving sphere over the standing
+        // flag: five passes, five `caches` carrying it, NO notice.
+        for value in ["1.4", "1.5", "1.6", "1.7", "1.8"] {
+            tick("r", value);
+        }
+        let got = texts(&drain(&mut rx));
+        let caches = of_kind(&got, "caches");
+        assert_eq!(caches.len(), 5, "{got:?}");
+        assert!(
+            caches.iter().all(|c| {
+                c["payload"]["display"]["over_budget"] == true
+                    && c["payload"]["display"]["thrash"] == false
+            }),
+            "the flag rides every caches, and no tick evicted the picture: {got:?}"
+        );
+        assert_eq!(
+            of_kind(&got, "display_end")
+                .iter()
+                .filter(|e| e["payload"]["outputs"] == 1)
+                .count(),
+            5,
+            "every tick redrew the sphere: {got:?}"
+        );
+        assert!(
+            of_kind(&got, "notice").is_empty(),
+            "no notice per tick over a standing flag: {got:?}"
+        );
+        // A structural generation that redraws the picture says so — once,
+        // with the numbers.
+        set("r", "1.9");
+        let got = texts(&drain(&mut rx));
+        let notices = of_kind(&got, "notice");
+        assert_eq!(notices.len(), 1, "{got:?}");
+        assert!(
+            notices[0]["payload"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("4 solids on screen need"),
+            "{}",
+            notices[0]
+        );
+        // One that draws nothing over the same standing flag says nothing.
+        set("knob", "1.5");
+        let got = texts(&drain(&mut rx));
+        assert!(of_kind(&got, "notice").is_empty(), "{got:?}");
+        assert_eq!(
+            of_kind(&got, "caches")[0]["payload"]["display"]["over_budget"],
+            true
+        );
+        // A resize the picture fits: the flag falls at once; a tick after
+        // it says nothing and its `caches` is clear.
+        session
+            .core
+            .resize_display_cache(&mut session.core.lock_inner(), 64 * 1024 * 1024);
+        assert_eq!(flags(&session), (false, false), "re-judged at the resize");
+        tick("r", "1.95");
+        let got = texts(&drain(&mut rx));
+        assert!(of_kind(&got, "notice").is_empty(), "{got:?}");
+        assert_eq!(
+            of_kind(&got, "caches")[0]["payload"]["display"]["over_budget"],
+            false,
+            "fits now: {got:?}"
+        );
+        // A resize below the picture raises the flag AT THE RESIZE (its own
+        // `caches` turns the indicator); the ticks after it are over a
+        // standing flag again and say nothing.
+        session
+            .core
+            .resize_display_cache(&mut session.core.lock_inner(), 250 * 1024);
+        assert_eq!(flags(&session), (true, false), "raised by the resize");
+        for value in ["1.4", "1.5", "1.6"] {
+            tick("r", value);
+        }
+        let got = texts(&drain(&mut rx));
+        assert!(
+            of_kind(&got, "notice").is_empty(),
+            "the flag stood since the resize: {got:?}"
+        );
+        assert_eq!(of_kind(&got, "caches").len(), 3);
+        assert!(
+            of_kind(&got, "caches")
+                .iter()
+                .all(|c| c["payload"]["display"]["over_budget"] == true),
+            "{got:?}"
+        );
+    }
+
+    /// A flag RISING in a preview tick's pass is announced — once, by the
+    /// tick that raised it; the ticks after it, over the now-standing flag,
+    /// say nothing. One fine sphere that never changes and one the slider
+    /// moves, in a 200 KiB cache that holds one fine mesh: the first tick's
+    /// preview mesh evicts the fine mesh the previous generation displayed
+    /// (`thrash` rises — the notice names the eviction), the next ticks'
+    /// meshes fit beside each other (it falls; `over_budget` stands
+    /// throughout, unchanged).
+    #[test]
+    fn a_flag_rising_on_a_tick_is_announced_by_that_tick_alone() {
+        let (_dir, mut config) = project(
+            "# cicada 1\n\
+             still = sphere(radius=1.0)\n\
+             r = slider(value=1.2, min=0.5, max=2.0)\n\
+             ball = sphere(radius=r)\n",
+        );
+        config.solid_cache_bytes = 200 * 1024;
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        let _ = drain(&mut rx);
+        let state = session.debug_state(false);
+        assert_eq!(state["caches"]["display"]["over_budget"], true);
+        assert_eq!(state["caches"]["display"]["thrash"], false);
+        assert_eq!(
+            state["display_cache"]["entries"], 1,
+            "the cache holds one fine mesh: {}",
+            state["display_cache"]
+        );
+        let mut tick = |value: &str| {
+            session.handle(
+                id,
+                None,
+                ClientMessage::ParamPreview {
+                    node: "r".into(),
+                    port: Some("value".into()),
+                    value: value.into(),
+                },
+            );
+            session.wait_idle();
+            texts(&drain(&mut rx))
+        };
+        let got = tick("1.3");
+        let notices = of_kind(&got, "notice");
+        assert_eq!(notices.len(), 1, "the tick that raised thrash: {got:?}");
+        let message = notices[0]["payload"]["message"].as_str().unwrap();
+        assert!(message.contains("evicted 1 of the meshes"), "{message}");
+        assert!(message.contains("raise the display cache"), "{message}");
+        let caches = of_kind(&got, "caches");
+        assert_eq!(caches[0]["payload"]["display"]["thrash"], true, "{got:?}");
+        assert_eq!(caches[0]["payload"]["display"]["over_budget"], true);
+        for value in ["1.4", "1.5"] {
+            let got = tick(value);
+            assert!(
+                of_kind(&got, "notice").is_empty(),
+                "r = {value}: over a standing flag: {got:?}"
+            );
+            let caches = of_kind(&got, "caches");
+            assert_eq!(caches[0]["payload"]["display"]["thrash"], false, "{got:?}");
+            assert_eq!(caches[0]["payload"]["display"]["over_budget"], true);
+        }
+    }
+
+    /// A stable output beside a changing one, in a cache too small for
+    /// every value set the changing one has had: the stable output's
+    /// meshes — on screen, never looked up again once displayed — are the
+    /// picture, and the watch keeps them the newest thing in the cache, so
+    /// the past value sets nobody draws go first and `thrash` stays false
+    /// while the picture fits (under plain recency the stable output's
+    /// meshes were the OLDEST and left first, and the pass called a
+    /// fitting picture thrash and prescribed a bigger cache — review
+    /// finding 2026-08-25).
+    #[test]
+    fn a_stable_output_beside_a_changing_one_is_not_thrash_while_the_picture_fits() {
+        let (_dir, mut config) = project(
+            "# cicada 1\n\
+             still = sphere(radius=1.0)\n\
+             r = slider(value=1.2, min=0.5, max=3.0)\n\
+             moving = sphere(radius=r)\n",
+        );
+        // Holds a few fine spheres (one is 150–300 KiB), not the six this
+        // test draws.
+        config.solid_cache_bytes = 600 * 1024;
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        let _ = drain(&mut rx);
+        let first = session.debug_state(false);
+        let still_generation = first["display"]["still.out"]["generation"].clone();
+        let still_solids: Vec<ValueHash> = {
+            let inner = session.core.lock_inner();
+            inner
+                .display
+                .iter()
+                .find(|((node_ref, _), _)| inner.refs.name_of(*node_ref) == Some("still"))
+                .map(|(_, d)| d.solids.iter().map(|(hash, _)| *hash).collect())
+                .unwrap()
+        };
+        assert_eq!(still_solids.len(), 1);
+        let fine = DisplayTier::Fine.deflection(&session.core.config.project);
+        let still_key = display::TessellationKey::new(still_solids[0], fine);
+        assert!(session.core.solids.contains(still_key));
+        for value in ["1.4", "1.6", "1.8", "2.0", "2.2"] {
+            session.handle(
+                id,
+                Some(value.into()),
+                ClientMessage::SetParam {
+                    node: "r".into(),
+                    port: Some("value".into()),
+                    value: value.into(),
+                },
+            );
+            session.wait_idle();
+            let got = texts(&drain(&mut rx));
+            assert!(of_kind(&got, "notice").is_empty(), "r = {value}: {got:?}");
+            let caches = of_kind(&got, "caches");
+            assert_eq!(caches.len(), 1, "r = {value}: {got:?}");
+            assert_eq!(
+                caches[0]["payload"]["display"]["thrash"], false,
+                "r = {value}: a fitting picture is not thrash: {}",
+                caches[0]
+            );
+            assert_eq!(caches[0]["payload"]["display"]["over_budget"], false);
+            assert!(
+                session.core.solids.contains(still_key),
+                "r = {value}: the stable output's mesh outlives the garbage"
+            );
+        }
+        let state = session.debug_state(false);
+        assert!(
+            state["display_cache"]["evictions"].as_u64().unwrap() > 0,
+            "the scenario bit — past value sets were evicted: {}",
+            state["display_cache"]
+        );
+        assert_eq!(
+            state["display"]["still.out"]["generation"], still_generation,
+            "never redrawn"
+        );
+    }
+
+    /// The encode under the session lock never tessellates (docs/12
+    /// §Display): the warm-up pins the drawn tier's meshes — fetched through
+    /// the cache on the pool even when the verdict comes from the memo (a
+    /// memo hit used to skip the warm-up, and an undo to a remembered value
+    /// set whose meshes had been evicted re-tessellated all of them under
+    /// the lock), and held however the cache evicts meanwhile (a working
+    /// set larger than the budget evicts the warm-up's own first entries
+    /// before the encode reads them — the cascade). The oracle: the cache's
+    /// miss count does not move between the end of the warm-up (the pass
+    /// parked on the hold) and the end of the pass.
+    #[test]
+    #[allow(clippy::too_many_lines)] // two scenarios, one oracle: the miss count across the hold
+    fn the_encode_never_tessellates_a_remembered_verdict_warms_and_a_cascade_is_pinned() {
+        // (a) the remembered verdict: a cache that holds one fine sphere.
+        let (_dir, mut config) = project(
+            "# cicada 1\n\
+             r = slider(value=1.0, min=0.5, max=2.0)\n\
+             ball = sphere(radius=r)\n",
+        );
+        config.solid_cache_bytes = 300 * 1024;
+        let hold = PassHold::new();
+        config.display_hold = Some(hold.seam());
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        let _ = drain(&mut rx);
+        let misses = || {
+            session.debug_state(false)["display_cache"]["misses"]
+                .as_u64()
+                .unwrap()
+        };
+        assert_eq!(misses(), 1, "the first paint");
+        hold.arm(1);
+        session.handle(
+            id,
+            Some("b".into()),
+            ClientMessage::SetParam {
+                node: "r".into(),
+                port: Some("value".into()),
+                value: "1.5".into(),
+            },
+        );
+        let _ = hold.parked();
+        assert_eq!(misses(), 2, "the warm-up meshed the new sphere");
+        hold.release();
+        session.wait_idle();
+        assert_eq!(misses(), 2, "the encode hit the pin");
+        let got = texts(&drain(&mut rx));
+        assert_eq!(of_kind(&got, "display_end")[0]["payload"]["outputs"], 1);
+        assert_eq!(
+            session.debug_state(false)["display_cache"]["entries"],
+            1,
+            "the first sphere's mesh was evicted; its verdict is remembered"
+        );
+        // Undo to the remembered value: the verdict is a memo hit, the mesh
+        // is gone — the WARM-UP re-tessellates it on the pool (the miss is
+        // counted while the pass is parked), the encode tessellates nothing.
+        hold.arm(1);
+        session.handle(id, Some("undo".into()), ClientMessage::Undo {});
+        let parked = hold.parked();
+        assert_eq!(misses(), 3, "the remembered verdict still warmed the cache");
+        hold.release();
+        session.wait_idle();
+        assert_eq!(misses(), 3, "the encode tessellated nothing");
+        let got = texts(&drain(&mut rx));
+        let end = of_kind(&got, "display_end");
+        assert_eq!(end[0]["payload"]["generation"], parked);
+        assert_eq!(end[0]["payload"]["outputs"], 1, "{}", end[0]);
+        assert!(end[0]["payload"]["frames"].as_u64().unwrap() >= 1);
+        assert_eq!(
+            session.debug_state(false)["display"]["ball.out"]["generation"],
+            parked
+        );
+
+        // (b) the cascade: two spheres in a cache that holds one — the
+        // warm-up's second insert evicts its first; the encode still draws
+        // both from the pin and misses nothing.
+        let (_dir, mut config) = project(
+            "# cicada 1\n\
+             k = slider(value=1.0, min=0.5, max=2.0)\n\
+             kb = k * 1.5\n\
+             a = sphere(radius=k)\n\
+             b = sphere(radius=kb)\n",
+        );
+        config.solid_cache_bytes = 300 * 1024;
+        let hold = PassHold::new();
+        config.display_hold = Some(hold.seam());
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        let _ = drain(&mut rx);
+        let misses = || {
+            session.debug_state(false)["display_cache"]["misses"]
+                .as_u64()
+                .unwrap()
+        };
+        let before = misses();
+        hold.arm(2);
+        session.handle(
+            id,
+            Some("k".into()),
+            ClientMessage::SetParam {
+                node: "k".into(),
+                port: Some("value".into()),
+                value: "1.2".into(),
+            },
+        );
+        let parked = hold.parked();
+        assert_eq!(
+            misses(),
+            before + 2,
+            "both new spheres meshed in the warm-up"
+        );
+        assert_eq!(
+            session.debug_state(false)["display_cache"]["entries"],
+            1,
+            "the cache holds one: the second evicted the first"
+        );
+        hold.release();
+        session.wait_idle();
+        assert_eq!(
+            misses(),
+            before + 2,
+            "the encode drew the evicted one from the pin"
+        );
+        let got = texts(&drain(&mut rx));
+        let end = of_kind(&got, "display_end");
+        assert_eq!(end[0]["payload"]["generation"], parked);
+        assert_eq!(end[0]["payload"]["outputs"], 2, "{}", end[0]);
+        let state = session.debug_state(false);
+        for name in ["a.out", "b.out"] {
+            assert_eq!(state["display"][name]["generation"], parked, "{name}");
+            assert_eq!(state["display"][name]["stats"]["solids"], 1, "{name}");
+        }
+    }
+
+    /// The verdict memo forgets in halves, not all at once: a verdict asked
+    /// for along the way survives every turnover (the on-screen outputs'),
+    /// one never asked for again is gone, and the memo stays bounded.
+    #[test]
+    fn the_verdict_memo_keeps_what_is_asked_for_across_its_turnover() {
+        let mut memo = VerdictMemo::default();
+        let verdict = |n: u64| display::BudgetStats {
+            limit: n,
+            requested: DisplayTier::Fine,
+            drawn: DisplayTier::Fine,
+            triangles: n,
+            over_budget: false,
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let key = |n: u64| {
+            (
+                HashedValue::new(ValueData::Number(n as f64))
+                    .unwrap()
+                    .hash(),
+                DisplayTier::Fine,
+            )
+        };
+        let kept = key(0);
+        memo.insert(kept, verdict(0));
+        let stale = key(1);
+        memo.insert(stale, verdict(1));
+        for n in 2..=(VERDICTS_KEPT as u64 + 2) {
+            memo.insert(key(n), verdict(n));
+            if n % 4096 == 0 {
+                assert_eq!(memo.get(&kept), Some(verdict(0)), "asked for at {n}");
+            }
+            assert!(
+                memo.len() <= VERDICTS_KEPT,
+                "bounded at {n}: {}",
+                memo.len()
+            );
+        }
+        assert_eq!(
+            memo.get(&kept),
+            Some(verdict(0)),
+            "kept across two turnovers"
+        );
+        assert_eq!(memo.get(&stale), None, "never asked for again: forgotten");
+        assert_eq!(
+            memo.get(&key(VERDICTS_KEPT as u64 + 2)),
+            Some(verdict(VERDICTS_KEPT as u64 + 2))
         );
     }
 
@@ -9995,7 +10742,11 @@ size = slider(value=4.0, min=0.5, max=5.0)
             assert_eq!(got[0]["payload"]["kind"], "invalid", "{got:?}");
             assert_eq!(got[0]["payload"]["intent_id"], format!("bad-{mib}"));
             let message = got[0]["payload"]["message"].as_str().unwrap();
-            assert!(message.contains("64 ..= 65536 MiB"), "{message}");
+            assert!(
+                message.contains("between 64 MiB and 65536 MiB"),
+                "English, not a Rust range: {message}"
+            );
+            assert!(message.contains(&format!("asked for {mib}")), "{message}");
         }
         assert_eq!(
             session.debug_state(false)["display_cache"]["budget"],
@@ -10034,44 +10785,82 @@ size = slider(value=4.0, min=0.5, max=5.0)
     }
 
     /// A hold a test parks a display pass on (the `display_hold` seam):
-    /// armed once, it reports the generation it holds after its first
-    /// output's verdict and blocks — off the session lock — until released.
-    fn pass_hold() -> (
-        Arc<AtomicBool>,
-        std::sync::mpsc::Receiver<u64>,
-        std::sync::mpsc::Sender<()>,
-        DisplayHold,
-    ) {
-        let armed = Arc::new(AtomicBool::new(false));
-        let (held_tx, held_rx) = std::sync::mpsc::channel();
-        let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
-        let go_rx = Mutex::new(go_rx);
-        let flag = Arc::clone(&armed);
-        let hold: DisplayHold = Arc::new(move |generation, done| {
-            if done == 1 && flag.swap(false, Ordering::SeqCst) {
-                let _ = held_tx.send(generation);
-                // A deadline, never a pass condition.
-                let _ = go_rx
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .recv_timeout(Duration::from_secs(30));
-            }
-        });
-        (armed, held_rx, go_tx, hold)
+    /// armed once for a chosen output count (`arm(n)`: after the n-th
+    /// pending output's verdict — `n` = the pass's output count parks it
+    /// after its last verdict, before the encode), it reports the
+    /// generation it holds and blocks — off the session lock — until
+    /// released.
+    struct PassHold {
+        armed: Arc<std::sync::atomic::AtomicUsize>,
+        held: std::sync::mpsc::Receiver<u64>,
+        go: std::sync::mpsc::Sender<()>,
+        seam: DisplayHold,
     }
 
-    /// The display lifecycle and latest-wins (docs/13 §The display edge).
-    /// A plain generation: `display_begin` (the control lane) precedes its
-    /// first frame, `display_end` (the display lane) follows its last —
-    /// with the outputs, frames, bytes and the two phases' times — and
-    /// `caches` follows. Then a pass parked between its two outputs: a
-    /// preview tick arrives (the lock is free), the pass resumes, sees the
-    /// newer job waiting and stops — `display_end {cancelled: true}`, no
-    /// frame of it reaches the client — and the newer generation paints
-    /// both outputs; the client sees the newest state and never a queue.
+    impl PassHold {
+        fn new() -> Self {
+            let armed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let (held_tx, held) = std::sync::mpsc::channel();
+            let (go, go_rx) = std::sync::mpsc::channel::<()>();
+            let go_rx = Mutex::new(go_rx);
+            let at = Arc::clone(&armed);
+            let seam: DisplayHold = Arc::new(move |generation, done| {
+                if done == at.load(Ordering::SeqCst) && at.swap(0, Ordering::SeqCst) != 0 {
+                    let _ = held_tx.send(generation);
+                    // A deadline, never a pass condition.
+                    let _ = go_rx
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .recv_timeout(Duration::from_secs(30));
+                }
+            });
+            Self {
+                armed,
+                held,
+                go,
+                seam,
+            }
+        }
+
+        fn seam(&self) -> DisplayHold {
+            Arc::clone(&self.seam)
+        }
+
+        /// Park the next pass after its `at`-th output's verdict.
+        fn arm(&self, at: usize) {
+            assert!(at > 0);
+            self.armed.store(at, Ordering::SeqCst);
+        }
+
+        /// The parked generation (a deadline, never a pass condition).
+        fn parked(&self) -> u64 {
+            self.held
+                .recv_timeout(Duration::from_secs(30))
+                .expect("the pass reaches its hold")
+        }
+
+        fn release(&self) {
+            self.go.send(()).unwrap();
+        }
+    }
+
+    /// The display lifecycle (docs/13 §The display edge). A plain
+    /// generation: `display_begin` (the control lane) precedes its first
+    /// frame, `display_end` (the display lane) follows its last — with the
+    /// outputs, frames, bytes and the two phases' times. (`caches` and the
+    /// notice ride the control lane and may reach a real socket before
+    /// `display_end`; their order is not asserted.) Then a pass parked
+    /// between its two outputs — `display_begin` already on the wire, no
+    /// frame yet: the begin precedes the tessellation — and a preview tick
+    /// arriving while it is parked (the lock is free): the tick WAITS for
+    /// the pass as it waits for the solve, the pass paints both outputs,
+    /// then the tick's generation paints both again at preview — the
+    /// client sees every completed generation, in order, and the drag
+    /// paints while it moves (review finding 2026-08-25: a pending tick
+    /// used to cut every pass before its first frame).
     #[test]
-    #[allow(clippy::too_many_lines)] // one story: a plain pass in order, then a parked pass cut by a tick
-    fn the_display_pass_is_bracketed_and_a_superseded_pass_stops() {
+    #[allow(clippy::too_many_lines)] // one story: a plain pass in order, then a parked pass a tick waits for
+    fn the_display_pass_is_bracketed_and_a_tick_waits_for_a_parked_pass() {
         let (_dir, mut config) = project(
             "# cicada 1\n\
              size = slider(value=2.0, min=0.5, max=5.0)\n\
@@ -10079,8 +10868,8 @@ size = slider(value=4.0, min=0.5, max=5.0)
              block = box(x=span, y=span, z=span)\n\
              ball = sphere(radius=size)\n",
         );
-        let (armed, parked_rx, go, seam) = pass_hold();
-        config.display_hold = Some(seam);
+        let hold = PassHold::new();
+        config.display_hold = Some(hold.seam());
         let session = Session::open(config).unwrap();
         session.wait_idle();
         let (tx, mut rx) = unbounded_channel();
@@ -10125,7 +10914,6 @@ size = slider(value=4.0, min=0.5, max=5.0)
             last_frame < at("display_end"),
             "end after the last frame: {kinds:?}"
         );
-        assert!(at("display_end") < at("caches"), "{kinds:?}");
         let msgs = texts(&got);
         let begin = of_kind(&msgs, "display_begin");
         let end = of_kind(&msgs, "display_end");
@@ -10150,8 +10938,8 @@ size = slider(value=4.0, min=0.5, max=5.0)
         for frame in frames(&got) {
             assert_eq!(frame.header().generation, generation);
         }
-        // ---- latest-wins: park the next pass after its first output.
-        armed.store(true, Ordering::SeqCst);
+        // ---- a tick waits: park the next pass after its first output.
+        hold.arm(1);
         session.handle(
             id,
             Some("b".into()),
@@ -10161,59 +10949,280 @@ size = slider(value=4.0, min=0.5, max=5.0)
                 value: "3.0".into(),
             },
         );
-        let parked = parked_rx
-            .recv_timeout(Duration::from_secs(30))
-            .expect("the structural pass reaches its hold");
+        let parked = hold.parked();
+        // `display_begin` went out BEFORE the tessellation: it is on the
+        // wire while the pass is parked in its warm-up, and no frame of the
+        // generation is (the ordering the spinner rests on; a begin after
+        // the warm-up passed every other assertion here — review finding
+        // 2026-08-25).
+        let while_parked = drain(&mut rx);
+        let parked_msgs = texts(&while_parked);
+        let begins = of_kind(&parked_msgs, "display_begin");
+        assert_eq!(begins.len(), 1, "{parked_msgs:?}");
+        assert_eq!(begins[0]["payload"]["generation"], parked);
+        assert_eq!(begins[0]["payload"]["outputs"], 2);
+        assert!(frames(&while_parked).is_empty(), "nothing encoded yet");
+        assert!(of_kind(&parked_msgs, "display_end").is_empty());
         // The lock is free while the pass is parked: a tick lands and is
-        // queued on the loop behind this generation.
+        // queued on the loop behind this generation — and WAITS for the
+        // pass, as it waits for the solve: a pending tick is no supersession.
         preview(&session, id, "3.5");
         assert!(session.solve.is_busy(), "the tick waits on the parked pass");
-        go.send(()).unwrap();
+        assert_eq!(
+            session.solve.superseded(),
+            None,
+            "a pending tick does not supersede the pass"
+        );
+        hold.release();
         session.wait_idle();
         let got = drain(&mut rx);
         let msgs = texts(&got);
         let ends = of_kind(&msgs, "display_end");
-        assert_eq!(ends.len(), 2, "the cut pass and the tick's: {msgs:?}");
-        let cut = ends
+        assert_eq!(ends.len(), 2, "the parked pass's and the tick's: {msgs:?}");
+        let first = ends
             .iter()
             .find(|e| e["payload"]["generation"] == parked)
             .expect("the parked generation ended");
-        assert_eq!(cut["payload"]["cancelled"], true, "{cut}");
-        assert_eq!(
-            cut["payload"]["outputs"], 0,
-            "nothing of it was sent: {cut}"
+        assert!(
+            first["payload"].get("cancelled").is_none(),
+            "the parked pass ran to completion: {first}"
         );
-        let newer = ends
+        assert_eq!(first["payload"]["outputs"], 2, "it painted both: {first}");
+        let tick = ends
             .iter()
             .find(|e| e["payload"]["generation"] != parked)
             .unwrap();
-        let newer_generation = newer["payload"]["generation"].as_u64().unwrap();
-        assert!(newer_generation > parked);
+        let tick_generation = tick["payload"]["generation"].as_u64().unwrap();
+        assert!(tick_generation > parked);
         assert_eq!(
-            newer["payload"]["outputs"], 2,
-            "the tick painted both: {newer}"
+            tick["payload"]["outputs"], 2,
+            "the tick painted both at preview: {tick}"
         );
-        assert!(newer["payload"].get("cancelled").is_none());
+        assert!(tick["payload"].get("cancelled").is_none());
         let sent = frames(&got);
-        assert!(!sent.is_empty());
+        let of_parked = sent
+            .iter()
+            .filter(|f| f.header().generation == parked)
+            .count();
+        let of_tick = sent
+            .iter()
+            .filter(|f| f.header().generation == tick_generation)
+            .count();
         assert!(
-            sent.iter()
-                .all(|f| f.header().generation == newer_generation),
-            "no frame of the cut generation reached the client"
+            of_parked > 0 && of_tick > 0,
+            "both generations reached the client: {of_parked} / {of_tick}"
         );
+        assert_eq!(of_parked + of_tick, sent.len(), "and nothing else");
+        let last_parked = sent
+            .iter()
+            .rposition(|f| f.header().generation == parked)
+            .unwrap();
+        let first_tick = sent
+            .iter()
+            .position(|f| f.header().generation == tick_generation)
+            .unwrap();
+        assert!(last_parked < first_tick, "in order: the parked pass first");
         let state = session.debug_state(false);
         for name in ["block.out", "ball.out"] {
             assert_eq!(
-                state["display"][name]["generation"], newer_generation,
+                state["display"][name]["generation"], tick_generation,
                 "{name}"
             );
             assert_eq!(state["display"][name]["stats"]["tier"], "preview", "{name}");
         }
-        // The cut generation's timing records its phases too.
+        assert_eq!(state["summary"]["cancelled"], false);
+        // The parked generation's timing records its phases and its frames.
         let timings = state["timings"].as_array().unwrap();
-        let cut_timing = timings.iter().find(|t| t["generation"] == parked).unwrap();
-        assert!(cut_timing["tessellate_ms"].as_f64().unwrap() >= 0.0);
-        assert_eq!(cut_timing["frame_bytes"], 0);
+        let parked_timing = timings.iter().find(|t| t["generation"] == parked).unwrap();
+        assert!(parked_timing["tessellate_ms"].as_f64().unwrap() >= 0.0);
+        assert!(parked_timing["frame_bytes"].as_u64().unwrap() > 0);
+        assert_eq!(parked_timing["cancelled"], false);
+    }
+
+    /// Latest-wins for the display edge (docs/13 §The display edge): what
+    /// DOES cut a pass. (a) An EDIT landing while the pass is parked in its
+    /// warm-up becomes the pending structural job; the pass resumes, sees it
+    /// and stops — `display_end {cancelled: true, cut_by: "edit", outputs:
+    /// 0}`, no frame of it — and the edit's generation paints both outputs;
+    /// the generation is not reported cancelled (the edit follows at once).
+    /// (b) The same edit landing after the LAST verdict — the pass parked
+    /// before its encode — is seen by the encode's own check: the same
+    /// end, nothing sent (each of the two documented check sites pinned on
+    /// its own). (c) Esc while parked: `cut_by: "esc"`, the generation IS
+    /// reported cancelled (the chip's `cancelled gen N`, the timing, a
+    /// `cancel_to_idle_ms`), the outputs the pass did not reach keep the
+    /// previous generation's picture — the loop idle, nothing further on
+    /// the wire — and the next edit repaints them.
+    #[test]
+    #[allow(clippy::too_many_lines)] // three cuts of one parked pass, each pinned where it happens
+    fn an_edit_or_esc_cuts_a_parked_pass_where_it_is_seen() {
+        let (_dir, mut config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n\
+             ball = sphere(radius=size)\n",
+        );
+        let hold = PassHold::new();
+        config.display_hold = Some(hold.seam());
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        let _ = drain(&mut rx);
+        let set = |value: &str, label: &str| {
+            session.handle(
+                id,
+                Some(label.into()),
+                ClientMessage::SetParam {
+                    node: "size".into(),
+                    port: Some("value".into()),
+                    value: value.into(),
+                },
+            );
+        };
+        let mut cut_by_edit = |at: usize, value: &str, edit: &str| {
+            hold.arm(at);
+            set(value, "parked");
+            let parked = hold.parked();
+            // The edit: through the debounce it becomes the pending
+            // structural job — wait for the loop to hold it.
+            set(edit, "edit");
+            wait_until(
+                "the edit to be pending on the loop",
+                Duration::from_secs(30),
+                || session.solve.superseded() == Some(Superseded::Edit),
+                || hold.release(),
+            );
+            hold.release();
+            session.wait_idle();
+            let got = drain(&mut rx);
+            let msgs = texts(&got);
+            let ends = of_kind(&msgs, "display_end");
+            assert_eq!(ends.len(), 2, "the cut pass's and the edit's: {msgs:?}");
+            let cut = ends
+                .iter()
+                .find(|e| e["payload"]["generation"] == parked)
+                .expect("the parked generation ended");
+            assert_eq!(cut["payload"]["cancelled"], true, "{cut}");
+            assert_eq!(cut["payload"]["cut_by"], "edit", "{cut}");
+            assert_eq!(
+                cut["payload"]["outputs"], 0,
+                "nothing of it was sent: {cut}"
+            );
+            assert_eq!(cut["payload"]["frames"], 0);
+            let newer = ends
+                .iter()
+                .find(|e| e["payload"]["generation"] != parked)
+                .unwrap();
+            let newer_generation = newer["payload"]["generation"].as_u64().unwrap();
+            assert!(newer_generation > parked);
+            assert_eq!(
+                newer["payload"]["outputs"], 2,
+                "the edit painted both: {newer}"
+            );
+            assert!(newer["payload"].get("cancelled").is_none());
+            assert!(newer["payload"].get("cut_by").is_none());
+            let sent_frames = frames(&got);
+            assert!(!sent_frames.is_empty());
+            assert!(
+                sent_frames
+                    .iter()
+                    .all(|f| f.header().generation == newer_generation),
+                "no frame of the cut generation reached the client"
+            );
+            let state = session.debug_state(false);
+            for name in ["block.out", "ball.out"] {
+                assert_eq!(
+                    state["display"][name]["generation"], newer_generation,
+                    "{name}"
+                );
+                assert_eq!(state["display"][name]["stats"]["tier"], "fine", "{name}");
+            }
+            assert_eq!(
+                state["summary"]["cancelled"], false,
+                "an edit is no cancellation"
+            );
+            let timings = state["timings"].as_array().unwrap();
+            let cut_timing = timings.iter().find(|t| t["generation"] == parked).unwrap();
+            assert_eq!(cut_timing["frame_bytes"], 0);
+            assert_eq!(cut_timing["cancelled"], false);
+            assert!(cut_timing.get("cancel_to_idle_ms").is_none());
+            newer_generation
+        };
+        // (a) seen in the warm-up, between the two outputs.
+        cut_by_edit(1, "2.5", "3.0");
+        // (b) seen in the encode: parked after the last verdict.
+        let on_screen = cut_by_edit(2, "3.5", "4.0");
+
+        // (c) Esc while parked.
+        hold.arm(1);
+        set("4.5", "parked");
+        let parked = hold.parked();
+        session.handle(id, Some("esc".into()), ClientMessage::Cancel {});
+        assert_eq!(session.solve.superseded(), Some(Superseded::Esc));
+        hold.release();
+        session.wait_idle();
+        let got = drain(&mut rx);
+        let msgs = texts(&got);
+        let ends = of_kind(&msgs, "display_end");
+        assert_eq!(ends.len(), 1, "{msgs:?}");
+        assert_eq!(ends[0]["payload"]["generation"], parked);
+        assert_eq!(ends[0]["payload"]["cancelled"], true);
+        assert_eq!(ends[0]["payload"]["cut_by"], "esc", "{}", ends[0]);
+        assert_eq!(ends[0]["payload"]["outputs"], 0);
+        assert!(
+            frames(&got).is_empty(),
+            "no frame of the cancelled generation"
+        );
+        assert!(
+            !session.solve.is_busy(),
+            "idle: nothing resubmits on its own"
+        );
+        let state = session.debug_state(false);
+        // Every layer agrees: the generation is cancelled — the summary the
+        // chip reads, the timing with its cancel-to-idle — and the picture
+        // is the previous generation's.
+        assert_eq!(state["summary"]["generation"], parked);
+        assert_eq!(state["summary"]["cancelled"], true, "{}", state["summary"]);
+        assert_eq!(state["summary"]["running"], false);
+        assert!(
+            state["text"].as_str().unwrap().contains("value=4.5"),
+            "the edit itself stands"
+        );
+        for name in ["block.out", "ball.out"] {
+            assert_eq!(
+                state["display"][name]["generation"], on_screen,
+                "{name} keeps the previous picture"
+            );
+        }
+        let timings = state["timings"].as_array().unwrap();
+        let esc_timing = timings.iter().find(|t| t["generation"] == parked).unwrap();
+        assert_eq!(esc_timing["cancelled"], true, "{esc_timing}");
+        assert!(esc_timing["cancel_to_idle_ms"].is_number(), "{esc_timing}");
+        assert_eq!(esc_timing["frame_bytes"], 0);
+        let statuses = of_kind(&msgs, "status");
+        assert!(
+            statuses
+                .last()
+                .is_some_and(|s| s["payload"]["summary"]["cancelled"] == true),
+            "the last status says cancelled: {statuses:?}"
+        );
+        // The next edit repaints both.
+        set("5.0", "after");
+        session.wait_idle();
+        let got = drain(&mut rx);
+        let msgs = texts(&got);
+        let ends = of_kind(&msgs, "display_end");
+        assert_eq!(ends.len(), 1);
+        assert_eq!(ends[0]["payload"]["outputs"], 2, "{}", ends[0]);
+        let state = session.debug_state(false);
+        assert_eq!(state["summary"]["cancelled"], false);
+        let repainted = ends[0]["payload"]["generation"].as_u64().unwrap();
+        assert!(repainted > parked);
+        for name in ["block.out", "ball.out"] {
+            assert_eq!(state["display"][name]["generation"], repainted, "{name}");
+        }
     }
 
     #[test]

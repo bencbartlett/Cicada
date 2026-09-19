@@ -2389,6 +2389,55 @@ proves wrong is revised here, dated, in the landing commit.
   session's unit tests lower `solid_cache_bytes` to 100 KiB / 300 KiB to
   make both flags bite. Not in D1: the notice's numbers in the indicator's
   breakdown are the view's, not the notice's (P1 gets the profile).
+
+  *Fix round 2026-08-25 (the adversarial review's twelve confirmed
+  findings; docs/12 §Display, docs/13 §The display edge and DECISIONS.md
+  row 2026-08-25 revised in the same commits).* **Deviation (3) revised:
+  a pending PREVIEW or TRANSPORT tick never cuts a pass** — only a
+  pending STRUCTURAL job (an edit) or Esc does (`SolveLoop::superseded`
+  → `Option<Superseded>`, mirroring `submit`'s rule for the solve). The
+  first build cut a pass whenever any job was pending, so a drag or a
+  playback whose pass outlasted a tick (~16 ms) cut every pass before its
+  first frame and the viewport painted NOTHING until the input stopped
+  (three lenses, one root: 240 ticks, 73 passes, 0 frames on the 140-
+  sphere ring; main painted 110). **Deviation (4) completed: Esc during
+  a pass reports the generation cancelled** (`summary.cancelled`,
+  `timings[].cancelled` + `cancel_to_idle_ms`, the chip's `cancelled gen
+  N`) and `display_end` says what cut it — `cut_by: "edit" | "esc"` —
+  since the two are not one situation: an edit's generation redraws what
+  the pass did not reach, Esc schedules nothing and the outputs it did
+  not reach keep the previous generation's picture until the next edit
+  (the document and the picture disagree by one generation, said so
+  everywhere — the alternative, a zero-solve repaint when idle, would
+  make Esc a delay rather than a stop). **The encode never tessellates:**
+  the warm-up PINS the drawn tier's meshes for the encode
+  (`display::Chosen`, `DisplayContext::pinned`) and a memo-hit verdict
+  still fetches them through the cache on the pool (`fetch_meshes`) —
+  before, an undo to a remembered value set whose meshes had been evicted
+  re-tessellated all of them serially under the session lock (17 s for
+  400 spheres in a 64 MiB cache, every intent and Esc waiting), and a
+  working set larger than the budget cascaded (the warm-up's own first
+  entries evicted before the encode read them). **The notice is raised
+  on a flag's rising edge and per structural redraw over a standing
+  flag**, never per tick (45 ticks had raised 45 identical warnings);
+  **`set_display_cache` re-arms the thrash watch** on the surviving
+  picture (a shrink's evictions were reported as the next generation's
+  thrash); **the watch touches the picture's entries** (a stable output's
+  meshes, never looked up again once displayed, were the LRU and left
+  before any garbage — a fitting picture read as thrash); **the verdict
+  memo forgets in halves** (`VerdictMemo`), not all at once at the cap;
+  **`DiskStore::value_bytes` has its store test** (loose blob + pack, the
+  cold walk, a quarantine) and the session test compares `memo.bytes` to
+  the files' sizes; the refusal reads "between 64 MiB and 65536 MiB
+  (asked for 10)"; the lifecycle test pins `display_begin` on the wire
+  while the pass is parked in its warm-up (a begin after the tessellation
+  had passed every assertion) and no longer pins `display_end < caches`
+  (control-lane texts may precede it on a real socket). Not changed: the
+  cut is still between OUTPUTS — one heavy output's tally runs to its
+  end before Esc lands (docs/17 §Follow-ups: the costed cancellable
+  display edge); `DisplayStats.budget.over_budget` keeps the contract's
+  name (the triangle budget's flag; the `caches` view's `over_budget` is
+  the cache's).
 - **P1 — the profiler.**
   - **Server.** A read intent `profile {generation?}` (any client) →
     `profile_view {generation, kind, phases: {queued_ms, solve_ms,

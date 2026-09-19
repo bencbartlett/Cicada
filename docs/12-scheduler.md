@@ -258,9 +258,16 @@ sets did not fit a 256 MiB cache).
   output, not the tier the generation asks for, so a structural
   generation over an unchanged over-budget output — on screen at preview,
   chosen preview again — re-sends nothing and tessellates nothing (the
-  verdict comes from the memo). U30's 1,000 spheres drop to 866,000
-  triangles, 17 MB and 9× less tessellation; two value sets of them are
-  2 × 21 MB and fit the cache, so the undo/redo thrash goes with it.
+  verdict comes from the memo, which is bounded at `VERDICTS_KEPT` =
+  65,536 verdicts in two halves — a verdict asked for since the last
+  turnover survives it, what nobody asked for in half a memo's worth of
+  new verdicts, a drag's per-tick hashes, is forgotten; a clear-all at
+  the cap re-paid the fine tally of every unchanged over-budget output
+  on the next structural generation). Projected, not measured (the
+  measured runs are 140 spheres on 2–4 threads, docs/17 D1): U30's 1,000
+  spheres would drop to ~866,000 triangles, ~17 MB and ~9× less
+  tessellation; two value sets of them ~2 × 21 MB, fitting the cache, so
+  the undo/redo thrash would go with it.
 - **The cache: 1 GiB, resizable, watched.** `SOLID_CACHE_BUDGET` = 1024
   MiB (`SessionConfig::solid_cache_bytes`; `cicada serve
   --solid-cache-mib <n>`, 64..=65536, `app` passes it through). The
@@ -281,43 +288,86 @@ sets did not fit a 256 MiB cache).
   the working set is larger than the cache budget (the picture cannot all
   be held, so every redraw re-tessellates part of it — a solid larger
   than the whole budget is `oversized`: served, never kept). `thrash` = the
-  pass evicted entries the previous complete generation displayed: before
-  each pass the cache is told to **watch** the previous picture's entries
-  (`SolidCache::watch`; "used" = on screen at the end of that generation),
-  and an eviction of a watched entry during the pass — by the warm-up's
-  insertions or by the emit's — is counted (`watched_evictions`). Both
-  flags are set per pass (cleared by a pass whose picture fits and evicts
-  none of the previous one) and ride the `caches` view; when either is
-  set the pass broadcasts ONE `notice` (warning) naming the numbers and
-  the remedy ("raise the display cache in settings, or draw fewer
-  solids"). A pipeline without solids has an empty working set and never
-  raises either. `set_display_cache` re-judges `over_budget` against the
-  new budget at once; `thrash` stands until the next pass.
+  pass evicted entries the previous complete generation displayed: after
+  each pass (and after a resize) the cache is told to **watch** the
+  picture's entries (`SolidCache::watch`; "used" = on screen at the end
+  of that generation), and an eviction of a watched entry during the next
+  pass — by the warm-up's insertions or by the emit's — is counted
+  (`watched_evictions`). Watching also **touches** the picture's entries,
+  so the picture on screen is the newest thing in the cache and the
+  least-recently-used entries — past value sets nobody draws, the fine
+  meshes of an output the budget dropped to preview — go first: without
+  the touch a stable output's meshes, never looked up again once
+  displayed, were the OLDEST entries and left before any garbage, and the
+  flag called a picture that fit with room to spare thrash (fix round
+  2026-08-25). So `thrash` is exactly "the previous picture and this one
+  do not fit together". Both flags are set per pass (cleared by a pass
+  whose picture fits and evicts none of the previous one) and ride the
+  `caches` view. The **notice** (ONE `notice`, level warning, naming the
+  numbers and the remedy "raise the display cache in settings, or draw
+  fewer solids") is raised when a flag RISES in a pass, and when a
+  STRUCTURAL generation redraws part of the picture while a flag stands
+  (the user changed the picture; it still does not fit) — never on a
+  preview or transport pass over a standing flag (the first build raised
+  it on every pass whose flags were set, so a drag re-broadcast the same
+  warning at the tick rate — review finding 2026-08-25), and never on a
+  generation that drew nothing. A pipeline without solids has an empty
+  working set and never raises either. `set_display_cache` re-judges
+  `over_budget` against the new budget at once — a flag it raises rose at
+  the resize (its `caches` turns the indicator; the pass after it raises
+  no notice) — and re-arms the watch on the picture that survived the
+  resize, so the resize's own evictions are never reported as the next
+  generation's thrash; `thrash` stands until the next pass.
 - **The lifecycle and latest-wins.** A generation's display pass is
   `display_begin` (the control lane, the moment the solve finished and
   BEFORE the tessellation — the spinner starts when the work does;
   `outputs` = the pre-filter's count of outputs not on screen at the
   requested tier) → the warm-up off the session lock (load each pending
-  value, take its verdict — which IS the tessellation on the worker pool)
-  → the encode and send under the lock → `display_end` on the DISPLAY
-  lane behind the last frame (`outputs` / `frames` / `bytes` as sent,
-  `tessellate_ms` / `encode_ms`, `cancelled`) → the cache verdict, its
-  notice and `caches`. Between outputs — in the warm-up and in the encode
-  — the pass asks the solve loop whether it is **superseded** (a newer job
-  waiting, or Esc pressed: `SolveLoop::superseded`) and stops:
-  `display_end {cancelled: true}`, no further frame; the outputs it did
-  not reach keep their previous frames and table entries, so the newer
-  generation — which starts the moment the pass returns — draws them at
-  the newest state. A pass cut during its warm-up encodes nothing (its
-  tessellations stay in the cache for the newer generation). The client
-  keeps its per-output generation rule (`sceneStore`: a frame older than
-  the newest applied for its output is dropped; a restream's older
-  generations are not) — a global "older than the newest `display_begin`"
-  rule would discard the tail of a completed pass that the control lane's
-  `display_begin` overtook, or a restream interleaved with a live pass,
-  and nothing would re-send them. `/debug/state.timings` carries
-  `tessellate_ms` / `encode_ms` per generation; `/debug/state.caches` is
-  the `caches` view.
+  value, take its verdict — which IS the tessellation on the worker pool
+  — and **pin** the drawn tier's meshes for the encode) → the encode and
+  send under the lock, drawing the pinned meshes → `display_end` on the
+  DISPLAY lane behind the last frame (`outputs` / `frames` / `bytes` as
+  sent, `tessellate_ms` / `encode_ms`, `cancelled`, `cut_by`) → the cache
+  verdict, its notice and `caches` (control-lane texts, which a real
+  socket may deliver BEFORE `display_end` and the pass's frames — a
+  client reads the flags from `caches` alone). **The encode never
+  tessellates**: a verdict the memo already knew still fetches the
+  value's meshes through the cache on the worker pool (a hash lookup each
+  when warm, the kernel for an evicted one — an undo to a remembered
+  value set after a shrink, or after enough other value sets went through
+  the cache), and the pinned meshes are drawn from the pin however the
+  cache's eviction went in between (a working set larger than the budget
+  evicts the warm-up's own first entries before the encode reads them;
+  the pin ends the cascade). Both were lock-held serial kernel work
+  before the fix round of 2026-08-25 (review findings). Between outputs —
+  in the warm-up and in the encode — the pass asks the solve loop whether
+  it is **superseded** (`SolveLoop::superseded`), and the rule is the
+  solve's own: a pending STRUCTURAL job — an edit — supersedes it (the
+  pass stops, `display_end {cancelled: true, cut_by: "edit"}`, no further
+  frame; the outputs it did not reach keep their previous frames and
+  table entries, and the edit's generation, which starts the moment the
+  pass returns, draws them at the newest state), Esc supersedes it
+  (`cut_by: "esc"`: the generation is reported **cancelled** — the
+  summary, the timing with its `cancel_to_idle_ms`, the chip's `cancelled
+  gen N` — the solve finished and the memo holds its values, but its
+  picture did not land: the outputs the pass did not reach keep the
+  previous generation's picture until the next edit repaints them; Esc
+  schedules nothing), and a pending PREVIEW or TRANSPORT tick does NOT
+  supersede it — it waits for the pass as it waits for the solve
+  (latest-wins over COMPLETED generations, §Solve generations below). The
+  first D1 build cut a pass whenever ANY job was pending, so a drag or a
+  playback whose pass outlasted a tick cut every pass before its first
+  frame and painted nothing until the input stopped (review findings
+  2026-08-25, the same root under three lenses). A pass cut during its
+  warm-up encodes nothing (its tessellations stay in the cache for the
+  next generation). The client keeps its per-output generation rule
+  (`sceneStore`: a frame older than the newest applied for its output is
+  dropped; a restream's older generations are not) — a global "older than
+  the newest `display_begin`" rule would discard the tail of a completed
+  pass that the control lane's `display_begin` overtook, or a restream
+  interleaved with a live pass, and nothing would re-send them.
+  `/debug/state.timings` carries `tessellate_ms` / `encode_ms` per
+  generation; `/debug/state.caches` is the `caches` view.
 
 ## Solve generations
 
