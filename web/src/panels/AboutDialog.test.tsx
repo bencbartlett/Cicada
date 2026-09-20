@@ -6,10 +6,17 @@
  * version's release page, a click on the commit copies it (and a refused
  * clipboard says so), an engine that reported no build reads "not reported"
  * rather than an invented value, Esc / × close it, and the settings menu's
- * last entry opens it while closing the menu.
+ * last entry opens it while closing the menu. With the REAL key router on
+ * the window (App's order — the router first, the dialog's own listener
+ * after), Esc from the page behind the dialog closes it and does nothing
+ * else, Del behind it deletes nothing, and focus moves into the dialog on
+ * open and back to the gear on close (fix round 2026-09-20, L5-1 / R1-C1 /
+ * R1-C5).
  */
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createKeyRouter } from "../keyboard";
+import type { ClientMessage } from "../protocol/messages";
 import { useCicada, type HelloInfo } from "../state/store";
 import { NOT_REPORTED, REPOSITORY_URL, releaseNotesUrl } from "./about";
 import { AboutDialog } from "./AboutDialog";
@@ -27,8 +34,8 @@ const stamped: HelloInfo = {
   threads: 6,
 };
 
-function seed(hello: HelloInfo | null) {
-  useCicada.setState({ connection: "open", role: "writer", hello, notices: [] });
+function seed(hello: HelloInfo | null, aboutDialog = true) {
+  useCicada.setState({ connection: "open", role: "writer", hello, notices: [], aboutDialog });
 }
 
 function installClipboard(writeText: (text: string) => Promise<void>) {
@@ -36,13 +43,17 @@ function installClipboard(writeText: (text: string) => Promise<void>) {
 }
 
 const text = (testId: string) => screen.getByTestId(testId).textContent;
+const isOpen = () => useCicada.getState().aboutDialog;
 
 describe("the About dialog", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    useCicada.setState({ aboutDialog: false });
+  });
 
   it("shows the build's fields from hello and links to the repository and this version's release notes", () => {
     seed(stamped);
-    render(<AboutDialog onClose={() => {}} />);
+    render(<AboutDialog />);
     expect(screen.getByRole("dialog", { name: "about" })).toBeTruthy();
     expect(text("about-version")).toBe("0.1.0-alpha.1");
     expect(text("about-commit")).toBe("a82eb39d1c2e-dirty");
@@ -59,7 +70,7 @@ describe("the About dialog", () => {
     seed(stamped);
     const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
     installClipboard(writeText);
-    render(<AboutDialog onClose={() => {}} />);
+    render(<AboutDialog />);
     expect(screen.queryByTestId("about-copied")).toBeNull();
     await act(async () => {
       fireEvent.click(screen.getByTestId("about-commit"));
@@ -76,7 +87,7 @@ describe("the About dialog", () => {
 
   it("an engine that reported no build says so instead of inventing one, and the notes link falls back to the releases list", () => {
     seed({ ...stamped, version: null, threads: null });
-    render(<AboutDialog onClose={() => {}} />);
+    render(<AboutDialog />);
     expect(text("about-version")).toBe(NOT_REPORTED);
     expect(text("about-commit")).toBe(NOT_REPORTED);
     expect(text("about-built")).toBe(NOT_REPORTED);
@@ -89,29 +100,31 @@ describe("the About dialog", () => {
 
   it("before the engine says hello every field is a dash and the dialog says it is not connected", () => {
     seed(null);
-    render(<AboutDialog onClose={() => {}} />);
+    render(<AboutDialog />);
     expect(text("about-version")).toBe("—");
     expect(text("about-threads")).toBe("—");
     expect(screen.getByText(/not connected/)).toBeTruthy();
   });
 
-  it("Esc, the × and a click on the backdrop close it", () => {
+  it("Esc, the × and a click on the backdrop close it (the store flag)", () => {
     seed(stamped);
-    const onClose = vi.fn();
-    render(<AboutDialog onClose={onClose} />);
+    render(<AboutDialog />);
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(isOpen()).toBe(false);
+    useCicada.setState({ aboutDialog: true });
     fireEvent.click(screen.getByTestId("about-close"));
-    expect(onClose).toHaveBeenCalledTimes(2);
+    expect(isOpen()).toBe(false);
+    useCicada.setState({ aboutDialog: true });
     fireEvent.pointerDown(screen.getByTestId("about-backdrop"));
-    expect(onClose).toHaveBeenCalledTimes(3);
+    expect(isOpen()).toBe(false);
     // A pointer inside the dialog is not a close.
+    useCicada.setState({ aboutDialog: true });
     fireEvent.pointerDown(screen.getByTestId("about-dialog"));
-    expect(onClose).toHaveBeenCalledTimes(3);
+    expect(isOpen()).toBe(true);
   });
 
   it("opens from the settings menu's last entry, which closes the menu; × takes it down again", () => {
-    seed(stamped);
+    seed(stamped, false);
     render(<TopBar />);
     expect(screen.queryByTestId("about-dialog")).toBeNull();
     fireEvent.click(screen.getByTestId("tb-settings"));
@@ -122,5 +135,53 @@ describe("the About dialog", () => {
     expect(text("about-commit")).toBe("a82eb39d1c2e-dirty");
     fireEvent.click(screen.getByTestId("about-close"));
     expect(screen.queryByTestId("about-dialog")).toBeNull();
+  });
+
+  it("with the real key router on the window: Esc behind About closes it and nothing else, Del behind it deletes nothing, focus lands in the dialog and returns to the gear", () => {
+    seed(stamped, false);
+    const sent: ClientMessage[] = [];
+    useCicada.getState().installSender((m) => {
+      sent.push(m);
+      return "id";
+    });
+    useCicada.setState({
+      summary: { ...useCicada.getState().summary, running: true },
+      selection: { nodes: ["a"], wire: null, element: null },
+    });
+    const router = createKeyRouter();
+    window.addEventListener("keydown", router.onKeyDown);
+    try {
+      render(<TopBar />);
+      fireEvent.click(screen.getByTestId("tb-settings"));
+      fireEvent.click(screen.getByTestId("tb-about"));
+      const dialog = screen.getByTestId("about-dialog");
+      expect(document.activeElement, "the modal takes focus on open").toBe(dialog);
+
+      // Focus on the page behind it (the review's reproduction): Del must not
+      // reach the canvas, the dialog stays.
+      fireEvent.keyDown(document.body, { key: "Delete" });
+      expect(sent, "no delete_node behind the modal").toEqual([]);
+      expect(isOpen()).toBe(true);
+      fireEvent.keyDown(document.body, { key: " ", code: "Space" });
+      fireEvent.keyUp(document.body, { key: " ", code: "Space" });
+      expect(sent, "no transport intent behind the modal").toEqual([]);
+
+      // Esc behind it: closes About — the running solve is NOT cancelled and
+      // the selection stands.
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      expect(isOpen()).toBe(false);
+      expect(screen.queryByTestId("about-dialog")).toBeNull();
+      expect(sent, "no cancel: Esc did one thing").toEqual([]);
+      expect(useCicada.getState().selection.nodes).toEqual(["a"]);
+      expect(document.activeElement, "focus returns to the gear that opened it").toBe(screen.getByTestId("tb-settings"));
+
+      // With About closed the same Esc is the map's again (a running solve → cancel).
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      expect(sent).toEqual([{ type: "cancel", payload: {} }]);
+    } finally {
+      window.removeEventListener("keydown", router.onKeyDown);
+      window.removeEventListener("keyup", router.onKeyUp);
+      useCicada.setState({ summary: { ...useCicada.getState().summary, running: false }, selection: { nodes: [], wire: null, element: null } });
+    }
   });
 });

@@ -849,6 +849,7 @@ describe("resetSession (File → Open / Recent / Close, Back)", () => {
       search: { x: 1, y: 2, cell: null, from: null },
       commitDialog: true,
       fileDialog: true,
+      aboutDialog: true,
     });
     useCicada.getState().setGitStatus({
       state: { kind: "not_a_repo" },
@@ -883,7 +884,7 @@ describe("resetSession (File → Open / Recent / Close, Back)", () => {
     expect(s.pending).toBeNull();
     expect(s.selection).toEqual({ nodes: [], wire: null, element: null });
     expect(s.search).toBeNull();
-    expect([s.commitDialog, s.fileDialog]).toEqual([false, false]);
+    expect([s.commitDialog, s.fileDialog, s.aboutDialog]).toEqual([false, false, false]);
     expect(s.catalog, "the catalog stays until the join's snapshot re-reads it").toBe(catalog);
     expect(s.catalogError, "and its failure record with it — the same re-read clears or renews it").toBe("catalog: HTTP 503");
     expect(s.notices.map((n) => n.message)).toEqual(["kept"]);

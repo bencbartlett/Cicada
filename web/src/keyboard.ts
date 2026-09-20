@@ -6,7 +6,9 @@
  * checkbox) keeps its plain keys but lets Ctrl chords through (`hotkeysReach`).
  * ONE chord is routed before that gate: `Ctrl+S` — the commit dialog — is
  * consumed from every surface, so the browser's own save dialog never opens
- * (`createKeyRouter`). Every handled key is a gesture-level intent through
+ * (`createKeyRouter`). A modal dialog (About, the commit dialog, File →
+ * Open) owns the keyboard while it is open: Esc closes it and nothing else
+ * acts (`modalOpen`). Every handled key is a gesture-level intent through
  * the store's `send`; nothing here mutates authoritative state.
  */
 import { useEffect } from "react";
@@ -92,8 +94,24 @@ export function isCommitChord(event: Pick<KeyboardEvent, "key" | "ctrlKey" | "me
  */
 function openCommitDialogOnce(event: Pick<KeyboardEvent, "repeat">): void {
   const state = useCicada.getState();
-  if (event.repeat || state.commitDialog) return;
+  // Never over another modal: About and File → Open own the keyboard while
+  // they are open (`modalOpen`).
+  if (event.repeat || state.commitDialog || state.aboutDialog || state.fileDialog) return;
   state.openCommitDialog();
+}
+
+/**
+ * Is a modal dialog open — About, the commit dialog, File → Open? A modal
+ * owns the keyboard (docs/16 §Keyboard map): Esc closes it and does nothing
+ * else, and every other hotkey is inert behind it — the dialog's own keys
+ * (Ctrl+Enter in the commit form, Enter in the file list) are handled inside
+ * it and never reach the map (fix round 2026-09-20, finding L5-1: with focus
+ * on the page behind About, Esc cancelled the running solve or cleared the
+ * selection as it closed the dialog, Del deleted the selection, Space
+ * toggled playback).
+ */
+function modalOpen(state: ReturnType<typeof useCicada.getState>): boolean {
+  return state.aboutDialog || state.commitDialog || state.fileDialog;
 }
 
 /**
@@ -116,13 +134,19 @@ export function handleHotkey(event: KeyboardEvent): boolean {
     return true;
   };
 
+  // A modal first (`modalOpen`): Esc closes it — its own listener covers a
+  // focus inside it, this covers a focus on the page behind it — and every
+  // other key is inert: not consumed (Tab and the browser's own keys keep
+  // working), but nothing below runs.
+  if (modalOpen(state)) {
+    if (key !== "Escape") return false;
+    if (state.aboutDialog) state.closeAboutDialog();
+    else if (state.commitDialog) state.closeCommitDialog();
+    else state.closeFileDialog();
+    return true;
+  }
+
   if (key === "Escape") {
-    // The commit dialog closes first (its own listener covers focus inside
-    // it; this covers a focus on the page behind it).
-    if (state.commitDialog) {
-      state.closeCommitDialog();
-      return true;
-    }
     // "Stop": a running solve, or a playing transport — the server's
     // `cancel` does both (docs/13 §Animation transport: Esc pauses the
     // transport along with cancelling the generation). The transport is

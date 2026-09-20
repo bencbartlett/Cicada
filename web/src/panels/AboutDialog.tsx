@@ -9,16 +9,28 @@
  * than showing a stale or invented number. Esc, the × and a click on the
  * backdrop close it; a failed copy says why (a clipboard the browser
  * withholds), never a silent "copied".
+ *
+ * A modal: it is open while `store.aboutDialog` is, so the keyboard map
+ * closes it on Esc FIRST and keeps every canvas hotkey off behind it (fix
+ * round 2026-09-20, finding L5-1); it takes focus on mount — the
+ * `data-no-hotkeys` gate then applies to what the user types, and a screen
+ * reader lands in the `aria-modal` region — and hands focus back to the
+ * element that opened it when it closes.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useCicada } from "../state/store";
 import { COPIED_MS, NOT_REPORTED, REPOSITORY_URL, releaseNotesUrl } from "./about";
 import "./panels.css";
 
-export function AboutDialog({ onClose }: { onClose: () => void }) {
+export function AboutDialog() {
   const hello = useCicada((s) => s.hello);
+  const onClose = useCicada((s) => s.closeAboutDialog);
   const [copied, setCopied] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
 
+  // Esc from a focus inside the dialog (the router's `data-no-hotkeys` gate
+  // stops it before the keyboard map); a focus behind it is the map's
+  // (`keyboard.ts`, `modalOpen`).
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -29,6 +41,16 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  // Focus: into the dialog on mount, back to the opener on unmount (when it
+  // is still in the document).
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.focus();
+    return () => {
+      if (opener !== null && opener.isConnected) opener.focus();
+    };
+  }, []);
 
   useEffect(() => {
     if (copied === null) return;
@@ -59,6 +81,8 @@ export function AboutDialog({ onClose }: { onClose: () => void }) {
         role="dialog"
         aria-modal="true"
         aria-label="about"
+        tabIndex={-1}
+        ref={dialogRef}
         data-no-hotkeys
         data-testid="about-dialog"
         onPointerDown={(event) => event.stopPropagation()}

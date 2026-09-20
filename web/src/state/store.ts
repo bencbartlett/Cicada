@@ -486,6 +486,14 @@ export interface CicadaState {
   /** File → Open…: the dialog over `GET /api/files` (docs/16 §Application layout). */
   fileDialog: boolean;
   /**
+   * The About dialog (docs/16 §Settings; wave 5 R1). A store flag, not the
+   * top bar's own state, so the keyboard map can close it on Esc FIRST and
+   * keep every other hotkey off while it is open (fix round 2026-09-20,
+   * finding L5-1: Esc cancelled the solve or cleared the selection as it
+   * closed About, Del deleted the selection from behind it).
+   */
+  aboutDialog: boolean;
+  /**
    * The grid cell under the centre of the canvas view (finding U29,
    * 2026-08-25): written by the canvas after every pan / zoom / fit, null
    * while no canvas is mounted; the menu bar places its nodes there, so a
@@ -602,6 +610,8 @@ export interface CicadaState {
   closeCommitDialog: () => void;
   openFileDialog: () => void;
   closeFileDialog: () => void;
+  openAboutDialog: () => void;
+  closeAboutDialog: () => void;
 }
 
 let noticeCounter = 0;
@@ -656,6 +666,7 @@ export const useCicada = create<CicadaState>((set, get) => ({
   runNotice: null,
   commitDialog: false,
   fileDialog: false,
+  aboutDialog: false,
   canvasCenter: null,
 
   send: (message) => {
@@ -741,6 +752,7 @@ export const useCicada = create<CicadaState>((set, get) => ({
       runNotice: null,
       commitDialog: false,
       fileDialog: false,
+      aboutDialog: false,
     })),
 
   applyServerMessage: (envelope) => {
@@ -1207,6 +1219,8 @@ export const useCicada = create<CicadaState>((set, get) => ({
   closeCommitDialog: () => set({ commitDialog: false }),
   openFileDialog: () => set({ fileDialog: true }),
   closeFileDialog: () => set({ fileDialog: false }),
+  openAboutDialog: () => set({ aboutDialog: true }),
+  closeAboutDialog: () => set({ aboutDialog: false }),
 }));
 
 /**

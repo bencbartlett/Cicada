@@ -3180,7 +3180,16 @@ proves wrong is revised here, dated, in the landing commit.
   token-gated like every `/api` route. The web: `HelloInfo.version` /
   `.threads` (the mirror marks both optional at protocol 1 — N1's rule),
   `web/src/panels/AboutDialog.tsx` + `about.ts`, the settings menu's
-  last entry; docs/16 §Settings. `CHANGELOG.md` + `tools/changelog.py`
+  last entry; docs/16 §Settings — a modal in the STORE (`aboutDialog`)
+  since the fix round of 2026-09-20 (L5-1 / R1-C1 / L2-5: as first built
+  its open state was the top bar's own, invisible to the keyboard map,
+  so with focus on the page behind it Esc cancelled the solve or cleared
+  the selection as it closed, Del deleted the selection, Space toggled
+  playback): the map closes it on Esc first and does nothing else, every
+  other hotkey is inert behind any modal (About, the commit dialog, File
+  → Open — one rule, `keyboard.ts::modalOpen`), and the dialog takes
+  focus on open and returns it to the gear on close (R1-C5's focus half;
+  no Tab trap yet). `CHANGELOG.md` + `tools/changelog.py`
   (`check [--tag]` / `section` / `assets`; `tools/test_changelog.py` in
   CI's offline job holds the first section to Cargo.toml's version at
   every commit) and `.github/workflows/release.yml` — `notes` (the tag

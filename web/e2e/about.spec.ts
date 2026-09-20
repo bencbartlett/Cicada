@@ -5,10 +5,22 @@
  * /api/version` answers (the same object `hello.version` carried — the
  * build the binary stamped), the protocol is the server's, the threads are
  * the suite's `--threads 2`, a click on the commit puts it on the
- * clipboard, and Esc closes the dialog.
+ * clipboard, and Esc closes the dialog. The modal owns the keyboard (fix
+ * round 2026-09-20, L5-1): with a node selected, Esc closes About and
+ * keeps the selection, and Del behind the dialog deletes nothing — both
+ * from the focus the dialog took and from a focus on the page behind it.
  */
 import { expect, test } from "@playwright/test";
 import config from "../playwright.config";
+
+interface CicadaHandle {
+  state: () => {
+    aboutDialog: boolean;
+    selection: { nodes: string[] };
+    graph: { nodes: { name: string }[] };
+    selectNodes: (names: string[]) => void;
+  };
+}
 
 const meta = config.metadata as { token: string; serveArgs: string[] };
 const TOKEN = meta.token;
@@ -62,4 +74,36 @@ test("About shows the build /api/version reports, copies the commit, closes on E
 
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
+
+  // The modal owns the keyboard: select a node, open About, and the canvas
+  // hotkeys behind it are inert — from the focus the dialog took on open,
+  // and from a focus on the page behind it (a blur to the body).
+  const view = () =>
+    page.evaluate(() => {
+      const s = (window as unknown as { __cicada: CicadaHandle }).__cicada.state();
+      return { about: s.aboutDialog, selection: s.selection.nodes, nodes: s.graph.nodes.length, active: document.activeElement?.getAttribute("data-testid") ?? document.activeElement?.tagName ?? null };
+    });
+  await page.evaluate(() => (window as unknown as { __cicada: CicadaHandle }).__cicada.state().selectNodes(["size"]));
+  const before = await view();
+  expect(before.selection).toEqual(["size"]);
+  expect(before.nodes).toBeGreaterThan(0);
+
+  await page.getByTestId("tb-settings").click();
+  await page.getByTestId("tb-about").click();
+  await expect(dialog).toBeVisible();
+  expect((await view()).active, "the dialog takes focus on open").toBe("about-dialog");
+  await page.keyboard.press("Delete");
+  await expect(dialog).toBeVisible();
+  expect(await view()).toMatchObject({ about: true, selection: ["size"], nodes: before.nodes });
+  // Focus on the page behind it — the review's reproduction.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  expect((await view()).active).toBe("BODY");
+  await page.keyboard.press("Delete");
+  await page.keyboard.press("Space");
+  await expect(dialog).toBeVisible();
+  expect(await view()).toMatchObject({ about: true, selection: ["size"], nodes: before.nodes });
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  expect(await view(), "Esc closed About and did nothing else").toMatchObject({ about: false, selection: ["size"], nodes: before.nodes });
+  expect((await view()).active, "focus returns to the gear").toBe("tb-settings");
 });

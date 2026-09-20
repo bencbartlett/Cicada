@@ -1377,6 +1377,12 @@ aside.inspector {
   width: min(460px, 92vw);
 }
 
+/* The dialog itself takes focus on open (a region, not a control): no ring
+   on the box — the × is the first Tab stop and shows its own. */
+.about-dialog:focus {
+  outline: none;
+}
+
 .about-grid {
   gap: 4px 12px;
 }

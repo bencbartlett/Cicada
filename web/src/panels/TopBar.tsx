@@ -40,8 +40,11 @@ export function TopBar() {
   const display = useCicada((s) => s.display);
   const send = useCicada((s) => s.send);
   // About is a modal over the whole app, opened from the settings menu
-  // (which closes as it opens) — so it lives here, not inside the menu.
-  const [about, setAbout] = useState(false);
+  // (which closes as it opens) — so it is rendered here, not inside the
+  // menu; its open state is the STORE's (`aboutDialog`), where the keyboard
+  // map reads it to close it on Esc first and keep the hotkeys off behind it.
+  const about = useCicada((s) => s.aboutDialog);
+  const openAbout = useCicada((s) => s.openAboutDialog);
 
   const project = hello === null ? "…" : basename(hello.project);
   const clients = lease.clients.length;
@@ -161,8 +164,8 @@ export function TopBar() {
         )}
       </span>
 
-      <SettingsMenu onAbout={() => setAbout(true)} />
-      {about && <AboutDialog onClose={() => setAbout(false)} />}
+      <SettingsMenu onAbout={openAbout} />
+      {about && <AboutDialog />}
     </header>
   );
 }
@@ -329,7 +332,9 @@ const DISPLAY_MODES: [DisplayMode, string][] = [
 /**
  * The settings menu (docs/16 §Settings): per-user choices, never project
  * state — and, last, **About**, which closes the menu and opens the dialog
- * (`onAbout`).
+ * (`onAbout`). Focus goes to the gear first, so the dialog — which takes
+ * focus on open — has an opener to hand it back to when it closes (the
+ * menu item it came from unmounts with the menu).
  */
 function SettingsMenu({ onAbout }: { onAbout: () => void }) {
   const settings = useCicada((s) => s.settings);
@@ -337,6 +342,7 @@ function SettingsMenu({ onAbout }: { onAbout: () => void }) {
   const setTab = useInspectorTab((s) => s.setTab);
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLSpanElement>(null);
+  const gearRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -380,6 +386,7 @@ function SettingsMenu({ onAbout }: { onAbout: () => void }) {
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
+        ref={gearRef}
         data-testid="tb-settings"
       >
         ⚙ settings
@@ -433,6 +440,7 @@ function SettingsMenu({ onAbout }: { onAbout: () => void }) {
             className="tb-menu-item about-item"
             title="the build behind this session: version, commit, date, protocol, threads — and the release notes"
             onClick={() => {
+              gearRef.current?.focus();
               setOpen(false);
               onAbout();
             }}

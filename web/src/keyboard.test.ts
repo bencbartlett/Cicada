@@ -170,6 +170,88 @@ describe("handleHotkey", () => {
     useCicada.setState({ summary: { ...useCicada.getState().summary, running: false } });
   });
 
+  // A modal owns the keyboard (docs/16 §Keyboard map; fix round 2026-09-20,
+  // findings L5-1 / R1-C1 / L2-5): About is a store flag the map reads —
+  // Esc closes it and does nothing else, every other hotkey is inert behind
+  // it. The same rule covers the commit dialog and File → Open.
+  describe("while About is open", () => {
+    const playing = {
+      view: {
+        playing: true,
+        speed: 1,
+        t_ms: 0,
+        frame: 0,
+        frames: 120,
+        period_ms: 4000,
+        driven: [{ node: "spin", port: "frame", signal: "frame" as const, loop: { frames: 120, period_ms: 4000 } }],
+      },
+      receivedAt: 0,
+    };
+
+    beforeEach(() => {
+      useCicada.setState({ aboutDialog: true, commitDialog: false, fileDialog: false });
+      useCicada.getState().selectNodes(["a"]);
+    });
+
+    it("Esc closes it first: a running solve is not cancelled, the selection stands", () => {
+      useCicada.setState({ summary: { ...useCicada.getState().summary, running: true } });
+      expect(handleHotkey(key("Escape"))).toBe(true);
+      expect(useCicada.getState().aboutDialog).toBe(false);
+      expect(sent, "no cancel").toEqual([]);
+      expect(useCicada.getState().selection.nodes).toEqual(["a"]);
+      useCicada.setState({ summary: { ...useCicada.getState().summary, running: false } });
+    });
+
+    it("Esc with a playing transport closes About and does not pause it", () => {
+      useCicada.setState({ transport: playing });
+      expect(handleHotkey(key("Escape"))).toBe(true);
+      expect(useCicada.getState().aboutDialog).toBe(false);
+      expect(sent).toEqual([]);
+      expect(useCicada.getState().selection.nodes).toEqual(["a"]);
+    });
+
+    it("Del, Space, P, D, the arrows and Ctrl+Z are inert: nothing sent, no notice, the dialog stays", () => {
+      useCicada.setState({ transport: { ...playing, view: { ...playing.view, playing: false } } });
+      for (const event of [
+        key("Delete"),
+        key(" ", { code: "Space" }),
+        key("p"),
+        key("d"),
+        key("ArrowLeft"),
+        key("z", { ctrlKey: true }),
+        key("a", { ctrlKey: true }),
+        key("f", { ctrlKey: true }),
+      ]) {
+        expect(handleHotkey(event), `${event.key} is not consumed either — the browser's own keys keep working`).toBe(false);
+      }
+      expect(sent).toEqual([]);
+      expect(useCicada.getState().notices).toEqual([]);
+      expect(useCicada.getState().aboutDialog).toBe(true);
+      expect(useCicada.getState().selection.nodes).toEqual(["a"]);
+      expect(useCicada.getState().search).toBeNull();
+    });
+
+    it("Ctrl+S does not open the commit dialog over it", () => {
+      expect(handleHotkey(key("s", { ctrlKey: true }))).toBe(false);
+      expect(useCicada.getState().commitDialog).toBe(false);
+      const router = createKeyRouter();
+      const preventDefault = vi.fn();
+      router.onKeyDown({ ...key("s", { ctrlKey: true }), preventDefault, target: null, isComposing: false } as unknown as KeyboardEvent);
+      expect(preventDefault, "the browser's save is still swallowed").toHaveBeenCalledTimes(1);
+      expect(useCicada.getState().commitDialog).toBe(false);
+      expect(useCicada.getState().aboutDialog).toBe(true);
+    });
+
+    it("File → Open behind the same rule: Esc closes it, Del is inert", () => {
+      useCicada.setState({ aboutDialog: false, fileDialog: true });
+      expect(handleHotkey(key("Delete"))).toBe(false);
+      expect(sent).toEqual([]);
+      expect(handleHotkey(key("Escape"))).toBe(true);
+      expect(useCicada.getState().fileDialog).toBe(false);
+      expect(useCicada.getState().selection.nodes).toEqual(["a"]);
+    });
+  });
+
   // The profiler closes on Esc (docs/16 §Inspector contents; v0.1 wave 5
   // P1): one Esc does one thing — the tab goes back to Inspect and the
   // selection stands; the next Esc clears it. A running solve is still
