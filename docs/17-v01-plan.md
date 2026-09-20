@@ -3362,7 +3362,8 @@ proves wrong is revised here, dated, in the landing commit.
   `web/src/TooltipLayer.tsx` (the box, mounted in `Root` beside every
   screen), the `.tooltip` rule in `styles.css` (z-index 100, over the
   dialogs' 60 and the notices' 50, `pointer-events: none`,
-  `white-space: pre-line`). Tests: `tooltip.test.ts` (14, jsdom, fake
+  `white-space: pre-line`). Tests: `tooltip.test.ts` (14 at the first
+  build, 22 after fix round 1 — items 6–9 below; jsdom, fake
   timers: shown at 250 and null at 249, the title parked as an empty
   attribute + `data-title` and back on leave, the element's descendants
   keeping the hover and a sibling starting from zero, an ancestor's
