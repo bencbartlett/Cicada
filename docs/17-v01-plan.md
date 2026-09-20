@@ -3220,16 +3220,24 @@ proves wrong is revised here, dated, in the landing commit.
   build (fix round 2026-09-20, L3-5 / R1-C8: as first built the stamp was
   `github.sha`, an annotated tag's OBJECT, and the check compared it with
   itself; a release's `built` was the runner's day). Tests: `stamp` (9), `version::LINE`'s shape,
-  `tests/version.rs` (the binary's line; HEAD's hash where git can say),
+  `tests/version.rs` (the binary's line; HEAD's hash where git can say;
+  `-dirty` ⇔ the build inputs' porcelain; the date ≥ HEAD's commit date),
   `tests/app.rs` (`/api/version` = `--version`), the protocol unit test,
   `tests/http_e2e.rs` (`/api/version` 401 / the object, `hello.version` +
   `hello.threads` at `--threads 2`, and at `--threads 0` the SCHEDULER's
   resolved count — cores − 2, ≥ 1 — equal to `/debug/state`'s, so a
   `hello` echoing the raw request is red (fix round 2026-09-20, L4-1:
   the first test sat where requested and resolved coincide),
-  `/health` unchanged), `AboutDialog.test.tsx` (6),
-  `store.test.ts`, `web/e2e/about.spec.ts` (the dialog = `/api/version`,
-  the suite's `--threads 2`, the clipboard, Esc). *What the contract did
+  `/health` unchanged), `AboutDialog.test.tsx` (8 — with the real key
+  router on the window: Del and Space behind the modal send nothing, Esc
+  closes it alone, focus in and back; `unknown` as text),
+  `keyboard.test.ts` (the modal rule), `store.test.ts`,
+  `web/e2e/about.spec.ts` (the dialog = `/api/version`, the suite's
+  `--threads 2`, the mirror's protocol number, the clipboard before the
+  note, Esc; a selected node survives Esc and Del from the dialog's focus
+  and from a blurred body), `tools/test_launch.py` (the README from the
+  binary's stamp, `--release`, the licensing files), `tools/test_changelog.py`
+  (the `TAG-TODO` and `Unreleased` rules, the asset names). *What the contract did
   not foresee:* (1) the engine's threads reach the client through
   `hello.threads` (additive) — nothing had carried them, and About lists
   them; (2) "`/health` answers the same JSON on `/api/version`" is built
