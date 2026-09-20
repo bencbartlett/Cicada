@@ -251,6 +251,10 @@ pub struct SessionConfig {
     /// are done; the pass proceeds when it returns. `None` (production) =
     /// no hold. The shape of `restream_hold`.
     pub display_hold: Option<DisplayHold>,
+    /// The build behind this engine (v0.1 wave 5 R1): on every `hello` as
+    /// `version`. The `cicada` binary stamps it; the library's own tests
+    /// pass [`crate::protocol::VersionInfo::unstamped`].
+    pub version: crate::protocol::VersionInfo,
 }
 
 /// See [`SessionConfig::restream_hold`].
@@ -289,6 +293,7 @@ impl std::fmt::Debug for SessionConfig {
                 "display_hold",
                 &self.display_hold.as_ref().map_or("none", |_| "injected"),
             )
+            .field("version", &self.version)
             .finish()
     }
 }
@@ -1953,6 +1958,8 @@ impl Session {
                 project: display_path(&self.core.config.project_dir),
                 pipeline: self.core.relative.clone(),
                 unit_px: UNIT_PX,
+                version: self.core.config.version.clone(),
+                threads: self.core.threads,
             },
         )
     }
@@ -7553,6 +7560,7 @@ mod tests {
             solid_cache_bytes: display::SOLID_CACHE_BUDGET,
             display_triangle_budget: display::DISPLAY_TRIANGLE_BUDGET,
             display_hold: None,
+            version: crate::protocol::VersionInfo::unstamped(),
         };
         (dir, config)
     }
@@ -9738,6 +9746,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
             solid_cache_bytes: display::SOLID_CACHE_BUDGET,
             display_triangle_budget: display::DISPLAY_TRIANGLE_BUDGET,
             display_hold: None,
+            version: crate::protocol::VersionInfo::unstamped(),
         };
         let session = Session::open(config).unwrap();
         session.wait_idle();
@@ -9858,6 +9867,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
             solid_cache_bytes: display::SOLID_CACHE_BUDGET,
             display_triangle_budget: display::DISPLAY_TRIANGLE_BUDGET,
             display_hold: None,
+            version: crate::protocol::VersionInfo::unstamped(),
         };
         // Python startup included: generous, and only ever waited in full
         // when the bridge is broken — then every hold is released so the

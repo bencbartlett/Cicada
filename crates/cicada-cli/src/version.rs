@@ -26,6 +26,18 @@ pub const LINE: &str = concat!(
     ")"
 );
 
+/// The same three values as the server reports them — `serve` and `app`
+/// put this in [`cicada_server::ServeConfig::version`], so `hello.version`,
+/// `GET /api/version` and About say exactly what `--version` says.
+#[must_use]
+pub fn info() -> cicada_server::protocol::VersionInfo {
+    cicada_server::protocol::VersionInfo {
+        semver: SEMVER.to_owned(),
+        commit: COMMIT.to_owned(),
+        built: BUILT.to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -40,5 +52,14 @@ mod tests {
         );
         assert!(stamp::is_date(BUILT), "built {BUILT:?} is not YYYY-MM-DD");
         assert_eq!(LINE, format!("{SEMVER} ({COMMIT}, {BUILT})"));
+        let info = info();
+        assert_eq!(
+            (
+                info.semver.as_str(),
+                info.commit.as_str(),
+                info.built.as_str()
+            ),
+            (SEMVER, COMMIT, BUILT)
+        );
     }
 }

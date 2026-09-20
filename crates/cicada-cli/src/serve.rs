@@ -121,6 +121,9 @@ pub fn serve_with(
     config.cache_dir = cache_dir;
     config.threads = args.threads;
     config.web_dir = web_dir;
+    // The build this binary is (docs/17 wave 5 R1): `hello.version`,
+    // `GET /api/version` and About say what `cicada --version` says.
+    config.version = crate::version::info();
     config.solid_cache_bytes = usize::try_from(args.solid_cache_mib.saturating_mul(1024 * 1024))
         .with_context(|| {
             format!(

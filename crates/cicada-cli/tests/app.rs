@@ -373,6 +373,64 @@ fn the_solid_cache_flag_sizes_the_session_and_its_range_is_refused() {
     }
 }
 
+/// The binary's stamp reaches the server it serves (docs/17 wave 5 R1):
+/// `GET /api/version` answers exactly the three parts `cicada --version`
+/// prints — `serve` hands `cicada_cli::version::info()` to `ServeConfig`;
+/// without that line the library's `unknown` stamp would ship with every
+/// other test green.
+#[test]
+fn the_server_reports_the_stamp_the_binary_prints() {
+    let output = cicada().arg("--version").output().unwrap();
+    assert!(output.status.success());
+    let line = String::from_utf8(output.stdout).unwrap().trim().to_owned();
+    // `cicada <semver> (<commit>, <built>)`
+    let inner = line
+        .strip_prefix("cicada ")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .unwrap_or_else(|| panic!("unexpected --version line: {line}"));
+    let (printed_version, tail) = inner.split_once(" (").unwrap();
+    let (printed_commit, printed_built) = tail.split_once(", ").unwrap();
+
+    let dir = scratch();
+    let mut server = Server::start(
+        cicada()
+            .args([
+                "app",
+                "--no-browser",
+                "--port",
+                "0",
+                "--token",
+                "t",
+                "--threads",
+                "2",
+                "--web-dir",
+            ])
+            .arg(dir.path().join("dist"))
+            .arg("--cache-dir")
+            .arg(dir.path().join("cache"))
+            .arg(dir.path().join("demo.cic")),
+    );
+    let header = server.line("the URL line");
+    let url = header.split(" — ").nth(1).unwrap().to_owned();
+    let addr = url
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap()
+        .to_owned();
+    let response = get(&addr, "/api/version?token=t");
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("");
+    let json: serde_json::Value =
+        serde_json::from_str(body.trim()).unwrap_or_else(|e| panic!("{e}: {body}"));
+    assert_eq!(
+        json,
+        serde_json::json!({ "semver": printed_version, "commit": printed_commit, "built": printed_built }),
+        "--version said {line}"
+    );
+    server.finish();
+}
+
 #[test]
 fn help_carries_serve_flags_and_the_browser_switch() {
     let output = cicada().args(["app", "--help"]).output().unwrap();

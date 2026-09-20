@@ -27,6 +27,42 @@ pub enum Role {
     Observer,
 }
 
+/// The build behind a running engine (v0.1 wave 5 R1): what `cicada
+/// --version` prints, in fields — on `hello` as `version`, on `GET
+/// /api/version`, and in the app's About dialog. The `cicada` binary's
+/// build script stamps the commit and the date (`crates/cicada-cli/build.rs`)
+/// and `serve` hands them in through [`crate::ServeConfig::version`]; the
+/// server library itself knows only its semver ([`VersionInfo::unstamped`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VersionInfo {
+    /// The workspace version (`CARGO_PKG_VERSION`), e.g. `0.1.0-alpha.1`.
+    pub semver: String,
+    /// The commit the binary was built from: git's 12-digit short hash,
+    /// `-dirty` when the tree had uncommitted tracked changes, or `unknown`
+    /// when the build could not tell (no git and no `CICADA_GIT_SHA` — said
+    /// at build time, never silently).
+    pub commit: String,
+    /// The UTC date of the build, `YYYY-MM-DD` (`SOURCE_DATE_EPOCH` when the
+    /// build set it); `unknown` when nothing stamped it.
+    pub built: String,
+}
+
+impl VersionInfo {
+    /// What a build that stamped nothing reports: this crate's semver, and
+    /// `unknown` for the commit and the date — the library's tests, and an
+    /// embedder that is not the `cicada` binary. The binary never reports
+    /// this: its build script stamps every build (a missing git is
+    /// `unknown` there too, but announced at build time).
+    #[must_use]
+    pub fn unstamped() -> Self {
+        Self {
+            semver: env!("CARGO_PKG_VERSION").to_owned(),
+            commit: "unknown".to_owned(),
+            built: "unknown".to_owned(),
+        }
+    }
+}
+
 /// The scheduler's status vocabulary (docs/16 — one vocabulary everywhere).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -833,7 +869,8 @@ pub enum ServerMessage {
         role: Role,
         /// Protocol version the server speaks.
         protocol: u32,
-        /// Engine version string.
+        /// Engine version string (`cicada <semver>`; unchanged since stage
+        /// 5 — `version` carries the parts).
         engine: String,
         /// The project directory (display).
         project: String,
@@ -841,6 +878,13 @@ pub enum ServerMessage {
         pipeline: String,
         /// Grid unit hint (px) — the client may override.
         unit_px: u32,
+        /// The build behind this engine (additive, v0.1 wave 5 R1): the
+        /// same object `GET /api/version` answers; About shows it.
+        version: VersionInfo,
+        /// The session's worker threads as resolved at open (`--threads`,
+        /// 0 = cores − 2 → the count; additive, v0.1 wave 5 R1 — About
+        /// shows it beside the version).
+        threads: usize,
     },
     /// The full authoritative state (initial load, resync, reload
     /// barrier). ONE hydration path.
@@ -2620,6 +2664,53 @@ mod tests {
         assert_eq!(inputs[1][1]["kind"], "Number");
         assert_eq!(inputs[1][1]["samples"], serde_json::json!(["2"]));
         assert_eq!(inputs[1][1]["hash"], "ab".repeat(32));
+    }
+
+    /// The build info's wire shape (v0.1 wave 5 R1): exactly `{semver,
+    /// commit, built}`, and the library's unstamped value names its own
+    /// semver with `unknown` for the rest — what the binary never sends.
+    #[test]
+    fn version_info_is_three_fields_and_unstamped_says_unknown() {
+        let info = VersionInfo {
+            semver: "0.1.0-alpha.1".into(),
+            commit: "a82eb39d1c2e-dirty".into(),
+            built: "2026-08-25".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&info).unwrap(),
+            serde_json::json!({
+                "semver": "0.1.0-alpha.1",
+                "commit": "a82eb39d1c2e-dirty",
+                "built": "2026-08-25",
+            })
+        );
+        let back: VersionInfo =
+            serde_json::from_value(serde_json::to_value(&info).unwrap()).unwrap();
+        assert_eq!(back, info);
+        let unstamped = VersionInfo::unstamped();
+        assert_eq!(unstamped.semver, env!("CARGO_PKG_VERSION"));
+        assert_eq!(unstamped.commit, "unknown");
+        assert_eq!(unstamped.built, "unknown");
+        // On `hello` it rides beside the stage-5 fields, with the threads.
+        let hello = encode(
+            0,
+            &ServerMessage::Hello {
+                client_id: 1,
+                role: Role::Writer,
+                protocol: PROTOCOL_VERSION,
+                engine: "cicada 0.1.0-alpha.1".into(),
+                project: "p".into(),
+                pipeline: "p.cic".into(),
+                unit_px: 24,
+                version: info.clone(),
+                threads: 6,
+            },
+        );
+        let value: serde_json::Value = serde_json::from_str(&hello).unwrap();
+        assert_eq!(value["type"], "hello");
+        assert_eq!(value["payload"]["version"]["commit"], "a82eb39d1c2e-dirty");
+        assert_eq!(value["payload"]["threads"], 6);
+        assert_eq!(value["payload"]["engine"], "cicada 0.1.0-alpha.1");
     }
 
     #[test]

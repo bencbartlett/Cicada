@@ -32,7 +32,7 @@ use crate::files::{self, FilesError};
 use crate::git::{Git, GitRefusal, Scope};
 use crate::protocol::{
     ApplyTextRequest, CommitRequest, DeltaSource, FilesErrorKind, GitErrorKind, IntentEnvelope,
-    JoinRefusal, PROTOCOL_VERSION, RevertRequest, Role, ServerMessage, encode,
+    JoinRefusal, PROTOCOL_VERSION, RevertRequest, Role, ServerMessage, VersionInfo, encode,
 };
 use crate::session::{ClientLanes, IntentError, Outgoing, Session, SessionConfig};
 
@@ -74,6 +74,12 @@ pub struct ServeConfig {
     /// Default [`crate::display::SOLID_CACHE_BUDGET`] (1 GiB); a session's
     /// writer may resize it live (`set_display_cache`).
     pub solid_cache_bytes: usize,
+    /// The build behind this server (v0.1 wave 5 R1): every session's
+    /// `hello.version` and `GET /api/version`. `cicada serve` / `app` set
+    /// the values their build script stamped (`cicada_cli::version`);
+    /// [`ServeConfig::new`] starts from [`VersionInfo::unstamped`] — the
+    /// library cannot know a binary's commit.
+    pub version: VersionInfo,
 }
 
 impl ServeConfig {
@@ -91,6 +97,7 @@ impl ServeConfig {
             web_dir: None,
             project: ProjectConfig::default(),
             solid_cache_bytes: crate::display::SOLID_CACHE_BUDGET,
+            version: VersionInfo::unstamped(),
         }
     }
 }
@@ -367,6 +374,7 @@ fn open_session(state: &AppState, relative: &str) -> Result<Arc<Session>, ServeE
         solid_cache_bytes: state.config.solid_cache_bytes,
         display_triangle_budget: crate::display::DISPLAY_TRIANGLE_BUDGET,
         display_hold: None,
+        version: state.config.version.clone(),
     })?;
     // Two clients racing to open the same pipeline: the second finds the
     // first's session already inserted and drops its own.
@@ -583,6 +591,7 @@ fn same_file(a: &Path, b: &Path) -> bool {
 fn router(state: Arc<AppState>) -> Router {
     let api = Router::new()
         .route("/api/catalog", get(api_catalog))
+        .route("/api/version", get(api_version))
         .route("/api/project", get(api_project))
         .route("/api/files", get(api_files))
         .route("/api/blob/{hash}", get(api_blob))
@@ -735,6 +744,15 @@ async fn api_catalog(
         Err(response) => return *response,
     };
     axum::Json(session.catalog_value()).into_response()
+}
+
+/// `GET /api/version` (docs/13 §HTTP surface; v0.1 wave 5 R1): the build
+/// behind this server — the same `{semver, commit, built}` every `hello`
+/// carries as `version`, for a launcher, a script or an agent that has no
+/// socket. Token-gated like every `/api` route; `/health` stays the bare
+/// `ok` the bundle's smoke and Playwright wait on.
+async fn api_version(State(state): State<Arc<AppState>>) -> Response {
+    axum::Json(state.config.version.clone()).into_response()
 }
 
 async fn api_project(State(state): State<Arc<AppState>>) -> Response {
@@ -2002,6 +2020,7 @@ mod tests {
             solid_cache_bytes: crate::display::SOLID_CACHE_BUDGET,
             display_triangle_budget: crate::display::DISPLAY_TRIANGLE_BUDGET,
             display_hold: None,
+            version: VersionInfo::unstamped(),
         })
         .unwrap();
         session.wait_idle();

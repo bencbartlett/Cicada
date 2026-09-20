@@ -15,7 +15,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
 use cicada_server::frames::{Frame, FrameKind, decode};
-use cicada_server::protocol::PROTOCOL_VERSION;
+use cicada_server::protocol::{PROTOCOL_VERSION, VersionInfo};
 use cicada_server::{ServeConfig, serve};
 use futures_util::{SinkExt as _, StreamExt as _};
 use tokio_tungstenite::tungstenite::Message;
@@ -86,6 +86,84 @@ fn http_post(addr: SocketAddr, path: &str, body: &str) -> (u16, String) {
         "unexpected chunked body:\n{head}"
     );
     (status, body.to_owned())
+}
+
+/// The build info (v0.1 wave 5 R1) rides `hello` as `version` — the object
+/// `ServeConfig::version` holds, field for field — beside the resolved
+/// thread count, and `GET /api/version` answers the same object behind the
+/// token; `engine` keeps its stage-5 shape and `/health` its bare `ok`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn version_rides_hello_and_api_version() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("p.cic"), PIPELINE).unwrap();
+    let mut config = ServeConfig::new(dir.path().to_owned());
+    config.pipeline = Some("p.cic".to_owned());
+    config.port = 0;
+    config.token = Some("t".to_owned());
+    config.cache_dir = Some(dir.path().join("cache"));
+    config.threads = 2;
+    let stamped = VersionInfo {
+        semver: "9.9.9-test.1".to_owned(),
+        commit: "a82eb39d1c2e-dirty".to_owned(),
+        built: "2026-08-25".to_owned(),
+    };
+    config.version = stamped.clone();
+    let handle = serve(config).await.expect("serve");
+    let addr = handle.addr;
+    let expected = serde_json::json!({
+        "semver": "9.9.9-test.1",
+        "commit": "a82eb39d1c2e-dirty",
+        "built": "2026-08-25",
+    });
+
+    let (status, _) = tokio::task::spawn_blocking(move || http_get(addr, "/api/version", None))
+        .await
+        .unwrap();
+    assert_eq!(status, 401, "no token → 401, like every /api route");
+    let (status, body) =
+        tokio::task::spawn_blocking(move || http_get(addr, "/api/version?token=t", None))
+            .await
+            .unwrap();
+    assert_eq!(status, 200);
+    let version: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(version, expected, "{body}");
+    let (status, body) = tokio::task::spawn_blocking(move || http_get(addr, "/health", None))
+        .await
+        .unwrap();
+    assert_eq!((status, body.as_str()), (200, "ok"), "/health is unchanged");
+
+    let url = format!("ws://{addr}/ws?token=t&pipeline=p.cic");
+    let (mut socket, _) = tokio_tungstenite::connect_async(url).await.expect("ws");
+    socket
+        .send(Message::Text(
+            format!(
+                r#"{{"v":{PROTOCOL_VERSION},"type":"hello","payload":{{"v":{PROTOCOL_VERSION}}}}}"#
+            )
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let first = tokio::time::timeout(Duration::from_secs(20), socket.next())
+        .await
+        .expect("a first message")
+        .expect("socket open")
+        .expect("a message");
+    let Message::Text(text) = first else {
+        panic!("the first message is not text: {first:?}");
+    };
+    let hello: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(hello["type"], "hello", "{text}");
+    assert_eq!(hello["payload"]["version"], expected, "{text}");
+    assert_eq!(
+        hello["payload"]["threads"], 2,
+        "the session's resolved worker threads (--threads 2): {text}"
+    );
+    assert_eq!(
+        hello["payload"]["engine"],
+        format!("cicada {}", env!("CARGO_PKG_VERSION")),
+        "{text}"
+    );
+    handle.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
