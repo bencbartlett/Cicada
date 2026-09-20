@@ -195,6 +195,8 @@ test("floating: the panel over the canvas — the same scene, drag + resize pers
   await expect(page.getByTestId("viewport-pane")).toHaveAttribute("data-mode", "floating");
   await expect(page.getByTestId("viewport-float-title")).toBeVisible();
   await expect(page.getByTestId("viewport-float-corner")).toBeVisible();
+  // The placeholder is the window mode's alone: the panel IS the viewport here.
+  await expect(page.getByTestId("viewport-placeholder")).toHaveCount(0);
   expect((await box(page, "canvas-pane")).height).toBeGreaterThan(workArea!.height - 2);
   await expect(page.getByTestId("viewport-canvas")).toHaveAttribute("data-marker", "same-canvas");
   expect(triangles(await scene(page))).toBeGreaterThan(500);
@@ -266,6 +268,7 @@ test("floating: the panel over the canvas — the same scene, drag + resize pers
   await expect(page.getByTestId("app")).toBeVisible();
   await expect(page.getByTestId("viewport-pane")).toHaveAttribute("data-mode", "floating");
   await expect(page.locator(".splitter")).toHaveCount(0);
+  await expect(page.getByTestId("viewport-placeholder")).toHaveCount(0);
   const reloaded = await box(page, "viewport-pane");
   expect(reloaded.x).toBeCloseTo(resized.x, 0);
   expect(reloaded.y).toBeCloseTo(resized.y, 0);
