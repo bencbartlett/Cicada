@@ -18,7 +18,7 @@ pub struct In {
 /// ```cic
 /// shown = bad(x=1.0)
 /// ```
-#[node(category = "Output, display & export", tier = "S", version = 1, gh = none)]
+#[node(category = "Output, display & export", sub = "Display", tier = "S", version = 1, gh = none)]
 pub fn bad(input: In) {
     let _ = input;
 }

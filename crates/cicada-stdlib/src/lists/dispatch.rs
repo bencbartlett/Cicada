@@ -43,7 +43,13 @@ pub struct DispatchOut {
 /// odd = [True, False, True, False]
 /// picked, rest, picked_from, rest_from = dispatch(list=xs, pattern=odd)
 /// ```
-#[node(category = "List & axis", tier = "1", version = 1, gh = "Dispatch")]
+#[node(
+    category = "List & axis",
+    sub = "List",
+    tier = "1",
+    version = 1,
+    gh = "Dispatch"
+)]
 #[must_use]
 pub fn dispatch(input: DispatchIn) -> DispatchOut {
     assert!(

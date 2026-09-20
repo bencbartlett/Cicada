@@ -46,6 +46,7 @@ pub struct MeshBoxIn {
 /// ```
 #[node(
     category = "Mesh & field",
+    sub = "Primitive",
     tier = "S",
     version = 1,
     gh = "Mesh Box",

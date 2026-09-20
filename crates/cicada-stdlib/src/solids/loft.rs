@@ -51,6 +51,7 @@ pub struct LoftIn {
 // (see `box`'s note for the stale-memo failure it prevents).
 #[node(
     category = "Surface & solid",
+    sub = "Freeform",
     tier = "S",
     version = 2,
     gh = "Loft",

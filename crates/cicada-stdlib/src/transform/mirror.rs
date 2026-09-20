@@ -48,6 +48,7 @@ pub struct MirrorIn {
 /// ```
 #[node(
     category = "Transform",
+    sub = "Euclidean",
     tier = "1",
     version = 1,
     gh = "Mirror",

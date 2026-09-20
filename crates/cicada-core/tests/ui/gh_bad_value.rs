@@ -8,7 +8,7 @@ pub struct In {
 
 /// Bad — `gh` takes a quoted component name or the bare word `none`;
 /// a typo like `None` must not silently register as "no counterpart".
-#[node(category = "Maths & logic", tier = "S", version = 1, gh = None)]
+#[node(category = "Maths & logic", sub = "Util", tier = "S", version = 1, gh = None)]
 pub fn bad(input: In) -> f64 {
     input.x
 }

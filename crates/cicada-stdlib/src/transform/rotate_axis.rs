@@ -50,6 +50,7 @@ pub struct RotateAxisIn {
 /// ```
 #[node(
     category = "Transform",
+    sub = "Euclidean",
     tier = "1",
     version = 1,
     gh = "Rotate Axis",

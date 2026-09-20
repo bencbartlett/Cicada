@@ -74,6 +74,7 @@ const fn node(
         title: "Fake",
         description: "checker fixture.",
         category: "Maths & logic",
+        sub: "Util",
         tier: Tier::S,
         version: 1,
         pure: true,

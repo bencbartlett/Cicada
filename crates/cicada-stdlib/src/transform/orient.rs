@@ -44,6 +44,7 @@ pub struct OrientIn {
 /// ```
 #[node(
     category = "Transform",
+    sub = "Euclidean",
     tier = "S",
     version = 1,
     gh = "Orient",

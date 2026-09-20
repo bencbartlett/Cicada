@@ -14,7 +14,13 @@ use super::BinaryIn;
 /// ```cic
 /// lower = min(a=1.5, b=2.5)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Minimum")]
+#[node(
+    category = "Maths & logic",
+    sub = "Util",
+    tier = "1",
+    version = 1,
+    gh = "Minimum"
+)]
 #[must_use]
 pub fn min(input: BinaryIn) -> f64 {
     input.a.min(input.b)

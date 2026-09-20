@@ -14,7 +14,7 @@ pub struct In {
 /// ```
 /// y = bad(x=1.0)
 /// ```
-#[node(category = "Maths & logic", tier = "S", version = 1, gh = none)]
+#[node(category = "Maths & logic", sub = "Util", tier = "S", version = 1, gh = none)]
 pub fn bad(input: In) -> f64 {
     input.x
 }

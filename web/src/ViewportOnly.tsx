@@ -1,6 +1,6 @@
 /**
  * The pop-out (docs/16 §Viewport conventions; docs/17 wave 4 O3): the
- * viewport alone — no canvas, panels, ribbon or hotkeys — for a second
+ * viewport alone — no canvas, panels, menu bar or hotkeys — for a second
  * window or monitor. Its socket joined as a declared observer (docs/13 —
  * the join hint), so it follows the same pipeline's display set live and
  * can never take the lease from the main window; its camera is its own.

@@ -2,7 +2,8 @@
 //! 2026-08-19; docs/14 §The node file format): every registered stdlib
 //! node carries the pieces the catalog, the canvas, the docs, and the AI
 //! read — a title line, a description, a doc line per port, a `gh`
-//! answer, and at least one runnable example. An integration test on
+//! answer, a `sub`-group of its category (v0.1 wave 5, C2c), and at least
+//! one runnable example. An integration test on
 //! purpose: it sees exactly the shipped registry (the crate's cfg(test)
 //! naming fixtures never register here), so "every registered node" has
 //! no exceptions.
@@ -21,9 +22,10 @@
 
 #![allow(clippy::expect_used)]
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use cicada_core::spec::NodeSpec;
+use cicada_core::spec::{NodeSpec, SUBGROUPS, subgroups_of};
 use cicada_stdlib::registry;
 
 /// The crate's `src/` — the source layout is part of the format, so the
@@ -465,6 +467,138 @@ fn calls_node_needs_an_identifier_boundary() {
         "outline = polyline(vertices=corners)\nseg = line(a=p, b=q)",
         "line"
     ));
+}
+
+// ---------------------------------------------------------------------------
+// Sub-groups (v0.1 wave 5, C2c): the menu bar's columns
+// ---------------------------------------------------------------------------
+
+/// The macro requires `sub = "…"` and holds its shape; which names exist is
+/// `spec::SUBGROUPS`, one table per category, and every node's `sub` must
+/// be one of its category's — a node in a column the menu does not have
+/// would be unreachable from the menu bar.
+#[test]
+fn every_node_names_a_sub_group_of_its_category() {
+    let failures = collect_failures(|spec| {
+        let Some(subs) = subgroups_of(spec.category) else {
+            return vec![format!(
+                "category `{}` has no row in `cicada_core::spec::SUBGROUPS`",
+                spec.category
+            )];
+        };
+        if subs.contains(&spec.sub) {
+            Vec::new()
+        } else {
+            vec![format!(
+                "sub-group `{}` is not one of `{}`'s columns ({}) — a new sub-group is a design \
+                 addition: add it to `spec::SUBGROUPS` and docs/08 §Catalog in the same commit",
+                spec.sub,
+                spec.category,
+                subs.join(" · ")
+            )]
+        }
+    });
+    assert_no_failures("sub-group", &failures);
+}
+
+/// Every sub-group the table lists for a shipped category has a node in
+/// it: a column the menu would show empty is a promise the catalog does
+/// not keep (Curve's `Spline` joins with its first spline node, not
+/// before). `Script` is the one row no stdlib node fills — the project's
+/// `scripts/*.py` do (cicada-server's `scripts.rs` asserts it) — and it
+/// must stay the only such row.
+#[test]
+fn every_listed_sub_group_of_a_shipped_category_has_a_node() {
+    let filled: BTreeSet<(&str, &str)> = registry()
+        .iter()
+        .map(|spec| (spec.category, spec.sub))
+        .collect();
+    let shipped: BTreeSet<&str> = registry().iter().map(|spec| spec.category).collect();
+    let mut problems = Vec::new();
+    for (category, subs) in SUBGROUPS {
+        if !shipped.contains(category) {
+            if *category != "Script" {
+                problems.push(format!(
+                    "`{category}` has a row in `spec::SUBGROUPS` but ships no node"
+                ));
+            }
+            continue;
+        }
+        for sub in *subs {
+            if !filled.contains(&(category, sub)) {
+                problems.push(format!(
+                    "`{category}` / `{sub}` is listed but no node names it — a sub-group is \
+                     listed with its first node"
+                ));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "{} sub-group table problem(s):\n  {}",
+        problems.len(),
+        problems.join("\n  ")
+    );
+}
+
+/// docs/08 §Catalog mirrors the table: each category section's
+/// `**Sub-groups:** A · B · C` line, in section order, equals the
+/// category's row — the document and the code say the same thing or this
+/// fails (`Script` has no docs/08 section; the row is the project scripts').
+#[test]
+fn docs08_mirrors_the_sub_group_table() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/08-standard-library.md");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+    let mut mirrored: Vec<(String, Vec<String>)> = Vec::new();
+    let mut section: Option<String> = None;
+    for line in text.lines() {
+        if let Some(heading) = line.strip_prefix("### ") {
+            // `### 5 · Point · Vector · Plane` — the number, then the name.
+            section = heading
+                .split_once(" · ")
+                .map(|(_, name)| name.trim().to_owned());
+        } else if let Some(list) = line.strip_prefix("**Sub-groups:** ") {
+            let category = section
+                .take()
+                .expect("a Sub-groups line sits under a `### N · Category` heading");
+            mirrored.push((
+                category,
+                list.split(" · ").map(|s| s.trim().to_owned()).collect(),
+            ));
+        }
+    }
+    let table: Vec<(String, Vec<String>)> = SUBGROUPS
+        .iter()
+        .filter(|(category, _)| *category != "Script")
+        .map(|(category, subs)| {
+            (
+                (*category).to_owned(),
+                subs.iter().map(|s| (*s).to_owned()).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        mirrored, table,
+        "docs/08 §Catalog's Sub-groups lines (left) must equal spec::SUBGROUPS (right), \
+         category by category in table order"
+    );
+}
+
+/// A sub-group is where a node sits in the menu, not what it means: the
+/// signature ledger below ignores it, so moving a node between columns
+/// bumps no version and blesses no row.
+#[test]
+fn a_sub_group_is_not_part_of_the_signature_ledger() {
+    let spec = registry()
+        .iter()
+        .find(|spec| spec.name == "add")
+        .expect("add registered");
+    let moved = NodeSpec {
+        sub: "Elsewhere",
+        ..(*spec).clone()
+    };
+    assert_eq!(signature_row(spec), signature_row(&moved));
 }
 
 // ---------------------------------------------------------------------------

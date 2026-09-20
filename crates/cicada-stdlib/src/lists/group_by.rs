@@ -44,7 +44,7 @@ pub struct GroupByOut {
 /// parts = [10.0, 20.0, 30.0, 40.0, 50.0]
 /// per_plate, plates = group_by(keys=plate, values=parts)
 /// ```
-#[node(category = "List & axis", tier = "S", version = 1, gh = none)]
+#[node(category = "List & axis", sub = "Axis", tier = "S", version = 1, gh = none)]
 #[must_use]
 pub fn group_by(input: GroupByIn) -> GroupByOut {
     assert!(

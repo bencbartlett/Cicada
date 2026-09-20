@@ -110,7 +110,8 @@ class FakeSocket {
 
 const catalogText = (...names: string[]) =>
   JSON.stringify({
-    format: 2,
+    format: 3,
+    subgroups: [],
     nodes: names.map((name) => ({
       name,
       title: name,
@@ -121,6 +122,7 @@ const catalogText = (...names: string[]) =>
       pure: true,
       uses_tolerance: false,
       gh: null,
+      sub: "Util",
       examples: [],
       inputs: [],
       outputs: [],

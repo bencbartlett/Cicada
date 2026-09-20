@@ -38,6 +38,7 @@ pub struct SolidIntersectionIn {
 /// ```
 #[node(
     category = "Surface & solid",
+    sub = "Boolean",
     tier = "1",
     version = 1,
     gh = "Solid Intersection"

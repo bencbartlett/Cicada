@@ -49,6 +49,7 @@ pub struct CullDuplicatesOut {
 /// ```
 #[node(
     category = "Point · Vector · Plane",
+    sub = "Point",
     tier = "1",
     version = 1,
     gh = "Cull Duplicates"

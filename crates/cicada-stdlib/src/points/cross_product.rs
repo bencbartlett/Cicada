@@ -21,6 +21,7 @@ use super::VectorPairIn;
 /// ```
 #[node(
     category = "Point · Vector · Plane",
+    sub = "Vector",
     tier = "1",
     version = 1,
     gh = "Cross Product"

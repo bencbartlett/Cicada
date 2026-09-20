@@ -26,7 +26,13 @@ pub struct LineIn {
 /// end = construct_point(x=4.0, y=3.0, z=0.0)
 /// segment = line(a=start, b=end)
 /// ```
-#[node(category = "Curve", tier = "S", version = 1, gh = "Line")]
+#[node(
+    category = "Curve",
+    sub = "Primitive",
+    tier = "S",
+    version = 1,
+    gh = "Line"
+)]
 #[must_use]
 pub fn line(input: LineIn) -> Curve {
     Curve::Line(Line {

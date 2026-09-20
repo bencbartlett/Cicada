@@ -43,6 +43,7 @@ pub struct RectangleIn {
 /// ```
 #[node(
     category = "Curve",
+    sub = "Primitive",
     tier = "S",
     version = 1,
     gh = "Rectangle",

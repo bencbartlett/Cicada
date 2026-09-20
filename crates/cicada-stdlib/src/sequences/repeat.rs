@@ -38,6 +38,7 @@ pub struct RepeatIn {
 /// ```
 #[node(
     category = "Sequences & random",
+    sub = "Sequence",
     tier = "1",
     version = 2,
     gh = "Repeat Data"

@@ -23,7 +23,13 @@ pub struct LengthIn {
 /// xs = [1.0, 2.0, 3.0]
 /// count = length(list=xs)
 /// ```
-#[node(category = "List & axis", tier = "S", version = 1, gh = "List Length")]
+#[node(
+    category = "List & axis",
+    sub = "List",
+    tier = "S",
+    version = 1,
+    gh = "List Length"
+)]
 #[must_use]
 pub fn length(input: LengthIn) -> i64 {
     #[allow(clippy::cast_possible_wrap)] // list lengths are far below i64::MAX

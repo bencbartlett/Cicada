@@ -14,7 +14,13 @@ use super::BinaryIn;
 /// ```cic
 /// upper = max(a=1.5, b=2.5)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Maximum")]
+#[node(
+    category = "Maths & logic",
+    sub = "Util",
+    tier = "1",
+    version = 1,
+    gh = "Maximum"
+)]
 #[must_use]
 pub fn max(input: BinaryIn) -> f64 {
     input.a.max(input.b)

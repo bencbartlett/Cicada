@@ -26,7 +26,13 @@ pub struct ConcatIn {
 /// tail = [3.0]
 /// joined = concat(a=head, b=tail)
 /// ```
-#[node(category = "List & axis", tier = "S", version = 1, gh = "Merge")]
+#[node(
+    category = "List & axis",
+    sub = "Axis",
+    tier = "S",
+    version = 1,
+    gh = "Merge"
+)]
 #[must_use]
 pub fn concat(input: ConcatIn) -> Vec<ElemSlot> {
     let mut out = input.a;

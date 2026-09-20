@@ -8,19 +8,24 @@
 //!   `#[port(transport_driven = frame | time)]` hands the port to the
 //!   session's transport (v0.1 item 4 — the canvas hides it, the playhead
 //!   fills it at lowering; it must carry a default, its headless value).
-//! - `#[node(category = "…", tier = "S", version = 1, gh = "…" | none)]`
+//! - `#[node(category = "…", sub = "…", tier = "S", version = 1, gh = "…" | none)]`
 //!   assembles the `NodeSpec` from the function — name (trailing
 //!   keyword-dodging `_` stripped), title/description from the doc comment's
 //!   first line (`Title — description.`), the runtime contract from its
 //!   `# Panics` section, the doc of a bare single `out` port from its
 //!   `# Returns` section, the runnable `.cic` snippets from its `# Examples`
 //!   section (```` ```cic ```` fences), the Grasshopper component it replaces
-//!   from `gh`, ports from the input struct and return type — and registers
-//!   it at compile time. `gh` is required: a node either names the GH
-//!   component it replaces or says `none` (DECISIONS.md stdlib row).
-//!   `# Returns` is required exactly when the node returns one bare value
-//!   (one doc line per port — the output struct's fields carry their own
-//!   docs, a sink has no output to document).
+//!   from `gh`, the sub-group within its category from `sub`, ports from the
+//!   input struct and return type — and registers it at compile time. `gh`
+//!   is required: a node either names the GH component it replaces or says
+//!   `none` (DECISIONS.md stdlib row). `sub` is required too (v0.1 wave 5,
+//!   C2c): the menu bar groups a category's nodes by it; docs/08 §Catalog
+//!   lists each category's sub-groups and `cicada_core::spec::SUBGROUPS` is
+//!   the table the stdlib's conformance test holds every node to (the macro
+//!   checks presence and shape — it has no workspace dependencies to read
+//!   the table from). `# Returns` is required exactly when the node returns
+//!   one bare value (one doc line per port — the output struct's fields
+//!   carry their own docs, a sink has no output to document).
 //!
 //! The macros emit paths into `cicada_core` but do not link against it;
 //! consuming crates must depend on `cicada-core`.
@@ -48,6 +53,8 @@ pub fn derive_ports(input: TokenStream) -> TokenStream {
 /// Declares a node function: assembles and registers its `NodeSpec`.
 ///
 /// Arguments: `category = "…"` (required, a docs/08 category),
+/// `sub = "…"` (required — the sub-group within that category, one of
+/// the names docs/08 §Catalog lists for it: the menu bar's column),
 /// `tier = "S" | "1" | "2"` (required), `version = N` (required — the
 /// semantic node version in cache keys, doc 12), `gh = "Component Name"`
 /// or `gh = none` (required — the Grasshopper component this node
@@ -486,6 +493,8 @@ enum Gh {
 
 struct NodeArgs {
     category: Option<LitStr>,
+    /// `sub = "…"`: the sub-group within the category (v0.1 wave 5, C2c).
+    sub: Option<LitStr>,
     tier: Option<LitStr>,
     version: Option<LitInt>,
     name: Option<LitStr>,
@@ -493,6 +502,25 @@ struct NodeArgs {
     effectful: bool,
     volatile: bool,
     uses_tolerance: bool,
+}
+
+/// The `sub = "…"` value: a non-empty sub-group name without surrounding
+/// whitespace. Which names exist per category is `cicada_core::spec::
+/// SUBGROUPS` (docs/08 §Catalog mirrors it) — this crate has no workspace
+/// dependencies to read it from, so membership is the stdlib conformance
+/// test's check; the macro holds the shape.
+fn parse_sub(meta: &syn::meta::ParseNestedMeta<'_>) -> syn::Result<LitStr> {
+    let name: LitStr = meta.value()?.parse()?;
+    let value = name.value();
+    if value.trim().is_empty() || value.trim() != value {
+        return Err(syn::Error::new(
+            name.span(),
+            "sub = \"…\" names the node's sub-group within its category (docs/08 §Catalog \
+             lists each category's sub-groups) — a non-empty name without surrounding \
+             whitespace",
+        ));
+    }
+    Ok(name)
 }
 
 fn parse_gh(meta: &syn::meta::ParseNestedMeta<'_>) -> syn::Result<Gh> {
@@ -523,6 +551,7 @@ fn parse_gh(meta: &syn::meta::ParseNestedMeta<'_>) -> syn::Result<Gh> {
 fn parse_node_args(args: &TokenStream2) -> syn::Result<NodeArgs> {
     let mut parsed = NodeArgs {
         category: None,
+        sub: None,
         tier: None,
         version: None,
         name: None,
@@ -548,6 +577,9 @@ fn parse_node_args(args: &TokenStream2) -> syn::Result<NodeArgs> {
         if meta.path.is_ident("category") {
             let value = meta.value()?.parse()?;
             set_once(&mut parsed.category, value, &meta)
+        } else if meta.path.is_ident("sub") {
+            let value = parse_sub(&meta)?;
+            set_once(&mut parsed.sub, value, &meta)
         } else if meta.path.is_ident("tier") {
             let value = meta.value()?.parse()?;
             set_once(&mut parsed.tier, value, &meta)
@@ -577,7 +609,7 @@ fn parse_node_args(args: &TokenStream2) -> syn::Result<NodeArgs> {
             Ok(())
         } else {
             Err(meta.error(
-                "unknown #[node(...)] key — expected category, tier, version, gh, name, \
+                "unknown #[node(...)] key — expected category, sub, tier, version, gh, name, \
                  effectful, volatile, or uses_tolerance",
             ))
         }
@@ -730,6 +762,37 @@ fn gh_tokens(gh: Option<Gh>, span: proc_macro2::Span) -> syn::Result<TokenStream
     }
 }
 
+/// The `tier: …` spec-field tokens from the required `tier = "S" | "1" |
+/// "2"` (docs/08's catalog tiers).
+fn tier_tokens(tier: Option<LitStr>, span: proc_macro2::Span) -> syn::Result<TokenStream2> {
+    let tier_lit =
+        tier.ok_or_else(|| syn::Error::new(span, "#[node] requires tier = \"S\" | \"1\" | \"2\""))?;
+    match tier_lit.value().as_str() {
+        "S" => Ok(quote!(cicada_core::spec::Tier::S)),
+        "1" => Ok(quote!(cicada_core::spec::Tier::V01)),
+        "2" => Ok(quote!(cicada_core::spec::Tier::V02)),
+        other => Err(syn::Error::new(
+            tier_lit.span(),
+            format!("unknown tier `{other}` — expected \"S\", \"1\", or \"2\""),
+        )),
+    }
+}
+
+/// The `sub: …` spec-field tokens. Required like `gh`: the menu bar groups
+/// a category's nodes by sub-group, and a node without one would have no
+/// column — silence is not a placement.
+fn sub_tokens(sub: Option<LitStr>, span: proc_macro2::Span) -> syn::Result<TokenStream2> {
+    sub.map(|name| quote!(#name)).ok_or_else(|| {
+        syn::Error::new(
+            span,
+            "#[node] requires sub = \"…\" — the node's sub-group within its category, the \
+             menu bar's column (docs/08 §Catalog lists each category's sub-groups, e.g. \
+             sub = \"Operators\" under Maths & logic; `cicada_core::spec::SUBGROUPS` is the \
+             table)",
+        )
+    })
+}
+
 /// The input-struct type of a node fn (struct-in ABI): exactly one typed
 /// argument, with `uses_tolerance` nodes taking the project config as an
 /// explicit FIRST argument (tolerance is explicit state, never ambient).
@@ -771,9 +834,7 @@ fn expand_node(args: &TokenStream2, function: &ItemFn) -> syn::Result<TokenStrea
             "#[node] requires category = \"…\" (a docs/08 category)",
         )
     })?;
-    let tier_lit = parsed
-        .tier
-        .ok_or_else(|| syn::Error::new(span, "#[node] requires tier = \"S\" | \"1\" | \"2\""))?;
+    let tier = tier_tokens(parsed.tier, span)?;
     let version = parsed.version.ok_or_else(|| {
         syn::Error::new(
             span,
@@ -781,19 +842,9 @@ fn expand_node(args: &TokenStream2, function: &ItemFn) -> syn::Result<TokenStrea
              bump it on any behavior change",
         )
     })?;
-    let tier = match tier_lit.value().as_str() {
-        "S" => quote!(cicada_core::spec::Tier::S),
-        "1" => quote!(cicada_core::spec::Tier::V01),
-        "2" => quote!(cicada_core::spec::Tier::V02),
-        other => {
-            return Err(syn::Error::new(
-                tier_lit.span(),
-                format!("unknown tier `{other}` — expected \"S\", \"1\", or \"2\""),
-            ));
-        }
-    };
 
     let gh_tokens = gh_tokens(parsed.gh, span)?;
+    let sub_tokens = sub_tokens(parsed.sub, span)?;
 
     let (title, description) = parse_title_line(function)?;
     let panics_tokens = panics_tokens(function);
@@ -849,6 +900,7 @@ fn expand_node(args: &TokenStream2, function: &ItemFn) -> syn::Result<TokenStrea
             title: #title,
             description: #description,
             category: #category,
+            sub: #sub_tokens,
             tier: #tier,
             version: #version,
             pure: #pure,

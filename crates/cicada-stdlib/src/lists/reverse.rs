@@ -23,7 +23,13 @@ pub struct ReverseIn {
 /// xs = [1.0, 2.0, 3.0]
 /// backwards = reverse(list=xs)
 /// ```
-#[node(category = "List & axis", tier = "1", version = 1, gh = "Reverse List")]
+#[node(
+    category = "List & axis",
+    sub = "List",
+    tier = "1",
+    version = 1,
+    gh = "Reverse List"
+)]
 #[must_use]
 pub fn reverse(input: ReverseIn) -> Vec<ElemSlot> {
     let mut list = input.list;

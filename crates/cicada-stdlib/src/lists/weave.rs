@@ -46,7 +46,13 @@ pub struct WeaveIn {
 /// odds = [1.0, 3.0, 5.0]
 /// counted = weave(pattern=[0, 1], a=evens, b=odds)
 /// ```
-#[node(category = "List & axis", tier = "1", version = 1, gh = "Weave")]
+#[node(
+    category = "List & axis",
+    sub = "List",
+    tier = "1",
+    version = 1,
+    gh = "Weave"
+)]
 #[must_use]
 pub fn weave(input: WeaveIn) -> Vec<ElemSlot> {
     let WeaveIn { pattern, a, b } = input;

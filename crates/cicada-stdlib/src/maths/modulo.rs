@@ -19,7 +19,13 @@ use super::BinaryIn;
 /// ```cic
 /// remainder = modulo(a=7.5, b=2.0)
 /// ```
-#[node(category = "Maths & logic", tier = "S", version = 1, gh = "Modulus")]
+#[node(
+    category = "Maths & logic",
+    sub = "Operators",
+    tier = "S",
+    version = 1,
+    gh = "Modulus"
+)]
 #[must_use]
 pub fn modulo(input: BinaryIn) -> f64 {
     input.a % input.b

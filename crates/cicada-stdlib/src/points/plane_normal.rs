@@ -42,6 +42,7 @@ pub struct PlaneNormalIn {
 /// ```
 #[node(
     category = "Point · Vector · Plane",
+    sub = "Plane",
     tier = "1",
     version = 1,
     gh = "Plane Normal",

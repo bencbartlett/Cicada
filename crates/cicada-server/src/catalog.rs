@@ -1,20 +1,38 @@
-//! The machine-readable catalog (`catalog.json`, format 2 — DECISIONS.md:
+//! The machine-readable catalog (`catalog.json`, format 3 — DECISIONS.md:
 //! consumed by the palette, the checker, and the AI). Rendered here so the
 //! `GET /api/catalog` route and `cicada catalog` emit the same bytes; the
 //! server's copy is project-aware (stdlib + the session's script nodes,
 //! ledger revision 2026-08-18) while the CLI's committed file is the
 //! stdlib alone.
 
-use cicada_core::spec::{Dimension, NodeSpec, PortSpec, Tier, TransportSignal};
+use cicada_core::spec::{Dimension, NodeSpec, PortSpec, SUBGROUPS, Tier, TransportSignal};
 
 /// The catalog format version this build emits. Bumps on breaking shape
-/// changes; additive fields keep it.
-pub const CATALOG_FORMAT: u32 = 2;
+/// changes; additive fields keep it. 3 since v0.1 wave 5 (C2c): every node
+/// carries `sub` and the catalog carries the `subgroups` table — both
+/// additive in shape, but a format-2 reader grouping a menu by category
+/// alone would show a different app, so the number says so. Mirrored by
+/// `web/src/protocol/version.ts::CATALOG_FORMAT`: the client refuses a body
+/// of any other format (a notice naming both numbers) instead of reading a
+/// shape it does not know.
+pub const CATALOG_FORMAT: u32 = 3;
 
 #[derive(serde::Serialize)]
 struct Catalog<'a> {
     format: u32,
+    /// The sub-groups of every category in menu order — `spec::SUBGROUPS`,
+    /// the ONE table (docs/08 mirrors it, the conformance test enforces
+    /// it): the menu bar orders its columns by this instead of keeping a
+    /// second copy. Format 3.
+    subgroups: Vec<SubgroupRow>,
     nodes: Vec<Node<'a>>,
+}
+
+/// One category's sub-groups, in menu order.
+#[derive(serde::Serialize)]
+struct SubgroupRow {
+    category: &'static str,
+    subgroups: Vec<&'static str>,
 }
 
 #[derive(serde::Serialize)]
@@ -23,6 +41,10 @@ struct Node<'a> {
     title: &'a str,
     description: &'a str,
     category: &'a str,
+    /// The sub-group within the category — the menu bar's column
+    /// (`#[node(sub = …)]`, required; `Script` for project script nodes).
+    /// Always present and non-empty. Format 3.
+    sub: &'a str,
     tier: &'a str,
     version: u32,
     pure: bool,
@@ -92,6 +114,7 @@ fn node(spec: &NodeSpec) -> Node<'_> {
         title: spec.title,
         description: spec.description,
         category: spec.category,
+        sub: spec.sub,
         tier: match spec.tier {
             Tier::S => "S",
             Tier::V01 => "1",
@@ -112,6 +135,13 @@ fn node(spec: &NodeSpec) -> Node<'_> {
 fn build<'a>(specs: &[&'a NodeSpec]) -> Catalog<'a> {
     Catalog {
         format: CATALOG_FORMAT,
+        subgroups: SUBGROUPS
+            .iter()
+            .map(|(category, subgroups)| SubgroupRow {
+                category,
+                subgroups: subgroups.to_vec(),
+            })
+            .collect(),
         nodes: specs.iter().map(|spec| node(spec)).collect(),
     }
 }
@@ -153,14 +183,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn json_is_format_2_with_structured_ports() {
+    fn json_is_format_3_with_structured_ports() {
         let specs = cicada_stdlib::registry();
         let value = catalog_value(specs);
         assert_eq!(value["format"], CATALOG_FORMAT);
+        assert_eq!(value["format"], 3);
         let nodes = value["nodes"].as_array().unwrap();
         assert_eq!(nodes.len(), specs.len());
         let slider = nodes.iter().find(|n| n["name"] == "slider").unwrap();
         assert_eq!(slider["inputs"][0]["base"], "Number");
+        assert_eq!(slider["sub"], "Input", "format 3 carries the sub-group");
         assert!(
             slider["panics"].is_string(),
             "format 2 carries the contract"
@@ -177,6 +209,49 @@ mod tests {
         let as_closed = nodes.iter().find(|n| n["name"] == "as_closed").unwrap();
         assert!(as_closed["gh"].is_null() && as_closed.get("gh").is_some());
         assert!(render_json(specs).unwrap().ends_with('\n'));
+    }
+
+    // Format 3 (v0.1 wave 5, C2c): every node names a sub-group of its
+    // category, and the catalog carries the table itself — the same rows,
+    // in the same order, as `spec::SUBGROUPS` — so the menu bar never holds
+    // a second copy of the order.
+    #[test]
+    fn every_node_has_a_sub_group_and_the_catalog_carries_the_table() {
+        let value = catalog_value(cicada_stdlib::registry());
+        let table = value["subgroups"].as_array().unwrap();
+        assert_eq!(table.len(), SUBGROUPS.len());
+        for (row, (category, subgroups)) in table.iter().zip(SUBGROUPS) {
+            assert_eq!(row["category"], *category);
+            let listed: Vec<&str> = row["subgroups"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s.as_str().unwrap())
+                .collect();
+            assert_eq!(listed, *subgroups);
+        }
+        assert_eq!(table[0]["category"], "Params & input");
+        let columns_of = |category: &str| -> Vec<String> {
+            table
+                .iter()
+                .find(|row| row["category"] == category)
+                .unwrap()["subgroups"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s.as_str().unwrap().to_owned())
+                .collect()
+        };
+        for node in value["nodes"].as_array().unwrap() {
+            let sub = node["sub"].as_str().unwrap_or_default();
+            assert!(!sub.is_empty(), "{} has no sub", node["name"]);
+            assert!(
+                columns_of(node["category"].as_str().unwrap()).contains(&sub.to_owned()),
+                "{}'s sub `{sub}` is not a column of `{}`",
+                node["name"],
+                node["category"]
+            );
+        }
     }
 
     // The transport-driven ports are marked for the canvas to hide (v0.1

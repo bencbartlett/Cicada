@@ -28,7 +28,13 @@ pub struct PolylineIn {
 /// corners = construct_point(x=each(xs), y=each(ys))
 /// outline = polyline(vertices=corners, closed=True)
 /// ```
-#[node(category = "Curve", tier = "S", version = 1, gh = "PolyLine")]
+#[node(
+    category = "Curve",
+    sub = "Primitive",
+    tier = "S",
+    version = 1,
+    gh = "PolyLine"
+)]
 #[must_use]
 pub fn polyline(input: PolylineIn) -> Curve {
     Curve::Polyline(Polyline {

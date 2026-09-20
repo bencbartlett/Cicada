@@ -40,6 +40,7 @@ pub struct PipeIn {
 /// ```
 #[node(
     category = "Surface & solid",
+    sub = "Freeform",
     tier = "1",
     version = 1,
     gh = "Pipe",

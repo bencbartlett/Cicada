@@ -92,7 +92,6 @@ export interface Settings {
   wireMode: WireMode;
   displayMode: DisplayMode;
   textPanel: boolean;
-  ribbonCollapsed: boolean;
   navigation: "rhino" | "blender";
 }
 
@@ -105,15 +104,32 @@ const DEFAULT_SETTINGS: Settings = {
   wireMode: "spline",
   displayMode: "shaded_edges",
   textPanel: false,
-  ribbonCollapsed: false,
   navigation: "rhino",
 };
+
+/**
+ * A stored settings object → this build's `Settings`: the keys this build
+ * has, each from the store when present and its default otherwise. A key
+ * this build no longer has is dropped — `ribbonCollapsed` (wave 4) went
+ * with the ribbon when the menu bar replaced it (wave 5 M1: a stored value
+ * is ignored) — so a setting that was removed never rides along in memory
+ * or back into storage. Anything that is not an object is no settings.
+ */
+export function settingsFrom(raw: unknown): Settings {
+  const settings: Record<string, unknown> = { ...DEFAULT_SETTINGS };
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return DEFAULT_SETTINGS;
+  const stored = raw as Record<string, unknown>;
+  for (const key of Object.keys(DEFAULT_SETTINGS)) {
+    if (key in stored) settings[key] = stored[key];
+  }
+  return settings as unknown as Settings;
+}
 
 function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (raw === null) return DEFAULT_SETTINGS;
-    return { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<Settings>) };
+    return settingsFrom(JSON.parse(raw));
   } catch {
     return DEFAULT_SETTINGS;
   }
@@ -295,6 +311,16 @@ export interface CicadaState {
 
   // ---- read caches
   catalog: Catalog | null;
+  /**
+   * Why the last catalog read failed — `fetchCatalog`'s refusal (another
+   * format: the engine and the app are from different builds; a non-OK
+   * answer) — or null after a good read. The menu bar and the search box
+   * render it when there is no catalog to show: a first connect to an
+   * engine of another format has nothing to keep, and without this record
+   * both would describe a pending load for a read that will never succeed
+   * once the error notice is dismissed (wave 5 M1 fix round 1).
+   */
+  catalogError: string | null;
   nodeValues: Record<string, NodeValues>;
   wireValues: Record<string, WireValues>;
   probe: ProbeState | null;
@@ -358,7 +384,7 @@ export interface CicadaState {
   /**
    * The grid cell under the centre of the canvas view (finding U29,
    * 2026-08-25): written by the canvas after every pan / zoom / fit, null
-   * while no canvas is mounted; the ribbon places its nodes there, so a
+   * while no canvas is mounted; the menu bar places its nodes there, so a
    * click lands where the user is looking instead of wherever the server's
    * auto-layout has room.
    */
@@ -394,6 +420,7 @@ export interface CicadaState {
   resetSession: (token: string, pipeline: string) => void;
   applyServerMessage: (envelope: ServerEnvelope) => void;
   setCatalog: (catalog: Catalog) => void;
+  setCatalogError: (message: string) => void;
   setDisplayGeneration: (generation: number) => void;
   selectNodes: (nodes: string[], additive?: boolean) => void;
   selectWire: (wire: string | null) => void;
@@ -476,6 +503,7 @@ export const useCicada = create<CicadaState>((set, get) => ({
   displayResets: 0,
 
   catalog: null,
+  catalogError: null,
   nodeValues: {},
   wireValues: {},
   probe: null,
@@ -813,7 +841,8 @@ export const useCicada = create<CicadaState>((set, get) => ({
     }
   },
 
-  setCatalog: (catalog) => set({ catalog }),
+  setCatalog: (catalog) => set({ catalog, catalogError: null }),
+  setCatalogError: (message) => set({ catalogError: message }),
   setDisplayGeneration: (generation) => set({ displayGeneration: generation }),
 
   selectNodes: (nodes, additive = false) =>
@@ -1008,7 +1037,7 @@ export function isWriter(state: Pick<CicadaState, "role">): boolean {
  * May this client send a write intent right now? Holding the lease is not
  * enough: the socket must be open — a dropped socket clears the role, and
  * this is the ONE predicate every write affordance (canvas gestures,
- * inspector buttons, params, ribbon placement, hotkeys) checks.
+ * inspector buttons, params, menu-bar placement, hotkeys) checks.
  */
 export function canWrite(state: Pick<CicadaState, "role" | "connection">): boolean {
   return state.connection === "open" && state.role === "writer";

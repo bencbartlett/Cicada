@@ -72,6 +72,7 @@ pub struct PolarArrayIn {
 /// ```
 #[node(
     category = "Transform",
+    sub = "Array",
     tier = "1",
     version = 1,
     gh = "Polar Array",

@@ -14,7 +14,7 @@ pub struct In {
 /// # Returns
 ///
 /// The value.
-#[node(category = "Maths & logic", tier = "S", version = 1, gh = none, volatile, effectful)]
+#[node(category = "Maths & logic", sub = "Util", tier = "S", version = 1, gh = none, volatile, effectful)]
 pub fn bad(input: In) -> f64 {
     input.x
 }

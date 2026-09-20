@@ -29,6 +29,7 @@ pub struct DeconstructDomainOut {
 /// ```
 #[node(
     category = "Maths & logic",
+    sub = "Domain",
     tier = "S",
     version = 1,
     gh = "Deconstruct Domain"

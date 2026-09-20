@@ -31,6 +31,7 @@ pub struct DeconstructPointOut {
 /// ```
 #[node(
     category = "Point · Vector · Plane",
+    sub = "Point",
     tier = "S",
     version = 1,
     gh = "Deconstruct"

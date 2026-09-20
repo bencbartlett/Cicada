@@ -60,6 +60,7 @@ pub struct RectangularArrayIn {
 /// ```
 #[node(
     category = "Transform",
+    sub = "Array",
     tier = "1",
     version = 1,
     gh = "Rectangular Array",

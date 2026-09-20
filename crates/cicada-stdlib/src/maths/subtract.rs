@@ -17,6 +17,7 @@ use super::BinaryIn;
 /// ```
 #[node(
     category = "Maths & logic",
+    sub = "Operators",
     tier = "S",
     version = 1,
     gh = "Subtraction"

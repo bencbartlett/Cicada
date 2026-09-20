@@ -51,7 +51,7 @@ pub struct CycleIn {
 /// spin = cycle(period=4.0, frames=120)
 /// angle = spin * 6.283185307179586
 /// ```
-#[node(category = "Params & input", tier = "1", version = 1, gh = none)]
+#[node(category = "Params & input", sub = "Time", tier = "1", version = 1, gh = none)]
 #[must_use]
 pub fn cycle(input: CycleIn) -> f64 {
     assert!(

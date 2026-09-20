@@ -140,6 +140,13 @@ pub struct NodeSpec {
     /// Palette category — one of [`crate::catalog::CATEGORY_ORDER`]
     /// (docs/08 §Catalog).
     pub category: &'static str,
+    /// The sub-group within the category (`#[node(sub = "Operators")]`;
+    /// v0.1 wave 5, C2c) — the menu bar's column under the category's tab.
+    /// One of the names [`SUBGROUPS`] lists for the category (docs/08
+    /// §Catalog mirrors the table; the stdlib's conformance test holds every
+    /// node to it). The attribute is REQUIRED, like `gh`; project script
+    /// nodes are `Script`.
+    pub sub: &'static str,
     /// Catalog tier.
     pub tier: Tier,
     /// Explicit semantic node version (doc 12 cache keys): bumped on any
@@ -187,6 +194,69 @@ pub struct NodeSpec {
     pub module: &'static str,
     /// Defining line (`line!`) — same role as `module`.
     pub line: u32,
+}
+
+/// The sub-groups of every catalog category, in menu order: ONE table
+/// (v0.1 wave 5, C2c — DECISIONS.md row of 2026-08-25) that docs/08
+/// §Catalog mirrors (each category section's "Sub-groups" line), the
+/// stdlib's conformance test enforces (a node's `sub` is in its category's
+/// list; every listed sub-group of a shipped category has a node), the
+/// `CATALOG.md` renderer groups by, and `catalog.json` carries
+/// (`subgroups`, so the menu bar reads the order from the server instead of
+/// keeping a second copy). Names are Title Case, one or two words —
+/// Grasshopper's where Grasshopper has them. A sub-group is listed only
+/// while a node lives in it: `Curve`'s `Spline` / `Analysis`, `Mesh &
+/// field`'s `Field`, `List & axis`'s `Sets` join the table with their
+/// first node (an empty column is a promise the menu cannot keep).
+///
+/// The rows are every [`crate::catalog::CATEGORY_ORDER`] category plus
+/// `Script` (the project's `scripts/*.py` nodes, one sub-group of the same
+/// name) — the unit test below holds the two lists together.
+pub const SUBGROUPS: &[(&str, &[&str])] = &[
+    ("Params & input", &["Input", "Time"]),
+    ("Sequences & random", &["Sequence", "Random"]),
+    (
+        "Maths & logic",
+        &["Operators", "Trig", "Util", "Domain", "Logic"],
+    ),
+    ("List & axis", &["List", "Axis"]),
+    ("Point · Vector · Plane", &["Point", "Vector", "Plane"]),
+    ("Curve", &["Primitive", "Division", "Util"]),
+    (
+        "Surface & solid",
+        &["Primitive", "Freeform", "Boolean", "Analysis"],
+    ),
+    (
+        "Mesh & field",
+        &["Primitive", "Freeform", "Boolean", "Util"],
+    ),
+    ("Intersect & regions", &["Shape", "Region"]),
+    ("Transform", &["Affine", "Euclidean", "Array", "Util"]),
+    ("Output, display & export", &["Display", "Text", "Files"]),
+    ("Script", &["Script"]),
+];
+
+/// The sub-groups of `category` in menu order, or `None` for a category the
+/// table does not know (a test fixture's — never a shipped node's, the
+/// conformance test sees to that).
+#[must_use]
+pub fn subgroups_of(category: &str) -> Option<&'static [&'static str]> {
+    SUBGROUPS
+        .iter()
+        .find(|(known, _)| *known == category)
+        .map(|(_, subs)| *subs)
+}
+
+/// Sort rank of a sub-group within its category: its table position, or
+/// after every listed one (then by name — the second tuple slot) when the
+/// table does not list it. The one ordering rule the `CATALOG.md` renderer
+/// uses for a category's sections.
+#[must_use]
+pub fn subgroup_rank(category: &str, sub: &'static str) -> (usize, &'static str) {
+    let subs = subgroups_of(category).unwrap_or(&[]);
+    subs.iter()
+        .position(|known| *known == sub)
+        .map_or((subs.len(), sub), |i| (i, ""))
 }
 
 impl NodeSpec {
@@ -594,6 +664,7 @@ mod tests {
             title: "Divide Curve",
             description: "Points and tangents along a curve.",
             category: "Curve",
+            sub: "Division",
             tier: Tier::S,
             version: 1,
             pure: true,
@@ -611,6 +682,56 @@ mod tests {
             spec.signature(),
             "divide_curve(curve: Curve, count: Integer = 10) → (points: [Point], tangents: [Vector])"
         );
+    }
+
+    // The sub-group table covers exactly the docs/08 categories plus
+    // `Script`, every name in the shape the menu shows (Title Case, one or
+    // two words), no name twice within a category, and at least one
+    // sub-group per row — an empty row would be a tab with no columns.
+    #[test]
+    fn subgroups_cover_every_category_once_with_menu_shaped_names() {
+        let table: Vec<&str> = SUBGROUPS.iter().map(|(category, _)| *category).collect();
+        let mut expected: Vec<&str> = crate::catalog::CATEGORY_ORDER.to_vec();
+        expected.push("Script");
+        assert_eq!(table, expected, "one row per category, in catalog order");
+        for (category, subs) in SUBGROUPS {
+            assert!(!subs.is_empty(), "`{category}` lists no sub-group");
+            let mut seen = BTreeSet::new();
+            for sub in *subs {
+                assert!(seen.insert(*sub), "`{category}` lists `{sub}` twice");
+                let words: Vec<&str> = sub.split(' ').collect();
+                assert!(
+                    (1..=2).contains(&words.len()),
+                    "`{category}` / `{sub}`: one or two words"
+                );
+                for word in words {
+                    assert!(
+                        word.chars().next().is_some_and(char::is_uppercase)
+                            && word.chars().all(|c| c.is_ascii_alphabetic()),
+                        "`{category}` / `{sub}`: Title Case, letters only"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn subgroup_lookup_and_rank_follow_the_table() {
+        assert_eq!(
+            subgroups_of("Maths & logic"),
+            Some(&["Operators", "Trig", "Util", "Domain", "Logic"][..])
+        );
+        assert_eq!(subgroups_of("Script"), Some(&["Script"][..]));
+        assert_eq!(subgroups_of("Zebra category"), None);
+        // Table order first; an unlisted sub-group after every listed one,
+        // then alphabetically among unlisted ones.
+        assert!(
+            subgroup_rank("Maths & logic", "Operators") < subgroup_rank("Maths & logic", "Trig")
+        );
+        assert!(subgroup_rank("Maths & logic", "Logic") < subgroup_rank("Maths & logic", "Alpha"));
+        assert!(subgroup_rank("Maths & logic", "Alpha") < subgroup_rank("Maths & logic", "Zulu"));
+        // An unknown category ranks every sub-group as unlisted.
+        assert_eq!(subgroup_rank("Zebra category", "Anything"), (0, "Anything"));
     }
 
     // The macro's const-time step: a bare single `out` takes the node's

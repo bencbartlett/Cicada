@@ -106,9 +106,13 @@ type FetchLike = Parameters<typeof fetchCatalog>[1];
 /**
  * One catalog read into the store: a good answer replaces the catalog
  * (the store swaps the whole object — the canvas re-indexes per object)
- * unless it is byte-identical to the one the store holds; a failure is a
- * notice and the previous catalog stays — better a stale search box than
- * an empty one mid-session. `fetchImpl` is for tests.
+ * unless it is byte-identical to the one the store holds and clears the
+ * store's `catalogError`; a failure is a notice, the previous catalog
+ * stays — better a stale search box than an empty one mid-session — and
+ * the failure is recorded (`catalogError`) so that when there is NO
+ * previous catalog (a first connect to an engine of another format) the
+ * menu bar and the search box say what happened instead of "loading".
+ * `fetchImpl` is for tests.
  */
 export async function readCatalog(fetchImpl?: FetchLike): Promise<void> {
   try {
@@ -118,7 +122,9 @@ export async function readCatalog(fetchImpl?: FetchLike): Promise<void> {
     applied = { text, catalog };
     store.setCatalog(catalog);
   } catch (error: unknown) {
-    useCicada.getState().addNotice("error", String(error));
+    const store = useCicada.getState();
+    store.addNotice("error", String(error));
+    store.setCatalogError(error instanceof Error ? error.message : String(error));
   }
 }
 

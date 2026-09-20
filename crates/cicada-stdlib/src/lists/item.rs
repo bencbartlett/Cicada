@@ -34,7 +34,13 @@ pub struct ItemIn {
 /// xs = [10.0, 20.0, 30.0]
 /// last = item(list=xs, index=-1, wrap=True)
 /// ```
-#[node(category = "List & axis", tier = "S", version = 2, gh = "List Item")]
+#[node(
+    category = "List & axis",
+    sub = "List",
+    tier = "S",
+    version = 2,
+    gh = "List Item"
+)]
 #[must_use]
 pub fn item(input: ItemIn) -> ElemSlot {
     let len = input.list.len();

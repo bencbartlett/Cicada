@@ -14,7 +14,13 @@ use super::AngleIn;
 /// ```cic
 /// value = sin(x=0.5)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Sine")]
+#[node(
+    category = "Maths & logic",
+    sub = "Trig",
+    tier = "1",
+    version = 1,
+    gh = "Sine"
+)]
 #[must_use]
 pub fn sin(input: AngleIn) -> f64 {
     input.x.sin()

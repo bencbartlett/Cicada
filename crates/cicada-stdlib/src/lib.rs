@@ -9,8 +9,8 @@
 //! (cicada-macros); the registry is queried through [`registry`].
 //!
 //! Layout (DECISIONS.md stdlib row, revised 2026-08-19): one node per
-//! file, `src/<category>/<node>.rs`, where the categories are the ribbon
-//! tabs (docs/08 §Catalog); a category's `mod.rs` lists its nodes and a
+//! file, `src/<category>/<node>.rs`, where the categories are the menu
+//! bar's tabs (docs/08 §Catalog); a category's `mod.rs` lists its nodes and a
 //! `support.rs` holds whatever several of them share. Catalog order never
 //! depends on this layout (name order within a category).
 
@@ -254,7 +254,7 @@ mod naming_fixtures {
     /// # Returns
     ///
     /// The truthy value.
-    #[node(category = "Maths & logic", tier = "S", version = 1, gh = none)]
+    #[node(category = "Maths & logic", sub = "Util", tier = "S", version = 1, gh = none)]
     pub fn loop_(input: FixtureIn) -> f64 {
         input.r#true
     }
@@ -266,6 +266,7 @@ mod naming_fixtures {
     /// The truthy value.
     #[node(
         category = "Maths & logic",
+        sub = "Util",
         tier = "S",
         version = 1,
         gh = none,
@@ -283,7 +284,7 @@ mod naming_fixtures {
     /// # Returns
     ///
     /// The truthy value.
-    #[node(category = "Maths & logic", tier = "S", version = 1, gh = none, volatile)]
+    #[node(category = "Maths & logic", sub = "Util", tier = "S", version = 1, gh = none, volatile)]
     pub fn fixture_volatile(input: FixtureIn) -> f64 {
         input.r#true
     }

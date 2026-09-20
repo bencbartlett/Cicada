@@ -94,16 +94,17 @@ an opaque protocol error; stdout carries nothing but JSON-RPC.
   the node catalog (docs/08): every query word scores against the
   dialect name, title, Grasshopper component name (`gh` — migrants
   search by the component they know), port names and description;
-  returns name, title, gh, category and the one-line signature per hit
+  returns name, title, gh, category, `sub` (the sub-group within the
+  category — the menu bar's column) and the one-line signature per hit
   — scoped retrieval instead of dumping the specs into context. An
   empty query lists the catalog; `category` scopes it.
 - `node_doc {name}` — one node's full spec: the `/api/catalog` node
-  object (title, description, category, tier, version, `pure`,
+  object (title, description, category, `sub`, tier, version, `pure`,
   `uses_tolerance`, `panics` = the red-when contract, `gh`, runnable
   `examples`, every input and output port with type / default / doc /
   dimension) plus `signature` and `effectful`. An unknown name returns
   the checker's own did-you-mean.
-- `list_categories` — the ribbon tabs with node counts.
+- `list_categories` — the menu bar's tabs with node counts.
 - `check {text | path}` — parse + typecheck + dry-lower in
   milliseconds, no geometry: `ok`, the doc-11 diagnostics (kind, node,
   span, message, expected/actual, fix with a machine-applicable

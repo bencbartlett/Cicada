@@ -21,6 +21,7 @@ use super::UnaryIn;
 /// ```
 #[node(
     category = "Maths & logic",
+    sub = "Util",
     tier = "1",
     version = 1,
     gh = "Natural logarithm"

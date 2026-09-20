@@ -22,6 +22,7 @@ use super::UnaryIn;
 /// ```
 #[node(
     category = "Maths & logic",
+    sub = "Operators",
     tier = "1",
     version = 1,
     gh = "Square Root"

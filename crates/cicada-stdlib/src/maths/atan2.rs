@@ -23,7 +23,7 @@ pub struct Atan2In {
 /// ```cic
 /// heading = atan2(y=1.0, x=1.0)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = none)]
+#[node(category = "Maths & logic", sub = "Trig", tier = "1", version = 1, gh = none)]
 #[must_use]
 pub fn atan2(input: Atan2In) -> f64 {
     input.y.atan2(input.x)

@@ -1,5 +1,5 @@
 /**
- * The docked window (docs/16 §Application layout): top bar · ribbon ·
+ * The docked window (docs/16 §Application layout): top bar · menu bar ·
  * canvas/viewport split (resizable, presets, swap) · inspector · transport
  * bar (only with time params) · status bar.
  * Regions are components owned by their folders; this file only arranges
@@ -11,9 +11,9 @@ import { useKeyboard } from "./keyboard";
 import { CommitDialog } from "./panels/CommitDialog";
 import { ConnBanner } from "./panels/ConnBanner";
 import { Inspector } from "./panels/Inspector";
+import { MenuBar } from "./panels/MenuBar";
 import { Notices } from "./panels/Notices";
 import { OpenDialog } from "./panels/OpenDialog";
-import { Ribbon } from "./panels/Ribbon";
 import { StatusBar } from "./panels/StatusBar";
 import { TopBar } from "./panels/TopBar";
 import { TransportBar } from "./panels/TransportBar";
@@ -68,7 +68,7 @@ export function App() {
     <div className="app" data-testid="app">
       <ConnBanner />
       <TopBar />
-      <Ribbon />
+      <MenuBar />
       <div className="app-main">
         <div className="app-work" ref={workRef} style={style}>
           <div className="pane" data-testid={settings.swap ? "viewport-pane" : "canvas-pane"}>

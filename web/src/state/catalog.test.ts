@@ -5,7 +5,8 @@
  * scripts — and nothing else), HOW reads are sequenced (one in flight, one
  * follow-up for any number of snapshots that land meanwhile, so the store
  * never keeps an older catalog on top of a newer one), and what a read
- * does to the store (replace on success, notice + keep on failure).
+ * does to the store (replace on success and clear the recorded failure;
+ * notice + keep + record the failure on failure).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Catalog, CatalogNode, ServerEnvelope } from "../protocol/messages";
@@ -51,7 +52,8 @@ function snapshot(barrier: boolean, reason: string, seq = 1): ServerEnvelope {
 
 function catalogOf(...names: string[]): Catalog {
   return {
-    format: 2,
+    format: 3,
+    subgroups: [],
     nodes: names.map(
       (name): CatalogNode => ({
         name,
@@ -63,6 +65,7 @@ function catalogOf(...names: string[]): Catalog {
         pure: true,
         uses_tolerance: false,
         gh: null,
+        sub: "Util",
         examples: [],
         inputs: [],
         outputs: [],
@@ -211,7 +214,7 @@ describe("readCatalog", () => {
   beforeEach(() => {
     // `stopCatalogRefresh` also forgets the last applied answer.
     stopCatalogRefresh();
-    useCicada.setState({ catalog: null, notices: [] });
+    useCicada.setState({ catalog: null, catalogError: null, notices: [] });
     useCicada.getState().setIdentity("tok", "sub/p.cic");
   });
 
@@ -241,6 +244,34 @@ describe("readCatalog", () => {
     const state = useCicada.getState();
     expect(state.catalog?.nodes.map((n) => n.name), "better a stale search box than an empty one").toEqual(["series"]);
     expect(state.notices.map((n) => [n.level, n.message])).toEqual([["error", "Error: catalog: HTTP 401"]]);
+    expect(state.catalogError, "recorded for the empty states to read").toBe("catalog: HTTP 401");
+  });
+
+  it("an engine of another catalog format is an error notice naming both numbers, and the previous catalog stays", async () => {
+    await readCatalog(() => Promise.resolve(new Response(JSON.stringify(catalogOf("series")), { status: 200 })));
+    // A format-2 body — no `subgroups`, no `sub` per node — is what an
+    // older engine on this port would serve; the app refuses it instead of
+    // laying the menu out from fields that are not there.
+    const formatTwo = { format: 2, nodes: [] };
+    await readCatalog(() => Promise.resolve(new Response(JSON.stringify(formatTwo), { status: 200 })));
+    const state = useCicada.getState();
+    expect(state.catalog?.nodes.map((n) => n.name), "the catalog the app can read stays").toEqual(["series"]);
+    expect(state.notices.map((n) => n.level)).toEqual(["error"]);
+    expect(state.notices[0]?.message).toMatch(/format 2 .*format 3/);
+  });
+
+  it("a refusal on the FIRST connect — nothing to keep — is recorded, so the menu bar and the search box name it instead of a pending load; a good read clears it", async () => {
+    expect(useCicada.getState().catalog).toBeNull();
+    await readCatalog(() => Promise.resolve(new Response(JSON.stringify({ format: 2, nodes: [] }), { status: 200 })));
+    let state = useCicada.getState();
+    expect(state.catalog, "no previous catalog: the store stays without one").toBeNull();
+    expect(state.catalogError).toMatch(/^catalog: format 2 .*format 3/);
+    expect(state.notices.map((n) => n.level), "the notice is still raised").toEqual(["error"]);
+    // An engine of this build answers: the record clears with the catalog's arrival.
+    await readCatalog(() => Promise.resolve(new Response(JSON.stringify(catalogOf("series")), { status: 200 })));
+    state = useCicada.getState();
+    expect(state.catalog?.nodes.map((n) => n.name)).toEqual(["series"]);
+    expect(state.catalogError, "a good read clears the record").toBeNull();
   });
 
   it("an answer byte-identical to the one held is not re-applied — a text-only reload re-renders no canvas node", async () => {

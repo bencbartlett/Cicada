@@ -23,7 +23,7 @@ runs in parallel from day 1:
 | 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | **DONE** 2026-08-20 (`wt/transport`): engine — `cycle` / `clock` with the `transport_driven` port attribute, the playhead injected at lowering, per-session transport state + the five `transport_*` intents + `TransportView` in every snapshot and the `transport` broadcast, playback over the preview loop, `examples/08-orbit.cic` (orbit second pass 120 generations, 0 computed / 1,800 cached, p50 0.43 ms); web — the play bar (play/pause, the frame scrubber, speed, reset), `Space`, the transport-driven ports hidden on the canvas and in the inspector (each driven port carrying its own loop; the server owns the wire-target rule — `probe_wire`/`connect` refuse), observers read-only, `web/e2e/transport.spec.ts` |
 | 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | **S1 (engine) done** 2026-08-24 (`wt/scrub`): eligibility as a pure function (32 positions, `step > 0`, literal bounds), `slider`'s `scrub = False` kwarg (version 2), the idle-class warmer (nearest-first alternating, one position at a time, dry-run skips, the 256 MiB cap, dropped on a text change, blocked by a live drag / playback, parked after a pre-emption), the additive protocol (`ParamView.scrub`, `scrub_progress`, `set_scrub`, `/debug/state.scrub`), `02-solids`' cone slider opted in; the DoD sweep (`slider_loop.mjs --snap --expect warm`) — §Item 5; **S2 (web) done** 2026-08-24 (`wt/scrub`): the one buffer bar under both slider widgets (`ScrubBar.tsx`), the toggle in the inspector's actions, the params row and the node menu greyed with the server's reason (`ScrubToggle.tsx`, `state/scrub.ts`), `scrub_progress` as a store overlay beside the graph; the `scrub` port row stays; `web/e2e/scrub.spec.ts` — 02-solids warm / toggled and a Python-burn pipeline for the live-vs-withheld tie-in (warm drag: every preview `computed: 0`, the viewport following; cold un-scrubbed drag: the pending chip on writer and observer) — §Item 5 |
 | 6 | WASM script host — load precompiled guests, epoch cancellation, `cicada-guest` SDK | last | weeks | pending |
-| C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); **C1 done** (2026-08-20: 48 nodes — lists, maths tail, sequences; the diagnostics name real nodes and a test keeps it so; `compact` satisfiable at check time; `examples/06-lists.cic`); **`cicada mcp` done** (2026-08-20: the four doc-11 read tools over stdio on `rmcp`); **C2a done** (2026-08-24, `wt/catalog-c2`: the 12 Point · Vector · Plane rows — `distance`, `closest_point` (a flat scan, no new dependency), `cull_duplicates`, `construct_vector` / `deconstruct_vector`, `amplitude` / `vector_length`, `cross_product` / `dot_product` / `angle`, `rotate_vector`, `plane_normal`; `examples/09-vectors.cic`); **C2b done** (2026-08-24, `wt/catalog-c2`: `rotate_axis`, `scale_nu`, `polar_array`, `rectangular_array`, `compose_xform`, `transform`, `center_box`, `mesh_plane`, the dropdown param as `choice` (the ledger's name; the contract's `value_list`) with its `<select>` on both param surfaces, plus `construct_xform` as the one `Xform` producer; `cicada_geom::transform::Affine`; `examples/06-lists.cic` gains the pegboard; the record and its deviations are under the wave-4 second-half contract); next C3+ |
+| C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); **C1 done** (2026-08-20: 48 nodes — lists, maths tail, sequences; the diagnostics name real nodes and a test keeps it so; `compact` satisfiable at check time; `examples/06-lists.cic`); **`cicada mcp` done** (2026-08-20: the four doc-11 read tools over stdio on `rmcp`); **C2a done** (2026-08-24, `wt/catalog-c2`: the 12 Point · Vector · Plane rows — `distance`, `closest_point` (a flat scan, no new dependency), `cull_duplicates`, `construct_vector` / `deconstruct_vector`, `amplitude` / `vector_length`, `cross_product` / `dot_product` / `angle`, `rotate_vector`, `plane_normal`; `examples/09-vectors.cic`); **C2b done** (2026-08-24, `wt/catalog-c2`: `rotate_axis`, `scale_nu`, `polar_array`, `rectangular_array`, `compose_xform`, `transform`, `center_box`, `mesh_plane`, the dropdown param as `choice` (the ledger's name; the contract's `value_list`) with its `<select>` on both param surfaces, plus `construct_xform` as the one `Xform` producer; `cicada_geom::transform::Affine`; `examples/06-lists.cic` gains the pegboard; the record and its deviations are under the wave-4 second-half contract); **C2c done** (2026-08-25, `wt/menu`, wave 5 Track M: the required `#[node(sub = …)]`, `NodeSpec.sub`, `spec::SUBGROUPS` mirrored by docs/08 and enforced by the conformance tests, catalog format 3 with `sub` + the `subgroups` table and the web mirror's refusal of any other format, CATALOG.md grouped by sub-group, `cicada mcp` carrying `sub`; the record and its deviations are under §Wave 5 Track M); next C3+ |
 
 Out of v0.1 (unchanged from doc 05): fillets/chamfers and B-rep
 maturity, the Blender bridge, fidget, the .gh importer, Tauri, the AI
@@ -2524,6 +2524,93 @@ proves wrong is revised here, dated, in the landing commit.
   signature — the conformance test says so). The `add-stdlib-node`
   skill and docs/14 §node file format gain the attribute. Catalog
   regenerated in the same commit.
+  *Built 2026-08-25 (`wt/menu`).* The macro requires `sub = "…"` (a
+  missing one, a blank one and a padded one are trybuild cases — one
+  witness per shape rule; presence and shape are the macro's,
+  membership is the conformance test's — cicada-macros has
+  no workspace dependency to read the table from), `NodeSpec.sub`, the
+  table `spec::SUBGROUPS` (unit-tested to cover exactly
+  `CATEGORY_ORDER` + `Script`, Title Case one-or-two-word names, no
+  duplicates), `subgroups_of` / `subgroup_rank`; `CATALOG.md` renders
+  `###` sub-group headings under each category in table order (a
+  sub-group the table does not list trails; an empty one gets no
+  heading); `catalog.json` is format 3; the four conformance tests —
+  membership, every listed column of a shipped category filled (`Script`
+  the one row the stdlib never fills), docs/08's Sub-groups lines equal
+  to the table, and the ledger row unchanged by a move between columns;
+  `cicada mcp`'s `catalog_search` hits and `node_doc` carry `sub` (the
+  schema test holds the latter); the web mirror (`CatalogNode.sub`,
+  `Catalog.subgroups`) and `catalog.test.ts` against the committed
+  bytes; script nodes `Script`; docs/08, docs/13, docs/14, DECISIONS.md
+  row 23 and the skill revised; the catalog regenerated. *What the
+  contract did not foresee, recorded here as it asks:* (1) **150
+  assignments, not 159** — the registry holds 150 stdlib nodes (the
+  three `cfg(test)` fixtures in `lib.rs` are `Util`). (2) **The table as
+  built differs from the contract's sketch where a listed sub-group
+  would have been empty** — the contract's own rule ("every listed
+  sub-group non-empty") and the menu's (an empty column is a promise the
+  menu cannot keep) decide: *Params & input* → Input · **Time**
+  (`cycle` / `clock` are time params, not GH's "Primitive" containers —
+  Cicada's literals are bare bindings, so "Primitive" had no node);
+  *List & axis* → List · **Axis** (no set node ships; `Sets` joins with
+  the first; "Axis", not the sketch's "Tree" — see (4)); *Curve* →
+  Primitive · Division · Util (`Spline` / `Analysis` wait for
+  `interpolate` / `length` & co.); *Mesh & field* → Primitive ·
+  **Freeform** · Boolean · **Util** (`mesh_extrude` / `mesh_loft` sit
+  where their B-rep twins sit — see (4); `as_watertight` and
+  `tessellate` are the mesh tier's conversions, GH's Mesh › Util;
+  `Analysis` / `Field` wait for their nodes); *Output, display & export*
+  → Display · **Text** ·
+  **Files** (`text_outlines` / `text_solids` are real geometry, neither
+  display nor export; `import_step` belongs with the STEP/OBJ file nodes
+  and "Export" would have misnamed it). Maths, Point · Vector · Plane,
+  Surface & solid, Sequences, Intersect, Transform and Script are the
+  contract's. (3) **`catalog.json` also carries the table** (top-level
+  `subgroups: [{category, subgroups}]`, additive) — M1's columns are "in
+  table order", and without it the web would hold a second copy of the
+  order (as `kinds.ts` already does for `CATEGORY_ORDER`); the contract's
+  "ONE table" is kept literally by serving it. The web's `Catalog` type
+  carries it; the ribbon of today ignores it. (4) **Two table revisions
+  from the catalog review (fix round 1, 2026-08-25)** — the contract hands
+  the table to the review's judgement: the sketch's "Tree" column is the
+  vocabulary DECISIONS.md's 2026-08-11 row retired ("lists are lists";
+  graft / flatten / Path Mapper replaced by typed combinators), and
+  `flatten` / `nest` / `transpose` / `chunk` / `partition` / `group_by` /
+  `concat` / `compact` are exactly those combinators, so the column is
+  **Axis** — the category's own word (each row's `gh` hint — Graft Tree,
+  Flatten Tree, Clean Tree — is the migrant's bridge; the column title
+  need not be); and `mesh_extrude` / `mesh_loft` moved from Mesh &
+  field's Primitive to a **Freeform** column beside their B-rep twins'
+  (`extrude` / `loft` under Surface & solid) — the two tiers are
+  documented as the same four nodes under `mesh_*` names, and a user who
+  learns one tier's column must find the other in it. The
+  `add-stdlib-node` skill now points at docs/08's Sub-groups lines instead
+  of carrying a third copy of the table (nothing tested that copy). The two
+  new trybuild cases carry `# Returns`, so the `sub` error is their only
+  one — a regressed macro compiles them and trybuild says "should not have
+  compiled" in every mode, the overwrite bless included (before, the cases
+  still failed on `# Returns`, and a bless would have rewritten the
+  snapshot to that error, retiring the `sub` check without a word). And the web
+  REFUSES a catalog whose `format` is not the `CATALOG_FORMAT` it mirrors
+  (`web/src/protocol/version.ts`, beside `PROTOCOL_VERSION`; `fetchCatalog`
+  throws naming both numbers, the state layer raises the notice and keeps
+  the catalog it has) — a format-2 engine under a format-3 app (an older
+  engine on the proxy port, a stale embedded SPA) would otherwise have
+  been the silent category-only menu the server's bump exists to prevent;
+  and the mirror's `sub` / `subgroups` are pinned REQUIRED at the type
+  level in `catalog.test.ts` (`expectTypeOf` — `sub?: string` had passed
+  every runtime assertion). *Fix round of 2026-08-26:* the blank-`sub`
+  trybuild case had used `" "`, which BOTH halves of the macro's shape
+  rule refuse — dropping either half alone left the suite green — so it
+  is now two witnesses, `sub_blank.rs` (`""`) and `sub_padded.rs`
+  (`" Operators "`), each red under exactly one mutation; docs/11's
+  `catalog_search` / `node_doc` field lists and docs/14's CATALOG.md
+  bullet name `sub` and the sub-group grouping; and the web's one copy
+  of the CATEGORY order (`kinds.ts::CATEGORY_ORDER`, which `ribbonTabs`
+  and the params panel order by) is held to the served `subgroups` rows
+  by `catalog.test.ts` — the column order is read from the server and
+  kept nowhere else, the category order is one pinned copy.
+
 - **M1 — the menu bar.** The ribbon becomes a menu bar: one tab per
   category (label · count); a click opens a panel under it whose
   columns are the category's sub-groups in table order, each a titled
@@ -2539,6 +2626,64 @@ proves wrong is revised here, dated, in the landing commit.
   the view's centre cell ± 1). docs/16 §Application layout (the ribbon
   paragraph becomes the menu bar's), DECISIONS.md row 2026-08-11
   revised ("GH-style category ribbon" → a menu bar with sub-groups).
+  *Built 2026-08-25 (`wt/menu`).* `web/src/panels/MenuBar.tsx` replaces
+  `Ribbon.tsx`: one tab per category (label · count, docs/08 order, the
+  `Project` tab for script nodes); a click drops the panel under the tab
+  (pulled left when it would overrun the bar's right edge), its columns
+  the category's filled sub-groups in the catalog's `subgroups` order —
+  the model keeps the contract's name, `ribbonTabs(nodes, subgroups)`,
+  now with `columns` per tab; an empty sub-group has no column, and a
+  sub-group the table does not list for the category trails under its
+  own name rather than folding into a listed column silently (a
+  defensive rule no shipped node reaches: the script decorator declares
+  a title and a description, never a category, so every script node is
+  `Script` / `Script` on the Project tab). Node buttons
+  carry title + name; the hover the description, `GH: <name>` when it
+  differs from the title (`ghHint`) and `Red when: …`. Hovering another
+  tab while a panel is open switches (`onPointerEnter`, only while open);
+  an outside `pointerdown`, Esc, a re-click of the tab and a placement
+  close it — the File / settings menus' listener pattern. That Esc
+  closes the panel and nothing else: the clicked tab keeps focus and the
+  keyboard router passes no plain key from a button (`hotkeysReach`), so
+  the selection stays — as with those menus.
+  A placement is one `place_node {func, cell: canvasCenter}` (null before
+  the canvas's first fit → the server's auto-layout), then the panel
+  closes. `settings.ribbonCollapsed` is gone from `Settings`, the
+  defaults and the settings menu; `settingsFrom(raw)` builds the settings
+  from the keys this build has, so a stored `ribbonCollapsed` is dropped
+  — never carried in memory or written back. `.app-main` is an isolated
+  stacking context so the canvas's own layers (search box, context menu)
+  stay under the panel while the top bar's menus stay above the bar.
+  Tests: `ribbonTabs.test.ts` (columns in table order, the empty and
+  trailing rules, every tab of the committed catalog against its table
+  row), `MenuBar.test.tsx` (jsdom against the committed catalog: open,
+  hover-switch, the four closings, one `place_node` at the centre, the
+  observer's disabled buttons with the reason, the loading state),
+  `store.test.ts` (`settingsFrom`), `web/e2e/menu.spec.ts` (Maths opens
+  with exactly the server's row — five columns — hover switches, outside
+  click / Esc / re-click close, `add` lands within ± 1 of the centre cell
+  computed from the DOM's viewport transform and equal to the store's
+  `canvasCenter`, the settings menu offers no "ribbon collapsed").
+  docs/16 §Application layout (diagram + paragraph), docs/14's node file
+  format line and DECISIONS.md row 2026-08-11 revised in the same
+  commit. *What the contract did not foresee:* nothing of substance —
+  the test ids are the menu's (`menubar`, `menu-tab-<label>`,
+  `menu-panel`, `menu-col-<sub>`, `menu-node-<name>`; no spec had used
+  the ribbon's), and a hover's GH hint follows search-to-place's rule
+  (shown only when it says something the title does not). *Fix round of
+  2026-08-26 (the UI half's review):* a refused catalog with none to
+  keep — a first connect to an engine of another format — is recorded in
+  the store (`catalogError`, set by `readCatalog`'s failure, cleared by
+  a good read; `store.test.ts`'s `resetSession` leaves it with the
+  catalog) and the menu bar's and the search box's empty states render
+  it (`menu-catalog-error`, `.cv-search-empty.error`) in place of
+  `catalog loading…` / `catalog not loaded yet`, which had described a
+  pending load for a read that will never succeed once the one error
+  notice is dismissed; the two sentences above on script nodes'
+  "declared category" and on Esc clearing the selection were corrected to
+  what is built (the decorator declares no category; a focused tab
+  button keeps plain keys from the router — Delete included — while
+  Ctrl chords pass, as every button does).
 
 **Round 2** (launched as Round-1 worktrees merge and free their slots).
 

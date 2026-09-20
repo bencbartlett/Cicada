@@ -39,6 +39,7 @@ pub struct TruncateIn {
 /// ```
 #[node(
     category = "List & axis",
+    sub = "List",
     tier = "S",
     version = 1,
     gh = "Shortest List"

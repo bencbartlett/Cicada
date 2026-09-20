@@ -63,6 +63,7 @@ pub struct MeshLoftIn {
 /// ```
 #[node(
     category = "Mesh & field",
+    sub = "Freeform",
     tier = "S",
     version = 1,
     gh = "Loft",
