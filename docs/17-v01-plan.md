@@ -2130,7 +2130,7 @@ DECISIONS.md row of 2026-08-11 (UI contracts) revised for the tiers.
 | U21 | Make the **hover** effect on an edge far more noticeable — like the selected-edge effect at a slightly lower opacity. | **Done 2026-08-25** (fast lane): the glow path is drawn under every wire; hover shows it at 0.2, the selected wire at 0.32 (`canvas.css`). | — |
 | U22 | Selecting a node highlights all its connected edges with the hover effect. | **Done 2026-08-25** (fast lane): each edge reads one boolean from the store's selection (`attached`) and wears the hover glow. | — |
 | U23 | Nodes should show the values of their **inputs** as well as their outputs at close zoom; numbers (and vectors of numbers) to **4 significant figures** on the node (full in the inspector); value text 30 % smaller and fainter. | **Half done 2026-08-25** (fast lane): `valueText.ts` rounds every decimal on the face to four significant figures (the hover and the inspector keep the server's rendering); the value text is 5.25 px / `--fg-faint`. **Input values: built 2026-08-25 (wave 5 N1; §Wave 5 Track N)** — `inspect` answers `inputs` beside `outputs`, each wired input its source output's summary, shown after the port label like an output's; fix round 2026-09-19 (unpacked sources, red/blocked nodes). | N1 |
-| U24 | Mouseover text boxes should appear ~50 % faster. | Build. The delay is the browser's (native `title` tooltips, ~1 s in Chromium, not configurable), so a tooltip layer of our own: one listener on the document, the hovered element's `title` shown after ~250 ms in a themed box, the attribute parked in `data-title` while hovered so the native one never doubles it, restored on leave — 125 `title=` sites keep working unchanged; the e2e specs that read `title` do so unhovered. | T1 |
+| U24 | Mouseover text boxes should appear ~50 % faster. | Build. The delay is the browser's (native `title` tooltips, ~1 s in Chromium, not configurable), so a tooltip layer of our own: one listener on the document, the hovered element's `title` shown after ~250 ms in a themed box, the attribute parked in `data-title` while hovered so the native one never doubles it, restored on leave — 125 `title=` sites keep working unchanged; the e2e specs that read `title` do so unhovered. **Built 2026-09-20 (wave 5 T1; §Wave 5 Track A)** — disabled controls included (Chromium fires pointer events over them). | T1 |
 | U25 | Profiling badge: slightly smaller; drop the word "cached" — always the last timing, grey and in parentheses when cached; 3 significant figures in the hover; `ns` below 1 µs. | **Done 2026-08-25** (fast lane): `durationLabel` / `durationTitle` in `grid.ts`; `(1.2ms)` in `--fg-faint` for a memo hit (the entry's recorded cost — the word stays only for an entry that recorded none), `done in 1.24 ms` hovers, `640ns`. | — |
 | U26 | Adopt GH's wire convention: single line = one value, double line = list, thick dashed = tree / nested / complex. | **Done 2026-08-25** (fast lane): `wireStyle(depth)` — single · double (a 4 px stroke with a 1.5 px background core) · thick dashed (depth ≥ 2); docs/09 and docs/16 said "double / hatched" and now say what is drawn. | — |
 | U27 | The ribbon should not be persistent: a **dropdown menu** per tab that closes on a click elsewhere, with **sub-categories** (as GH groups Maths into Operators / Trig / Util …). | Build. The catalog carries the sub-group: `#[node(…, sub = "operators")]` on every node (docs/08's category sections gain their sub-groups; `catalog.json` format 3 `sub`; the conformance test requires it), and the ribbon becomes a **menu bar** — a tab opens a panel whose columns are the sub-groups, closed by an outside click, Esc or a placement; the `ribbonCollapsed` setting goes. A mechanical catalog package (C2c, every node file) and a web package (M1) that can group by category alone until C2c lands. | C2c + M1 |
@@ -3353,6 +3353,65 @@ proves wrong is revised here, dated, in the landing commit.
   250: shown; leave: hidden, `title` back), an assertion in
   `smoke.spec.ts` (hover the undo button → the box shows its title
   within 400 ms). docs/16 §Theme and visual language.
+  *Built 2026-09-20 (wave 5 T1)* — `web/src/tooltip.ts` (the
+  controller: `installTooltips(document)` → a subscription, the four
+  listeners in the capture phase; `placeTooltip`, the pure placement;
+  `TOOLTIP_DELAY_MS` = 250, `PARKED_ATTR` = `data-title`) +
+  `web/src/TooltipLayer.tsx` (the box, mounted in `Root` beside every
+  screen), the `.tooltip` rule in `styles.css` (z-index 100, over the
+  dialogs' 60 and the notices' 50, `pointer-events: none`,
+  `white-space: pre-line`). Tests: `tooltip.test.ts` (14, jsdom, fake
+  timers: shown at 250 and null at 249, the title parked as an empty
+  attribute + `data-title` and back on leave, the element's descendants
+  keeping the hover and a sibling starting from zero, an ancestor's
+  title for an untitled child, an empty title showing nothing, a pointer
+  down and Esc dismissing with the title kept parked and the key not
+  consumed, a title rewritten under the pointer followed and restored
+  as the NEW value, a removed one restoring nothing, newlines kept, an
+  element removed before the delay, dispose; `placeTooltip` — below,
+  above, the edges, neither side), `TooltipLayer.test.tsx` (the box
+  rendered for real: one `role="tooltip"`, placed, gone on leave and on
+  unmount), and `smoke.spec.ts`'s last section (the undo button after
+  the drag: the box shows its own title, `role`, the title parked and
+  `data-title` set while hovered, the box below the button and inside
+  the viewport, back on leave — and the delay measured INSIDE the page,
+  `pointerover` to the box's arrival, held to ≥ 245 ms). *What the
+  contract did not foresee:* (1) **the upper bound "within 400 ms" is a
+  runner fact** (the brief's cross-runner rule — a loaded CI runner
+  with a debug engine makes the interval longer, never shorter), so the
+  spec holds the layer's own contract instead: never before the delay
+  (the in-page measurement), shown within the suite's expect timeout;
+  the exact 250 is the fake-timer test's. (2) **Disabled controls DO
+  fire pointer events in Chromium** (measured on 151 with a document
+  listener: `pointerover` / `pointerout` / `pointerdown` / `pointerup`
+  and the mouse events arrive over a disabled button; only `click` is
+  withheld), so "they keep the native tooltip" would have to be a rule
+  of ours making the "why disabled" titles — the ones a user wants
+  first — slower on purpose; the layer special-cases nothing and they
+  show at 250 ms too, and where a browser withholds those events the
+  native one stays (docs/16 says which is which; DECISIONS.md's row
+  2026-08-25, "a 250 ms layer of our own over the same `title` text",
+  holds as written). (3) The title is parked as an **empty attribute**,
+  not removed: an empty `title` is the platform's "no tooltip here, and
+  none of the ancestors'", so the undo button's parked title cannot let
+  its `tb-history` wrapper's "3 undoable" surface natively in its place —
+  a removed attribute would — and React's `removeAttribute` for a prop
+  gone `undefined` still produces a mutation record to adopt. (4) A
+  title the app rewrites under the pointer — the undo button after a
+  click on it, the solve chip mid-generation, the git chip — is adopted
+  through a MutationObserver on the hovered element, so the box follows
+  and the restore never writes a stale value; the contract's "restored
+  on leave" would otherwise have restored the OLD title over React's
+  new one (React writes the attribute only when the prop changes, so
+  the stale value would have stood until the next change). (5) The
+  component file is `TooltipLayer.tsx`, not `Tooltip.tsx`: that name
+  differs from `tooltip.ts` only in case, and Vite resolves `./Tooltip`
+  to `tooltip.ts` on a case-insensitive file system — the first run of
+  the component test on this Windows machine rendered `undefined`.
+  Not built: a scroll or resize listener (the box is placed once, at
+  show; Chromium re-hovers after layout moves the element away from
+  under the pointer and the layer ends the hover then); a hover timer
+  restart when a title reappears on the same element.
 
 **Answered in place**, not in the wave: U28 (the icon workflow — a
 track-C package when Ben wants it).

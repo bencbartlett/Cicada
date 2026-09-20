@@ -95,6 +95,11 @@ signing, and Python 3 must be on the machine (the engine's script host).
   settings menu's About dialog shows them with the protocol, the engine's
   threads and links to the repository and the release notes; `v*` tags
   build and publish the bundles.
+- **Tooltips at 250 ms** (wave 5 T1): every `title` in the app shows in a
+  themed box of our own a quarter second after the pointer rests on the
+  element — below it, above when there is no room — in place of the
+  browser's own tooltip and its second of delay; a press or Esc dismisses
+  it.
 
 ### From the user tests
 
@@ -123,10 +128,11 @@ sets thrash a 256 MiB cache — which is why the cache is 1 GiB and visible.
   changes to its sources (`crates/`, `web/`, the manifests) — a dev build,
   not a release.
 
-<!-- TAG-TODO: wave 5's round 2 packages V1 (viewport modes: Split ·
-Floating · Window) and T1 (the 250 ms tooltip layer) are landing beside
-this entry. Before tagging: if the tag includes them, describe them under
-"The app" above; if not, say so under Known limits. Then delete this
-comment — `python tools/changelog.py check --tag` refuses to release a
-section that still carries a TAG-TODO, so the notes cannot describe a
-release they do not match. -->
+<!-- TAG-TODO: wave 5's round 2 package V1 (viewport modes: Split ·
+Floating · Window) is landing beside this entry (T1, the 250 ms tooltip
+layer, is in this branch's history and described under "The app"). Before
+tagging: if the tag includes V1, describe it under "The app" above; if
+not, say so under Known limits. Then delete this comment — `python
+tools/changelog.py check --tag` refuses to release a section that still
+carries a TAG-TODO, so the notes cannot describe a release they do not
+match. -->

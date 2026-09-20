@@ -7,6 +7,7 @@
  */
 import { expect, test, type Page } from "@playwright/test";
 import config from "../playwright.config";
+import { PARKED_ATTR, TOOLTIP_DELAY_MS } from "../src/tooltip";
 
 const meta = config.metadata as { token: string };
 const TOKEN = meta.token;
@@ -188,6 +189,65 @@ test("serve → load → place → wire → drag → screenshot asserts geometry
       }),
     )
     .toBeGreaterThan(0);
+
+  // ---- tooltips (docs/16 §Theme; wave 5 T1): the layer shows the undo
+  // button's OWN title — the op just made — in its box, after the delay and
+  // never before it, placed below the button inside the viewport; while the
+  // pointer rests there the title is parked (an empty attribute, the text in
+  // `data-title`), and it is back once the pointer leaves. The delay is
+  // measured INSIDE the page — the time from the button's `pointerover` to
+  // the box's arrival in the DOM — so the assertion is the layer's own
+  // clock, not the runner's: a loaded runner makes the interval longer,
+  // never shorter, so only the lower bound is a fact to hold (the exact
+  // 250 ms is the fake-timer unit test's).
+  const undo = page.getByTestId("tb-undo");
+  await expect(undo).toBeEnabled();
+  const undoTitle = await undo.getAttribute("title");
+  expect(undoTitle).toMatch(/^undo: .* \(Ctrl\+Z\)$/);
+  await page.evaluate(() => {
+    const w = window as unknown as { __tooltipProbe: { overAt: number | null; shownAt: number | null } };
+    const probe = { overAt: null as number | null, shownAt: null as number | null };
+    w.__tooltipProbe = probe;
+    const button = document.querySelector("[data-testid='tb-undo']");
+    if (button === null) throw new Error("no undo button");
+    document.addEventListener(
+      "pointerover",
+      (event) => {
+        if (probe.overAt === null && button.contains(event.target as Node)) probe.overAt = performance.now();
+      },
+      true,
+    );
+    new MutationObserver(() => {
+      if (probe.shownAt === null && document.querySelector("[data-testid='tooltip']") !== null) probe.shownAt = performance.now();
+    }).observe(document.body, { childList: true, subtree: true });
+  });
+  await undo.hover();
+  const tooltip = page.getByTestId("tooltip");
+  await expect(tooltip).toBeVisible();
+  await expect(tooltip).toHaveText(undoTitle!);
+  await expect(tooltip).toHaveAttribute("role", "tooltip");
+  await expect(undo).toHaveAttribute("title", "");
+  await expect(undo).toHaveAttribute(PARKED_ATTR, undoTitle!);
+  const probe = await page.evaluate(
+    () => (window as unknown as { __tooltipProbe: { overAt: number | null; shownAt: number | null } }).__tooltipProbe,
+  );
+  expect(probe.overAt, "the hover reached the document").not.toBeNull();
+  expect(probe.shownAt, "the box's arrival was seen").not.toBeNull();
+  expect(probe.shownAt! - probe.overAt!, "never before the delay").toBeGreaterThanOrEqual(TOOLTIP_DELAY_MS - 5);
+  const undoBox = (await undo.boundingBox())!;
+  const tipBox = (await tooltip.boundingBox())!;
+  const viewportSize = page.viewportSize()!;
+  expect(tipBox.y, "below the button (the top bar has room under it)").toBeGreaterThanOrEqual(undoBox.y + undoBox.height);
+  await expect(tooltip).toHaveAttribute("data-side", "below");
+  expect(tipBox.x).toBeGreaterThanOrEqual(0);
+  expect(tipBox.y).toBeGreaterThanOrEqual(0);
+  expect(tipBox.x + tipBox.width).toBeLessThanOrEqual(viewportSize.width);
+  expect(tipBox.y + tipBox.height).toBeLessThanOrEqual(viewportSize.height);
+  // Leave: the box goes, the title is the element's again.
+  await page.mouse.move(vb.x + vb.width / 2, vb.y + vb.height / 2);
+  await expect(tooltip).toHaveCount(0);
+  await expect(undo).toHaveAttribute("title", undoTitle!);
+  await expect(undo).not.toHaveAttribute(PARKED_ATTR);
 
   expect(errors, errors.join("\n")).toEqual([]);
 });

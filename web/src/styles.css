@@ -322,6 +322,29 @@ code,
   padding: 8px 10px;
 }
 
+/* The tooltip layer (docs/16 §Theme; wave 5 T1): every `title`, after
+   250 ms, in one box `TooltipLayer.tsx` places against the hovered element —
+   fixed, over the dialogs' backdrops (60) and the notices (50), and never
+   under the pointer (a box that took the hover would end it). */
+.tooltip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 100;
+  max-width: min(360px, calc(100vw - 8px));
+  padding: 4px 8px;
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+
 /* The pop-out (docs/16 §Viewport conventions): the viewport alone, full window. */
 .viewport-only {
   display: grid;
