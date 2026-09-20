@@ -3207,10 +3207,27 @@ proves wrong is revised here, dated, in the landing commit.
   not `-alpha` alone — an `-rc.1` must not publish as final; (4)
   `CICADA_GIT_SHA` must be ≥ 12 hex digits (cut to 12) — a shorter or
   non-hex value fails the build with the reason rather than being
-  guessed around; (5) the stamp is re-taken when HEAD, its reflog, the
-  index or the two variables change, not on every source edit, so a dev
-  build's `-dirty` and date can lag an edit or a day (a fresh CI checkout
-  is exact; said in the script's header); (6) the repository URL is a
+  guessed around; (5) `-dirty` means the BUILD INPUTS carry uncommitted
+  tracked changes — `stamp::BUILD_INPUTS` = `crates/`, `web/`,
+  `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, what the binary and
+  the SPA it embeds are built from; a docs-only or examples-only edit is
+  not a dirty build — and the script registers every tracked file under
+  them plus HEAD, its reflog and the index as `rerun-if-changed`, so the
+  stamp is re-taken before the next build after any such change and
+  `tests/version.rs` holds `-dirty` ⇔ the porcelain over those paths
+  (fix round 2026-09-20, findings L2-1 / R1-C2: as first built the stamp
+  was re-taken only when HEAD or the index moved, so the plain edit →
+  build loop shipped a clean hash from a dirty tree for as long as
+  nothing wrote the index, and the `-dirty`-stripping test could not see
+  it). The price is one relink of cicada-cli per such change and per
+  external index write (`git add`, an IDE's status refresh after an edit
+  — L2-6, accepted and said in the header); the script's own git calls
+  carry `GIT_OPTIONAL_LOCKS=0` so its `status` never rewrites the index
+  behind cargo (L3-1: that re-ran the script on the very next build); the
+  repository must be this workspace (`git rev-parse --show-toplevel` =
+  the root) or the stamp is `unknown` with the reason (L3-3: a tarball
+  unpacked inside another checkout stamped that project's HEAD); a fresh
+  CI checkout is exact; (6) the repository URL is a
   client constant (`about.ts`), the release-notes link
   `<repo>/releases/tag/v<semver>`; (7) the CHANGELOG's section date is
   the day it was written — the tag's run carries the release date — and

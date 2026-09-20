@@ -1,13 +1,18 @@
 //! `cicada --version` at the process level (docs/17 wave 5 R1): the line
 //! has the stamped shape — `cicada <semver> (<commit>, <YYYY-MM-DD>)` with
 //! the workspace version, a 12-digit git hash (`-dirty` allowed) or
-//! `unknown`, and a date — and, where git can be asked, the hash is HEAD's.
-//! The rules themselves are unit-tested in `cicada_cli::stamp`; this proves
-//! the build script ran and clap prints what it stamped.
+//! `unknown`, and a date — and, where git can be asked, the hash is HEAD's,
+//! `-dirty` is exactly the build inputs' state. The rules themselves are
+//! unit-tested in
+//! `cicada_cli::stamp`; this proves the build script ran, re-ran when it had
+//! to, and clap prints what it stamped.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use cicada_cli::stamp::BUILD_INPUTS;
 
 fn version_line() -> String {
     let output = Command::new(env!("CARGO_BIN_EXE_cicada"))
@@ -35,6 +40,37 @@ fn parse(line: &str) -> (String, String, String) {
     (semver.to_owned(), commit.to_owned(), built.to_owned())
 }
 
+/// The workspace root: `crates/cicada-cli` → two up.
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .unwrap()
+        .to_path_buf()
+}
+
+/// Git in the workspace root, as the build script runs it (no index
+/// rewrite): its trimmed stdout, or `None` when git cannot answer — no git,
+/// not a repository.
+fn git(args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .args(args)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .current_dir(workspace_root())
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+/// `CICADA_GIT_SHA` set and non-blank: the override wins by contract, and
+/// HEAD is not the reference for the commit.
+fn overridden() -> bool {
+    std::env::var_os("CICADA_GIT_SHA").is_some_and(|v| !v.is_empty())
+}
+
 #[test]
 fn version_prints_the_stamped_shape() {
     let line = version_line();
@@ -53,29 +89,46 @@ fn version_prints_the_stamped_shape() {
 }
 
 /// Where git can say what HEAD is and no override was set, the stamped hash
-/// is HEAD's (the build script re-runs when HEAD moves). The `-dirty`
-/// suffix is not compared: the tree's state at build time is not its state
-/// now.
+/// is HEAD's (the build script re-runs when HEAD moves).
 #[test]
 fn the_commit_is_head_when_git_can_say() {
-    if std::env::var_os("CICADA_GIT_SHA").is_some_and(|v| !v.is_empty()) {
-        return; // the override wins by contract; HEAD is not the reference
-    }
-    let Ok(output) = Command::new("git")
-        .args(["rev-parse", "--short=12", "HEAD"])
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-    else {
-        return; // no git: the stamp is `unknown` by contract, checked above
-    };
-    if !output.status.success() {
+    if overridden() {
         return;
     }
-    let head = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let Some(head) = git(&["rev-parse", "--short=12", "HEAD"]) else {
+        return; // no git: the stamp is `unknown` by contract, checked above
+    };
     let (_, commit, _) = parse(&version_line());
     assert_eq!(
         commit.strip_suffix("-dirty").unwrap_or(&commit),
         head,
         "the stamped commit is not HEAD's short hash"
+    );
+}
+
+/// `-dirty` follows the build inputs exactly (fix round 2026-09-20,
+/// findings L2-1 / R1-C2): the build script registers every tracked file
+/// under `stamp::BUILD_INPUTS`, HEAD and the index as `rerun-if-changed`,
+/// so the stamp this binary carries was taken after the last change to
+/// them — and it says `-dirty` iff `git status --porcelain
+/// --untracked-files=no -- <BUILD_INPUTS>` lists anything now. A script
+/// that never answers `-dirty` (the review's mutation) is red here on any
+/// dirty tree — and the mutation itself dirties `build.rs`.
+#[test]
+fn dirty_follows_the_build_inputs_when_git_can_say() {
+    if overridden() {
+        return;
+    }
+    let mut args = vec!["status", "--porcelain", "--untracked-files=no", "--"];
+    args.extend_from_slice(BUILD_INPUTS);
+    let Some(porcelain) = git(&args) else {
+        return;
+    };
+    let dirty = porcelain.lines().any(|line| !line.trim().is_empty());
+    let (_, commit, _) = parse(&version_line());
+    assert_eq!(
+        commit.ends_with("-dirty"),
+        dirty,
+        "the stamp {commit:?} disagrees with the build inputs' porcelain:\n{porcelain}"
     );
 }

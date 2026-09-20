@@ -19,6 +19,28 @@ pub const UNKNOWN: &str = "unknown";
 /// The short hash's length: `git rev-parse --short=12`.
 pub const SHORT_LEN: usize = 12;
 
+/// The build inputs — the tracked paths, relative to the workspace root,
+/// whose uncommitted changes make a build `-dirty` and whose tracked files
+/// the build script watches so the stamp is re-taken before the next build
+/// (fix round 2026-09-20, findings L2-1 / R1-C2): what the binary and the
+/// SPA it embeds are built from. A docs-only or examples-only edit is not a
+/// dirty BUILD, and watching it would relink `cicada-cli` on every such
+/// edit. One pathspec for both questions, so `-dirty` ⇔ "the porcelain over
+/// these paths lists something" holds exactly (`tests/version.rs`).
+pub const BUILD_INPUTS: &[&str] = &[
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    "crates",
+    "web",
+];
+
+/// The paths in a `git ls-files -z` listing: NUL-separated, the trailing
+/// terminator dropped, relative to the directory git ran in.
+pub fn tracked_paths(listing: &str) -> impl Iterator<Item = &str> {
+    listing.split('\0').filter(|path| !path.is_empty())
+}
+
 /// A stamping input the build must refuse rather than guess around.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StampError {
@@ -251,6 +273,46 @@ mod tests {
         assert_eq!(utc_date(1_787_702_400), "2026-08-26");
         assert_eq!(utc_date(1_735_689_600), "2025-01-01");
         assert_eq!(utc_date(1_735_689_599), "2024-12-31");
+    }
+
+    #[test]
+    fn tracked_paths_split_the_nul_listing_and_drop_the_terminator() {
+        let listing = "Cargo.toml\0crates/cicada-cli/build.rs\0web/src/App.tsx\0";
+        assert_eq!(
+            tracked_paths(listing).collect::<Vec<_>>(),
+            [
+                "Cargo.toml",
+                "crates/cicada-cli/build.rs",
+                "web/src/App.tsx"
+            ]
+        );
+        assert_eq!(tracked_paths("").count(), 0);
+        // A path with a space survives whole (no quoting in `-z` output).
+        assert_eq!(
+            tracked_paths("web/a b.ts\0").collect::<Vec<_>>(),
+            ["web/a b.ts"]
+        );
+    }
+
+    #[test]
+    fn the_build_inputs_are_the_binary_and_the_spa_sources_only() {
+        // The manifests, the crates and the web app — never docs/ or
+        // examples/, whose edits are not a dirty BUILD.
+        assert_eq!(
+            BUILD_INPUTS,
+            [
+                "Cargo.toml",
+                "Cargo.lock",
+                "rust-toolchain.toml",
+                "crates",
+                "web"
+            ]
+        );
+        assert!(
+            BUILD_INPUTS
+                .iter()
+                .all(|p| !p.starts_with("docs") && !p.starts_with("examples"))
+        );
     }
 
     #[test]

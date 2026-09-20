@@ -78,7 +78,9 @@ with a proxy for HMR.
   unchanged): the server's `hello` carries `version: {semver, commit,
   built}` — what `cicada --version` prints, in fields: the workspace
   version, git's 12-digit short hash of HEAD (`-dirty` for uncommitted
-  tracked changes; `CICADA_GIT_SHA` when the build set it; `unknown`,
+  tracked changes to the build inputs — `crates/`, `web/`, the
+  manifests; the stamp is re-taken whenever one of them changes, so it
+  never lags an edit; `CICADA_GIT_SHA` when the build set it; `unknown`,
   said at build time, when neither could answer) and the build's UTC
   date — stamped by the binary's build script
   (`crates/cicada-cli/build.rs`, rules in `cicada_cli::stamp`) and handed

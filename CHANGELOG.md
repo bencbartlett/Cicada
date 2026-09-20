@@ -82,7 +82,7 @@ signing, and Python 3 must be on the machine (the engine's script host).
   names; value summaries from the `near` tier; the viewport gimbal; dimmer
   grid tokens.
 - **Releases and About** (wave 5 R1): the build stamps its version, commit
-  (`-dirty` when built from a dirty tree) and UTC date — `cicada
+  (`-dirty` when built with uncommitted changes to the code) and UTC date — `cicada
   --version`, `hello.version` on the socket, `GET /api/version` — and the
   settings menu's About dialog shows them with the protocol, the engine's
   threads and links to the repository and the release notes; `v*` tags
@@ -109,8 +109,9 @@ sets thrash a 256 MiB cache — which is why the cache is 1 GiB and visible.
   the OpenCASCADE 7.8.1 run-time libraries on `LD_LIBRARY_PATH` (`python
   tools/fetch_occt.py --print-env bash` from a checkout prints them) and
   Python 3; the Windows and macOS bundles carry the libraries.
-- A `-dirty` commit in About means the binary was built from a tree with
-  uncommitted changes — a dev build, not a release.
+- A `-dirty` commit in About means the binary was built with uncommitted
+  changes to its sources (`crates/`, `web/`, the manifests) — a dev build,
+  not a release.
 - Wave 5's round 2 packages V1 (viewport modes: Split · Floating · Window)
   and T1 (the 250 ms tooltip layer) land beside this entry; they belong in
   this section when the tag includes them.
