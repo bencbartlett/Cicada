@@ -2595,8 +2595,11 @@ proves wrong is revised here, dated, in the landing commit.
   arcs lightness-stepped neutrals. (6) **Esc from a focused button**: the
   keyboard map's plain keys stay with a focused control (`hotkeysReach`),
   so the panel listens for that case itself — the `profile` button and
-  the caches indicator the user just clicked would otherwise not close it;
-  a press the map consumed is skipped, a text field keeps its Esc. (7) The
+  the caches indicator the user just clicked would otherwise not close it
+  — and hands the press to the same map (fix round 2026-09-19, C4: the
+  first build closed the tab from a focused button during a running solve
+  and cancelled nothing, inverting the documented order); a press the map
+  consumed is skipped, a text field keeps its Esc. (7) The
   `profile` read goes out when the tab shows and after every pass LANDS
   (`display.phase === "painted"`), never while one paints — the answer
   would be the previous generation's, replaced moments later. Not in P1:

@@ -280,11 +280,24 @@ describe("the profiler tab", () => {
     consumed.preventDefault();
     window.dispatchEvent(consumed);
     expect(useInspectorTab.getState().tab).toBe("profile");
-    // From a focused button — the sort header the user just clicked — the tab closes.
+    // From a focused button — the sort header the user just clicked — the
+    // press goes to the keyboard map's ONE order (C4): a running solve is
+    // cancelled first and the tab left …
     const header = screen.getByTestId("profile-sort-name");
     header.focus();
+    useCicada.setState({ summary: { ...useCicada.getState().summary, running: true } });
+    fireEvent.keyDown(header, { key: "Escape" });
+    expect(sent.filter((m) => m.type === "cancel")).toHaveLength(1);
+    expect(useInspectorTab.getState().tab, "the solve was the one thing this Esc did").toBe("profile");
+    // … and at rest the tab closes.
+    useCicada.setState({ summary: { ...useCicada.getState().summary, running: false } });
     fireEvent.keyDown(header, { key: "Escape" });
     expect(useInspectorTab.getState().tab).toBe("inspect");
+    // A press from a non-control target is the map's, not the panel's (the
+    // map is not installed here, so nothing happens).
+    useInspectorTab.setState({ tab: "profile" });
+    fireEvent.keyDown(screen.getByTestId("profile-title"), { key: "Escape" });
+    expect(useInspectorTab.getState().tab).toBe("profile");
   });
 
   it("an observer reads the profile too; a dead socket asks for nothing", () => {

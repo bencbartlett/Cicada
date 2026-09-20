@@ -10,7 +10,7 @@
  * it too; Esc closes it (the keyboard map).
  */
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { isEditableTarget } from "../keyboard";
+import { handleHotkey, isControlTarget, isEditableTarget } from "../keyboard";
 import type { ProfileDisplay, ProfileNode } from "../protocol/messages";
 import { frameBus } from "../state/frameBus";
 import { useCicada } from "../state/store";
@@ -83,16 +83,19 @@ export function ProfilePanel() {
   }, [connection, display, snapshots, outstanding, askProfile]);
 
   // Esc closes the tab. The keyboard map does it when the key reaches it;
-  // from a FOCUSED BUTTON — the top bar's `profile` button or the caches
-  // indicator the user just clicked, a tab — plain keys stay with the
-  // control and never reach the map (`hotkeysReach`), so the panel listens
-  // for that case itself: the same one rule, never twice (a press the map
-  // consumed is `defaultPrevented`; a text field keeps its Esc).
+  // from a FOCUSED CONTROL — the top bar's `profile` button or the caches
+  // indicator the user just clicked, a sort header, a tab — plain keys stay
+  // with the control and never reach the map (`hotkeysReach`), so the panel
+  // hands that one case to the SAME map: the documented order (a running
+  // solve or a painting pass is cancelled first and the tab left, then
+  // search, then the tab, then the selection) — never a second rule that
+  // closed the tab and cancelled nothing (review finding C4). A press the
+  // map consumed is `defaultPrevented`; a text field keeps its Esc.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented || isEditableTarget(event.target)) return;
-      const tabs = useInspectorTab.getState();
-      if (tabs.tab === "profile") tabs.setTab("inspect");
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (isEditableTarget(event.target) || !isControlTarget(event.target)) return;
+      if (handleHotkey(event)) event.preventDefault();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
