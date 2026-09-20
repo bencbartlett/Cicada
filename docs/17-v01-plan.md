@@ -2697,6 +2697,15 @@ proves wrong is revised here, dated, in the landing commit.
   gives way is the name, which keeps its hover; `profile.spec.ts` asserts
   no cell but a name's has `scrollWidth > clientWidth` and every
   ellipsised name has a title.
+  **The counts have a home in the profiler** (L5-6): D1 moved the chip's
+  `computed / cached / red / blocked` to the hover "and to the profiler",
+  and the table itemised the states without totalling them; a counts line
+  under the nodes header totals the rows, each word a click that filters
+  the table to that state. **The display table is fixed-order** (L1-6,
+  the narrowing named): the contract's "sortable table" sentence included
+  the display outputs; the built display table — a handful of rows, one
+  per drawn output, in the pass's order — has no sort or filter, the
+  nodes table has both.
   **Every arm of the node and display mapping is held** (L2-P1-2 /
   L2-P1-3 / L2-P1-4 / L2-P1-5 / L2-P1-8): the fixture gains a
   red-by-diagnostics cylinder with a consumer that type-checks itself

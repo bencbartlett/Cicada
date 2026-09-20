@@ -166,6 +166,15 @@ describe("the profiler tab", () => {
     expect(screen.getByTestId("profile-phases").textContent).toContain("solve5.5 ms");
     expect(screen.getByTestId("profile-first-paint").textContent).toBe("130 ms");
     expect(screen.getByTestId("profile-decode").textContent).toBe("—");
+    // The counts the chip gave up, totalled from the rows (L5-6): the
+    // literal `k` is `done` like the chip's `computed`; a word is a click
+    // that filters the table to that state, and again for every node.
+    expect(screen.getByTestId("profile-counts").textContent).toBe("3 computed · 1 cached · 1 red · 1 blocked");
+    fireEvent.click(screen.getByTestId("profile-count-red"));
+    expect(rowNames()).toEqual(["bad"]);
+    expect((screen.getByTestId("profile-filter") as HTMLInputElement).value).toBe("red");
+    fireEvent.click(screen.getByTestId("profile-count-red"));
+    expect((screen.getByTestId("profile-filter") as HTMLInputElement).value).toBe("");
     // Every node is a row, costliest first, rows without a time last.
     expect(rowNames()).toEqual(["block", "ball", "arms", "bad", "k", "vol"]);
     const cached = screen.getAllByTestId("profile-node-row").find((r) => r.getAttribute("data-node") === "block")!;

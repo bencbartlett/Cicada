@@ -1782,6 +1782,26 @@ footer.statusbar {
   margin-top: 4px;
 }
 
+/* The counts line under the nodes header: `9 computed · 0 cached · 3 red`,
+   each word a click that filters the table to that state. */
+.prof-counts {
+  margin: 0 0 4px;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prof-count {
+  font: inherit;
+  color: inherit;
+}
+
+.prof-count.active,
+.prof-count:hover {
+  color: var(--fg);
+}
+
 .prof-filter {
   width: 110px;
   padding: 1px 6px;

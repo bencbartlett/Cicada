@@ -308,11 +308,31 @@ function arcTitle(arc: RingArc, rate: string | null): string {
   return arc.id === "socket" && rate !== null ? `${line} · ${rate}` : line;
 }
 
+/** The state words the counts line names, in the chip's order (`computed` is the profile's `done`). */
+const COUNTED: [string, string][] = [
+  ["done", "computed"],
+  ["cached", "cached"],
+  ["red", "red"],
+  ["blocked", "blocked"],
+  ["cancelled", "cancelled"],
+  ["idle", "idle"],
+];
+
 function NodesTable({ nodes, shares }: { nodes: ProfileNode[]; shares: Map<string, number> }) {
   const [sort, setSort] = useState<NodeSort>(DEFAULT_NODE_SORT);
   const [filter, setFilter] = useState("");
   const selectNodes = useCicada((s) => s.selectNodes);
   const rows = useMemo(() => sortProfileNodes(filterProfileNodes(nodes, filter), sort, shares), [nodes, filter, sort, shares]);
+  // The counts the chip gave up (docs/17 §The chip: they "move to the hover
+  // and to the profiler"): totalled here from the rows, each word a click
+  // that filters the table to that state (review finding L5-6: the table
+  // itemised the states but never totalled them).
+  const counts = useMemo(() => {
+    const tally = new Map<string, number>();
+    for (const node of nodes) tally.set(node.state, (tally.get(node.state) ?? 0) + 1);
+    // `computed` and `cached` always show (the chip's two); the others only when non-zero.
+    return COUNTED.filter(([state]) => state === "done" || state === "cached" || (tally.get(state) ?? 0) > 0).map(([state, word]) => ({ state, word, n: tally.get(state) ?? 0 }));
+  }, [nodes]);
   return (
     <section className="insp-section">
       <h3 className="insp-h">
@@ -330,6 +350,21 @@ function NodesTable({ nodes, shares }: { nodes: ProfileNode[]; shares: Map<strin
           />
         </span>
       </h3>
+      <div className="prof-counts faint" data-testid="profile-counts">
+        {counts.map(({ state, word, n }, index) => (
+          <span key={state}>
+            {index > 0 ? " · " : ""}
+            <button
+              className={`link prof-count state-${state}${filter === state ? " active" : ""}`}
+              title={`${n} ${word}: click to show ${n === 1 ? "that node" : "those nodes"}; click again for every node`}
+              onClick={() => setFilter(filter === state ? "" : state)}
+              data-testid={`profile-count-${state}`}
+            >
+              {n.toLocaleString("en-US")} {word}
+            </button>
+          </span>
+        ))}
+      </div>
       <table className="prof-table prof-nodes" data-testid="profile-nodes" data-sort={sort.key} data-descending={sort.descending}>
         <thead>
           <tr>
