@@ -3204,8 +3204,13 @@ proves wrong is revised here, dated, in the landing commit.
   run stops there) → `bundle` (Windows + macOS: release + `embed`,
   `--version` must print the tag's version and commit, `bundle.py --out
   --release` (the release README, the commit from the binary's stamp —
-  fix round 2026-09-20, R1-C4) then `--check --smoke`, `Cicada-<version>-<os>.zip` unpacking to a
-  folder of that name) and `linux` (the bare `cicada-<version>-linux-x86_64`)
+  fix round 2026-09-20, R1-C4) then `--check --smoke`,
+  `Cicada-<version>-<os>-<arch>.zip` unpacking to a folder of that name —
+  `windows-x86_64`, `macos-arm64`: the contract's `<os>` alone promised an
+  Intel Mac a binary that dies with "Bad CPU type", so every asset names
+  its architecture like the Linux one already did (fix round 2026-09-20,
+  L3-6 / R1-C7; an Intel row slots into the matrix when wanted — the
+  prebuilt `osx-64` is in the manifest)) and `linux` (the bare `cicada-<version>-linux-x86_64`)
   → `release` (`gh release create --verify-tag`, every asset,
   `--prerelease` for a `-` suffix; `tools/release_stamp.sh` stamps every
   binary with the CHECKOUT's HEAD and HEAD's commit date —

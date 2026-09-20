@@ -103,10 +103,16 @@ jobs:
       fail-fast: true
       matrix:
         include:
+          # The slug names the architecture too: `macos-latest` is Apple
+          # silicon, and a `-macos` zip promised an Intel Mac a binary that
+          # dies with "Bad CPU type" (findings L3-6 / R1-C7); the Linux
+          # asset already said `x86_64`. An Intel row (`macos-13`,
+          # `macos-x86_64`) slots in here when wanted — the prebuilt
+          # `osx-64` exists in the manifest.
           - os: windows-latest
-            slug: windows
+            slug: windows-x86_64
           - os: macos-latest
-            slug: macos
+            slug: macos-arm64
     runs-on: ${{ matrix.os }}
     env:
       VERSION: ${{ needs.notes.outputs.version }}
@@ -170,7 +176,7 @@ jobs:
           out="$RUNNER_TEMP/Cicada-$VERSION-${{ matrix.slug }}"
           python tools/launch/bundle.py --out "$out" --binary "$binary" --cache-root "$RUNNER_TEMP/cicada-occt" --release
           python tools/launch/bundle.py --check "$out" --smoke
-      - name: Zip the bundle folder (`Cicada-<version>-<os>.zip` unpacks to that folder)
+      - name: Zip the bundle folder (`Cicada-<version>-<os>-<arch>.zip` unpacks to that folder)
         shell: bash
         run: |
           cd "$RUNNER_TEMP"
@@ -274,8 +280,8 @@ jobs:
             --title "Cicada $VERSION" \
             --notes-file dist/release-notes.md \
             $prerelease \
-            dist/Cicada-"$VERSION"-windows.zip \
-            dist/Cicada-"$VERSION"-macos.zip \
+            dist/Cicada-"$VERSION"-windows-x86_64.zip \
+            dist/Cicada-"$VERSION"-macos-arm64.zip \
             dist/cicada-"$VERSION"-linux-x86_64 \
             LICENSE \
             THIRD_PARTY_NOTICES.md

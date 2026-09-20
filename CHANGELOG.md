@@ -105,6 +105,8 @@ sets thrash a 256 MiB cache — which is why the cache is 1 GiB and visible.
 
 - Pre-release: no installer, no code signing or notarization (macOS:
   right-click → Open the first time), no support.
+- The macOS bundle is Apple silicon only (`-macos-arm64`); there is no
+  Intel build yet. The Windows bundle and the Linux binary are x86_64.
 - The Linux asset is the bare engine binary with the app embedded: it needs
   the OpenCASCADE 7.8.1 run-time libraries on `LD_LIBRARY_PATH` (`python
   tools/fetch_occt.py --print-env bash` from a checkout prints them) and

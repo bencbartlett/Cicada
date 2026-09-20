@@ -97,8 +97,11 @@ class CheckTest(unittest.TestCase):
 
     def test_assets_name_the_three_files_for_the_version(self):
         text = cl.assets("0.1.0-alpha.1")
-        for name in ["Cicada-0.1.0-alpha.1-windows.zip", "Cicada-0.1.0-alpha.1-macos.zip", "cicada-0.1.0-alpha.1-linux-x86_64"]:
+        # Every asset names its architecture (L3-6 / R1-C7): the macOS zip is Apple silicon and says so.
+        for name in ["Cicada-0.1.0-alpha.1-windows-x86_64.zip", "Cicada-0.1.0-alpha.1-macos-arm64.zip", "cicada-0.1.0-alpha.1-linux-x86_64"]:
             self.assertIn(name, text)
+        self.assertIn("Apple silicon only", text)
+        self.assertNotIn("-macos.zip", text)
         self.assertIn("cicada 0.1.0-alpha.1 (<commit>, <build date>)", text)
         # The licensing files ride as assets (R1-C3): the release job attaches them.
         self.assertIn("`LICENSE` and `THIRD_PARTY_NOTICES.md`", text)
@@ -143,7 +146,7 @@ class CliTest(unittest.TestCase):
             self.assertIn("empty", err)
             code, out, _ = self.run_cli("assets", "0.2.0")
             self.assertEqual(code, 0)
-            self.assertIn("Cicada-0.2.0-windows.zip", out)
+            self.assertIn("Cicada-0.2.0-windows-x86_64.zip", out)
 
     def test_a_missing_changelog_is_an_error_line(self):
         missing = os.path.join(tempfile.gettempdir(), "cicada-no-such-changelog.md")
