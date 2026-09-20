@@ -33,6 +33,7 @@ import type {
   ValueSummary,
   WireEnd,
 } from "../protocol/messages";
+import { floatingRectFrom, viewportModeFrom, type FloatingRect, type ViewportMode } from "../viewport/modes";
 import { frameBus } from "./frameBus";
 import { nowMs, type TransportState } from "./transport";
 
@@ -136,6 +137,16 @@ export interface Settings {
    * the server's (`--solid-cache-mib`, 1 GiB by default) stands.
    */
   displayCacheMib: number | null;
+  /**
+   * Where the viewport is (docs/16 §Viewport conventions; wave 5 V1): its
+   * pane, a floating panel over the canvas, or the picture-in-picture
+   * window. `window` never rests in storage — it loads as `split`
+   * (`viewportModeFrom`): the PiP window closes with the page and reopening
+   * one needs a click.
+   */
+  viewportMode: ViewportMode;
+  /** The floating panel's place and size (work-area pixels); null = the default computed from the area. */
+  floatingViewport: FloatingRect | null;
 }
 
 const SETTINGS_KEY = "cicada.settings.v1";
@@ -149,6 +160,8 @@ const DEFAULT_SETTINGS: Settings = {
   textPanel: false,
   navigation: "rhino",
   displayCacheMib: null,
+  viewportMode: "split",
+  floatingViewport: null,
 };
 
 /**
@@ -166,6 +179,10 @@ export function settingsFrom(raw: unknown): Settings {
   for (const key of Object.keys(DEFAULT_SETTINGS)) {
     if (key in stored) settings[key] = stored[key];
   }
+  // The viewport mode and the floating rect are validated, not copied: a
+  // stored `window` is a mode this page cannot be in at load.
+  settings.viewportMode = viewportModeFrom(settings.viewportMode);
+  settings.floatingViewport = floatingRectFrom(settings.floatingViewport);
   return settings as unknown as Settings;
 }
 

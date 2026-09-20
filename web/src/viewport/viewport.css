@@ -39,6 +39,30 @@
   opacity: 0.9;
 }
 
+/* the three-way mode control (split · floating · window), one segmented group */
+.viewport-modes {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-elev);
+}
+
+.viewport-modes > button {
+  border: none;
+  border-radius: 0;
+  border-right: 1px solid var(--border);
+}
+
+.viewport-modes > button:last-child {
+  border-right: none;
+}
+
+.viewport-modes > button.active {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
 .viewport-readout {
   font-size: 11px;
   color: var(--fg-dim);

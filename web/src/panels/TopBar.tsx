@@ -6,9 +6,10 @@
  * the counts in the hover) · the `profile` button (→ the profiler tab) ·
  * the caches indicator (display cache bytes / budget · meshes; warn tone
  * while over budget or thrashing; click → the profiler's caches section)
- * · connection · settings menu (with the display cache size). Everything
- * here reads the store mirror; the intents it sends are `undo`, `redo`,
- * `cancel`, `take_lease` and `set_display_cache`.
+ * · connection · settings menu (with the viewport mode, the second-monitor
+ * pop-out and the display cache size). Everything here reads the store
+ * mirror; the intents it sends are `undo`, `redo`, `cancel`, `take_lease`
+ * and `set_display_cache`.
  */
 import { useEffect, useRef, useState } from "react";
 import {
@@ -19,6 +20,9 @@ import {
   type SplitPreset,
   type WireMode,
 } from "../state/store";
+import { VIEWPORT_MODES } from "../viewport/modes";
+import { popOutViewport } from "../viewport/popout";
+import { chooseViewportMode } from "../viewport/windowMode";
 import { DisplayCachePicker } from "./DisplayCachePicker";
 import { FileMenu } from "./FileMenu";
 import { basename, cachesText, cachesTitle, currentPass, summaryText, summaryTitle, withStatusCounts } from "./format";
@@ -403,6 +407,34 @@ function SettingsMenu() {
           <label>wires</label>
           {seg("wireMode", WIRE_MODES)}
           <span className="menu-h">viewport</span>
+          <label title="split: its pane · floating: a panel over the canvas · window: a picture-in-picture window (docs/16 §Viewport conventions)">
+            mode
+          </label>
+          <span className="seg" role="radiogroup" aria-label="viewport mode" data-testid="settings-viewport-mode">
+            {VIEWPORT_MODES.map((mode) => (
+              <button
+                key={mode}
+                className={settings.viewportMode === mode ? "active" : ""}
+                role="radio"
+                aria-checked={settings.viewportMode === mode}
+                data-testid={`settings-viewport-mode-${mode}`}
+                onClick={() => chooseViewportMode(mode)}
+              >
+                {mode}
+              </button>
+            ))}
+          </span>
+          <label title="a second window on this pipeline's display set for another monitor — a read-only observer with its own camera; the fallback of the window mode where the browser has no picture-in-picture window">
+            second monitor
+          </label>
+          <button
+            className="tb-esc"
+            data-testid="viewport-popout"
+            title="pop the viewport out into a separate read-only window (a declared observer of this pipeline, its own camera)"
+            onClick={() => popOutViewport(window)}
+          >
+            pop out
+          </button>
           <label>display</label>
           {seg("displayMode", DISPLAY_MODES)}
           <label>navigation</label>

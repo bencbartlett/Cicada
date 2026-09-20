@@ -1134,7 +1134,27 @@ describe("settingsFrom (the stored per-user settings → this build's)", () => {
     expect(settings.navigation).toBe("rhino");
     expect(Object.hasOwn(settings, "ribbonCollapsed")).toBe(false);
     // And what `updateSettings` would write back carries no removed key.
-    expect(Object.keys(settings).sort()).toEqual(["displayCacheMib", "displayMode", "navigation", "split", "swap", "textPanel", "theme", "wireMode"]);
+    expect(Object.keys(settings).sort()).toEqual([
+      "displayCacheMib",
+      "displayMode",
+      "floatingViewport",
+      "navigation",
+      "split",
+      "swap",
+      "textPanel",
+      "theme",
+      "viewportMode",
+      "wireMode",
+    ]);
+  });
+  it("a stored viewport mode of `window` loads as split (the PiP window closes with the page); floating stays; the rect is validated", () => {
+    expect(settingsFrom({ viewportMode: "window" }).viewportMode).toBe("split");
+    expect(settingsFrom({ viewportMode: "floating" }).viewportMode).toBe("floating");
+    expect(settingsFrom({ viewportMode: "sideways" }).viewportMode).toBe("split");
+    expect(settingsFrom({}).viewportMode).toBe("split");
+    expect(settingsFrom({ floatingViewport: { x: 10, y: 20, width: 300, height: 200 } }).floatingViewport).toEqual({ x: 10, y: 20, width: 300, height: 200 });
+    expect(settingsFrom({ floatingViewport: { x: 10, y: 20, width: "wide", height: 200 } }).floatingViewport).toBeNull();
+    expect(settingsFrom({}).floatingViewport).toBeNull();
   });
   it("anything that is not a settings object is the defaults", () => {
     for (const raw of [null, undefined, 3, "x", [], true]) {

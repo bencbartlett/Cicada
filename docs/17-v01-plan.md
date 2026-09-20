@@ -3135,6 +3135,60 @@ proves wrong is revised here, dated, in the landing commit.
   pattern). docs/16 §Viewport conventions revised, DECISIONS.md row
   2026-08-24 revised (the observer pop-out is the fallback).
 
+  *Built 2026-09-19 (`wt/viewport`): `web/src/viewport/modes.ts` — the
+  pure rules (`clampFloating` / `defaultFloating` / `moveFloating` /
+  `resizeFloating`, `viewportModeFrom` / `floatingRectFrom`,
+  `windowChoice`, the reducer `stepMode` over `{mode, windowOpen}` ×
+  `choose` / `window_opened` / `window_closed` / `window_refused` /
+  `host_unmounted` → `reclaim` / `close_window` / `open_window` /
+  `pop_out`); `windowMode.ts` — the controller (`chooseViewportMode`,
+  `registerViewportHost`, `adoptStyles`) that runs the reducer against
+  `settings.viewportMode` and moves the `Viewport`'s host element into the
+  PiP document and back; `ViewportFrame.tsx` — the ONE keyed wrapper the
+  viewport lives in across the modes (a pane · the floating panel with its
+  title strip and corner · parked) and the placeholder; `scene.ts` —
+  `ViewportScene.rehome(win)` (the resize observer, the pixel ratio and
+  the animation frames of the window the container is laid out by);
+  `App.tsx` keys the work area's children so a swap or a mode change
+  reorders or restyles the wrapper instead of remounting the viewport;
+  `settings.viewportMode` + `settings.floatingViewport`, validated on
+  load; the toolbar's three-way control, the settings menu's `viewport ·
+  mode` and `second monitor · pop out`; docs/16 §Viewport conventions +
+  §Settings; vitest `modes.test.ts` (the whole reducer table),
+  `windowMode.test.ts` (a fake `documentPictureInPicture` + a fake
+  pop-out), `ViewportFrame.test.tsx` (jsdom drag / resize / clamp / the
+  one wrapper), the store's `settingsFrom` rows; `web/e2e/
+  viewport_modes.spec.ts`.* What the contract did not foresee: (1) the
+  **real PiP path is end-to-end tested headless** — the contract expected
+  only the stubbed fallback, but Playwright's headless shell (Chromium
+  151) exposes `documentPictureInPicture` on a secure-context origin
+  (`127.0.0.1` is one; `about:blank` is not, which is why a first probe
+  saw no API), opens the window, and the WebGL context survives the move
+  (probed with a raw canvas, then the spec: the SAME `viewport-canvas`
+  element, marked before, is in the PiP page and back in the main one);
+  (2) **where the observer pop-out lives**: the contract replaced the
+  toolbar button with the control and kept the pop-out as "the
+  second-monitor path" without naming its entry — it is the settings
+  menu's `viewport · second monitor · pop out` (`viewport-popout` keeps
+  its test id; `popout.spec.ts` opens the menu first) and the
+  `window`-without-the-API fallback; (3) **`window` never rests**: a
+  stored `window` loads as `split` — the PiP window dies with the page and
+  `requestWindow` is gated on a user gesture — and a refused request is an
+  error notice with no change of mode (both unsaid in the contract); (4)
+  **leaving `window` by the control lands on the CHOSEN mode**, only the
+  window closing on its own returns to `split` (the contract's sentence
+  read literally would send a `window → floating` click to split); (5) the
+  **element returns before the store changes** — a layout effect's cleanup
+  reclaims it before React removes the node (File → Close while the window
+  is open), which the contract's "moved into the PiP document" needed but
+  did not spell out; (6) `requestWindow`'s size is the **floating panel's
+  size** (else 640 × 400) rather than a fourth setting; (7) the swap of the
+  panes, which used to remount the viewport (the scene's `savedView`), now
+  reorders keyed children and remounts nothing. Not built: hotkeys typed
+  into the PiP window (the keyboard map is the main window's — said in
+  docs/16), camera sync with the observer pop-out (unchanged since wave
+  4).
+
 **Track A — `wt/about` (cli + server + web + CI; R1's server/CI half gets the adversarial pass, the rest one review).**
 - **R1 — releases and About.** The workspace version becomes
   `0.1.0-alpha.1`. `crates/cicada-cli/build.rs` stamps the build:

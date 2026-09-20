@@ -1,9 +1,11 @@
 /**
  * The pop-out viewport (docs/17 wave 4 O3; docs/16 §Viewport conventions;
  * docs/13 — the join hint) against the REAL `cicada serve` from
- * `playwright.config.ts`: the viewport's button opens the same URL with
+ * `playwright.config.ts`: the settings menu's `second monitor · pop out`
+ * button (since wave 5 V1 the viewport toolbar carries the three-way mode
+ * control instead — `viewport_modes.spec.ts`) opens the same URL with
  * `view=viewport` in a window named `cicada-viewport`; that page renders the
- * viewport alone (no canvas, top bar, menu bar, no pop-out button of its own)
+ * viewport alone (no canvas, top bar, menu bar, no mode control of its own)
  * and joins as a DECLARED observer — the main window keeps the lease, the
  * pop-out shows the same geometry, follows the main window's writes live
  * (its text and its scene move), stays read-only throughout, and its
@@ -77,8 +79,10 @@ test("the pop-out shows the geometry as a declared observer while the main windo
   const mainId = (await store(page))?.hello?.clientId;
   expect(mainId).toBeDefined();
 
-  // ---- the button opens <same URL>&view=viewport as the named window.
+  // ---- the settings menu's second-monitor button opens <same URL>&view=viewport as the named window.
+  await page.getByTestId("tb-settings").click();
   const [popup] = await Promise.all([context.waitForEvent("page"), page.getByTestId("viewport-popout").click()]);
+  await page.keyboard.press("Escape");
   watch(popup, "popout");
   await popup.waitForLoadState();
   const url = new URL(popup.url());
@@ -88,13 +92,14 @@ test("the pop-out shows the geometry as a declared observer while the main windo
   expect(url.pathname).toBe(new URL(page.url()).pathname);
   expect(await popup.evaluate(() => window.name)).toBe("cicada-viewport");
 
-  // ---- the viewport alone: no canvas, top bar, menu bar, inspector; no pop-out button of its own.
+  // ---- the viewport alone: no canvas, top bar, menu bar, inspector; no mode control or pop-out of its own.
   await expect(popup.getByTestId("viewport-only")).toBeVisible();
   await expect(popup.getByTestId("viewport")).toBeVisible();
   await expect(popup.getByTestId("app")).toHaveCount(0);
   await expect(popup.locator(".react-flow")).toHaveCount(0);
   await expect(popup.getByTestId("topbar")).toHaveCount(0);
   await expect(popup.getByTestId("viewport-popout")).toHaveCount(0);
+  await expect(popup.getByTestId("viewport-modes")).toHaveCount(0);
   await expect(popup.getByTestId("viewport-only-pipeline")).toHaveText(PIPELINE);
   await expect(popup.getByTestId("viewport-only-role")).toHaveText("read-only observer");
   await expect(popup).toHaveTitle(`${PIPELINE} — viewport · Cicada`);
