@@ -20,7 +20,7 @@
  *   - window without the API (stubbed out): the wave-4 observer pop-out
  *     opens with a notice saying so, and the mode stays put.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import config from "../playwright.config";
 
 const meta = config.metadata as { token: string };
@@ -91,6 +91,52 @@ async function debugText(page: Page): Promise<string> {
   const response = await page.request.get(`/debug/state?token=${TOKEN}&pipeline=${PIPELINE}&wait=true`);
   expect(response.ok(), await response.text()).toBeTruthy();
   return ((await response.json()) as { text: string }).text;
+}
+
+/**
+ * Wrap `ResizeObserver` in every document of the context so a page can say
+ * how many LIVE observers of ITS realm watch the element with a test id —
+ * the observer the scene watches its container with must belong to the
+ * window the container is laid out by (docs/16): one from the main window
+ * never fires for an element in the PiP document (a test that waits for the
+ * canvas to follow cannot tell — the runner's trace screencast drives the
+ * main document's rendering and lets a main-realm observer fire late).
+ */
+async function countResizeObservers(context: BrowserContext): Promise<void> {
+  await context.addInitScript(() => {
+    const Native = window.ResizeObserver;
+    const targets = new Map<ResizeObserver, Set<Element>>();
+    class Counting extends Native {
+      override observe(target: Element, options?: ResizeObserverOptions): void {
+        let set = targets.get(this);
+        if (set === undefined) {
+          set = new Set();
+          targets.set(this, set);
+        }
+        set.add(target);
+        super.observe(target, options);
+      }
+      override unobserve(target: Element): void {
+        targets.get(this)?.delete(target);
+        super.unobserve(target);
+      }
+      override disconnect(): void {
+        targets.delete(this);
+        super.disconnect();
+      }
+    }
+    window.ResizeObserver = Counting;
+    (window as unknown as { __resizeObserved: (testId: string) => number }).__resizeObserved = (testId) => {
+      let n = 0;
+      for (const set of targets.values()) for (const el of set) if ((el as HTMLElement).dataset?.testid === testId) n += 1;
+      return n;
+    };
+  });
+}
+
+/** How many live `ResizeObserver`s of THIS page's realm watch the element with `testId`. */
+async function resizeObserversOf(page: Page, testId: string): Promise<number> {
+  return page.evaluate((id) => (window as unknown as { __resizeObserved: (testId: string) => number }).__resizeObserved(id), testId);
 }
 
 /** Load the app as the writer with geometry drawn, and mark the viewport's canvas element so a remount would be seen. */
@@ -225,7 +271,9 @@ test("window: the viewport's element moves into the picture-in-picture window an
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(`console: ${message.text()}`);
   });
+  await countResizeObservers(context);
   await loadDrawn(page);
+  expect(await resizeObserversOf(page, "viewport"), "the scene watches its container from the main window").toBe(1);
   const hasApi = await page.evaluate(() => "documentPictureInPicture" in window);
   expect(hasApi, "this Chromium exposes documentPictureInPicture on the loopback origin").toBe(true);
   const rendersBefore = (await scene(page))?.renders ?? 0;
@@ -250,6 +298,32 @@ test("window: the viewport's element moves into the picture-in-picture window an
   expect(styled.width).toBe(styled.inner);
   expect(await pip.title()).toBe(`${PIPELINE} — viewport · Cicada`);
   expect((await storedSettings(page)).viewportMode).toBe("window");
+
+  // ---- the scene is re-homed to the PiP window: its resize observer is THAT
+  // window's — the PiP realm holds the one live observer of the host, the
+  // main realm none — so the canvas (its CSS size and its drawing buffer)
+  // follows the PiP window's size when it changes after the move. A
+  // main-document observer never fires for an element in another document
+  // (review finding F2); the realm is asserted because the runner's trace
+  // screencast can make even that one fire late.
+  expect(await resizeObserversOf(pip, "viewport"), "the PiP realm's observer watches the host").toBe(1);
+  expect(await resizeObserversOf(page, "viewport"), "no main-realm observer watches the moved host").toBe(0);
+  const pipInner = () => pip.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight, dpr: Math.min(window.devicePixelRatio || 1, 2) }));
+  const canvasSize = () =>
+    pip.getByTestId("viewport-canvas").evaluate((el) => {
+      const c = el as HTMLCanvasElement;
+      return { client: { width: c.clientWidth, height: c.clientHeight }, buffer: { width: c.width, height: c.height } };
+    });
+  const expectedCanvas = (inner: { width: number; height: number; dpr: number }) => ({
+    client: { width: inner.width, height: inner.height },
+    buffer: { width: Math.floor(inner.width * inner.dpr), height: Math.floor(inner.height * inner.dpr) },
+  });
+  const openedAt = await pipInner();
+  await expect.poll(canvasSize).toEqual(expectedCanvas(openedAt));
+  const larger = { width: openedAt.width + 200, height: openedAt.height + 100 };
+  await pip.setViewportSize(larger);
+  await expect.poll(pipInner, { message: "the shell honours setViewportSize on the PiP page" }).toMatchObject(larger);
+  await expect.poll(canvasSize).toEqual(expectedCanvas({ ...larger, dpr: openedAt.dpr }));
 
   // ---- the same scene: a write moves the geometry the PiP shows (the scene
   // object is the main window's). The value written differs from the file's
@@ -300,6 +374,8 @@ test("window: the viewport's element moves into the picture-in-picture window an
   await expect(page.locator(".splitter")).toHaveCount(1);
   await expect.poll(() => pip2.isClosed()).toBe(true);
   expect(triangles(await scene(page))).toBeGreaterThan(500);
+  // Home: the scene watches its container from the main window again.
+  expect(await resizeObserversOf(page, "viewport")).toBe(1);
 
   // ---- once more, from floating; the PiP window closing on its own returns to SPLIT (the contract), not to floating.
   await page.getByTestId("viewport-mode-floating").click();
