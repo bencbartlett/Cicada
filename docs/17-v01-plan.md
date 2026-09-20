@@ -3215,7 +3215,17 @@ proves wrong is revised here, dated, in the landing commit.
   ref) rather than a ref object: React attaches a parent's ref after its
   children's layout effects, so a ref object was still null in the frame's
   first layout effect and the panel loaded unmeasured (the floating e2e's
-  reload step caught that on the way).
+  reload step caught that on the way). (d) Runner assumptions named in
+  the spec: the headless shell exposes the API on the loopback origin —
+  the window test now SKIPS without it instead of failing the serial file
+  — and the shell's PiP window does not follow its opener's unload (Edge
+  and Chrome close it), so docs/16's "opener leaving → split" arm is
+  verified under a real channel; what holds in both, a reload in window
+  mode loading as split, is asserted. (e) The pop-out fallback's warning
+  is said once per window (a further click re-targets the open pop-out);
+  the PiP window's title follows File → Open; the toolbar wraps inside a
+  240 px panel with every control inside; the placeholder is asserted
+  absent in floating.
 
 **Track A — `wt/about` (cli + server + web + CI; R1's server/CI half gets the adversarial pass, the rest one review).**
 - **R1 — releases and About.** The workspace version becomes
