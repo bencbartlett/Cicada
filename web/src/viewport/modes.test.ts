@@ -106,6 +106,24 @@ describe("windowChoice", () => {
     }
     expect(windowChoice({}).kind).toBe("popout");
   });
+  it("the observer pop-out naming the ORIGIN when the API is missing because the page is not a secure context", () => {
+    const insecure = windowChoice({ documentPictureInPicture: undefined, isSecureContext: false, location: { origin: "http://192.0.2.7:8420" } });
+    expect(insecure.kind).toBe("popout");
+    if (insecure.kind === "popout") {
+      expect(insecure.reason).toMatch(/secure origin/);
+      expect(insecure.reason).toContain("http://192.0.2.7:8420");
+      expect(insecure.reason).not.toMatch(/this browser/);
+    }
+    // Without a location to name, the rule alone.
+    const unnamed = windowChoice({ isSecureContext: false });
+    if (unnamed.kind === "popout") expect(unnamed.reason).toMatch(/this page's origin/);
+    // A secure context without the API is the browser's doing.
+    const secure = windowChoice({ isSecureContext: true, location: { origin: "http://127.0.0.1:8420" } });
+    if (secure.kind === "popout") expect(secure.reason).toMatch(/this browser has no picture-in-picture window/);
+    // An API present is used whatever the context says (never seen: the API is SecureContext-gated).
+    const api = { requestWindow: () => Promise.reject(new Error("fake")), window: null };
+    expect(windowChoice({ documentPictureInPicture: api, isSecureContext: false }).kind).toBe("pip");
+  });
 });
 
 describe("stepMode (the mode reducer)", () => {

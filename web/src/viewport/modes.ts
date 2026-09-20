@@ -123,11 +123,31 @@ export interface DocumentPictureInPicture {
 
 export type WindowChoice = { kind: "pip"; api: DocumentPictureInPicture } | { kind: "popout"; reason: string };
 
-/** What `window` mode does in this browser: the PiP window when the API is there, the observer pop-out otherwise (said in a notice). */
-export function windowChoice(win: { documentPictureInPicture?: unknown }): WindowChoice {
+/** What the window decision reads off the main window: the API if any, whether the origin is a secure context, and the origin to name. */
+export interface WindowChoiceInput {
+  documentPictureInPicture?: unknown;
+  isSecureContext?: boolean;
+  location?: { origin: string };
+}
+
+/**
+ * What `window` mode does in this browser: the PiP window when the API is
+ * there, the observer pop-out otherwise (said in a notice, with the cause):
+ * the API is `[SecureContext]`-gated, so on a plain-http non-loopback origin
+ * (`cicada serve --host` reached over the LAN) a browser that HAS it shows
+ * none — the reason then names the origin, not the browser.
+ */
+export function windowChoice(win: WindowChoiceInput): WindowChoice {
   const api = win.documentPictureInPicture;
   if (typeof api === "object" && api !== null && typeof (api as { requestWindow?: unknown }).requestWindow === "function") {
     return { kind: "pip", api: api as DocumentPictureInPicture };
+  }
+  if (win.isSecureContext === false) {
+    const origin = win.location === undefined ? "this page's origin" : win.location.origin;
+    return {
+      kind: "popout",
+      reason: `picture-in-picture needs a secure origin — localhost or https — and ${origin} is not one`,
+    };
   }
   return {
     kind: "popout",
