@@ -24,8 +24,13 @@ on:
   push:
     tags: ["v*"]
 
+# The token is read-only everywhere but the publishing job: the build jobs
+# run `npm ci` and every dependency's build script, and a write-capable
+# token there could push a tag or publish a release from a compromised
+# package (fix round 2026-09-20, finding L3-4); their checkouts keep no
+# credentials in `.git/config` either.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -44,6 +49,8 @@ jobs:
       prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -101,6 +108,8 @@ jobs:
       VERSION: ${{ needs.notes.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -187,6 +196,8 @@ jobs:
       VERSION: ${{ needs.notes.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -242,6 +253,8 @@ jobs:
     name: Publish the GitHub Release
     needs: [notes, bundle, linux]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       VERSION: ${{ needs.notes.outputs.version }}
       GH_TOKEN: ${{ github.token }}
