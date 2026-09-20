@@ -3195,7 +3195,11 @@ proves wrong is revised here, dated, in the landing commit.
   `tests/version.rs` (the binary's line; HEAD's hash where git can say),
   `tests/app.rs` (`/api/version` = `--version`), the protocol unit test,
   `tests/http_e2e.rs` (`/api/version` 401 / the object, `hello.version` +
-  `hello.threads`, `/health` unchanged), `AboutDialog.test.tsx` (6),
+  `hello.threads` at `--threads 2`, and at `--threads 0` the SCHEDULER's
+  resolved count — cores − 2, ≥ 1 — equal to `/debug/state`'s, so a
+  `hello` echoing the raw request is red (fix round 2026-09-20, L4-1:
+  the first test sat where requested and resolved coincide),
+  `/health` unchanged), `AboutDialog.test.tsx` (6),
   `store.test.ts`, `web/e2e/about.spec.ts` (the dialog = `/api/version`,
   the suite's `--threads 2`, the clipboard, Esc). *What the contract did
   not foresee:* (1) the engine's threads reach the client through

@@ -166,6 +166,75 @@ async fn version_rides_hello_and_api_version() {
     handle.shutdown().await;
 }
 
+/// `hello.threads` is the count the SCHEDULER resolved, never the requested
+/// one (docs/13 §Projects, pipelines, sessions: `--threads 0` = cores − 2 →
+/// the number). The test above sits at `--threads 2`, where requested and
+/// resolved coincide, so a `hello` echoing the raw config value — `0` on
+/// the default `cicada app` launch, and About would read `engine threads
+/// 0` — passed it (finding L4-1). Opened with `threads = 0`, the number
+/// must be the scheduler's rule (≥ 1) and what `/debug/state` reports.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hello_threads_is_the_resolved_count_not_the_requested_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("p.cic"), PIPELINE).unwrap();
+    let mut config = ServeConfig::new(dir.path().to_owned());
+    config.pipeline = Some("p.cic".to_owned());
+    config.port = 0;
+    config.token = Some("t".to_owned());
+    config.cache_dir = Some(dir.path().join("cache"));
+    config.threads = 0; // the default: let the scheduler resolve it
+    let handle = serve(config).await.expect("serve");
+    let addr = handle.addr;
+
+    let url = format!("ws://{addr}/ws?token=t&pipeline=p.cic");
+    let (mut socket, _) = tokio_tungstenite::connect_async(url).await.expect("ws");
+    socket
+        .send(Message::Text(
+            format!(
+                r#"{{"v":{PROTOCOL_VERSION},"type":"hello","payload":{{"v":{PROTOCOL_VERSION}}}}}"#
+            )
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let first = tokio::time::timeout(Duration::from_secs(20), socket.next())
+        .await
+        .expect("a first message")
+        .expect("socket open")
+        .expect("a message");
+    let Message::Text(text) = first else {
+        panic!("the first message is not text: {first:?}");
+    };
+    let hello: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(hello["type"], "hello", "{text}");
+    let threads = hello["payload"]["threads"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("hello.threads is not a number: {text}"));
+    // The scheduler's rule (`cicada_sched::Scheduler::new`): cores − 2, at
+    // least 1 — never the requested 0.
+    let resolved = std::thread::available_parallelism()
+        .map_or(2, std::num::NonZeroUsize::get)
+        .saturating_sub(2)
+        .max(1) as u64;
+    assert_eq!(
+        threads, resolved,
+        "hello.threads is not the scheduler's resolved count for --threads 0: {text}"
+    );
+    assert!(threads >= 1, "{text}");
+    let (status, body) =
+        tokio::task::spawn_blocking(move || http_get(addr, "/debug/state?token=t&wait=true", None))
+            .await
+            .unwrap();
+    assert_eq!(status, 200, "{body}");
+    let state: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        state["threads"],
+        serde_json::json!(threads),
+        "hello and /debug/state disagree about the session's threads"
+    );
+    handle.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn serve_snapshot_frames_intents_and_debug_state() {
     let dir = tempfile::tempdir().unwrap();
