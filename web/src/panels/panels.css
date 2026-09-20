@@ -1336,6 +1336,10 @@ aside.inspector {
 
 .app-dialog {
   width: min(640px, 92vw);
+  /* The dialogs render inside `header.topbar`, whose `white-space: nowrap`
+     they would inherit: a long value then clipped at the dialog's edge
+     instead of wrapping (finding L3-7 — About at 420 px). */
+  white-space: normal;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: var(--radius);
