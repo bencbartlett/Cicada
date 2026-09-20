@@ -375,6 +375,7 @@ describe("node_values (the inspect answer; wave 5 N1 carries inputs beside outpu
         reason: "initial",
         history: EMPTY_HISTORY,
         transport: TRANSPORT_AT_REST,
+        caches: EMPTY_CACHES,
       },
     });
     expect(useCicada.getState().nodeValues).toEqual({});
@@ -1133,11 +1134,12 @@ describe("settingsFrom (the stored per-user settings → this build's)", () => {
     expect(settings.navigation).toBe("rhino");
     expect(Object.hasOwn(settings, "ribbonCollapsed")).toBe(false);
     // And what `updateSettings` would write back carries no removed key.
-    expect(Object.keys(settings).sort()).toEqual(["displayMode", "navigation", "split", "swap", "textPanel", "theme", "wireMode"]);
+    expect(Object.keys(settings).sort()).toEqual(["displayCacheMib", "displayMode", "navigation", "split", "swap", "textPanel", "theme", "wireMode"]);
   });
   it("anything that is not a settings object is the defaults", () => {
     for (const raw of [null, undefined, 3, "x", [], true]) {
       expect(settingsFrom(raw), String(raw)).toEqual(settingsFrom({}));
     }
-    expect(settingsFrom({}).theme).toBe("dark");  });
+    expect(settingsFrom({}).theme).toBe("dark");
+  });
 });
