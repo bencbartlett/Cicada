@@ -1793,29 +1793,37 @@ footer.statusbar {
   font-size: 11px;
 }
 
-/* Dense tables for a ~300 px panel: fixed layout, the name column takes
-   what the numeric columns leave and ellipsises. */
+/* Dense tables for a ~300 px panel: AUTO layout — every numeric column and
+   header is as wide as its own widest string (never clipped: `last 21.6 ms`,
+   `156.3 KB`, `100.0 %`, the `elements` header), and the ONE column that
+   gives way is the name, which keeps its hover. The fixed widths the first
+   build used clipped a cached row's time to `last 0.3…` on every row and the
+   `elements` header to `element` at the reference 1400 × 900 (review finding
+   L5-2). */
 .prof-table {
   width: 100%;
-  table-layout: fixed;
+  table-layout: auto;
   border-collapse: collapse;
   font-size: 11px;
 }
 
 .prof-table th,
 .prof-table td {
-  padding: 2px 4px 2px 0;
+  padding: 2px 0 2px 6px;
   text-align: left;
   vertical-align: baseline;
   border-bottom: 1px dashed var(--border);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-.prof-table th:last-child,
-.prof-table td:last-child {
-  padding-right: 0;
+.prof-table th:first-child,
+.prof-table td:first-child {
+  /* The name column takes what the others leave and ellipsises. */
+  width: 100%;
+  max-width: 0;
+  padding-left: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .prof-table th {
@@ -1831,30 +1839,6 @@ footer.statusbar {
   white-space: nowrap;
   display: inline-block;
   vertical-align: bottom;
-}
-
-.prof-col-state {
-  width: 54px;
-}
-
-.prof-col-time {
-  width: 70px;
-}
-
-.prof-col-share {
-  width: 50px;
-}
-
-.prof-col-elements {
-  width: 40px;
-}
-
-.prof-col-tier {
-  width: 48px;
-}
-
-.prof-col-num {
-  width: 54px;
 }
 
 .prof-nodes td:nth-child(n + 3),

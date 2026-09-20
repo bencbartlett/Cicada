@@ -160,6 +160,27 @@ test("the profiler: the ring, every node with its state and cost, cached rows af
   await expect(page.getByTestId("profile-first-paint")).toHaveText(/(ms|s)$/);
   await page.screenshot({ path: testInfo.outputPath("profile-second-generation.png") });
 
+  // ---- nothing but the name column ever clips (L5-2): at the reference
+  // 1400 × 900 every numeric cell and every header — a cached row's `last
+  // 2.1 ms`, `156.3 KB`, `100.0 %`, `elements` — is as wide as its string;
+  // the name column gives way and keeps its hover.
+  const clipped = await page.locator(".prof-table th, .prof-table td").evaluateAll((cells) =>
+    cells
+      .filter((cell) => cell.scrollWidth > cell.clientWidth)
+      .map((cell) => `${(cell as HTMLElement).cellIndex}:${cell.textContent?.trim() ?? ""}`),
+  );
+  expect(clipped.filter((c) => !c.startsWith("0:")), `only the name column may ellipsise; clipped: ${clipped.join(" | ")}`).toEqual([]);
+  const untitledNames = await page.locator(".prof-table td:first-child").evaluateAll((cells) =>
+    cells.filter((cell) => cell.scrollWidth > cell.clientWidth && cell.querySelector("[title]") === null && !cell.hasAttribute("title")).length,
+  );
+  expect(untitledNames, "an ellipsised name has its full text in a hover").toBe(0);
+  const inspector = page.getByTestId("inspector");
+  if ((await inspector.count()) > 0) {
+    const box = (await inspector.boundingBox())!;
+    const tables = await page.locator(".prof-table").evaluateAll((ts) => ts.map((t) => t.getBoundingClientRect().right));
+    for (const right of tables) expect(right, "the table stays inside the panel").toBeLessThanOrEqual(box.x + box.width + 0.5);
+  }
+
   // ---- sort and filter.
   await page.getByTestId("profile-sort-name").click();
   const byName = await rowNames(page);

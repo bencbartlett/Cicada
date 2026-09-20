@@ -2684,6 +2684,16 @@ proves wrong is revised here, dated, in the landing commit.
   the sum", and the built table listed per-output triangles only; the
   outputs' triangles and bytes are summed in a `tfoot` (the smaller
   honest closure — docs/12's sentence stands), pinned in the jsdom test.
+  **Nothing but the name column clips** (L5-2): the fixed column widths
+  (time 70 px, share 50, elements 40, numbers 54) could not hold the
+  panel's own strings at the reference 1400 × 900 — every cached row's
+  `last 0.37 ms` read `last 0.3…` with the unit unreadable, `156.3 KB`
+  read `156.3 …`, `100.0 %` read `100.0…`, the `elements` header
+  `element`; the tables are `table-layout: auto` now, every numeric
+  column and header as wide as its widest string, and the ONE column that
+  gives way is the name, which keeps its hover; `profile.spec.ts` asserts
+  no cell but a name's has `scrollWidth > clientWidth` and every
+  ellipsised name has a title.
   **Every arm of the node and display mapping is held** (L2-P1-2 /
   L2-P1-3 / L2-P1-4 / L2-P1-5 / L2-P1-8): the fixture gains a
   red-by-diagnostics cylinder with a consumer that type-checks itself
