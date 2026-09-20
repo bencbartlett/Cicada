@@ -2114,7 +2114,7 @@ DECISIONS.md row of 2026-08-11 (UI contracts) revised for the tiers.
 
 | # | Finding (Ben's words, condensed) | Verdict | Package |
 |---|---|---|---|
-| U15 | Start doing releases; an **About** entry in the settings menu with the exact version and commit hash. | Build. Today the binary knows only `CARGO_PKG_VERSION` (`0.0.1`, every build) and nothing of its commit; there are no tags and no release workflow. The version + commit (+ build date) are stamped at build time (a build script reading `git describe`, `CICADA_GIT_SHA` for CI checkouts), ride `hello` additively, and show in About and in `cicada --version`; a `v*` tag builds the three OS bundles (`tools/launch/bundle.py --out dist/ --check`) and attaches them to a GitHub Release; pre-releases `v0.1.0-alpha.N` from now, `v0.1.0` when the plan's items close. | R1 |
+| U15 | Start doing releases; an **About** entry in the settings menu with the exact version and commit hash. | Build. Today the binary knows only `CARGO_PKG_VERSION` (`0.0.1`, every build) and nothing of its commit; there are no tags and no release workflow. The version + commit (+ build date) are stamped at build time (a build script reading `git describe`, `CICADA_GIT_SHA` for CI checkouts), ride `hello` additively, and show in About and in `cicada --version`; a `v*` tag builds the three OS bundles (`tools/launch/bundle.py --out dist/ --check`) and attaches them to a GitHub Release; pre-releases `v0.1.0-alpha.N` from now, `v0.1.0` when the plan's items close. **Built 2026-09-19 (wave 5 R1; §Wave 5 Track A)** — the tag's run is the workflow's proof. | R1 |
 | U16 | Replace the pop-out button with a three-way toggle — **Split** (today's panes), **Floating** (a resizable, draggable viewport inside the main window), **Window** (picture-in-picture style, not a full browser window with tabs — as a video call's PiP behaves). | Build. Window = the browser's Document Picture-in-Picture window (an always-on-top, chrome-less window the page renders INTO — the same document, the same WebGL scene, no second socket; Chromium ≥ 116, which the `--app` window is) with the wave-4 observer pop-out as the fallback where the API is missing (Firefox/Safari), said in a notice; Floating = an overlay panel over the canvas with a drag handle and a resize corner, its place and size per-user settings; the three are one `viewportMode` setting. docs/16 §Viewport conventions and the DECISIONS row of 2026-08-24 (the observer pop-out) are revised when this lands — the observer window stays as the fallback and for a true second monitor. | V1 |
 | U17 | The collapse toggle should be **part of the node** (a chevron on the face); a collapsed slider's value should be an **editable text field**; the name should not be truncated — shrink the slider track by up to 60 % to fit it, truncate only after that. | Build: the chevron on the expanded face's bottom edge and on the collapsed row (sliders — the one collapsible node — today; the same control carries groups later); the collapsed value is the chip editor (one `set_param` on Enter, Esc cancels, like the literal chips); the row lays out name-first with the track's `flex-shrink` bounded at 60 % of its full width. **Built 2026-08-25 (wave 5 N1; §Wave 5 Track N)**, fix round 2026-09-19. | N1 |
 | U18 | Zoomed far out you see only the title; zoom in and the title moves to the bar but the arguments are blank; zoom in more and they appear. The latter two should coincide: **either only the title, or the full preview.** | **Done 2026-08-25** (fast lane): the `mid` tier is gone — `lodTier` is `far` (< 0.35) · `near` · `closest` (≥ 1.6, reserved); `showsPortValues` is every tier but `far`; docs/16 LOD table, DECISIONS row revised. | — |
@@ -3159,6 +3159,71 @@ proves wrong is revised here, dated, in the landing commit.
   the merge; the tag's run is the workflow's proof. Tests: a cli test
   that `--version` has the stamped shape, a server test that `hello`
   carries `version`, a web test for the About dialog's fields.
+  *Built 2026-09-19 (`wt/about`).* The workspace version is
+  `0.1.0-alpha.1` (Cargo.lock follows). `crates/cicada-cli/build.rs`
+  stamps `CICADA_BUILD_COMMIT` and `CICADA_BUILD_DATE`; its rules are
+  `crates/cicada-cli/src/stamp.rs` — included into the script by path
+  and compiled into the library, so the override, git's two answers
+  (`rev-parse --short=12 HEAD` + `status --porcelain
+  --untracked-files=no` → `-dirty`, tracked changes only, as `git
+  describe --dirty` counts them), the UTC date (days-from-civil, no date
+  crate) and the two shape predicates are unit-tested, and the script
+  re-checks its own stamp's shape before emitting it. `cicada
+  --version` = `cicada 0.1.0-alpha.1 (<12-hex[-dirty] | unknown>,
+  <YYYY-MM-DD>)` (`cicada_cli::version::LINE`); a missing git is
+  `unknown` said as a cargo warning. The server: `protocol::VersionInfo
+  {semver, commit, built}`, `ServeConfig::version` → `SessionConfig::version`
+  → every `hello` (`serve`/`app` set `cicada_cli::version::info()`; the
+  library's `VersionInfo::unstamped()` says `unknown` for what it cannot
+  know and the cli test holds `GET /api/version` to the `--version`
+  line's parts, so dropping the hand-over is red), `GET /api/version`
+  token-gated like every `/api` route. The web: `HelloInfo.version` /
+  `.threads` (the mirror marks both optional at protocol 1 — N1's rule),
+  `web/src/panels/AboutDialog.tsx` + `about.ts`, the settings menu's
+  last entry; docs/16 §Settings. `CHANGELOG.md` + `tools/changelog.py`
+  (`check [--tag]` / `section` / `assets`; `tools/test_changelog.py` in
+  CI's offline job holds the first section to Cargo.toml's version at
+  every commit) and `.github/workflows/release.yml` — `notes` (the tag
+  must name Cargo.toml's version and the CHANGELOG its section, else the
+  run stops there) → `bundle` (Windows + macOS: release + `embed`,
+  `--version` must print the tag's version and commit, `bundle.py --out`
+  then `--check --smoke`, `Cicada-<version>-<os>.zip` unpacking to a
+  folder of that name) and `linux` (the bare `cicada-<version>-linux-x86_64`)
+  → `release` (`gh release create --verify-tag`, every asset,
+  `--prerelease` for a `-` suffix; `CICADA_GIT_SHA = github.sha` stamps
+  every binary). Tests: `stamp` (9), `version::LINE`'s shape,
+  `tests/version.rs` (the binary's line; HEAD's hash where git can say),
+  `tests/app.rs` (`/api/version` = `--version`), the protocol unit test,
+  `tests/http_e2e.rs` (`/api/version` 401 / the object, `hello.version` +
+  `hello.threads`, `/health` unchanged), `AboutDialog.test.tsx` (6),
+  `store.test.ts`, `web/e2e/about.spec.ts` (the dialog = `/api/version`,
+  the suite's `--threads 2`, the clipboard, Esc). *What the contract did
+  not foresee:* (1) the engine's threads reach the client through
+  `hello.threads` (additive) — nothing had carried them, and About lists
+  them; (2) "`/health` answers the same JSON on `/api/version`" is built
+  as a NEW route answering the version object while `/health` keeps its
+  bare `ok` — the bundle's smoke and Playwright's `webServer` wait on
+  that word; (3) a pre-release is any semver pre-release suffix (`-`),
+  not `-alpha` alone — an `-rc.1` must not publish as final; (4)
+  `CICADA_GIT_SHA` must be ≥ 12 hex digits (cut to 12) — a shorter or
+  non-hex value fails the build with the reason rather than being
+  guessed around; (5) the stamp is re-taken when HEAD, its reflog, the
+  index or the two variables change, not on every source edit, so a dev
+  build's `-dirty` and date can lag an edit or a day (a fresh CI checkout
+  is exact; said in the script's header); (6) the repository URL is a
+  client constant (`about.ts`), the release-notes link
+  `<repo>/releases/tag/v<semver>`; (7) the CHANGELOG's section date is
+  the day it was written — the tag's run carries the release date — and
+  it says V1 / T1 land beside it (move them in when the tag includes
+  them). *Open, for Ben:* the bundles the workflow publishes carry no
+  third-party notices — DECISIONS.md row 2026-08-20 names the
+  obligations "at go-public, shipping binaries" (the LGPL notices, the
+  prominent OCCT acknowledgement, the corresponding-source pointer for
+  the exact OCCT build; `fetch_occt.py` extracts every package's license
+  texts into the prefix, `bundle.py` copies none of them), and row
+  2026-08-11's license choice is due "at first public release" — a tag
+  makes both due; not R1's contract, so not built here, and the workflow
+  publishes nothing until a tag is pushed.
 - **T1 — tooltips at 250 ms.** `web/src/tooltip.ts` + `Tooltip.tsx`:
   one document-level listener set (`pointerover`, `pointerout`,
   `pointerdown`, `keydown` Esc); entering an element whose closest
