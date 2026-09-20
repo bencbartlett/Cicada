@@ -11143,10 +11143,18 @@ size = slider(value=4.0, min=0.5, max=5.0)
             .unwrap()
             .clone();
         let phases = &view["phases"];
-        assert_eq!(phases["queued_ms"], timing["queued_ms"], "{phases}");
-        assert_eq!(phases["solve_ms"], timing["solve_ms"], "{phases}");
-        assert_eq!(phases["tessellate_ms"], timing["tessellate_ms"], "{phases}");
-        assert_eq!(phases["encode_ms"], timing["encode_ms"], "{phases}");
+        // The view came through the wire as TEXT and serde_json's default
+        // float parse is not round-trip exact (no `float_roundtrip`), while
+        // the timing's and `/debug/state`'s numbers never left the process:
+        // the same f64 can differ in its last digit here — the times are
+        // compared within a tolerance, everything else exactly.
+        let close = |a: &serde_json::Value, b: &serde_json::Value, what: &str| {
+            let (a, b) = (a.as_f64().unwrap(), b.as_f64().unwrap());
+            assert!((a - b).abs() < 1e-6, "{what}: {a} vs {b}");
+        };
+        for key in ["queued_ms", "solve_ms", "tessellate_ms", "encode_ms"] {
+            close(&phases[key], &timing[key], key);
+        }
         assert_eq!(phases["bytes"], timing["frame_bytes"], "{phases}");
         assert!(
             phases["solve_ms"].as_f64().unwrap() > 0.0,
@@ -11174,8 +11182,17 @@ size = slider(value=4.0, min=0.5, max=5.0)
         assert!(row_of(&view, "block").is_some(), "{}", view["display"]);
         assert!(row_of(&view, "bad").is_none(), "a red node drew nothing");
         assert_eq!(view["caches"], state["caches"]);
-        // `/debug/state.profile` is the same object.
-        assert_eq!(state["profile"], view);
+        // `/debug/state.profile` is the same object (the times within the
+        // text round trip's tolerance, the rest exactly).
+        let mut oracle = state["profile"].clone();
+        let mut wire = view.clone();
+        let oracle_phases = oracle["phases"].take();
+        let wire_phases = wire["phases"].take();
+        assert_eq!(oracle, wire);
+        for key in ["queued_ms", "solve_ms", "tessellate_ms", "encode_ms"] {
+            close(&wire_phases[key], &oracle_phases[key], key);
+        }
+        assert_eq!(oracle_phases["bytes"], wire_phases["bytes"]);
         // An observer reads it too.
         let theirs = profile(observer, &mut rx2, None);
         assert_eq!(theirs["type"], "profile_view", "{theirs}");
