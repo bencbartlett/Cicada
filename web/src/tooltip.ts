@@ -18,7 +18,9 @@
  *
  * Entering an element whose closest ancestor-or-self carries a title starts
  * the delay; the box shows that text (newlines kept) until the pointer leaves
- * the element, a pointer goes down, or Esc is pressed. No hover starts while
+ * the element, a pointer goes down, Esc is pressed, or the element leaves the
+ * document (a node deleted under the pointer fires no `pointerout`; the
+ * hover's MutationObserver watches the tree for it). No hover starts while
  * a button is held — a node or wire drag crossing titled elements shows
  * nothing, as the platform shows no tooltip with a button down — and the
  * element under the pointer at the release is entered then (Chromium fires
@@ -28,10 +30,13 @@
  * what the platform itself reads as "no tooltip here", so the native box
  * never doubles ours and no ancestor's title surfaces in its place — and it
  * is restored on leave. A title the app rewrites under the pointer (React
- * re-rendering the undo button after a click) is adopted through a
+ * re-rendering the undo button after a click) is adopted through the same
  * MutationObserver: the box follows the new text and the restore writes
- * the NEW value, never the stale one; a title removed under the pointer
- * takes the box down and restores nothing.
+ * the NEW value, never the stale one. The records of the layer's own
+ * parking writes are drained at the write, so an app-written EMPTY title
+ * is read as what it is — the platform's "no tooltip here": the box goes
+ * and the restore writes the empty value back — and a title removed under
+ * the pointer takes the box down and restores nothing.
  *
  * What the layer does not do: it never consumes a key (Esc hides the box
  * and goes on to the keyboard map and the modals — the layer fights
@@ -187,29 +192,34 @@ export function installTooltips(doc: Document, delayMs = TOOLTIP_DELAY_MS): Tool
     }
   };
 
-  // Park: the text into `data-title`, the source emptied.
+  // Park: the text into `data-title`, the source emptied — and the records of
+  // this write drained, so the observer never mistakes it for the app's.
   const park = (current: Session, text: string) => {
     current.source.anchor.setAttribute(PARKED_ATTR, text);
     writeTitle(current.source, "");
+    current.observer.takeRecords();
+  };
+
+  const takeDown = () => {
+    cancelTimer();
+    setShown(null);
   };
 
   // The app rewrote the hovered element's title (a React re-render with a
-  // new prop): adopt it — the box follows, the restore writes this one.
+  // new prop): adopt it — the box follows, the restore writes this one. An
+  // empty one is the platform's "no tooltip here": the box goes, the restore
+  // writes the empty value; a removed one takes the box down and restores
+  // nothing.
   const adopt = () => {
     if (session === null) return;
     const current = session;
     const title = readTitle(current.source);
-    // Our own parking write: nothing to adopt.
-    if (title === "") return;
-    if (title === null) {
-      // Removed by the app: nothing to show and nothing to restore.
-      current.title = null;
+    current.title = title;
+    if (title === null || title === "") {
       current.source.anchor.removeAttribute(PARKED_ATTR);
-      cancelTimer();
-      setShown(null);
+      takeDown();
       return;
     }
-    current.title = title;
     park(current, title);
     if (shown !== null) setShown({ anchor: current.source.anchor, text: title, ...(current.point !== null ? { point: current.point } : {}) });
   };
@@ -225,23 +235,43 @@ export function installTooltips(doc: Document, delayMs = TOOLTIP_DELAY_MS): Tool
     setShown(null);
   };
 
+  // One observer per hover: the anchor's `title` attribute (or its `<title>`
+  // child's text) for a rewrite, and the document's tree for the anchor's
+  // removal — a node deleted under the pointer fires no `pointerout`, and
+  // its box would stand until the next hover.
+  const onMutation = (records: MutationRecord[]) => {
+    if (session === null) return;
+    const { anchor, titleEl } = session.source;
+    if (!anchor.isConnected) {
+      leave();
+      return;
+    }
+    const titled = records.some(
+      (record) =>
+        (record.type === "attributes" && record.target === anchor) || (titleEl !== null && titleEl.contains(record.target)),
+    );
+    if (titled) adopt();
+  };
+
   const enter = (source: TitleSource, at: TooltipPoint) => {
     const title = readTitle(source) ?? "";
     // An empty title is the platform's "no tooltip here" (and none of the
     // ancestors' either): the same for us.
     if (title === "") return;
-    const observer = new MutationObserver(adopt);
+    const observer = new MutationObserver(onMutation);
     observer.observe(source.anchor, { attributes: true, attributeFilter: ["title"] });
     if (source.titleEl !== null) observer.observe(source.titleEl, { childList: true, characterData: true, subtree: true });
+    observer.observe(doc, { childList: true, subtree: true });
     const started: Session = { source, title, timer: null, observer, point: source.titleEl !== null ? at : null };
     session = started;
     park(started, title);
     started.timer = setTimeout(() => {
       if (session !== started) return;
       started.timer = null;
-      // Gone from the document meanwhile (a node deleted under the pointer),
-      // or the app took the title away: nothing to show.
-      if (!started.source.anchor.isConnected || started.title === null) {
+      // Gone from the document meanwhile, or the app took the title away
+      // (both end the hover through the observer; a belt for the timer):
+      // nothing to show.
+      if (!started.source.anchor.isConnected || started.title === null || started.title === "") {
         leave();
         return;
       }
@@ -285,10 +315,7 @@ export function installTooltips(doc: Document, delayMs = TOOLTIP_DELAY_MS): Tool
   // A press or Esc dismisses the box; the title stays parked, so the native
   // one does not surface in its place, until the pointer leaves. Nothing is
   // consumed: the keyboard map and the modals see the Esc as before.
-  const dismiss = () => {
-    cancelTimer();
-    setShown(null);
-  };
+  const dismiss = () => takeDown();
   const onPointerDown = () => dismiss();
   // The release that ends a drag: the element under the pointer is entered
   // as if the pointer had just arrived — a wire's drop target sees no

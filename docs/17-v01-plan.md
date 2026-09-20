@@ -3463,11 +3463,29 @@ proves wrong is revised here, dated, in the landing commit.
   dismisses through a wrapper that stops `pointerdown`, `keydown` and
   `pointerover` in the bubble phase (red under the bubble mutation), a
   stylesheet test holds `.tooltip`'s z-index above both dialog backdrops',
-  and the docs say what capture is for.
-  Not built: a scroll or resize listener (the box is placed once, at
-  show; Chromium re-hovers after layout moves the element away from
-  under the pointer and the layer ends the hover then); a hover timer
-  restart when a title reappears on the same element.
+  and the docs say what capture is for. (9) *(fix round 1, T1-C3 / T1-C4)*
+  **The observer could not tell the layer's own parking write from the
+  app's, and watched nothing after the box was shown**: `adopt` returned
+  early on an empty `title` as "our own write", so a React re-render whose
+  prop became `""` — the platform's "no tooltip here" — was ignored and
+  leave restored the stale text over it (latent: no site yields an empty
+  title today, but the design could not distinguish the two writers); and
+  only the delay timer checked `isConnected`, so a node deleted under the
+  pointer (Del, an undo — Chromium fires no `pointerout` for a removed
+  element) left the box standing with the dead node's port doc and value
+  until the next hover, which the first paragraph had recorded the other
+  way round. The hover's one MutationObserver now drains the records of
+  the layer's own writes at the write (`takeRecords`), so an app-written
+  empty title takes the box down and restores `""`, and also observes the
+  document's tree (`childList` + `subtree`; an `isConnected` check per
+  record batch) so a removed anchor ends its hover. Tests: both cases in
+  the controller (the empty write shown and pending; the removal after
+  the box is up, the detached element keeping its title). Not built: a
+  scroll or resize listener (the box is placed once, at show; Chromium
+  re-hovers after layout moves the element away from under the pointer
+  and the layer ends the hover then — for a moved element, not a removed
+  one, which (9) covers); a hover timer restart when a title reappears
+  on the same element.
 
 **Answered in place**, not in the wave: U28 (the icon workflow — a
 track-C package when Ben wants it).

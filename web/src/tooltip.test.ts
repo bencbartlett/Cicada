@@ -295,6 +295,51 @@ describe("the tooltip controller", () => {
     expect(undo.getAttribute("title")).toBe(UNDO);
   });
 
+  it("an EMPTY title the app writes under the pointer is the platform's 'no tooltip here': the box goes and leave restores the empty value", async () => {
+    const undo = el("undo");
+    move(el("pane"), undo);
+    vi.advanceTimersByTime(TOOLTIP_DELAY_MS);
+    expect(tooltips.shown()).toEqual({ anchor: undo, text: UNDO });
+    // React, for a prop gone "" — the same write the layer's parking makes,
+    // told apart by draining the layer's own records at the write.
+    undo.setAttribute("title", "");
+    await flush();
+    expect(tooltips.shown(), "an app-written empty title takes the box down").toBeNull();
+    expect(undo.hasAttribute(PARKED_ATTR)).toBe(false);
+    move(undo, el("pane"));
+    expect(undo.getAttribute("title"), "React's empty value, not the stale text").toBe("");
+
+    // Written inside the delay: no box comes.
+    undo.setAttribute("title", UNDO);
+    move(el("pane"), undo);
+    vi.advanceTimersByTime(100);
+    undo.setAttribute("title", "");
+    await flush();
+    vi.advanceTimersByTime(TOOLTIP_DELAY_MS * 4);
+    expect(tooltips.shown()).toBeNull();
+    move(undo, el("pane"));
+    expect(undo.getAttribute("title")).toBe("");
+  });
+
+  it("an element removed from the document AFTER its box is shown takes the box down", async () => {
+    // A node deleted under the pointer (Del, an undo, a menu closing on
+    // click) fires no `pointerout`; the hover's observer sees it leave.
+    const undo = el("undo");
+    move(el("pane"), undo);
+    vi.advanceTimersByTime(TOOLTIP_DELAY_MS);
+    expect(tooltips.shown()).toEqual({ anchor: undo, text: UNDO });
+    undo.remove();
+    await flush();
+    expect(tooltips.shown()).toBeNull();
+    expect(seen).toEqual([{ anchor: undo, text: UNDO }, null]);
+    expect(undo.getAttribute("title"), "the detached element keeps its title for a re-insertion").toBe(UNDO);
+    // The next hover starts from nothing.
+    const redo = el("redo");
+    move(el("pane"), redo);
+    vi.advanceTimersByTime(TOOLTIP_DELAY_MS);
+    expect(tooltips.shown()).toEqual({ anchor: redo, text: REDO });
+  });
+
   it("a title removed under the pointer takes the box down and restores nothing", async () => {
     const undo = el("undo");
     move(el("pane"), undo);
