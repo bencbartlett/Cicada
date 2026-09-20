@@ -55,6 +55,13 @@ class FrameBus {
   lastAt = 0;
   /** Highest generation seen in any frame. */
   lastGeneration = 0;
+  /**
+   * The clock the phases are stamped with — `performance.now()`; a test
+   * injects its own and drives it from a subscriber, so the apply time and
+   * the last-frame stamp are asserted against known numbers (the seam in
+   * the shape of the server's `op_clock`).
+   */
+  now: () => number = () => performance.now();
 
   /**
    * A frame off the socket: counted, attributed to its generation's client
@@ -64,7 +71,7 @@ class FrameBus {
   publish(frame: Frame, byteLength: number, decodeMs = 0): void {
     this.received += 1;
     this.bytes += byteLength;
-    const arrived = performance.now();
+    const arrived = this.now();
     this.lastAt = arrived;
     if (frame.header.generation > this.lastGeneration) this.lastGeneration = frame.header.generation;
     if (this.listeners.size === 0) {
@@ -72,7 +79,7 @@ class FrameBus {
       if (this.replay.length > REPLAY_LIMIT) this.replay.shift();
     }
     for (const listener of this.listeners) listener(frame, byteLength);
-    const applied = performance.now();
+    const applied = this.now();
     const generation = frame.header.generation;
     const stats = this.generations.get(generation) ?? {
       frames: 0,

@@ -190,20 +190,36 @@ test("control-plane texts that overtake frames touch nothing the ledger reads", 
 
 test("the bus keeps the client's phases per generation for the profiler: decode as measured, apply as timed, bounded", async () => {
   const { GENERATIONS_KEPT } = await import("./frameBus");
-  // Two frames of generation 200: the decode times add, the apply times
-  // are the subscribers' wall (the live ledger is subscribed by now).
-  frameBus.publish(mesh(200, 7, 70), BYTES, 1.5);
-  frameBus.publish(mesh(200, 8, 80), 3 * BYTES, 0.25);
-  const stats = frameBus.generation(200);
-  expect(stats).not.toBeNull();
-  expect(stats!.frames).toBe(2);
-  expect(stats!.bytes).toBe(4 * BYTES);
-  expect(stats!.decodeMs).toBeCloseTo(1.75, 9);
-  expect(stats!.applyMs).toBeGreaterThanOrEqual(0);
-  expect(stats!.lastAt).toBeGreaterThanOrEqual(stats!.firstAt);
-  // A copy, not the record: a caller cannot move the bus's numbers.
-  stats!.frames = 99;
-  expect(frameBus.generation(200)!.frames).toBe(2);
+  // The clock is injected and driven from a subscriber: each frame's apply
+  // is the wall the subscribers took, the first stamp is the first frame's
+  // arrival, the last stamp the last frame APPLIED — so a bus that stamped
+  // `applied` before the listeners ran (upload 0 ms for ever) or froze the
+  // last stamp at the first frame (the socket residual short by the whole
+  // pass) fails here (review finding L2-P1-6: `>= 0` and `lastAt >= firstAt`
+  // held for a bus that never moved).
+  let clock = 100;
+  const realNow = frameBus.now;
+  frameBus.now = () => clock;
+  const costly = frameBus.subscribe(() => {
+    clock += 5;
+  });
+  try {
+    // Two frames of generation 200: the decode times add, the apply times
+    // are the subscribers' wall (the live ledger is subscribed too).
+    frameBus.publish(mesh(200, 7, 70), BYTES, 1.5);
+    expect(frameBus.generation(200)).toEqual({ frames: 1, bytes: BYTES, decodeMs: 1.5, applyMs: 5, firstAt: 100, lastAt: 105 });
+    clock = 200;
+    frameBus.publish(mesh(200, 8, 80), 3 * BYTES, 0.25);
+    const stats = frameBus.generation(200);
+    expect(stats).toEqual({ frames: 2, bytes: 4 * BYTES, decodeMs: 1.75, applyMs: 10, firstAt: 100, lastAt: 205 });
+    expect(frameBus.lastAt).toBe(200);
+    // A copy, not the record: a caller cannot move the bus's numbers.
+    stats!.frames = 99;
+    expect(frameBus.generation(200)!.frames).toBe(2);
+  } finally {
+    costly();
+    frameBus.now = realNow;
+  }
   // Unknown generations are null; the decode time defaults to 0.
   expect(frameBus.generation(9999)).toBeNull();
   frameBus.publish(mesh(201, 7, 70), BYTES);
