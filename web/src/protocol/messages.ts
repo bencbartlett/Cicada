@@ -127,6 +127,73 @@ export interface DisplayEndPayload {
 /** What cut a display pass between outputs (`protocol::CutBy`). */
 export type CutBy = "edit" | "esc";
 
+/** The deflection tier a solid was meshed at (`display::DisplayTier`): a drag's generations draw coarse, structural ones fine. */
+export type DisplayTier = "preview" | "fine";
+
+/**
+ * The profile of ONE generation (`protocol::ProfileView`; docs/13 §The
+ * profiler; v0.1 wave 5 P1) — the last complete one, the only generation
+ * whose per-node costs the session keeps. The answer to the `profile` read,
+ * unicast; `/debug/state.profile` is the same object. The client adds its
+ * own phases beside `phases` (`panels/profile.ts::clientPhases`).
+ */
+export interface ProfileView {
+  generation: number;
+  /** The generation's job kind. */
+  kind: "structural" | "preview" | "transport" | (string & {});
+  phases: ProfilePhases;
+  /** Every binding of the generation's lowering: the solved nodes with their cost, the excluded ones, the literals. */
+  nodes: ProfileNode[];
+  /** The outputs this generation's OWN display pass drew — an output kept on screen from an earlier pass is not a row. */
+  display: ProfileDisplay[];
+  /** The two caches as they stood when the profile was read. */
+  caches: CachesView;
+}
+
+/** A generation's phases on the server, wall milliseconds (`protocol::ProfilePhases`). */
+export interface ProfilePhases {
+  /** The job's wait before its solve started. */
+  queued_ms: number;
+  /** The solve alone — start to the last node (the chip's `solve`). */
+  solve_ms: number;
+  /** The display pass's tessellation warm-up on the worker pool. */
+  tessellate_ms: number;
+  /** The frame encode under the session lock. */
+  encode_ms: number;
+  /** Bytes of frames the pass sent. */
+  bytes: number;
+}
+
+/**
+ * One node of a profile (`protocol::ProfileNode`): `nanos` is THIS
+ * generation's measured work (`done` only; CPU, summed across chunks),
+ * `last_nanos` the memo entry's recorded cost of the LAST compute (`cached`
+ * only — never this generation's, which paid a cache read); red / blocked /
+ * cancelled / idle carry neither.
+ */
+export interface ProfileNode {
+  name: string;
+  state: NodeState;
+  nanos?: number;
+  last_nanos?: number;
+  elements?: number;
+}
+
+/** One output a generation's display pass drew (`protocol::ProfileDisplay`). */
+export interface ProfileDisplay {
+  node: string;
+  output: string;
+  triangles: number;
+  bytes: number;
+  /** Absent for an output without solids (a mesh, a curve — no tier, no budget). */
+  tier?: DisplayTier;
+  solids: number;
+  /** Display-cache lookups the pass made for this output's value that the cache answered. */
+  cache_hits: number;
+  /** Lookups that called the kernel. */
+  cache_misses: number;
+}
+
 export interface ValueSummary {
   kind: string;
   hash: string;
@@ -220,7 +287,11 @@ export type ErrorKind =
    * a `not_found` file from Recent and returns the tab to the picker.
    */
   | "pipeline"
-  /** A value outside its documented range: `set_display_cache` below 64 MiB or above 64 GiB (docs/13 §The display edge). */
+  /**
+   * A value outside its documented range: `set_display_cache` below 64 MiB or
+   * above 64 GiB (docs/13 §The display edge); `profile` naming a generation
+   * other than the last complete one (docs/13 §The profiler).
+   */
   | "invalid"
   | (string & {});
 
@@ -945,7 +1016,9 @@ export type ServerMessage =
   /** A generation's display pass ended (the display lane, after its last frame). */
   | { type: "display_end"; payload: DisplayEndPayload }
   /** The two caches after a display pass or a `set_display_cache`: the same view every snapshot carries — replace, never merge. */
-  | { type: "caches"; payload: CachesView };
+  | { type: "caches"; payload: CachesView }
+  /** The answer to a `profile` read (v0.1 wave 5 P1): the last complete generation's profile, unicast. */
+  | { type: "profile_view"; payload: ProfileView };
 
 /** The `scrub_progress` payload (`protocol::ServerMessage::ScrubProgress`). */
 export interface ScrubProgressPayload {
@@ -1083,6 +1156,14 @@ export type ClientMessage =
   /** Whole files atomically (agents / MCP) — same atomicity as `batch`. */
   | { type: "apply_text"; payload: ApplyTextRequest }
   | { type: "inspect"; payload: { node: string } }
+  /**
+   * Ask for a generation's profile (v0.1 wave 5 P1; docs/13 §The profiler)
+   * — a read any client makes (observers too), answered by a unicast
+   * `profile_view`. Absent `generation` = the last complete generation, the
+   * only one kept; naming any other is refused (kind `invalid`) with that
+   * limit — the panel never names one.
+   */
+  | { type: "profile"; payload: { generation?: number } }
   | { type: "inspect_wire"; payload: { to: WireEnd } }
   | { type: "probe_wire"; payload: { from: WireEnd } }
   | { type: "resync_display"; payload: Record<string, never> }

@@ -25,6 +25,7 @@ import type {
   PreviewMode,
   ProbeCatalogEntry,
   ProbeVerdict,
+  ProfileView,
   Role,
   ScrubProgressPayload,
   ServerEnvelope,
@@ -362,6 +363,14 @@ export interface CicadaState {
   caches: CachesView | null;
 
   // ---- read caches
+  /**
+   * The last `profile_view` heard (docs/13 §The profiler; v0.1 wave 5 P1):
+   * the last complete generation's profile as the server keeps it, replaced
+   * whole by every answer; null before the first and after a disconnect or
+   * a session reset (the profiler asks again when it shows). A read cache
+   * like `nodeValues`, never authoritative state.
+   */
+  profile: ProfileView | null;
   catalog: Catalog | null;
   nodeValues: Record<string, NodeValues>;
   wireValues: Record<string, WireValues>;
@@ -561,6 +570,7 @@ export const useCicada = create<CicadaState>((set, get) => ({
   display: null,
   caches: null,
 
+  profile: null,
   catalog: null,
   nodeValues: {},
   wireValues: {},
@@ -616,6 +626,8 @@ export const useCicada = create<CicadaState>((set, get) => ({
       // socket would spin for good; the snapshot brings the caches back.
       display: null,
       caches: null,
+      // The profile too: the re-hydrated session's is asked for afresh.
+      profile: null,
     }),
   setReconnect: (reconnect) => set({ reconnect }),
   setIdentity: (token, pipeline) => set({ token, pipeline }),
@@ -645,6 +657,7 @@ export const useCicada = create<CicadaState>((set, get) => ({
       displayResets: state.displayResets + 1,
       display: null,
       caches: null,
+      profile: null,
       nodeValues: {},
       wireValues: {},
       probe: null,
@@ -970,6 +983,13 @@ export const useCicada = create<CicadaState>((set, get) => ({
         // After every display pass and every `set_display_cache`: the whole
         // view, replacing ours.
         set({ caches: envelope.payload });
+        break;
+      }
+      case "profile_view": {
+        // The answer to our `profile` read: the last complete generation's
+        // profile, replacing whatever we held (a newer generation's answer
+        // can only be newer — the server keeps one).
+        set({ profile: envelope.payload });
         break;
       }
       case "screenshot_request":

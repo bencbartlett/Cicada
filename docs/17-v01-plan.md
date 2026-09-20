@@ -2516,6 +2516,86 @@ proves wrong is revised here, dated, in the landing commit.
     arcs, the table lists every node, a cached row after a second
     generation). docs/13 (the read + view), docs/16 §Inspector contents.
 
+  *Built 2026-09-19 (`wt/display`, on the D1 commits: `protocol.rs` —
+  `ClientMessage::Profile {generation?}` (a read: not a write, not a
+  gesture), `ServerMessage::ProfileView`, `ProfileView` / `ProfilePhases`
+  / `ProfileNode` / `ProfileDisplay`, the shape held to the type by
+  `profile_view_encodes_the_documented_shape_and_the_read_intent`;
+  `session.rs` — `Kept` gains `kind`, `phases` and `drawn`, filled inside
+  `finish_display_pass`'s lock hold once the encode is timed,
+  `Core::profile_view` / `profile_nodes` / `profile_display`, the intent,
+  `/debug/state.profile`, `GenerationTiming.solve_ms`; `display.rs` —
+  `SolidCache::tessellation_served`, `tally` / `choose_tier` /
+  `fetch_meshes` carrying their hit and miss counts, `Displayed.cache_hits`
+  / `cache_misses`; the web — `messages.ts`, `store.profile`,
+  `frameBus.generation()` (decode as the socket measures it around
+  `decodeFrame`, apply as the bus times the subscribers), `panels/profile.ts`
+  (`ringArcs`, `ringPhases`, `clientPhases`, the sort and filter — vitest),
+  `ProfilePanel.tsx` (the tab `insp-tab-profile`), `DisplayCachePicker.tsx`
+  (the settings menu's control, shared with the caches section), the
+  `profile` button and the caches chip's re-target in `TopBar.tsx`,
+  `inspectorTab.openProfile("caches")`, Esc in `keyboard.ts` and in the
+  panel; `web/e2e/profile.spec.ts`, `display.spec.ts` re-targeted; docs/13
+  §The profiler, docs/16 §Inspector contents, §Status and progress
+  language, the keyboard map).* Measured on the debug engine: the D1
+  spec's 140 spheres profile as `gen 1 · structural`, tessellation 3.03 s
+  = 98.6 % of the ring, encode 21.6 ms, `balls` 17 ms = 90.3 % of the
+  solve's measured work, decode 0.50 ms and upload 2.5 ms for 4 frames /
+  2.33 MB, first paint 3.01 s; 02-solids after a slider change: everything
+  a memo hit (the scrub warmer had the position), tessellation 43.3 ms,
+  encode 1.4 ms, socket 6.3 ms = 157 KB at 24.3 MB/s, upload 0.90 ms,
+  first paint 61.8 ms; the bar fits at 1400 px with the `profile` button
+  beside the chip. What the contract did not foresee, each the smaller
+  honest deviation: (1) **`profile {generation}` names only the last
+  complete generation** — naming any other is refused (kind `invalid`)
+  with the limit in the message, and before the first generation
+  completes the read is refused the same way, rather than answered with
+  another generation's numbers; `/debug/state.profile` is `null` then.
+  (2) **The display rows are the outputs the generation's OWN pass drew**
+  (frames sent), not the whole picture: an output kept on screen from an
+  earlier generation cost this one nothing; `tier` is absent for an
+  output without solids (a mesh or a curve has no tier); the per-row
+  `cache_hits` / `cache_misses` are the lookups the pass made for the
+  output's VALUE (the budget's tally plus the fetch of the drawn tier's
+  meshes; two outputs of one value share the count), counted per lookup
+  by `tessellation_served` — a delta of the cache-wide counters around
+  each output would count a restream's or an inspector summary's lookups
+  on another thread. (3) **The node rows are the generation's own
+  lowering's**: its solved graph (`idle` for a node outside a preview's
+  cone), the bindings it excluded (the checker's red / blocked, the `#off`
+  ghosts) and its literal values (`done`, no cost) — so the table lists
+  every node of the pipeline as that generation saw it, and never the
+  current graph's view of a text that changed since. (4) **The socket
+  phase is a residual**: the client's wall from `display_begin` to the
+  last frame applied minus the server's tessellation and encode and the
+  client's decode and upload, clamped at 0 — "bytes at the measured rate"
+  read backwards (the rate shown is the bytes over it); a separate probe
+  of the socket would be an invention. **`upload_ms` is the frames'
+  apply** — the scene building its geometry for the GPU on the main
+  thread (the GPU upload itself happens inside the render); a page that
+  joined a session at rest saw no pass for the kept generation and reads
+  `—` for the socket and the first paint until the next pass (the join's
+  restream carries the frames, so decode and upload are measured; the
+  open L5-7 finding). (5) **The ring mixes measured work and wall time**,
+  as the contract asked: node arcs are CPU nanos summed across chunks, the
+  rest wall; the panel says so under the legend and in the hover, and the
+  table is the comparison (the dataviz rule against a donut for close
+  values holds — the ring is the glance). A node's colour follows its
+  order in the pipeline among the top nodes, not its rank, so it holds
+  across profiles; the eight node hues are a categorical palette validated
+  for both surfaces (the project's kind hues fail as a set: pastel
+  lightness, a deutan clash between the green and the orange), the other
+  arcs lightness-stepped neutrals. (6) **Esc from a focused button**: the
+  keyboard map's plain keys stay with a focused control (`hotkeysReach`),
+  so the panel listens for that case itself — the `profile` button and
+  the caches indicator the user just clicked would otherwise not close it;
+  a press the map consumed is skipped, a text field keeps its Esc. (7) The
+  `profile` read goes out when the tab shows and after every pass LANDS
+  (`display.phase === "painted"`), never while one paints — the answer
+  would be the previous generation's, replaced moments later. Not in P1:
+  a per-generation history (the session keeps one), the notice's numbers
+  in the profiler (the caches section shows the view's).
+
 **Track N — `wt/face` (web + one server addition; one review).**
 - **N1 — the node face.**
   - **The collapse chevron on the face.** An expanded slider wears a

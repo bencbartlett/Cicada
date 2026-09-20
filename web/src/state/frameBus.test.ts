@@ -187,3 +187,29 @@ test("control-plane texts that overtake frames touch nothing the ledger reads", 
   // The texts did what they do — in the store, not the ledger.
   expect(useCicada.getState().summary.generation).toBe(7);
 });
+
+test("the bus keeps the client's phases per generation for the profiler: decode as measured, apply as timed, bounded", async () => {
+  const { GENERATIONS_KEPT } = await import("./frameBus");
+  // Two frames of generation 200: the decode times add, the apply times
+  // are the subscribers' wall (the live ledger is subscribed by now).
+  frameBus.publish(mesh(200, 7, 70), BYTES, 1.5);
+  frameBus.publish(mesh(200, 8, 80), 3 * BYTES, 0.25);
+  const stats = frameBus.generation(200);
+  expect(stats).not.toBeNull();
+  expect(stats!.frames).toBe(2);
+  expect(stats!.bytes).toBe(4 * BYTES);
+  expect(stats!.decodeMs).toBeCloseTo(1.75, 9);
+  expect(stats!.applyMs).toBeGreaterThanOrEqual(0);
+  expect(stats!.lastAt).toBeGreaterThanOrEqual(stats!.firstAt);
+  // A copy, not the record: a caller cannot move the bus's numbers.
+  stats!.frames = 99;
+  expect(frameBus.generation(200)!.frames).toBe(2);
+  // Unknown generations are null; the decode time defaults to 0.
+  expect(frameBus.generation(9999)).toBeNull();
+  frameBus.publish(mesh(201, 7, 70), BYTES);
+  expect(frameBus.generation(201)!.decodeMs).toBe(0);
+  // Bounded: after GENERATIONS_KEPT newer generations, 200 has left the window.
+  for (let g = 300; g < 300 + GENERATIONS_KEPT; g += 1) frameBus.publish(mesh(g, 7, 70), BYTES);
+  expect(frameBus.generation(200)).toBeNull();
+  expect(frameBus.generation(300 + GENERATIONS_KEPT - 1)).not.toBeNull();
+});

@@ -19,8 +19,9 @@
  *     for them (the `already displayed` rule asks with the tier the budget
  *     chooses);
  *   - the caches indicator reads the session's `caches` view (`cache … /
- *     1G · N meshes`), its click opens the breakdown, and the bar
- *     still fits the window (the gear is reachable, nothing scrolls
+ *     1G · N meshes`), its click opens the profiler's caches section (P1
+ *     re-targeted it from D1's breakdown panel; Esc closes the tab), and
+ *     the bar still fits the window (the gear is reachable, nothing scrolls
  *     sideways);
  *   - the settings menu's display-cache select resizes the session's cache
  *     live (the indicator and `/debug/state` follow), the choice is kept
@@ -203,11 +204,18 @@ test("a heavy output is drawn at preview, the chip and the viewport show the dis
   expect(first.caches.display.over_budget).toBe(false);
   expect(first.caches.display.thrash).toBe(false);
   expect(first.caches.memo.bytes).toBeGreaterThan(0);
+  // The click lands on the profiler's caches section (P1); Esc closes the tab.
   await caches.click();
-  await expect(page.getByTestId("tb-caches-detail")).toContainText("display cache:");
-  await expect(page.getByTestId("tb-caches-detail")).toContainText("memo store:");
+  await expect(page.getByTestId("insp-tab-profile")).toHaveAttribute("aria-selected", "true");
+  const cachesSection = page.getByTestId("profile-caches");
+  await expect(cachesSection).toBeVisible();
+  await expect(cachesSection).toContainText("display cache");
+  await expect(cachesSection).toContainText("memo store");
+  await expect(page.getByTestId("profile-cache-held")).toHaveText(new RegExp(`of ${(1024).toFixed(2)} MB$`));
+  await expect(cachesSection.getByTestId("profile-display-cache")).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.getByTestId("tb-caches-detail")).toHaveCount(0);
+  await expect(page.getByTestId("insp-tab-profile")).toHaveAttribute("aria-selected", "false");
+  await expect(page.getByTestId("insp-tab-inspect")).toHaveAttribute("aria-selected", "true");
   await page.screenshot({ path: testInfo.outputPath("display-first-paint.png") });
 
   // ---- a structural edit that leaves the spheres alone re-sends nothing for them.

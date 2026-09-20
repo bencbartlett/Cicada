@@ -10,6 +10,7 @@
  * the store's `send`; nothing here mutates authoritative state.
  */
 import { useEffect } from "react";
+import { useInspectorTab } from "./panels/inspectorTab";
 import { asOneOp, type GestureMessage } from "./protocol/messages";
 import { canWrite, nodeByName, useCicada, writeBlockReason } from "./state/store";
 import { hasTimeParams } from "./state/transport";
@@ -136,6 +137,14 @@ export function handleHotkey(event: KeyboardEvent): boolean {
       return true;
     }
     if (state.search !== null) state.closeSearch();
+    // The profiler closes on Esc (docs/16 §Inspector contents; v0.1 wave 5
+    // P1) — back to Inspect, the selection kept: one Esc does one thing,
+    // like the transport's.
+    const tabs = useInspectorTab.getState();
+    if (tabs.tab === "profile") {
+      tabs.setTab("inspect");
+      return true;
+    }
     state.clearSelection();
     return true;
   }

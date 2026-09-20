@@ -1,9 +1,10 @@
 /**
- * Inspector (docs/16 §Inspector contents): tabs Inspect · Params · Git ·
- * Text. Inspect shows the selected node (ports + cached values, status,
+ * Inspector (docs/16 §Inspector contents): tabs Inspect · Params · Profile ·
+ * Git · Text. Inspect shows the selected node (ports + cached values, status,
  * diagnostics, contract, actions), the selected wire (type, depth, pairing,
- * values), or — nothing selected — the pipeline overview. Git is the git
- * panel (slice 1: status, per-node markers, commit, revert-to-HEAD).
+ * values), or — nothing selected — the pipeline overview. Profile is the
+ * profiler (v0.1 wave 5 P1: the last complete generation itemised). Git is
+ * the git panel (slice 1: status, per-node markers, commit, revert-to-HEAD).
  */
 import { useEffect, useRef, useState } from "react";
 import { baseOfType, kindColor } from "../kinds";
@@ -28,6 +29,7 @@ import { formatBytes, formatMs, statusText, summaryText } from "./format";
 import { GitPanel } from "./GitPanel";
 import { useInspectorTab, type InspectorTab } from "./inspectorTab";
 import { ParamsPanel } from "./ParamsPanel";
+import { ProfilePanel } from "./ProfilePanel";
 import { ScrubToggle } from "./ScrubToggle";
 import { TextPanel } from "./TextPanel";
 import { usePlayhead } from "./usePlayhead";
@@ -37,6 +39,7 @@ import "./panels.css";
 const TABS: [InspectorTab, string][] = [
   ["inspect", "Inspect"],
   ["params", "Params"],
+  ["profile", "Profile"],
   ["git", "Git"],
   ["text", "Text"],
 ];
@@ -83,6 +86,7 @@ export function Inspector() {
       <div className="insp-body" data-testid={`insp-body-${tab}`}>
         {tab === "inspect" && <InspectTab />}
         {tab === "params" && <ParamsPanel />}
+        {tab === "profile" && <ProfilePanel />}
         {tab === "git" && <GitPanel />}
         {tab === "text" && <TextPanel />}
       </div>

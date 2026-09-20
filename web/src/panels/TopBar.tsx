@@ -3,14 +3,14 @@
  * (branch / detached / no repo · dirty count; click → the Git tab) ·
  * engine · lease/role badge · undo/redo · solve chip (`Solving gen N` →
  * `painting…` → `gen N · solve · display`, a spinner while either runs,
- * the counts in the hover) · the caches indicator (display cache bytes /
- * budget · solids · memo; warn tone while over budget or thrashing; click
- * → the breakdown) · connection · settings menu (with the display cache
- * size). Everything here reads the store mirror; the intents it sends are
- * `undo`, `redo`, `cancel`, `take_lease` and `set_display_cache`.
+ * the counts in the hover) · the `profile` button (→ the profiler tab) ·
+ * the caches indicator (display cache bytes / budget · meshes; warn tone
+ * while over budget or thrashing; click → the profiler's caches section)
+ * · connection · settings menu (with the display cache size). Everything
+ * here reads the store mirror; the intents it sends are `undo`, `redo`,
+ * `cancel`, `take_lease` and `set_display_cache`.
  */
 import { useEffect, useRef, useState } from "react";
-import { DISPLAY_CACHE_CHOICES_MIB } from "../protocol/messages";
 import {
   canWrite,
   useCicada,
@@ -19,18 +19,9 @@ import {
   type SplitPreset,
   type WireMode,
 } from "../state/store";
+import { DisplayCachePicker } from "./DisplayCachePicker";
 import { FileMenu } from "./FileMenu";
-import {
-  basename,
-  cachesText,
-  cachesTitle,
-  currentPass,
-  displayCacheLabel,
-  shortBytes,
-  summaryText,
-  summaryTitle,
-  withStatusCounts,
-} from "./format";
+import { basename, cachesText, cachesTitle, currentPass, summaryText, summaryTitle, withStatusCounts } from "./format";
 import { gitChip } from "./gitFormat";
 import { useInspectorTab } from "./inspectorTab";
 import "./panels.css";
@@ -154,6 +145,7 @@ export function TopBar() {
         )}
       </span>
 
+      <ProfileButton />
       <CachesChip />
 
       <span className={`tb-conn ${connection}`} data-testid="tb-conn" title={connectionMessage}>
@@ -170,44 +162,46 @@ export function TopBar() {
 }
 
 /**
+ * The profiler's button (docs/16 §Inspector contents; v0.1 wave 5 P1):
+ * beside the solve chip, opens the Profile tab — the last complete
+ * generation itemised. The tab is what the chip's hover summarises.
+ */
+function ProfileButton() {
+  const tab = useInspectorTab((s) => s.tab);
+  const openProfile = useInspectorTab((s) => s.openProfile);
+  return (
+    <button
+      className={`tb-esc tb-profile${tab === "profile" ? " active" : ""}`}
+      title="the profiler: the last complete generation's phases, every node's cost, what the pass drew, the caches (Esc closes)"
+      aria-label="open the profiler"
+      aria-pressed={tab === "profile"}
+      onClick={() => openProfile()}
+      data-testid="tb-profile"
+    >
+      profile
+    </button>
+  );
+}
+
+/**
  * The caches indicator (docs/16 §Status and progress language; the D1
- * contract): `cache 612M / 1G · 1,397 meshes · memo 2.1G` from the
- * session's `caches` view, in the warn tone while the display cache is
- * over budget or thrashing; the full breakdown in the hover, and — until
- * the profiler's caches section exists (P1) — a click opens the same
- * breakdown as a panel under the chip.
+ * contract): `cache 612M / 1G · 1,397 meshes` from the session's `caches`
+ * view, in the warn tone while the display cache is over budget or
+ * thrashing; the full breakdown in the hover, and a click opens the
+ * profiler's caches section (P1 re-targeted it from D1's breakdown panel).
  */
 function CachesChip() {
   const caches = useCicada((s) => s.caches);
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLSpanElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (event: PointerEvent) => {
-      if (wrapRef.current !== null && !wrapRef.current.contains(event.target as Node)) setOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("pointerdown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("pointerdown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  const openProfile = useInspectorTab((s) => s.openProfile);
   if (caches === null) return null;
   const warn = caches.display.over_budget || caches.display.thrash;
-  const title = cachesTitle(caches);
   return (
-    <span className="tb-menu-wrap tb-caches-wrap" ref={wrapRef}>
+    <span className="tb-caches-wrap">
       <button
-        className={`tb-caches${warn ? " warn" : ""}${open ? " active" : ""}`}
-        title={title}
-        aria-label={`caches: ${cachesText(caches)}${warn ? " — attention" : ""}`}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        className={`tb-caches${warn ? " warn" : ""}`}
+        title={`${cachesTitle(caches)}\nclick: the profiler's caches section`}
+        aria-label={`caches: ${cachesText(caches)}${warn ? " — attention" : ""} — open the profiler's caches section`}
+        onClick={() => openProfile("caches")}
         data-testid="tb-caches"
         data-warn={warn}
         data-over-budget={caches.display.over_budget}
@@ -217,11 +211,6 @@ function CachesChip() {
           {cachesText(caches)}
         </span>
       </button>
-      {open && (
-        <div className="tb-menu tb-caches-menu" role="dialog" aria-label="caches" data-no-hotkeys data-testid="tb-caches-detail">
-          <pre className="mono">{title}</pre>
-        </div>
-      )}
     </span>
   );
 }
@@ -334,9 +323,6 @@ const DISPLAY_MODES: [DisplayMode, string][] = [
 function SettingsMenu() {
   const settings = useCicada((s) => s.settings);
   const updateSettings = useCicada((s) => s.updateSettings);
-  const chooseDisplayCache = useCicada((s) => s.chooseDisplayCache);
-  const caches = useCicada((s) => s.caches);
-  const writer = useCicada(canWrite);
   const setTab = useInspectorTab((s) => s.setTab);
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLSpanElement>(null);
@@ -436,28 +422,7 @@ function SettingsMenu() {
           >
             solid meshes
           </label>
-          <span className="tb-cache-pick">
-            <select
-              value={settings.displayCacheMib === null ? "" : String(settings.displayCacheMib)}
-              onChange={(e) => chooseDisplayCache(e.target.value === "" ? null : Number(e.target.value))}
-              title={
-                writer
-                  ? "resizes this session's display cache now and on every connect (the lease holder's preference wins)"
-                  : "kept for when you hold the write lease — only the lease holder resizes the session's cache"
-              }
-              data-testid="settings-display-cache"
-            >
-              <option value="">server default</option>
-              {DISPLAY_CACHE_CHOICES_MIB.map((mib) => (
-                <option key={mib} value={String(mib)}>
-                  {displayCacheLabel(mib)}
-                </option>
-              ))}
-            </select>
-            <span className="faint" data-testid="settings-display-cache-now">
-              {caches === null ? "session: …" : `session: ${shortBytes(caches.display.budget)}`}
-            </span>
-          </span>
+          <DisplayCachePicker />
         </div>
       )}
     </span>

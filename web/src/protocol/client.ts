@@ -9,7 +9,8 @@ import type { ClientEnvelope, ClientMessage, Role, ServerEnvelope } from "./mess
 
 export interface ClientHandlers {
   onMessage: (message: ServerEnvelope) => void;
-  onFrame: (frame: Frame, byteLength: number) => void;
+  /** A decoded binary frame, its size on the wire, and the decode's wall milliseconds (the profiler's `decode_ms`). */
+  onFrame: (frame: Frame, byteLength: number, decodeMs: number) => void;
   onOpen?: () => void;
   /** `closedByUs` = `close()` was called; false = the server/network dropped us. */
   onClose?: (reason: string, closedByUs: boolean) => void;
@@ -79,8 +80,9 @@ export class CicadaClient {
         this.handlers.onMessage(parsed);
       } else {
         try {
+          const decodeBegan = performance.now();
           const frame = decodeFrame(event.data);
-          this.handlers.onFrame(frame, event.data.byteLength);
+          this.handlers.onFrame(frame, event.data.byteLength, performance.now() - decodeBegan);
         } catch (error) {
           this.handlers.onError?.(`bad binary frame: ${String(error)}`);
         }

@@ -970,3 +970,27 @@ describe("the display edge (wave 5 D1: display_begin / display_end / caches / se
     expect(sent).toHaveLength(1);
   });
 });
+
+describe("the profile read cache (v0.1 wave 5 P1)", () => {
+  const view = {
+    generation: 12,
+    kind: "structural",
+    phases: { queued_ms: 1, solve_ms: 5, tessellate_ms: 40, encode_ms: 2, bytes: 4096 },
+    nodes: [{ name: "ball", state: "done" as const, nanos: 3_000_000, elements: 1 }],
+    display: [],
+    caches: EMPTY_CACHES,
+  };
+
+  it("a profile_view replaces the held profile; a disconnect and a session reset forget it", () => {
+    useCicada.setState({ profile: null, connection: "open", role: "writer" });
+    useCicada.getState().applyServerMessage({ v: 1, seq: 9, type: "profile_view", payload: view });
+    expect(useCicada.getState().profile).toEqual(view);
+    useCicada.getState().applyServerMessage({ v: 1, seq: 10, type: "profile_view", payload: { ...view, generation: 13 } });
+    expect(useCicada.getState().profile?.generation).toBe(13);
+    useCicada.getState().markDisconnected("gone", { attempt: 1, nextAt: null });
+    expect(useCicada.getState().profile, "a dead socket's profile is not shown as live").toBeNull();
+    useCicada.getState().applyServerMessage({ v: 1, seq: 11, type: "profile_view", payload: view });
+    useCicada.getState().resetSession("t", "other.cic");
+    expect(useCicada.getState().profile, "the old pipeline's profile goes with it").toBeNull();
+  });
+});

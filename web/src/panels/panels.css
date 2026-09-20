@@ -161,15 +161,10 @@ header.topbar > .tb-caches-wrap {
   background: var(--warn-bg);
 }
 
-.tb-caches-menu {
-  display: block;
-}
-
-.tb-caches-menu > pre {
-  margin: 0;
-  font-size: 11px;
-  line-height: 1.5;
-  white-space: pre;
+/* the profiler's button, beside the solve chip */
+.tb-profile.active {
+  color: var(--fg);
+  background: var(--accent-bg);
 }
 
 .tb-cache-pick {
@@ -1666,4 +1661,248 @@ footer.statusbar {
   font-size: 10px;
   line-height: 14px;
   font-family: var(--mono);
+}
+
+/* ------------------------------------------------------- profile tab */
+
+/* The ring's series (docs/16 §Inspector contents; v0.1 wave 5 P1). The
+   eight node slots are a categorical palette validated for both surfaces
+   (adjacent-pair CVD and normal-vision separation, the lightness band,
+   contrast — the dataviz validator, run on `--bg-panel` in each theme):
+   the project's kind hues are pastels that fail it as a set. A node takes
+   its slot by its ORDER IN THE PIPELINE among the top nodes, so its colour
+   holds across profiles. The other arcs — the rest of the nodes, the
+   server's two phases, the client's three — wear lightness-stepped
+   neutrals and are told apart by the legend. */
+:root {
+  --prof-1: #3987e5;
+  --prof-2: #d95926;
+  --prof-3: #199e70;
+  --prof-4: #c98500;
+  --prof-5: #d55181;
+  --prof-6: #008300;
+  --prof-7: #9085e9;
+  --prof-8: #e66767;
+  --prof-other: #6f7683;
+  --prof-tessellate: #e6e8ec;
+  --prof-encode: #b8bec9;
+  --prof-socket: #8a919d;
+  --prof-decode: #666d79;
+  --prof-upload: #4b525e;
+}
+
+[data-theme="light"] {
+  --prof-1: #2a78d6;
+  --prof-2: #eb6834;
+  --prof-3: #1baf7a;
+  --prof-4: #eda100;
+  --prof-5: #e87ba4;
+  --prof-6: #008300;
+  --prof-7: #4a3aa7;
+  --prof-8: #e34948;
+  --prof-other: #8a93a1;
+  --prof-tessellate: #1c1f24;
+  --prof-encode: #3d4652;
+  --prof-socket: #5f6875;
+  --prof-decode: #8a93a1;
+  --prof-upload: #b0b7c1;
+}
+
+.prof-ring-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.prof-note {
+  font-size: 10px;
+  align-self: flex-start;
+}
+
+.prof-ring {
+  flex: none;
+}
+
+.prof-ring-total {
+  fill: var(--fg);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.prof-ring-caption {
+  fill: var(--fg-faint);
+  font-size: 9px;
+}
+
+.prof-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 2px 8px;
+  align-items: center;
+  font-size: 11px;
+}
+
+.prof-legend > li {
+  display: contents;
+}
+
+.prof-swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+}
+
+.prof-legend-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-dim);
+}
+
+.prof-legend-ms {
+  text-align: right;
+  color: var(--fg);
+}
+
+.prof-legend-share {
+  text-align: right;
+  min-width: 46px;
+}
+
+.prof-phases {
+  margin-top: 4px;
+}
+
+.prof-filter {
+  width: 110px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+}
+
+/* Dense tables for a ~300 px panel: fixed layout, the name column takes
+   what the numeric columns leave and ellipsises. */
+.prof-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.prof-table th,
+.prof-table td {
+  padding: 2px 4px 2px 0;
+  text-align: left;
+  vertical-align: baseline;
+  border-bottom: 1px dashed var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prof-table th:last-child,
+.prof-table td:last-child {
+  padding-right: 0;
+}
+
+.prof-table th {
+  color: var(--fg-faint);
+  font-weight: normal;
+  border-bottom: 1px solid var(--border);
+}
+
+.prof-table td .link {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: bottom;
+}
+
+.prof-col-state {
+  width: 54px;
+}
+
+.prof-col-time {
+  width: 70px;
+}
+
+.prof-col-share {
+  width: 50px;
+}
+
+.prof-col-elements {
+  width: 40px;
+}
+
+.prof-col-tier {
+  width: 48px;
+}
+
+.prof-col-num {
+  width: 54px;
+}
+
+.prof-nodes td:nth-child(n + 3),
+.prof-nodes th:nth-child(n + 3),
+.prof-display td:nth-child(n + 3),
+.prof-display th:nth-child(n + 3) {
+  text-align: right;
+}
+
+.prof-sort {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.prof-sort.active,
+.prof-sort:hover {
+  color: var(--fg);
+}
+
+.prof-row.cached td {
+  color: var(--fg-dim);
+}
+
+.prof-row .status-line {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.prof-flag {
+  margin-top: 4px;
+  color: var(--warn);
+}
+
+.prof-budget {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.prof-budget > .k {
+  color: var(--fg-faint);
 }

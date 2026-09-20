@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createKeyRouter, handleHotkey, hotkeysReach, isCommitChord, isControlTarget, isEditableTarget } from "./keyboard";
 import type { ClientMessage, NodeView } from "./protocol/messages";
+import { useInspectorTab } from "./panels/inspectorTab";
 import { useCicada } from "./state/store";
 
 function key(k: string, mods: Partial<KeyboardEvent> = {}): KeyboardEvent {
@@ -144,6 +145,28 @@ describe("handleHotkey", () => {
     expect(sent, "the running solve was not cancelled").toEqual([]);
     expect(useCicada.getState().selection.nodes).toEqual(["a"]);
     useCicada.setState({ summary: { ...useCicada.getState().summary, running: false } });
+  });
+
+  // The profiler closes on Esc (docs/16 §Inspector contents; v0.1 wave 5
+  // P1): one Esc does one thing — the tab goes back to Inspect and the
+  // selection stands; the next Esc clears it. A running solve is still
+  // cancelled first, the tab left open.
+  it("Esc closes the profiler tab before it clears the selection; a running solve is cancelled first", () => {
+    useInspectorTab.setState({ tab: "profile", profileFocus: null });
+    useCicada.getState().selectNodes(["a"]);
+    expect(handleHotkey(key("Escape"))).toBe(true);
+    expect(useInspectorTab.getState().tab).toBe("inspect");
+    expect(useCicada.getState().selection.nodes, "the selection stands").toEqual(["a"]);
+    expect(sent).toEqual([]);
+    expect(handleHotkey(key("Escape"))).toBe(true);
+    expect(useCicada.getState().selection.nodes).toEqual([]);
+    useInspectorTab.setState({ tab: "profile" });
+    useCicada.setState({ summary: { ...useCicada.getState().summary, running: true } });
+    expect(handleHotkey(key("Escape"))).toBe(true);
+    expect(sent).toEqual([{ type: "cancel", payload: {} }]);
+    expect(useInspectorTab.getState().tab, "the solve was the one thing this Esc did").toBe("profile");
+    useCicada.setState({ summary: { ...useCicada.getState().summary, running: false } });
+    useInspectorTab.setState({ tab: "inspect" });
   });
 
   it("Delete removes ONE selected node as itself, several as one batch (one undo step)", () => {

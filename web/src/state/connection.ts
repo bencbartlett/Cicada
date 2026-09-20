@@ -240,7 +240,7 @@ export function startConnection(options: StartOptions): CicadaClient {
             });
         }
       },
-      onFrame: (frame, byteLength) => frameBus.publish(frame, byteLength),
+      onFrame: (frame, byteLength, decodeMs) => frameBus.publish(frame, byteLength, decodeMs),
       onOpen: () => {
         reconnectAttempt = 0;
         useCicada.getState().setConnection("open");
