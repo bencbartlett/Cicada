@@ -12,6 +12,7 @@
  */
 import { expect, test } from "@playwright/test";
 import config from "../playwright.config";
+import { PROTOCOL_VERSION } from "../src/protocol/version";
 
 interface CicadaHandle {
   state: () => {
@@ -59,7 +60,9 @@ test("About shows the build /api/version reports, copies the commit, closes on E
   await expect(page.getByTestId("about-version")).toHaveText(version.semver);
   await expect(page.getByTestId("about-commit")).toHaveText(version.commit);
   await expect(page.getByTestId("about-built")).toHaveText(version.built);
-  await expect(page.getByTestId("about-protocol")).toHaveText("1");
+  // The mirror's number, not a literal: the handshake succeeded, so the
+  // dialog shows what `hello.protocol` must equal (finding L4-2).
+  await expect(page.getByTestId("about-protocol")).toHaveText(String(PROTOCOL_VERSION));
   await expect(page.getByTestId("about-threads")).toHaveText(threads);
   await expect(page.getByTestId("about-engine")).toHaveText(`cicada ${version.semver}`);
   await expect(page.getByTestId("about-notes")).toHaveAttribute(
@@ -68,9 +71,12 @@ test("About shows the build /api/version reports, copies the commit, closes on E
   );
 
   await page.getByTestId("about-commit").click();
+  // The durable fact first — the clipboard holds the commit — then the
+  // note, which clears itself after COPIED_MS (1.5 s, web/src/panels/about.ts):
+  // a note assertion is the one timing-bound step here, and it must never
+  // be what hides a clipboard failure (finding R1-C10).
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(version.commit);
   await expect(page.getByTestId("about-copied")).toHaveText("copied");
-  const onClipboard = await page.evaluate(() => navigator.clipboard.readText());
-  expect(onClipboard).toBe(version.commit);
 
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
