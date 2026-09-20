@@ -170,6 +170,21 @@ describe("the About dialog", () => {
     expect(screen.queryByTestId("about-dialog")).toBeNull();
   });
 
+  it("never opens over another modal: with the commit dialog open the menu's About entry does nothing (one modal at a time)", () => {
+    seed(stamped, false);
+    useCicada.setState({ commitDialog: true });
+    try {
+      render(<TopBar />);
+      fireEvent.click(screen.getByTestId("tb-settings"));
+      fireEvent.click(screen.getByTestId("tb-about"));
+      expect(screen.queryByTestId("about-dialog")).toBeNull();
+      expect(isOpen()).toBe(false);
+      expect(useCicada.getState().commitDialog, "the commit dialog stands").toBe(true);
+    } finally {
+      useCicada.setState({ commitDialog: false });
+    }
+  });
+
   it("with the real key router on the window: Esc behind About closes it and nothing else, Del behind it deletes nothing, focus lands in the dialog and returns to the gear", () => {
     seed(stamped, false);
     const sent: ClientMessage[] = [];

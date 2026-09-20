@@ -14,7 +14,7 @@
 import { useEffect } from "react";
 import { useInspectorTab } from "./panels/inspectorTab";
 import { asOneOp, type GestureMessage } from "./protocol/messages";
-import { canWrite, nodeByName, useCicada, writeBlockReason } from "./state/store";
+import { canWrite, modalOpen, nodeByName, useCicada, writeBlockReason } from "./state/store";
 import { hasTimeParams } from "./state/transport";
 import { viewportApi } from "./viewport/api";
 
@@ -94,24 +94,12 @@ export function isCommitChord(event: Pick<KeyboardEvent, "key" | "ctrlKey" | "me
  */
 function openCommitDialogOnce(event: Pick<KeyboardEvent, "repeat">): void {
   const state = useCicada.getState();
-  // Never over another modal: About and File → Open own the keyboard while
-  // they are open (`modalOpen`).
-  if (event.repeat || state.commitDialog || state.aboutDialog || state.fileDialog) return;
+  // Never over another modal — the store's open action refuses it too
+  // (`modalOpen`, the one rule); the dialog's own keys (Ctrl+Enter in the
+  // commit form, Enter in the file list) are handled inside it and never
+  // reach the map.
+  if (event.repeat || modalOpen(state)) return;
   state.openCommitDialog();
-}
-
-/**
- * Is a modal dialog open — About, the commit dialog, File → Open? A modal
- * owns the keyboard (docs/16 §Keyboard map): Esc closes it and does nothing
- * else, and every other hotkey is inert behind it — the dialog's own keys
- * (Ctrl+Enter in the commit form, Enter in the file list) are handled inside
- * it and never reach the map (fix round 2026-09-20, finding L5-1: with focus
- * on the page behind About, Esc cancelled the running solve or cleared the
- * selection as it closed the dialog, Del deleted the selection, Space
- * toggled playback).
- */
-function modalOpen(state: ReturnType<typeof useCicada.getState>): boolean {
-  return state.aboutDialog || state.commitDialog || state.fileDialog;
 }
 
 /**

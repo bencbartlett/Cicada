@@ -7,6 +7,7 @@ import {
   dragStandsAfter,
   errorNoticeLevel,
   lastErrorOf,
+  modalOpen,
   pendingFor,
   pruneKeys,
   roleChangeNotice,
@@ -895,6 +896,44 @@ describe("resetSession (File → Open / Recent / Close, Back)", () => {
     useCicada.getState().resetSession("t", "");
     expect(useCicada.getState().pipeline).toBe("");
     expect(useCicada.getState().hello).toBeNull();
+  });
+});
+
+// One modal at a time (docs/16 §Keyboard map's Esc row; fix round 2
+// 2026-09-20, finding L3A-3): by Tab the gear behind the commit dialog's
+// backdrop opened About over it, and one Esc then closed both.
+describe("the modals open one at a time", () => {
+  const flags = () => {
+    const s = useCicada.getState();
+    return [s.commitDialog, s.fileDialog, s.aboutDialog];
+  };
+
+  it("an open action is a no-op while another modal is open; once that one closes, it opens", () => {
+    useCicada.setState({ commitDialog: false, fileDialog: false, aboutDialog: false });
+    const s = () => useCicada.getState();
+    expect(modalOpen(s())).toBe(false);
+    s().openCommitDialog();
+    expect(modalOpen(s())).toBe(true);
+    s().openAboutDialog();
+    s().openFileDialog();
+    expect(flags(), "About and Open refused over the commit dialog").toEqual([true, false, false]);
+    s().closeCommitDialog();
+    s().openAboutDialog();
+    expect(flags()).toEqual([false, false, true]);
+    s().openCommitDialog();
+    s().openFileDialog();
+    expect(flags(), "the commit dialog and Open refused over About").toEqual([false, false, true]);
+    s().closeAboutDialog();
+    s().openFileDialog();
+    expect(flags()).toEqual([false, true, false]);
+    s().openAboutDialog();
+    s().openCommitDialog();
+    expect(flags(), "About and the commit dialog refused over Open").toEqual([false, true, false]);
+    s().closeFileDialog();
+    expect(modalOpen(s())).toBe(false);
+    s().openCommitDialog();
+    expect(flags()).toEqual([true, false, false]);
+    s().closeCommitDialog();
   });
 });
 

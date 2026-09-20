@@ -606,6 +606,13 @@ export interface CicadaState {
   markGitStale: () => void;
   setGitLoading: (loading: boolean) => void;
   setGitBusy: (busy: GitBusy) => void;
+  /**
+   * The three modals open ONE at a time (fix round 2 2026-09-20, finding
+   * L3A-3): an open action is a no-op while another modal is open
+   * (`modalOpen`). There is no focus trap yet, so the gear behind a
+   * dialog's backdrop is reachable by Tab — and two modals stacked that way
+   * closed BOTH on one Esc, against the one-modal rule.
+   */
   openCommitDialog: () => void;
   closeCommitDialog: () => void;
   openFileDialog: () => void;
@@ -1215,11 +1222,11 @@ export const useCicada = create<CicadaState>((set, get) => ({
   markGitStale: () => set((state) => ({ git: { ...state.git, stale: true, writes: state.git.writes + 1 } })),
   setGitLoading: (loading) => set((state) => ({ git: { ...state.git, loading } })),
   setGitBusy: (busy) => set((state) => ({ git: { ...state.git, busy } })),
-  openCommitDialog: () => set({ commitDialog: true }),
+  openCommitDialog: () => set((state) => (modalOpen(state) ? {} : { commitDialog: true })),
   closeCommitDialog: () => set({ commitDialog: false }),
-  openFileDialog: () => set({ fileDialog: true }),
+  openFileDialog: () => set((state) => (modalOpen(state) ? {} : { fileDialog: true })),
   closeFileDialog: () => set({ fileDialog: false }),
-  openAboutDialog: () => set({ aboutDialog: true }),
+  openAboutDialog: () => set((state) => (modalOpen(state) ? {} : { aboutDialog: true })),
   closeAboutDialog: () => set({ aboutDialog: false }),
 }));
 
@@ -1338,6 +1345,20 @@ export function writeBlockReason(state: Pick<CicadaState, "role" | "connection">
   if (state.connection !== "open") return "not connected";
   if (state.role !== "writer") return "read-only observer";
   return null;
+}
+
+/**
+ * Is a modal dialog open — About, the commit dialog, File → Open? ONE rule
+ * (docs/16 §Keyboard map's Esc row): a modal owns the keyboard — Esc closes
+ * it and does nothing else, every other hotkey is inert behind it
+ * (`keyboard.ts`; fix round 2026-09-20, finding L5-1: with focus on the
+ * page behind About, Esc cancelled the running solve or cleared the
+ * selection as it closed the dialog, Del deleted the selection, Space
+ * toggled playback) — and no second modal opens over it (the store's open
+ * actions; fix round 2, finding L3A-3).
+ */
+export function modalOpen(state: Pick<CicadaState, "aboutDialog" | "commitDialog" | "fileDialog">): boolean {
+  return state.aboutDialog || state.commitDialog || state.fileDialog;
 }
 
 /**
