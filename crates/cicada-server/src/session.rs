@@ -12008,9 +12008,15 @@ size = slider(value=4.0, min=0.5, max=5.0)
     /// reported cancelled (the chip's `cancelled gen N`, the timing, a
     /// `cancel_to_idle_ms`), the outputs the pass did not reach keep the
     /// previous generation's picture — the loop idle, nothing further on
-    /// the wire — and the next edit repaints them.
+    /// the wire — and the next edit repaints them; the profile is the cut
+    /// generation's and says cancelled, by Esc. (d) The same Esc seen by the
+    /// encode's check (parked after the last verdict): the same end, and the
+    /// profile marked the same — the record keeps a cut the encode saw as
+    /// it keeps one the warm-up saw (review finding L2-P1-F2: with only the
+    /// warm-up's site pinned, dropping the encode's cut from the profile
+    /// survived the suite).
     #[test]
-    #[allow(clippy::too_many_lines)] // three cuts of one parked pass, each pinned where it happens
+    #[allow(clippy::too_many_lines)] // four cuts of one parked pass, each pinned where it happens
     fn an_edit_or_esc_cuts_a_parked_pass_where_it_is_seen() {
         let (_dir, mut config) = project(
             "# cicada 1\n\
@@ -12128,91 +12134,126 @@ size = slider(value=4.0, min=0.5, max=5.0)
         // (b) seen in the encode: parked after the last verdict.
         let on_screen = cut_by_edit(2, "3.5", "4.0");
 
-        // (c) Esc while parked.
-        hold.arm(1);
-        set("4.5", "parked");
-        let parked = hold.parked();
-        session.handle(id, Some("esc".into()), ClientMessage::Cancel {});
-        assert_eq!(session.solve.superseded(), Some(Superseded::Esc));
-        hold.release();
-        session.wait_idle();
-        let got = drain(&mut rx);
-        let msgs = texts(&got);
-        let ends = of_kind(&msgs, "display_end");
-        assert_eq!(ends.len(), 1, "{msgs:?}");
-        assert_eq!(ends[0]["payload"]["generation"], parked);
-        assert_eq!(ends[0]["payload"]["cancelled"], true);
-        assert_eq!(ends[0]["payload"]["cut_by"], "esc", "{}", ends[0]);
-        assert_eq!(ends[0]["payload"]["outputs"], 0);
-        assert!(
-            frames(&got).is_empty(),
-            "no frame of the cancelled generation"
-        );
-        assert!(
-            !session.solve.is_busy(),
-            "idle: nothing resubmits on its own"
-        );
-        let state = session.debug_state(false);
-        // Every layer agrees: the generation is cancelled — the summary the
-        // chip reads, the timing with its cancel-to-idle — and the picture
-        // is the previous generation's.
-        assert_eq!(state["summary"]["generation"], parked);
-        assert_eq!(state["summary"]["cancelled"], true, "{}", state["summary"]);
-        assert_eq!(state["summary"]["running"], false);
-        assert!(
-            state["text"].as_str().unwrap().contains("value=4.5"),
-            "the edit itself stands"
-        );
-        for name in ["block.out", "ball.out"] {
-            assert_eq!(
-                state["display"][name]["generation"], on_screen,
-                "{name} keeps the previous picture"
+        // (c) and (d): Esc while parked — seen in the warm-up, then in the
+        // encode. Every layer reports the generation cancelled, by Esc, and
+        // the profile is the cut generation's, MARKED.
+        let mut cut_by_esc = |at: usize, value: &str, site: &str| {
+            hold.arm(at);
+            set(value, "parked");
+            let parked = hold.parked();
+            session.handle(id, Some("esc".into()), ClientMessage::Cancel {});
+            assert_eq!(session.solve.superseded(), Some(Superseded::Esc));
+            hold.release();
+            session.wait_idle();
+            let got = drain(&mut rx);
+            let msgs = texts(&got);
+            let ends = of_kind(&msgs, "display_end");
+            assert_eq!(ends.len(), 1, "{site}: {msgs:?}");
+            assert_eq!(ends[0]["payload"]["generation"], parked, "{site}");
+            assert_eq!(ends[0]["payload"]["cancelled"], true, "{site}: {}", ends[0]);
+            assert_eq!(ends[0]["payload"]["cut_by"], "esc", "{site}: {}", ends[0]);
+            assert_eq!(ends[0]["payload"]["outputs"], 0, "{site}: {}", ends[0]);
+            assert!(
+                frames(&got).is_empty(),
+                "{site}: no frame of the cancelled generation"
             );
-        }
-        let timings = state["timings"].as_array().unwrap();
-        let esc_timing = timings.iter().find(|t| t["generation"] == parked).unwrap();
-        assert_eq!(esc_timing["cancelled"], true, "{esc_timing}");
-        assert!(esc_timing["cancel_to_idle_ms"].is_number(), "{esc_timing}");
-        assert_eq!(esc_timing["frame_bytes"], 0);
-        let statuses = of_kind(&msgs, "status");
-        assert!(
-            statuses
-                .last()
-                .is_some_and(|s| s["payload"]["summary"]["cancelled"] == true),
-            "the last status says cancelled: {statuses:?}"
-        );
-        // The profile agrees with the chip (docs/13 §The profiler, fix round
-        // 2026-09-19): the cut generation IS the kept one — its solve
-        // completed and the memo holds its values — and the view says it is
-        // cancelled, by Esc, with no display rows (the cut landed in the
-        // warm-up) and no frame bytes; `/debug/state.profile` is the same.
-        // The first build kept it unmarked: a "complete" pass that "drew
-        // nothing new" beside a chip reading `cancelled gen N`.
-        assert_eq!(state["solve"]["last_complete_generation"], parked);
-        let profile = &state["profile"];
-        assert_eq!(profile["generation"], parked, "{profile}");
-        assert_eq!(profile["cancelled"], true, "{profile}");
-        assert_eq!(profile["cut_by"], "esc", "{profile}");
-        assert_eq!(profile["display"], serde_json::json!([]), "{profile}");
-        assert_eq!(profile["phases"]["bytes"], 0, "{profile}");
-        assert!(
-            profile["phases"]["tessellate_ms"].as_f64().unwrap() > 0.0,
-            "the warm-up ran until the cut: {profile}"
-        );
-        session.handle(
-            id,
-            Some("prof".into()),
-            ClientMessage::Profile { generation: None },
-        );
-        let answers = texts(&drain(&mut rx));
-        let answer = of_kind(&answers, "profile_view");
-        assert_eq!(answer.len(), 1, "{answers:?}");
-        assert_eq!(answer[0]["payload"]["generation"], parked);
-        assert_eq!(answer[0]["payload"]["cancelled"], true);
-        assert_eq!(answer[0]["payload"]["cut_by"], "esc");
+            assert!(
+                !session.solve.is_busy(),
+                "{site}: idle: nothing resubmits on its own"
+            );
+            let state = session.debug_state(false);
+            // Every layer agrees: the generation is cancelled — the summary
+            // the chip reads, the timing with its cancel-to-idle — and the
+            // picture is the previous generation's.
+            assert_eq!(state["summary"]["generation"], parked, "{site}");
+            assert_eq!(
+                state["summary"]["cancelled"], true,
+                "{site}: {}",
+                state["summary"]
+            );
+            assert_eq!(state["summary"]["running"], false, "{site}");
+            assert!(
+                state["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains(&format!("value={value}")),
+                "{site}: the edit itself stands"
+            );
+            for name in ["block.out", "ball.out"] {
+                assert_eq!(
+                    state["display"][name]["generation"], on_screen,
+                    "{site}: {name} keeps the previous picture"
+                );
+            }
+            let timings = state["timings"].as_array().unwrap();
+            let esc_timing = timings.iter().find(|t| t["generation"] == parked).unwrap();
+            assert_eq!(esc_timing["cancelled"], true, "{site}: {esc_timing}");
+            assert!(
+                esc_timing["cancel_to_idle_ms"].is_number(),
+                "{site}: {esc_timing}"
+            );
+            assert_eq!(esc_timing["frame_bytes"], 0, "{site}");
+            let statuses = of_kind(&msgs, "status");
+            assert!(
+                statuses
+                    .last()
+                    .is_some_and(|s| s["payload"]["summary"]["cancelled"] == true),
+                "{site}: the last status says cancelled: {statuses:?}"
+            );
+            // The profile agrees with the chip (docs/13 §The profiler, fix
+            // round 2026-09-19): the cut generation IS the kept one — its
+            // solve completed and the memo holds its values — and the view
+            // says it is cancelled, by Esc, with no display rows and no frame
+            // bytes; `/debug/state.profile` is the same. The first build kept
+            // it unmarked: a "complete" pass that "drew nothing new" beside a
+            // chip reading `cancelled gen N`.
+            assert_eq!(state["solve"]["last_complete_generation"], parked, "{site}");
+            let profile = &state["profile"];
+            assert_eq!(profile["generation"], parked, "{site}: {profile}");
+            assert_eq!(profile["cancelled"], true, "{site}: {profile}");
+            assert_eq!(profile["cut_by"], "esc", "{site}: {profile}");
+            assert_eq!(
+                profile["display"],
+                serde_json::json!([]),
+                "{site}: {profile}"
+            );
+            assert_eq!(profile["phases"]["bytes"], 0, "{site}: {profile}");
+            assert!(
+                profile["phases"]["tessellate_ms"].as_f64().unwrap() > 0.0,
+                "{site}: the warm-up ran until the cut: {profile}"
+            );
+            session.handle(
+                id,
+                Some("prof".into()),
+                ClientMessage::Profile { generation: None },
+            );
+            let answers = texts(&drain(&mut rx));
+            let answer = of_kind(&answers, "profile_view");
+            assert_eq!(answer.len(), 1, "{site}: {answers:?}");
+            let view = &answer[0]["payload"];
+            assert_eq!(view["generation"], parked, "{site}: {view}");
+            assert_eq!(view["cancelled"], true, "{site}: {view}");
+            assert_eq!(view["cut_by"], "esc", "{site}: {view}");
+            assert_eq!(view["display"], serde_json::json!([]), "{site}: {view}");
+            parked
+        };
+        // (c) seen in the warm-up: parked between the two outputs, the check
+        // at the top of the next output cuts it.
+        let parked = cut_by_esc(1, "4.5", "seen in the warm-up");
         // The edit-cut generations before it never stood as the profile
         // once their edit's generation completed: `on_screen` is the edit's.
         assert!(on_screen < parked);
+        // (d) seen in the encode: parked after the LAST verdict, nothing is
+        // left for the warm-up's check, and the encode's own check — under
+        // the lock, before any output is sent — cuts it. The record keeps
+        // THAT cut too (`emitted.cut`, not only `warm.cut`): with it
+        // dropped, `display_end`, the summary and the chip said cancelled by
+        // Esc while the profile read as a complete pass, and every test
+        // stayed green because this case parked in the warm-up alone
+        // (review finding L2-P1-F2). Esc cancels under the session lock the
+        // encode runs under, so it is never seen between two encoded
+        // outputs: an Esc-cut pass has sent nothing — `outputs: 0`, no rows.
+        let parked = cut_by_esc(2, "4.75", "seen in the encode");
         // The next edit repaints both.
         set("5.0", "after");
         session.wait_idle();

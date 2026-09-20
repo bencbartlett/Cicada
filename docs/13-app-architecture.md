@@ -361,12 +361,20 @@ contents) — additive, `PROTOCOL_VERSION` unchanged:
   display PASS Esc cut (§The display edge, `cut_by: "esc"`) IS the last
   complete one — its solve completed and the memo holds its values, which
   the inspector reads — and the profile says so: `cancelled: true`,
-  `cut_by: "esc"`, the outputs the pass reached as its display rows (none
-  when the cut landed in the warm-up), the tessellation up to the cut.
-  The first build kept the cut generation unmarked, presenting it as a
-  complete pass that happened to draw nothing while the chip said
-  `cancelled gen N`. An edit's cut (`cut_by: "edit"`) is no cancellation
-  and its record stands only until the edit's generation completes.
+  `cut_by: "esc"`, NO display rows and no frame bytes, the tessellation
+  up to the cut. The rows are none for every Esc-cut pass, whichever of
+  the two check sites saw the Esc: `Session::cancel` cancels under the
+  session lock the encode runs under, so an Esc is seen between the
+  warm-up's outputs (off the lock) or at the encode's first check, before
+  any output is sent — never between two encoded outputs (fix round 2
+  2026-09-19, review finding L2-P1-F2: this sentence had promised "the
+  outputs the pass reached", a set no reachable cut produces, and only the
+  warm-up's site was pinned — the encode's cut, dropped from the record,
+  survived the suite). The first build kept the cut generation unmarked,
+  presenting it as a complete pass that happened to draw nothing while
+  the chip said `cancelled gen N`. An edit's cut (`cut_by: "edit"`) is no
+  cancellation and its record stands only until the edit's generation
+  completes.
 - `profile_view` — the payload IS `ProfileView {generation, kind, phases:
   {queued_ms, solve_ms, tessellate_ms, encode_ms, bytes}, cancelled?,
   cut_by?, nodes: [{name, state, nanos?, last_nanos?, elements?}],

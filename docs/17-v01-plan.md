@@ -2732,6 +2732,29 @@ proves wrong is revised here, dated, in the landing commit.
   and a preview's out-of-change nodes are `cached`; `idle` is a binding
   no target needed (an effectful leaf), and the canvas says the same.
 
+  *Fix round 2 2026-09-19 (the second review's confirmed findings — both
+  false-pass gaps in the profile's cut arms; docs/13 §The profiler revised
+  in the same commits).* **A cut the ENCODE sees marks the profile, and a
+  test says so** (L2-P1-F2, major): `Kept.cut` is `warm.cut.or(emitted.cut)`
+  — a pass is cut at the top of a warm-up output or at the encode's
+  per-output check under the lock — and the fix round's Esc regression
+  parked with `hold.arm(1)`, pinning the warm-up's site alone: with
+  `emitted.cut` dropped from the record every test stayed green while
+  `display_end`, the summary and the chip said cancelled by Esc and the
+  profile read `gen N · structural` — the L1-2 presentation, reopened for
+  the encode's window (the whole of the last output's tessellation:
+  seconds on the heavy pipeline). The Esc case of
+  `an_edit_or_esc_cuts_a_parked_pass_where_it_is_seen` is a closure now,
+  run parked between the outputs and parked after the last verdict, and
+  reads `/debug/state.profile` and the `profile` intent in both. docs/13
+  is narrowed with the reason: it promised "the outputs the pass reached as
+  its display rows" for an Esc-cut pass, but `Session::cancel` cancels
+  under the session lock the encode runs under, so no Esc is ever seen
+  between two encoded outputs and an Esc-cut pass has no rows and no bytes
+  (an edit's supersession is set off the lock — the debounce's submit — so
+  that clause was true of an edit's cut only, which the sentence was not
+  about).
+
 **Track N — `wt/face` (web + one server addition; one review).**
 - **N1 — the node face.**
   - **The collapse chevron on the face.** An expanded slider wears a
