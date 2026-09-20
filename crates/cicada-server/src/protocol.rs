@@ -1139,6 +1139,20 @@ pub struct ProfileView {
     pub kind: String,
     /// The generation's phases on the server, wall milliseconds.
     pub phases: ProfilePhases,
+    /// The generation is reported cancelled: Esc cut its display pass
+    /// between outputs (the solve completed and the memo holds its values,
+    /// so it IS the last complete generation, but its picture did not land
+    /// — the outputs the pass did not reach keep the previous one's). The
+    /// summary, `timings[].cancelled` and the chip say the same. Omitted
+    /// when false. (A generation whose SOLVE was cancelled is never kept.)
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cancelled: bool,
+    /// What cut the display pass between outputs, when something did —
+    /// `esc` (then `cancelled`), or `edit` (a structural job was waiting;
+    /// its generation replaces this record as soon as it completes).
+    /// Omitted otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cut_by: Option<CutBy>,
     /// Every node of the generation's lowering (the solved ones with their
     /// cost), plus the bindings it excluded and its literal values.
     pub nodes: Vec<ProfileNode>,
@@ -1878,6 +1892,8 @@ mod tests {
                 encode_ms: 1.5,
                 bytes: 2048,
             },
+            cancelled: false,
+            cut_by: None,
             nodes: vec![
                 ProfileNode {
                     name: "ball".to_owned(),
@@ -1954,6 +1970,33 @@ mod tests {
         // client mirror and `/debug/state.profile` read exactly this).
         let back: ProfileView = serde_json::from_value(wire["payload"].clone()).unwrap();
         assert_eq!(back, view);
+        // A pass Esc cut: the generation is kept (its solve completed) and
+        // the view says it is cancelled and by what — the two fields are
+        // omitted, never `false` / `null`, when nothing cut the pass (above).
+        let cut = ProfileView {
+            cancelled: true,
+            cut_by: Some(CutBy::Esc),
+            display: Vec::new(),
+            ..view.clone()
+        };
+        let cut_wire: serde_json::Value =
+            serde_json::from_str(&encode(12, &ServerMessage::ProfileView(cut.clone()))).unwrap();
+        assert_eq!(cut_wire["payload"]["cancelled"], true);
+        assert_eq!(cut_wire["payload"]["cut_by"], "esc");
+        assert_eq!(cut_wire["payload"]["display"], serde_json::json!([]));
+        let back: ProfileView = serde_json::from_value(cut_wire["payload"].clone()).unwrap();
+        assert_eq!(back, cut);
+        let edit_cut = ProfileView {
+            cut_by: Some(CutBy::Edit),
+            ..view.clone()
+        };
+        let edit_wire: serde_json::Value =
+            serde_json::from_str(&encode(13, &ServerMessage::ProfileView(edit_cut))).unwrap();
+        assert!(
+            edit_wire["payload"].get("cancelled").is_none(),
+            "an edit's cut is no cancellation: {edit_wire}"
+        );
+        assert_eq!(edit_wire["payload"]["cut_by"], "edit");
         // The read intent, with and without a generation.
         let bare: IntentEnvelope =
             serde_json::from_str(r#"{"v":1,"id":"p","type":"profile","payload":{}}"#).unwrap();

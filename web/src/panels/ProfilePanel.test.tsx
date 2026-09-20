@@ -118,6 +118,22 @@ describe("the profiler tab", () => {
     expect(rows[1]!.textContent).toContain("—");
   });
 
+  it("a pass Esc cut is presented as cut, never as a complete pass that drew nothing", () => {
+    // The store's pass for the cut generation: no frame, stamped at its end.
+    useCicada.setState({ display: { ...pass(12, "painted"), frames: 0, outputs: 0, bytes: 0, cancelled: true, cutBy: "esc", paintedMs: 787 } });
+    render(<ProfilePanel />);
+    act(() => useCicada.setState({ profile: { ...profile, cancelled: true, cut_by: "esc", display: [], phases: { ...profile.phases, encode_ms: 0.02, bytes: 0 } } }));
+    const view = screen.getByTestId("profile-view");
+    expect(view.getAttribute("data-cancelled")).toBe("true");
+    expect(view.getAttribute("data-cut-by")).toBe("esc");
+    expect(screen.getByTestId("profile-title").textContent).toBe("gen 12 · structural · cut by Esc");
+    expect(screen.getByTestId("profile-title").getAttribute("title")).toMatch(/Esc cut this generation's display pass/);
+    expect(screen.getByTestId("profile-display-caption").textContent).toBe("the pass was cut before it drew — the previous picture stays");
+    expect(screen.queryByTestId("profile-display")).toBeNull();
+    // Nothing was painted: the first paint is not the time until Esc landed.
+    expect(screen.getByTestId("profile-first-paint").textContent).toBe("—");
+  });
+
   it("a header click sorts, a second flips, and the filter narrows the rows; a name selects the node", () => {
     render(<ProfilePanel />);
     act(() => useCicada.setState({ profile }));

@@ -947,6 +947,12 @@ struct Kept {
     phases: ProfilePhases,
     /// The outputs its display pass drew ([`Emitted::drawn`]).
     drawn: Vec<(u32, u32)>,
+    /// What cut its display pass between outputs, when something did
+    /// (docs/13 §The display edge): the solve completed and the memo holds
+    /// its values — which is why the generation is kept — but its picture
+    /// did not land whole; Esc reports it cancelled. The profile says so
+    /// (`ProfileView::cancelled` / `cut_by`; review finding L1-2).
+    cut: Option<Superseded>,
 }
 
 /// The display tier of a generation: a slider drag's generations draw
@@ -5431,6 +5437,15 @@ impl Core {
             }
             .to_owned(),
             phases: kept.phases.clone(),
+            // A pass Esc cut: the generation is reported cancelled everywhere
+            // else (the summary, the timing, the chip) and the profile says
+            // the same; an edit's cut is no cancellation — its successor
+            // replaces this record at once — but is named while it stands.
+            cancelled: kept.cut == Some(Superseded::Esc),
+            cut_by: kept.cut.map(|why| match why {
+                Superseded::Edit => CutBy::Edit,
+                Superseded::Esc => CutBy::Esc,
+            }),
             nodes: Self::profile_nodes(kept),
             display: Self::profile_display(inner, kept),
             caches: self.caches_view(inner),
@@ -7110,6 +7125,7 @@ impl Core {
                     bytes: 0,
                 },
                 drawn: Vec::new(),
+                cut: None,
             });
         }
         if recorded && warm.cut.is_none() {
@@ -7119,10 +7135,12 @@ impl Core {
         let encode_ms = encode_began.elapsed().as_secs_f64() * 1000.0;
         if recorded && let Some(kept) = inner.last_complete.as_mut() {
             // Still under the lock that wrote the record above: no
-            // `profile` read sees the encode unfinished.
+            // `profile` read sees the encode unfinished — nor a cut pass
+            // presented as a complete one.
             kept.phases.encode_ms = encode_ms;
             kept.phases.bytes = emitted.bytes as u64;
             kept.drawn.clone_from(&emitted.drawn);
+            kept.cut = cut;
         }
         let end = encode(
             inner.seq,
@@ -11923,6 +11941,38 @@ size = slider(value=4.0, min=0.5, max=5.0)
                 .is_some_and(|s| s["payload"]["summary"]["cancelled"] == true),
             "the last status says cancelled: {statuses:?}"
         );
+        // The profile agrees with the chip (docs/13 §The profiler, fix round
+        // 2026-09-19): the cut generation IS the kept one — its solve
+        // completed and the memo holds its values — and the view says it is
+        // cancelled, by Esc, with no display rows (the cut landed in the
+        // warm-up) and no frame bytes; `/debug/state.profile` is the same.
+        // The first build kept it unmarked: a "complete" pass that "drew
+        // nothing new" beside a chip reading `cancelled gen N`.
+        assert_eq!(state["solve"]["last_complete_generation"], parked);
+        let profile = &state["profile"];
+        assert_eq!(profile["generation"], parked, "{profile}");
+        assert_eq!(profile["cancelled"], true, "{profile}");
+        assert_eq!(profile["cut_by"], "esc", "{profile}");
+        assert_eq!(profile["display"], serde_json::json!([]), "{profile}");
+        assert_eq!(profile["phases"]["bytes"], 0, "{profile}");
+        assert!(
+            profile["phases"]["tessellate_ms"].as_f64().unwrap() > 0.0,
+            "the warm-up ran until the cut: {profile}"
+        );
+        session.handle(
+            id,
+            Some("prof".into()),
+            ClientMessage::Profile { generation: None },
+        );
+        let answers = texts(&drain(&mut rx));
+        let answer = of_kind(&answers, "profile_view");
+        assert_eq!(answer.len(), 1, "{answers:?}");
+        assert_eq!(answer[0]["payload"]["generation"], parked);
+        assert_eq!(answer[0]["payload"]["cancelled"], true);
+        assert_eq!(answer[0]["payload"]["cut_by"], "esc");
+        // The edit-cut generations before it never stood as the profile
+        // once their edit's generation completed: `on_screen` is the edit's.
+        assert!(on_screen < parked);
         // The next edit repaints both.
         set("5.0", "after");
         session.wait_idle();
@@ -11938,6 +11988,12 @@ size = slider(value=4.0, min=0.5, max=5.0)
         for name in ["block.out", "ball.out"] {
             assert_eq!(state["display"][name]["generation"], repainted, "{name}");
         }
+        // And the profile is the repaint's, unmarked.
+        let profile = &state["profile"];
+        assert_eq!(profile["generation"], repainted, "{profile}");
+        assert!(profile.get("cancelled").is_none(), "{profile}");
+        assert!(profile.get("cut_by").is_none(), "{profile}");
+        assert_eq!(profile["display"].as_array().unwrap().len(), 2, "{profile}");
     }
 
     /// A preview toggle (the eye) repaints through a DISPLAY-ONLY structural

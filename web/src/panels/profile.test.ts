@@ -13,6 +13,7 @@ import {
   RING_RADIUS,
   RING_TOP_NODES,
   clientPhases,
+  displayCaption,
   filterProfileNodes,
   nextSort,
   nodeShares,
@@ -199,6 +200,21 @@ describe("clientPhases", () => {
     expect(phases.decode_ms).toBe(2);
     expect(clientPhases(view([]), frames, null).socket_ms).toBeNull();
   });
+
+  it("a cut pass that sent no frame painted nothing: no first paint, whatever the store stamped at its end", () => {
+    // The store stamps a pass with no frames at `display_end` (nothing to
+    // render); for a CUT pass that stamp is the time until Esc landed.
+    const cut: DisplayPass = { ...pass(12, 1000, 787), frames: 0, outputs: 0, cancelled: true, cutBy: "esc" };
+    const phases = clientPhases({ ...view([]), cancelled: true, cut_by: "esc" }, null, cut);
+    expect(phases.first_paint_ms).toBeNull();
+    expect(phases.frames).toBe(0);
+    // A pass that drew nothing NEW (not cut) did paint: nothing changed, at once.
+    const empty: DisplayPass = { ...pass(12, 1000, 3), frames: 0, outputs: 0 };
+    expect(clientPhases(view([]), null, empty).first_paint_ms).toBe(3);
+    // A cut pass that did send frames before the cut painted those.
+    const partial: DisplayPass = { ...pass(12, 1000, 400), cancelled: true, cutBy: "edit" };
+    expect(clientPhases({ ...view([]), cut_by: "edit" }, frames, partial).first_paint_ms).toBe(400);
+  });
 });
 
 describe("the node table", () => {
@@ -259,6 +275,18 @@ describe("formatting", () => {
     expect(shareText(0)).toBe("0.0 %");
     expect(shareText(null)).toBe("—");
     expect(shareText(undefined)).toBe("—");
+  });
+
+  it("the headline names a cut pass — Esc's as the chip's `cancelled`, an edit's while its record stands", () => {
+    expect(profileTitle(view([]))).toBe("gen 12 · structural");
+    expect(profileTitle({ ...view([]), cancelled: true, cut_by: "esc" })).toBe("gen 12 · structural · cut by Esc");
+    expect(profileTitle({ ...view([]), cut_by: "edit" })).toBe("gen 12 · structural · cut by an edit");
+    // The display caption says why a cut pass has no rows, or that its rows are partial.
+    expect(displayCaption(view([]))).toBe("this pass drew nothing new");
+    expect(displayCaption({ ...view([]), cancelled: true, cut_by: "esc" })).toBe("the pass was cut before it drew — the previous picture stays");
+    const row = { node: "ball", output: "out", triangles: 8, bytes: 16, solids: 1, cache_hits: 0, cache_misses: 1 };
+    expect(displayCaption({ ...view([]), display: [row] })).toBe("what this pass drew");
+    expect(displayCaption({ ...view([]), cut_by: "edit", display: [row] })).toBe("what this pass drew before it was cut");
   });
 
   it("the headline and the socket's rate", () => {

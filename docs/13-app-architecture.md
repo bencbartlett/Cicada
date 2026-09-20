@@ -353,15 +353,28 @@ contents) — additive, `PROTOCOL_VERSION` unchanged:
   (kind `invalid`, "profile: only the last complete generation (12) is
   kept — asked for 11") rather than answered with another generation's
   numbers; before the first generation completes the read is refused the
-  same way ("no generation has completed yet"). A cancelled generation
-  never becomes the last complete one, so after Esc the profile is the
-  previous generation's, and says which.
+  same way ("no generation has completed yet"). Esc and the kept
+  generation (fix round 2026-09-19, review finding L1-2): a generation
+  whose SOLVE Esc cancelled never becomes the last complete one — its
+  values are an incoherent mix — so the profile stays the previous
+  generation's, and its `generation` says which; a generation whose
+  display PASS Esc cut (§The display edge, `cut_by: "esc"`) IS the last
+  complete one — its solve completed and the memo holds its values, which
+  the inspector reads — and the profile says so: `cancelled: true`,
+  `cut_by: "esc"`, the outputs the pass reached as its display rows (none
+  when the cut landed in the warm-up), the tessellation up to the cut.
+  The first build kept the cut generation unmarked, presenting it as a
+  complete pass that happened to draw nothing while the chip said
+  `cancelled gen N`. An edit's cut (`cut_by: "edit"`) is no cancellation
+  and its record stands only until the edit's generation completes.
 - `profile_view` — the payload IS `ProfileView {generation, kind, phases:
-  {queued_ms, solve_ms, tessellate_ms, encode_ms, bytes}, nodes: [{name,
-  state, nanos?, last_nanos?, elements?}], display: [{node, output,
-  triangles, bytes, tier?, solids, cache_hits, cache_misses}], caches:
-  CachesView}`: `kind` is the job's (`structural` / `preview` /
-  `transport`); the phases are the server's wall milliseconds — the wait
+  {queued_ms, solve_ms, tessellate_ms, encode_ms, bytes}, cancelled?,
+  cut_by?, nodes: [{name, state, nanos?, last_nanos?, elements?}],
+  display: [{node, output, triangles, bytes, tier?, solids, cache_hits,
+  cache_misses}], caches: CachesView}`: `kind` is the job's (`structural`
+  / `preview` / `transport`); `cancelled` (omitted when false) and
+  `cut_by` (omitted when nothing cut the pass) are the display pass's
+  fate as above; the phases are the server's wall milliseconds — the wait
   before the solve, the solve itself (start to the last node — what the
   chip's `solve` reads), the pass's tessellation warm-up on the pool and
   its encode under the lock, and the frame bytes the pass sent — written

@@ -142,6 +142,15 @@ export interface ProfileView {
   /** The generation's job kind. */
   kind: "structural" | "preview" | "transport" | (string & {});
   phases: ProfilePhases;
+  /**
+   * The generation is reported cancelled: Esc cut its display pass between
+   * outputs — its solve completed (so it IS the last complete generation)
+   * but its picture did not land whole (docs/13 §The display edge). Absent
+   * when false. (A generation whose SOLVE was cancelled is never kept.)
+   */
+  cancelled?: boolean;
+  /** What cut the pass, when something did: `esc` (then `cancelled`), or `edit` (its generation replaces this profile at once). */
+  cut_by?: CutBy;
   /** Every binding of the generation's lowering: the solved nodes with their cost, the excluded ones, the literals. */
   nodes: ProfileNode[];
   /** The outputs this generation's OWN display pass drew — an output kept on screen from an earlier pass is not a row. */

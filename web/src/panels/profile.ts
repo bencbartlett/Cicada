@@ -49,7 +49,11 @@ export interface ClientPhases {
  */
 export function clientPhases(view: ProfileView, frames: GenerationFrames | null, pass: DisplayPass | null): ClientPhases {
   const same = pass !== null && pass.generation === view.generation ? pass : null;
-  const first_paint_ms = same?.paintedMs ?? null;
+  // A cut pass that sent no frame painted nothing: the store stamps such a
+  // pass at its end (there is nothing to render for a pass that drew nothing
+  // NEW), but for a CUT one that stamp is the time until the cut landed, not
+  // a paint — the viewport still shows the previous picture.
+  const first_paint_ms = same === null || (same.cancelled && same.frames === 0) ? null : same.paintedMs;
   if (frames === null || frames.frames === 0) {
     return { decode_ms: 0, upload_ms: 0, first_paint_ms, socket_ms: null, rate_bytes_per_ms: null, frames: 0 };
   }
@@ -296,9 +300,26 @@ export function filterProfileNodes(nodes: readonly ProfileNode[], text: string):
   return nodes.filter((node) => node.name.toLowerCase().includes(needle) || node.state.includes(needle));
 }
 
-/** `gen 12 · structural` — the panel's headline. */
+/**
+ * `gen 12 · structural` — the panel's headline; `gen 12 · structural · cut
+ * by Esc` when Esc cut the pass (the generation the chip calls `cancelled
+ * gen 12`: its solve completed, its picture did not land), `· cut by an
+ * edit` while an edit-cut generation's record stands (its successor replaces
+ * it at once).
+ */
 export function profileTitle(view: ProfileView): string {
-  return `gen ${view.generation} · ${view.kind}`;
+  const head = `gen ${view.generation} · ${view.kind}`;
+  if (view.cut_by === "esc") return `${head} · cut by Esc`;
+  if (view.cut_by === "edit") return `${head} · cut by an edit`;
+  return head;
+}
+
+/** The display section's caption: what the pass drew, or why it drew nothing. */
+export function displayCaption(view: ProfileView): string {
+  if (view.cut_by !== undefined) {
+    return view.display.length === 0 ? "the pass was cut before it drew — the previous picture stays" : "what this pass drew before it was cut";
+  }
+  return view.display.length === 0 ? "this pass drew nothing new" : "what this pass drew";
 }
 
 /** `2.33 MB at 41.2 MB/s` — the socket legend's hover; null when the rate is not measurable. */

@@ -2596,6 +2596,30 @@ proves wrong is revised here, dated, in the landing commit.
   a per-generation history (the session keeps one), the notice's numbers
   in the profiler (the caches section shows the view's).
 
+  *Fix round 2026-09-19 (the adversarial review's confirmed findings;
+  docs/13 §The profiler, docs/16 §Inspector contents revised in the same
+  commits).* **A pass Esc cut is the profile, MARKED** (L1-2 / L3-P1-2 /
+  L4-1 / L5-1 / C2): docs/13 had said a cancelled generation never
+  becomes the last complete one, but D1's reviewed rule keeps a
+  generation whose solve completed (the memo holds its values; the
+  inspector reads them) and reports it cancelled when Esc cut its PASS —
+  so the profile presented the cut generation as a complete pass that
+  "drew nothing new" beside a chip reading `cancelled gen N`. The code
+  side was the contract's: `Kept` records what cut the pass, the view
+  gains `cancelled` + `cut_by` (additive, omitted when nothing cut it),
+  the headline reads `gen N · structural · cut by Esc`, the display
+  caption says the pass was cut before it drew, and a cut pass that sent
+  no frame shows no first paint (the store's end stamp is the time until
+  Esc landed, not a paint); a generation whose SOLVE Esc cancelled is
+  still never kept. Regression: the Esc case of
+  `an_edit_or_esc_cuts_a_parked_pass_where_it_is_seen` reads the profile.
+  **Two outputs of one value share the value's cache counts** (L1-1 /
+  L3-P1-1): the warm-up inserted a fresh `Decided` per output and the
+  second output's memo-hit verdict (0 / 0) overwrote the first's — both
+  rows read `0 / 0` and the kernel call was on no row; it accumulates now,
+  and the profile test has a `twin` of `ball` whose rows carry the shared
+  count and whose distinct-value sum equals the cache's misses.
+
 **Track N — `wt/face` (web + one server addition; one review).**
 - **N1 — the node face.**
   - **The collapse chevron on the face.** An expanded slider wears a

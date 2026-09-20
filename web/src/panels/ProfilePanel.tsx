@@ -22,6 +22,7 @@ import {
   RING_SIZE,
   RING_WIDTH,
   clientPhases,
+  displayCaption,
   filterProfileNodes,
   nextSort,
   nodeShares,
@@ -123,12 +124,22 @@ export function ProfilePanel() {
   const rate = rateText(profile.phases.bytes, client.rate_bytes_per_ms);
 
   return (
-    <div data-testid="profile-view" data-generation={profile.generation} data-kind={profile.kind}>
+    <div data-testid="profile-view" data-generation={profile.generation} data-kind={profile.kind} data-cancelled={profile.cancelled ?? false} data-cut-by={profile.cut_by ?? "none"}>
       <div className="insp-title">
         <span className="name" style={{ fontSize: 13 }}>
           profile
         </span>
-        <span className="mono" data-testid="profile-title">
+        <span
+          className="mono"
+          data-testid="profile-title"
+          title={
+            profile.cut_by === "esc"
+              ? "Esc cut this generation's display pass: its solve completed (these are its costs) but the outputs the pass did not reach keep the previous picture until the next edit"
+              : profile.cut_by === "edit"
+                ? "an edit was waiting: the pass stopped and the edit's generation paints what it did not reach"
+                : undefined
+          }
+        >
           {profileTitle(profile)}
         </span>
         <span className="faint">Esc closes</span>
@@ -221,7 +232,9 @@ export function ProfilePanel() {
       <section className="insp-section">
         <h3 className="insp-h">
           display
-          <span className="right faint">{profile.display.length === 0 ? "this pass drew nothing new" : "what this pass drew"}</span>
+          <span className="right faint" data-testid="profile-display-caption">
+            {displayCaption(profile)}
+          </span>
         </h3>
         {profile.display.length > 0 && (
           <table className="prof-table prof-display" data-testid="profile-display">
