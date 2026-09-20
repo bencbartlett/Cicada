@@ -7,12 +7,19 @@
     python tools/changelog.py assets 0.1.0-alpha.1      # print the assets paragraph the release body ends with
 
 A section is a `## <version> ...` heading (the version is the first
-whitespace-delimited word after `## `; whatever follows — a date — is
-ignored) and everything down to the next `## ` heading. `check` refuses a
-CHANGELOG whose first section is not the workspace version, or a tag that
-is not `v` + that version: the release workflow runs it before building
-anything, so a tag pushed against the wrong version stops at the first job
-with the reason, never as a release whose notes describe another version.
+whitespace-delimited word after `## `, `[0.1.0]` as `0.1.0`; whatever
+follows — a date — is ignored) and everything down to the next `## `
+heading. `check` refuses a CHANGELOG whose first version section is not the
+workspace version, or a tag that is not `v` + that version: the release
+workflow runs it before building anything, so a tag pushed against the
+wrong version stops at the first job with the reason, never as a release
+whose notes describe another version. Two conventions (fix round
+2026-09-20, findings F2 / L5-2 and R1-C9): a leading `## Unreleased`
+section collects the next version's notes — `check` skips it, `check
+--tag` refuses it, so a tag never ships unreleased notes — and a `TAG-TODO`
+marker in the version's section is a decision still to make: `check`
+allows it at every commit, `check --tag` refuses it, so release notes
+cannot carry a stale "these land beside this entry" claim.
 
 Exit status: 0 on success; 1 on any refusal, always through an `error:` line.
 """
@@ -28,7 +35,13 @@ REPO = Path(__file__).resolve().parent.parent
 CHANGELOG = REPO / "CHANGELOG.md"
 CARGO_TOML = REPO / "Cargo.toml"
 
-HEADING = re.compile(r"^## +(\S+)(?:\s.*)?$")
+HEADING = re.compile(r"^## +\[?([^\s\]]+)\]?(?:\s.*)?$")
+#: The accumulator section for the next version (R1-C9): allowed at the top
+#: at every commit, refused under `--tag`.
+UNRELEASED = "Unreleased"
+#: A decision still to make inside a section (F2 / L5-2): allowed at every
+#: commit, refused under `--tag`.
+TODO_MARKER = "TAG-TODO"
 
 
 class ChangelogError(Exception):
@@ -48,11 +61,17 @@ def sections(text: str) -> list[tuple[str, str]]:
 
 
 def first_version(text: str) -> str:
-    """The newest section's version — the top of the file."""
-    found = sections(text)
+    """The newest VERSION section — the top of the file, past a leading
+    `## Unreleased`."""
+    found = [version for version, _ in sections(text) if version != UNRELEASED]
     if not found:
         raise ChangelogError("CHANGELOG.md has no `## <version>` section")
-    return found[0][0]
+    return found[0]
+
+
+def has_unreleased(text: str) -> bool:
+    """Is there a `## Unreleased` section?"""
+    return any(version == UNRELEASED for version, _ in sections(text))
 
 
 def section(text: str, version: str) -> str:
@@ -81,14 +100,24 @@ def workspace_version(cargo_toml: str) -> str:
 
 
 def check(changelog: str, cargo_toml: str, tag: str | None = None) -> str:
-    """The version everything agrees on, or a refusal naming the disagreement."""
+    """The version everything agrees on, or a refusal naming the disagreement.
+    With `tag`, also what a release may not carry: an `Unreleased` section
+    or a `TAG-TODO` in the version's section."""
     version = workspace_version(cargo_toml)
     newest = first_version(changelog)
     if newest != version:
         raise ChangelogError(f"CHANGELOG.md's first section is {newest}, Cargo.toml's workspace version is {version}")
-    section(changelog, version)  # non-empty
-    if tag is not None and tag != f"v{version}":
-        raise ChangelogError(f"tag {tag} does not name the workspace version {version} (expected v{version})")
+    body = section(changelog, version)  # non-empty
+    if tag is not None:
+        if tag != f"v{version}":
+            raise ChangelogError(f"tag {tag} does not name the workspace version {version} (expected v{version})")
+        if has_unreleased(changelog):
+            raise ChangelogError(f"CHANGELOG.md has a `## {UNRELEASED}` section — fold it into {version}'s (or remove it) before tagging")
+        if TODO_MARKER in body:
+            raise ChangelogError(
+                f"CHANGELOG.md's section for {version} still carries a {TODO_MARKER}: decide it and delete the marker before tagging "
+                "(the section is the release body verbatim)"
+            )
     return version
 
 

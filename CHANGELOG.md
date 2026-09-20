@@ -11,6 +11,14 @@ suffix. Every binary also stamps its commit and build date — `cicada
 --version`, `GET /api/version`, the app's About dialog. `0.1.0` proper
 closes when the v0.1 plan's items do (docs/17).
 
+Conventions: the first version section is the workspace version; a
+`## Unreleased` section may sit above it to collect the next version's
+notes — `check --tag` refuses it, so a tag never ships unreleased notes. A
+heading may write the version as `## 0.1.0` or `## [0.1.0]`; whatever
+follows it (a date) is ignored. A `TAG-TODO` inside a section is a
+decision still to make: `check` allows it at every commit, `check --tag`
+refuses it.
+
 ## 0.1.0-alpha.1 — 2026-09-19
 
 The first tagged pre-release: the vertical-slice spike (docs/15, gate
@@ -114,6 +122,11 @@ sets thrash a 256 MiB cache — which is why the cache is 1 GiB and visible.
 - A `-dirty` commit in About means the binary was built with uncommitted
   changes to its sources (`crates/`, `web/`, the manifests) — a dev build,
   not a release.
-- Wave 5's round 2 packages V1 (viewport modes: Split · Floating · Window)
-  and T1 (the 250 ms tooltip layer) land beside this entry; they belong in
-  this section when the tag includes them.
+
+<!-- TAG-TODO: wave 5's round 2 packages V1 (viewport modes: Split ·
+Floating · Window) and T1 (the 250 ms tooltip layer) are landing beside
+this entry. Before tagging: if the tag includes them, describe them under
+"The app" above; if not, say so under Known limits. Then delete this
+comment — `python tools/changelog.py check --tag` refuses to release a
+section that still carries a TAG-TODO, so the notes cannot describe a
+release they do not match. -->

@@ -3265,8 +3265,13 @@ proves wrong is revised here, dated, in the landing commit.
   client constant (`about.ts`), the release-notes link
   `<repo>/releases/tag/v<semver>`; (7) the CHANGELOG's section date is
   the day it was written — the tag's run carries the release date — and
-  it says V1 / T1 land beside it (move them in when the tag includes
-  them). *Open, for Ben — the tag is HELD until this is done (fix round
+  whether V1 / T1 are in the tag is a `TAG-TODO` marker in the section
+  (fix round 2026-09-20, F2 / L5-2: the section once SAID they "land
+  beside this entry", a sentence the release body would have shipped
+  verbatim whichever way the merge went; `changelog.py check` allows the
+  marker at every commit and `check --tag` refuses it, so the decision
+  cannot be skipped — the same rule folds a `## Unreleased` accumulator
+  and accepts `## [x.y.z]` headings, R1-C9). *Open, for Ben — the tag is HELD until this is done (fix round
   2026-09-20, finding R1-C3):* the release workflow's first job now
   refuses to publish while the repository root lacks `LICENSE` or
   `THIRD_PARTY_NOTICES.md` (both absent today — a stray tag stops there

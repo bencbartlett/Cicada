@@ -90,6 +90,32 @@ class CheckTest(unittest.TestCase):
             cl.check(FIXTURE, CARGO.replace('"0.2.0"', '"0.3.0"'))
         self.assertIn("first section is 0.2.0, Cargo.toml's workspace version is 0.3.0", str(refused.exception))
 
+    def test_a_tag_todo_passes_the_commit_check_and_refuses_the_tag(self):
+        # F2 / L5-2: a stale "these land beside this entry" claim shipped as
+        # the release body; the marker makes the decision impossible to skip.
+        marked = FIXTURE.replace("- a thing", "- a thing\n\n<!-- TAG-TODO: decide V1 -->")
+        self.assertEqual(cl.check(marked, CARGO), "0.2.0")
+        with self.assertRaises(cl.ChangelogError) as refused:
+            cl.check(marked, CARGO, tag="v0.2.0")
+        self.assertIn("still carries a TAG-TODO", str(refused.exception))
+        # The marker in ANOTHER section does not block this version's tag.
+        elsewhere = FIXTURE.replace("- everything", "- everything\n<!-- TAG-TODO: old -->")
+        self.assertEqual(cl.check(elsewhere, CARGO, tag="v0.2.0"), "0.2.0")
+
+    def test_an_unreleased_section_and_bracketed_headings(self):
+        # R1-C9: a `## Unreleased` accumulator above the version is fine at a
+        # commit, never in a tag's notes; `## [0.2.0]` is the same version.
+        unreleased = FIXTURE.replace("## 0.2.0 — 2027-01-01", "## Unreleased\n\n- next\n\n## [0.2.0] — 2027-01-01")
+        self.assertEqual(cl.first_version(unreleased), "0.2.0")
+        self.assertEqual([v for v, _ in cl.sections(unreleased)], ["Unreleased", "0.2.0", "0.1.0-alpha.1", "0.0.9"])
+        self.assertEqual(cl.section(unreleased, "0.2.0"), "Second release.\n\n- a thing")
+        self.assertEqual(cl.check(unreleased, CARGO), "0.2.0")
+        with self.assertRaises(cl.ChangelogError) as refused:
+            cl.check(unreleased, CARGO, tag="v0.2.0")
+        self.assertIn("`## Unreleased` section", str(refused.exception))
+        with self.assertRaises(cl.ChangelogError):
+            cl.first_version("# Changelog\n\n## Unreleased\n\n- next\n")
+
     def test_prerelease_is_a_dash_suffix(self):
         self.assertTrue(cl.is_prerelease("0.1.0-alpha.1"))
         self.assertTrue(cl.is_prerelease("1.0.0-rc.1"))
@@ -113,7 +139,9 @@ class RepositoryTest(unittest.TestCase):
     def test_the_committed_changelog_names_the_workspace_version(self):
         changelog = cl.CHANGELOG.read_text(encoding="utf-8")
         cargo_toml = cl.CARGO_TOML.read_text(encoding="utf-8")
-        version = cl.check(changelog, cargo_toml, tag=f"v{cl.workspace_version(cargo_toml)}")
+        # The per-commit check (no tag): the tag's stricter one — no
+        # TAG-TODO, no Unreleased — is the release workflow's, run at the tag.
+        version = cl.check(changelog, cargo_toml)
         self.assertRegex(version, r"^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$")
         self.assertTrue(cl.section(changelog, version).strip())
 
