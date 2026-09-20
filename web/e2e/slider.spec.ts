@@ -14,7 +14,7 @@
  * SCRATCH copy of `examples/`, on its own pipeline file.
  */
 import { expect, test, type Page } from "@playwright/test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import config from "../playwright.config";
 
@@ -24,9 +24,9 @@ const PIPELINE = "slider.cic";
 const FILE = join(meta.scratch, "examples", PIPELINE);
 const SIDECAR = `${FILE}.layout.json`;
 
-// `long_named` and the even longer one are for the collapsed row's
+// `lengthy` and the even longer one are for the collapsed row's
 // name-first layout (wave 5 N1): a name that fits within the room the
-// track's 40 % floor leaves, and one that cannot. `long_named` is also
+// track's 40 % floor leaves, and one that cannot. `lengthy` is also
 // scrub-cached (10 positions), so its collapsed row wears the buffer bar.
 // The red one (its value outside its bounds) wears a state badge in the
 // tail: the floor must not move for it.
@@ -35,12 +35,12 @@ const START =
   "size = slider(value=2.0, min=0.5, max=5.0)\n" +
   "bound = slider(value=1.0, min=0.0, max=size)\n" +
   "driven = slider(value=size, min=0.0, max=10.0)\n" +
-  "long_named = slider(value=2.0, min=0.5, max=5.0, step=0.5, scrub=True)\n" +
+  "lengthy = slider(value=2.0, min=0.5, max=5.0, step=0.5, scrub=True)\n" +
   "an_even_longer_slider_name_that_cannot_fit_beside_the_track = slider(value=2.0, min=0.5, max=5.0)\n" +
   "a_red_slider_whose_long_name_cannot_fit_either = slider(value=9.0, min=0.5, max=5.0)\n";
 const LONGEST = "an_even_longer_slider_name_that_cannot_fit_beside_the_track";
 const RED = "a_red_slider_whose_long_name_cannot_fit_either";
-const SLIDERS = ["size", "bound", "driven", "long_named", LONGEST, RED];
+const SLIDERS = ["size", "bound", "driven", "lengthy", LONGEST, RED];
 
 interface DebugState {
   text: string;
@@ -86,6 +86,8 @@ test("a slider collapses to one grid unit from the menu and expands from the ins
   browser,
 }) => {
   writeFileSync(FILE, START);
+  // The spec's own file: no layout sidecar from an earlier attempt either.
+  rmSync(SIDECAR, { force: true });
 
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
@@ -268,15 +270,15 @@ test("a slider collapses to one grid unit from the menu and expands from the ins
   // ---- name first: the collapsed row lays out name · track · value · tail
   // with the name never truncated until the track has shrunk to 40 % of
   // its FULL width (the width it has with no name at all), and only then
-  // with an ellipsis. `long_named` fits: its box equals its scroll width
+  // with an ellipsis. `lengthy` fits: its box equals its scroll width
   // and the track is what the name leaves; the even longer name is cut at
   // exactly the point where the track sits at its floor — no earlier.
-  for (const name of ["size", "long_named", LONGEST, RED]) {
+  for (const name of ["size", "lengthy", LONGEST, RED]) {
     await page.getByTestId(`chevron-${name}`).click();
     await expect(face(page, name)).toHaveAttribute("data-collapsed", "true");
   }
-  const fits = await collapsedGeometry(page, "long_named");
-  expect(fits.nameScroll, `long_named is whole: ${JSON.stringify(fits)}`).toBeLessThanOrEqual(fits.nameClient + 1);
+  const fits = await collapsedGeometry(page, "lengthy");
+  expect(fits.nameScroll, `lengthy is whole: ${JSON.stringify(fits)}`).toBeLessThanOrEqual(fits.nameClient + 1);
   expect(fits.track, "the track shrank to make room").toBeLessThan(fits.full - 10);
   expect(fits.track, "… and stays at or above its 40 % floor").toBeGreaterThanOrEqual(fits.floor - 1);
   expect(Math.abs(fits.track + fits.name - fits.full), "name and track share the room").toBeLessThan(2);
@@ -291,7 +293,7 @@ test("a slider collapses to one grid unit from the menu and expands from the ins
   // A badge in the tail (the red slider's state badge — a git marker is the
   // same shape) takes its own room and moves the floor NOT AT ALL: the cut
   // sits exactly at 40 % of the room the name and the track share. (The
-  // first cut's row-wide constant put it 7 px higher and cut `long_named`
+  // first cut's row-wide constant put it 7 px higher and cut `lengthy`
   // whenever the suite's git spec had made the scratch a repository.)
   await expect(page.getByTestId(`state-${RED}`), "the red badge sits in the tail").toHaveClass(/state-red/);
   const badged = await collapsedGeometry(page, RED);
@@ -306,15 +308,15 @@ test("a slider collapses to one grid unit from the menu and expands from the ins
   // label and the chevron (review finding C-3: an absolutely positioned
   // grid child with an `auto` end line ran to the row's edge).
   await expect
-    .poll(async () => (await debugState(page)).scrub.queues.find((q) => q.node === "long_named")?.warmed.length ?? 0, {
+    .poll(async () => (await debugState(page)).scrub.queues.find((q) => q.node === "lengthy")?.warmed.length ?? 0, {
       timeout: 60_000,
-      message: "long_named's 10 positions warm",
+      message: "lengthy's 10 positions warm",
     })
     .toBe(10);
-  const bar = node(page, "long_named").getByTestId("scrub-bar-long_named");
+  const bar = node(page, "lengthy").getByTestId("scrub-bar-lengthy");
   await expect(bar).toBeVisible();
   await expect(bar.locator(".scrub-seg")).toHaveCount(10);
-  const scrubbed = await scrubBarGeometry(page, "long_named");
+  const scrubbed = await scrubBarGeometry(page, "lengthy");
   expect(Math.abs(scrubbed.bar.left - scrubbed.track.left), `bar vs track: ${JSON.stringify(scrubbed)}`).toBeLessThan(1.5);
   expect(Math.abs(scrubbed.bar.right - scrubbed.track.right), "the bar ends with the track").toBeLessThan(1.5);
   expect(scrubbed.bar.right, "… before the value label").toBeLessThanOrEqual(scrubbed.value.left);

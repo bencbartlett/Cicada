@@ -168,7 +168,17 @@ code,
   display: grid;
   min-height: 0;
   min-width: 0;
+  position: relative;
   grid-template-rows: var(--split-a, 3fr) 6px var(--split-b, 2fr);
+}
+
+/* The viewport modes (docs/16 §Viewport conventions; wave 5 V1): outside
+   `split` the canvas takes the whole work area — the viewport is a panel
+   over it (`floating`) or gone to its picture-in-picture window (`window`),
+   its wrapper parked and a placeholder in the corner. */
+.app-work[data-viewport-mode="floating"],
+.app-work[data-viewport-mode="window"] {
+  grid-template-rows: 1fr;
 }
 
 .app-work > .pane {
@@ -176,6 +186,72 @@ code,
   min-width: 0;
   position: relative;
   overflow: hidden;
+}
+
+.viewport-float {
+  position: absolute;
+  z-index: 5;
+  min-width: 240px;
+  min-height: 160px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+/* the title strip is the drag handle; the viewport fills what is under it */
+.viewport-float-title {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 22px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.viewport-float-title:active {
+  cursor: grabbing;
+}
+
+.viewport-float > .viewport {
+  top: 22px;
+}
+
+.viewport-float-corner {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  z-index: 3;
+  cursor: nwse-resize;
+  touch-action: none;
+  background: linear-gradient(135deg, transparent 50%, var(--border-strong) 50%, var(--border-strong) 60%, transparent 60%, transparent 75%, var(--border-strong) 75%, var(--border-strong) 85%, transparent 85%);
+}
+
+.viewport-parked {
+  display: none;
+}
+
+.viewport-placeholder {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 5;
+  font-size: 12px;
+  color: var(--fg-dim);
+  box-shadow: var(--shadow);
 }
 
 .splitter {

@@ -3142,6 +3142,108 @@ proves wrong is revised here, dated, in the landing commit.
   pattern). docs/16 §Viewport conventions revised, DECISIONS.md row
   2026-08-24 revised (the observer pop-out is the fallback).
 
+  *Built 2026-09-19 (`wt/viewport`): `web/src/viewport/modes.ts` — the
+  pure rules (`clampFloating` / `defaultFloating` / `moveFloating` /
+  `resizeFloating`, `viewportModeFrom` / `floatingRectFrom`,
+  `windowChoice`, the reducer `stepMode` over `{mode, windowOpen}` ×
+  `choose` / `window_opened` / `window_closed` / `window_refused` /
+  `host_unmounted` → `reclaim` / `close_window` / `open_window` /
+  `pop_out`); `windowMode.ts` — the controller (`chooseViewportMode`,
+  `registerViewportHost`, `adoptStyles`) that runs the reducer against
+  `settings.viewportMode` and moves the `Viewport`'s host element into the
+  PiP document and back; `ViewportFrame.tsx` — the ONE keyed wrapper the
+  viewport lives in across the modes (a pane · the floating panel with its
+  title strip and corner · parked) and the placeholder; `scene.ts` —
+  `ViewportScene.rehome(win)` (the resize observer, the pixel ratio and
+  the animation frames of the window the container is laid out by);
+  `App.tsx` keys the work area's children so a swap or a mode change
+  reorders or restyles the wrapper instead of remounting the viewport;
+  `settings.viewportMode` + `settings.floatingViewport`, validated on
+  load; the toolbar's three-way control, the settings menu's `viewport ·
+  mode` and `second monitor · pop out`; docs/16 §Viewport conventions +
+  §Settings; vitest `modes.test.ts` (the whole reducer table),
+  `windowMode.test.ts` (a fake `documentPictureInPicture` + a fake
+  pop-out), `ViewportFrame.test.tsx` (jsdom drag / resize / clamp / the
+  one wrapper), the store's `settingsFrom` rows; `web/e2e/
+  viewport_modes.spec.ts`.* What the contract did not foresee: (1) the
+  **real PiP path is end-to-end tested headless** — the contract expected
+  only the stubbed fallback, but Playwright's headless shell (Chromium
+  151) exposes `documentPictureInPicture` on a secure-context origin
+  (`127.0.0.1` is one; `about:blank` is not, which is why a first probe
+  saw no API), opens the window, and the WebGL context survives the move
+  (probed with a raw canvas, then the spec: the SAME `viewport-canvas`
+  element, marked before, is in the PiP page and back in the main one);
+  (2) **where the observer pop-out lives**: the contract replaced the
+  toolbar button with the control and kept the pop-out as "the
+  second-monitor path" without naming its entry — it is the settings
+  menu's `viewport · second monitor · pop out` (`viewport-popout` keeps
+  its test id; `popout.spec.ts` opens the menu first) and the
+  `window`-without-the-API fallback; (3) **`window` never rests**: a
+  stored `window` loads as `split` — the PiP window dies with the page and
+  `requestWindow` is gated on a user gesture — and a refused request is an
+  error notice with no change of mode (both unsaid in the contract); (4)
+  **leaving `window` by the control lands on the CHOSEN mode**, only the
+  window closing on its own returns to `split` (the contract's sentence
+  read literally would send a `window → floating` click to split); (5) the
+  **element returns before the store changes** — a layout effect's cleanup
+  reclaims it before React removes the node (File → Close while the window
+  is open), which the contract's "moved into the PiP document" needed but
+  did not spell out; (6) `requestWindow`'s size is the **floating panel's
+  size** (else 640 × 400) rather than a fourth setting; (7) the swap of the
+  panes, which used to remount the viewport (the scene's `savedView`), now
+  reorders keyed children and remounts nothing. Not built: hotkeys typed
+  into the PiP window (the keyboard map is the main window's — said in
+  docs/16), camera sync with the observer pop-out (unchanged since wave
+  4).
+
+  *Review fixes 2026-09-20 (round 1, `wt/viewport`):* (a) **the toolbar
+  that moved with the viewport was dead** in the PiP window — React
+  delegates events to the root container in the main document and a click
+  in the PiP document never bubbles to it, so every `onClick` on the moved
+  overlay (display modes, frame all, the mode control) rendered live and
+  did nothing; now the overlay is a `createPortal` into the host element
+  itself (React installs its listeners on a portal's container, which
+  travels with the element), the same DOM as before — `viewport_modes.
+  spec.ts` clicks the display modes, frame all and the mode control IN
+  the PiP page (landing on the chosen mode), `viewportUnmount.test.tsx`
+  dispatches the click in the fake PiP document. (b) Three claims had no
+  test that could fail — the floating panel's re-clamp when the work area
+  shrinks (the frame's `ResizeObserver`; now a firing fake in
+  `ViewportFrame.test.tsx` and a `setViewportSize` step in the e2e), the
+  scene's observer being the PiP window's after the move (the e2e wraps
+  `ResizeObserver` per document and asserts the REALM — a wait for the
+  canvas to follow could not fail under the runner, whose trace screencast
+  drives the main document's rendering and lets a main-realm observer fire
+  late; then the canvas following a PiP resize), and the swap remounting
+  nothing (the e2e toggles `swap panes` and keeps the marked canvas). (c)
+  The floating panel painted one unstyled 240 × 160 frame at the area's
+  top-left before its rect landed — the measure is a layout effect now,
+  and `App` hands the frame the work area's ELEMENT as state (a callback
+  ref) rather than a ref object: React attaches a parent's ref after its
+  children's layout effects, so a ref object was still null in the frame's
+  first layout effect and the panel loaded unmeasured (the floating e2e's
+  reload step caught that on the way). (d) Runner assumptions named in
+  the spec: the headless shell exposes the API on the loopback origin —
+  the window test now SKIPS without it instead of failing the serial file
+  — and the shell's PiP window does not follow its opener's unload (Edge
+  and Chrome close it), so docs/16's "opener leaving → split" arm is
+  verified under a real channel; what holds in both, a reload in window
+  mode loading as split, is asserted. (e) The pop-out fallback's warning
+  is said once per window (a further click re-targets the open pop-out);
+  the PiP window's title follows File → Open; the toolbar wraps inside a
+  240 px panel with every control inside; the placeholder is asserted
+  absent in floating; the settings menu's split presets and swap are
+  greyed outside split with the reason as their hover; the fallback
+  notice names the ORIGIN, not the browser, when the API is missing
+  because the page is not a secure context (`cicada serve --host` over
+  plain http); docs/16 §Application layout names the split as one mode of
+  three. (f) Left open, said why: the two three-way controls are
+  `radiogroup`s without the arrow-key / roving-tabindex pattern, and the
+  floating panel's strip and corner are pointer-only — the radio gap is
+  shared by every segmented control in the settings menu (`seg`, wave 4),
+  so a shared keyboard-aware `Seg` is a cross-surface change for a track
+  of its own, not this package's fix round.
+
 **Track A — `wt/about` (cli + server + web + CI; R1's server/CI half gets the adversarial pass, the rest one review).**
 - **R1 — releases and About.** The workspace version becomes
   `0.1.0-alpha.1`. `crates/cicada-cli/build.rs` stamps the build:

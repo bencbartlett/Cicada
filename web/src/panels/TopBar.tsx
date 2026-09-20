@@ -6,8 +6,9 @@
  * the counts in the hover) · the `profile` button (→ the profiler tab) ·
  * the caches indicator (display cache bytes / budget · meshes; warn tone
  * while over budget or thrashing; click → the profiler's caches section)
- * · connection · settings menu (with the display cache size, and About —
- * the build behind the session, wave 5 R1). Everything here reads the store
+ * · connection · settings menu (with the viewport mode, the second-monitor
+ * pop-out, the display cache size, and About — the build behind the
+ * session, wave 5 R1). Everything here reads the store
  * mirror; the intents it sends are `undo`, `redo`, `cancel`, `take_lease`
  * and `set_display_cache`.
  */
@@ -22,6 +23,9 @@ import {
   type WireMode,
 } from "../state/store";
 import { AboutDialog } from "./AboutDialog";
+import { VIEWPORT_MODES } from "../viewport/modes";
+import { popOutViewport } from "../viewport/popout";
+import { chooseViewportMode } from "../viewport/windowMode";
 import { DisplayCachePicker } from "./DisplayCachePicker";
 import { FileMenu } from "./FileMenu";
 import { basename, cachesText, cachesTitle, currentPass, summaryText, summaryTitle, withStatusCounts } from "./format";
@@ -370,14 +374,16 @@ function SettingsMenu({ onAbout }: { onAbout: () => void }) {
     };
   }, [open]);
 
-  const seg = <K extends keyof Settings>(key: K, options: [Settings[K], string][]) => (
-    <span className="seg" role="radiogroup">
+  /** A segmented control over one setting; `disabled` = the reason it does not apply right now (shown as the hover), null when it does. */
+  const seg = <K extends keyof Settings>(key: K, options: [Settings[K], string][], extra: { testId?: string; disabled?: string | null } = {}) => (
+    <span className="seg" role="radiogroup" data-testid={extra.testId} title={extra.disabled ?? undefined}>
       {options.map(([value, label]) => (
         <button
           key={String(value)}
           className={settings[key] === value ? "active" : ""}
           role="radio"
           aria-checked={settings[key] === value}
+          disabled={extra.disabled !== undefined && extra.disabled !== null}
           onClick={() => updateSettings({ [key]: value } as Partial<Settings>)}
         >
           {label}
@@ -385,6 +391,14 @@ function SettingsMenu({ onAbout }: { onAbout: () => void }) {
       ))}
     </span>
   );
+  // The split presets and the swap arrange the two panes: outside the split
+  // viewport mode there are no panes to arrange, so they are greyed with the
+  // reason rather than writing a setting nothing shows (review finding
+  // 2026-09-20).
+  const splitOnly =
+    settings.viewportMode === "split"
+      ? null
+      : `applies to the split viewport mode — the viewport is ${settings.viewportMode === "floating" ? "a floating panel" : "in its own window"} now`;
 
   return (
     <span className="tb-menu-wrap" ref={wrapRef}>
@@ -412,12 +426,15 @@ function SettingsMenu({ onAbout }: { onAbout: () => void }) {
             ["light", "light"],
           ])}
           <span className="menu-h">layout</span>
-          <label>split</label>
-          {seg("split", SPLIT_LABELS)}
-          <label>swap panes</label>
+          <label title={splitOnly ?? undefined}>split</label>
+          {seg("split", SPLIT_LABELS, { testId: "settings-split", disabled: splitOnly })}
+          <label title={splitOnly ?? undefined}>swap panes</label>
           <input
             type="checkbox"
+            data-testid="settings-swap"
             checked={settings.swap}
+            disabled={splitOnly !== null}
+            title={splitOnly ?? undefined}
             onChange={(e) => updateSettings({ swap: e.target.checked })}
           />
           <label>text panel</label>
@@ -433,6 +450,34 @@ function SettingsMenu({ onAbout }: { onAbout: () => void }) {
           <label>wires</label>
           {seg("wireMode", WIRE_MODES)}
           <span className="menu-h">viewport</span>
+          <label title="split: its pane · floating: a panel over the canvas · window: a picture-in-picture window (docs/16 §Viewport conventions)">
+            mode
+          </label>
+          <span className="seg" role="radiogroup" aria-label="viewport mode" data-testid="settings-viewport-mode">
+            {VIEWPORT_MODES.map((mode) => (
+              <button
+                key={mode}
+                className={settings.viewportMode === mode ? "active" : ""}
+                role="radio"
+                aria-checked={settings.viewportMode === mode}
+                data-testid={`settings-viewport-mode-${mode}`}
+                onClick={() => chooseViewportMode(mode)}
+              >
+                {mode}
+              </button>
+            ))}
+          </span>
+          <label title="a second window on this pipeline's display set for another monitor — a read-only observer with its own camera; the fallback of the window mode where the browser has no picture-in-picture window">
+            second monitor
+          </label>
+          <button
+            className="tb-esc"
+            data-testid="viewport-popout"
+            title="pop the viewport out into a separate read-only window (a declared observer of this pipeline, its own camera)"
+            onClick={() => popOutViewport(window)}
+          >
+            pop out
+          </button>
           <label>display</label>
           {seg("displayMode", DISPLAY_MODES)}
           <label>navigation</label>

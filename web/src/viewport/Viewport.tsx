@@ -5,18 +5,45 @@
  * hover, settings and the graph are watched on the store; the imperative
  * API (`frameSelection`/`frameAll`/`screenshot`/`stats`) is installed on
  * mount for the keyboard map, the inspector and `window.__cicada.scene`.
+ * The toolbar's three-way control — split · floating · window — is the
+ * viewport-mode controller's (`windowMode.ts`); the host element is
+ * registered with it so the `window` mode can move it into the
+ * picture-in-picture document and back without a remount.
+ *
+ * The overlay (toolbar, readouts, hover label) is rendered through a PORTAL
+ * whose container is the host element itself. React delegates events to the
+ * container a tree was mounted in — for the app, `#root` in the main
+ * document — so a click on a button inside an element moved into the PiP
+ * document bubbles through THAT document and never reaches `#root`; but React
+ * also installs its listeners on every portal container, and the host travels
+ * with its listeners. The DOM is the same as a plain child's (the overlay is
+ * appended to the host either way) — only the event path differs (review
+ * finding 2026-09-20: the moved toolbar was dead).
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { displayText } from "../panels/format";
 import { frameBus } from "../state/frameBus";
 import { useRoute } from "../state/route";
 import { nodeByName, nodeByRef, useCicada, type ElementPick } from "../state/store";
 import { installViewportApi, type ViewportApi } from "./api";
 import { liveSceneStore } from "./liveStore";
-import { popOutViewport } from "./popout";
+import { VIEWPORT_MODES, type ViewportMode } from "./modes";
 import { ViewportScene, type ScenePick } from "./scene";
 import { sampleTheme } from "./theme";
+import { chooseViewportMode, registerViewportHost } from "./windowMode";
 import "./viewport.css";
+
+/** The three-way control's labels and hovers (docs/16 §Viewport conventions). */
+const MODE_LABELS: Record<ViewportMode, { label: string; title: string }> = {
+  split: { label: "split", title: "split: the viewport in its pane beside the canvas" },
+  floating: { label: "floating", title: "floating: a panel over the canvas — drag its title strip, resize its corner" },
+  window: {
+    label: "window",
+    title:
+      "window: the viewport in a picture-in-picture window of its own (Chromium); closing it returns to split — elsewhere the read-only pop-out opens instead",
+  },
+};
 
 interface Readout {
   outputs: number;
@@ -49,7 +76,10 @@ function selectedRefs(names: string[]): Set<number> {
 }
 
 export function Viewport() {
-  const hostRef = useRef<HTMLDivElement>(null);
+  // The host element as STATE (a callback ref), not a ref: the overlay's
+  // portal needs it as a render-time value, and the effects below run once
+  // it is there.
+  const [host, setHost] = useState<HTMLDivElement | null>(null);
   const sceneRef = useRef<ViewportScene | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [readout, setReadout] = useState<Readout>(EMPTY_READOUT);
@@ -57,10 +87,20 @@ export function Viewport() {
   const hoverPick = useCicada((s) => s.hoverPick);
   const updateSettings = useCicada((s) => s.updateSettings);
   const display = useCicada((s) => s.display);
+  const viewportMode = useCicada((s) => s.settings.viewportMode);
   const view = useRoute((s) => s.route.view);
 
+  // The `window` mode moves this element into the picture-in-picture
+  // document (`windowMode.ts`). A LAYOUT effect, so its cleanup — the
+  // element back where React left it — runs before React removes the node
+  // on unmount (a passive cleanup would run after, on a node that is no
+  // longer where React looks for it).
+  useLayoutEffect(() => {
+    if (host === null || view === "viewport") return;
+    return registerViewportHost({ element: host, rehome: (win) => sceneRef.current?.rehome(win) });
+  }, [host, view]);
+
   useEffect(() => {
-    const host = hostRef.current;
     if (host === null) return;
     const store = useCicada.getState;
     const nameOf = (ref: number) => nodeByRef(store().graph, ref)?.name ?? null;
@@ -185,16 +225,15 @@ export function Viewport() {
       scene.dispose();
       sceneRef.current = null;
     };
-  }, []);
+  }, [host]);
 
   const hoverLabel =
     hoverPick === null
       ? null
       : `${hoverPick.node ?? `#${hoverPick.nodeRef}`}[${hoverPick.element}]`;
 
-  return (
-    <div className="viewport" data-testid="viewport" ref={hostRef}>
-      {failure !== null && <div className="viewport-failure">{failure}</div>}
+  const overlay = (
+    <>
       <div className="viewport-overlay">
         <div className="viewport-toolbar">
           <button
@@ -230,14 +269,22 @@ export function Viewport() {
             frame all
           </button>
           {view !== "viewport" && (
-            <button
-              type="button"
-              title="pop the viewport out into its own window — a read-only observer of this pipeline, with its own camera (docs/16)"
-              data-testid="viewport-popout"
-              onClick={() => popOutViewport(window)}
-            >
-              pop out
-            </button>
+            <span className="viewport-modes" role="radiogroup" aria-label="viewport mode" data-testid="viewport-modes">
+              {VIEWPORT_MODES.map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  role="radio"
+                  aria-checked={viewportMode === mode}
+                  className={viewportMode === mode ? "active" : ""}
+                  title={MODE_LABELS[mode].title}
+                  data-testid={`viewport-mode-${mode}`}
+                  onClick={() => chooseViewportMode(mode)}
+                >
+                  {MODE_LABELS[mode].label}
+                </button>
+              ))}
+            </span>
           )}
         </div>
         <div className="viewport-readout mono" data-testid="viewport-readout">
@@ -266,6 +313,13 @@ export function Viewport() {
           {hoverLabel}
         </div>
       )}
+    </>
+  );
+
+  return (
+    <div className="viewport" data-testid="viewport" ref={setHost}>
+      {failure !== null && <div className="viewport-failure">{failure}</div>}
+      {host !== null && createPortal(overlay, host)}
     </div>
   );
 }

@@ -3,9 +3,9 @@
  * canvas/viewport split (resizable, presets, swap) · inspector · transport
  * bar (only with time params) · status bar.
  * Regions are components owned by their folders; this file only arranges
- * them and applies per-user settings (theme, split).
+ * them and applies per-user settings (theme, split, the viewport mode).
  */
-import { useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Canvas } from "./canvas/Canvas";
 import { useKeyboard } from "./keyboard";
 import { CommitDialog } from "./panels/CommitDialog";
@@ -18,7 +18,7 @@ import { StatusBar } from "./panels/StatusBar";
 import { TopBar } from "./panels/TopBar";
 import { TransportBar } from "./panels/TransportBar";
 import { useCicada } from "./state/store";
-import { Viewport } from "./viewport/Viewport";
+import { ViewportFrame, ViewportPlaceholder } from "./viewport/ViewportFrame";
 
 const SPLITS: Record<string, [string, string]> = {
   canvas: ["3fr", "2fr"],
@@ -30,7 +30,16 @@ export function App() {
   const settings = useCicada((s) => s.settings);
   const updateSettings = useCicada((s) => s.updateSettings);
   const pipeline = useCicada((s) => s.pipeline);
-  const workRef = useRef<HTMLDivElement>(null);
+  const workRef = useRef<HTMLDivElement | null>(null);
+  // The work area's element as STATE for the floating viewport, which
+  // measures it in a layout effect: a ref object would still be null there
+  // on the first mount (React attaches a parent's ref after its children's
+  // layout effects run), and the panel would paint a frame unmeasured.
+  const [workEl, setWorkEl] = useState<HTMLDivElement | null>(null);
+  const attachWork = useCallback((el: HTMLDivElement | null) => {
+    workRef.current = el;
+    setWorkEl(el);
+  }, []);
   const dragging = useRef(false);
   useKeyboard();
 
@@ -59,10 +68,39 @@ export function App() {
   // on a switch (File → Open / Recent, Back) and frames the new graph
   // itself — `fitView` runs once per canvas — instead of showing it at the
   // previous file's zoom and offset (docs/16 §Application layout). The
-  // viewport stays mounted: its camera is the user's.
-  const canvas = <Canvas key={pipeline} />;
-  const first = settings.swap ? <Viewport /> : canvas;
-  const second = settings.swap ? canvas : <Viewport />;
+  // viewport stays mounted: its camera is the user's. The work area's
+  // children are KEYED so that a swap or a mode change reorders or
+  // restyles the viewport's wrapper instead of remounting it — the three.js
+  // scene and its WebGL context are the same across the three viewport
+  // modes (docs/16 §Viewport conventions; wave 5 V1).
+  const mode = settings.viewportMode;
+  const split = mode === "split";
+  const canvasPane = (
+    <div key="canvas" className="pane" data-testid="canvas-pane">
+      <Canvas key={pipeline} />
+    </div>
+  );
+  const splitter = split ? (
+    <div
+      key="splitter"
+      className="splitter"
+      role="separator"
+      aria-orientation="horizontal"
+      title="drag to resize · double-click for presets"
+      aria-label="drag to resize · double-click for presets"
+      onPointerDown={onSplitterDown}
+      onPointerMove={onSplitterMove}
+      onPointerUp={onSplitterUp}
+      onDoubleClick={() =>
+        updateSettings({
+          split: settings.split === "canvas" ? "even" : settings.split === "even" ? "viewport" : "canvas",
+        })
+      }
+    />
+  ) : null;
+  const viewport = <ViewportFrame key="viewport" mode={mode} area={workEl} />;
+  const placeholder = mode === "window" ? <ViewportPlaceholder key="placeholder" /> : null;
+  const work = split && settings.swap ? [viewport, splitter, canvasPane] : [canvasPane, splitter, viewport, placeholder];
 
   return (
     <div className="app" data-testid="app">
@@ -70,33 +108,8 @@ export function App() {
       <TopBar />
       <MenuBar />
       <div className="app-main">
-        <div className="app-work" ref={workRef} style={style}>
-          <div className="pane" data-testid={settings.swap ? "viewport-pane" : "canvas-pane"}>
-            {first}
-          </div>
-          <div
-            className="splitter"
-            role="separator"
-            aria-orientation="horizontal"
-            title="drag to resize · double-click for presets"
-            aria-label="drag to resize · double-click for presets"
-            onPointerDown={onSplitterDown}
-            onPointerMove={onSplitterMove}
-            onPointerUp={onSplitterUp}
-            onDoubleClick={() =>
-              updateSettings({
-                split:
-                  settings.split === "canvas"
-                    ? "even"
-                    : settings.split === "even"
-                      ? "viewport"
-                      : "canvas",
-              })
-            }
-          />
-          <div className="pane" data-testid={settings.swap ? "canvas-pane" : "viewport-pane"}>
-            {second}
-          </div>
+        <div className="app-work" ref={attachWork} style={style} data-viewport-mode={mode}>
+          {work}
         </div>
         <Inspector />
       </div>

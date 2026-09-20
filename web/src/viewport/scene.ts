@@ -117,8 +117,17 @@ interface OutputDrawables {
 const LAYER_PICKABLE = 0;
 const LAYER_DECOR = 1;
 
-/** The last camera pose, so a remounted viewport (pane swap) keeps its view. */
+/** The last camera pose, so a remounted viewport (a new App after File → Close) keeps its view. */
 let savedView: { position: THREE.Vector3; target: THREE.Vector3; radius: number } | null = null;
+
+/**
+ * What the scene needs of the window its container lives in (docs/16
+ * §Viewport conventions — the `window` mode moves the container into the
+ * picture-in-picture document): its resize observer, so size changes are
+ * reported by the document that lays the container out; its pixel ratio;
+ * its animation frames, which run while THAT window is visible.
+ */
+export type SceneWindow = Pick<Window & typeof globalThis, "ResizeObserver" | "devicePixelRatio" | "requestAnimationFrame">;
 
 export interface ExtendedStats extends ViewportStats {
   /** Draws whose edge overlay was skipped (over `EDGE_TRIANGLE_LIMIT`). */
@@ -206,6 +215,8 @@ export class ViewportScene {
   private hoverTimer: ReturnType<typeof setTimeout> | null = null;
   private down: { x: number; y: number; button: number } | null = null;
   private resizeObserver: ResizeObserver | null = null;
+  /** The window the container is laid out by (`rehome`); the main window until the `window` mode moves it. */
+  private win: SceneWindow = window;
   private pixelRatio = 1;
   private onFirstGeometry: (() => void) | null = null;
   private unsubscribeStore: () => void;
@@ -303,9 +314,7 @@ export class ViewportScene {
     this.canvas.addEventListener("pointerdown", this.onPointerDown);
     this.canvas.addEventListener("pointerup", this.onPointerUp);
 
-    this.resizeObserver = new ResizeObserver(() => this.resize());
-    this.resizeObserver.observe(container);
-    this.resize();
+    this.rehome(window);
 
     // A remount keeps the previous view instead of re-framing.
     if (savedView !== null) {
@@ -397,6 +406,24 @@ export class ViewportScene {
     }
     this.requestRender();
   };
+
+  /**
+   * The container now lives in `win`'s document (the `window` mode moved it
+   * into the picture-in-picture window, or back): observe its size from
+   * there — a resize observer belongs to the document it was created in —
+   * take that window's pixel ratio (another monitor), schedule frames on
+   * it, and size the canvas to the container as laid out now.
+   */
+  rehome(win: SceneWindow): void {
+    if (this.disposed) return;
+    this.win = win;
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = new win.ResizeObserver(() => this.resize());
+    this.resizeObserver.observe(this.container);
+    this.pixelRatio = Math.min(win.devicePixelRatio || 1, 2);
+    this.renderer.setPixelRatio(this.pixelRatio);
+    this.resize();
+  }
 
   resize(): void {
     if (this.disposed) return;
@@ -1129,7 +1156,7 @@ export class ViewportScene {
   requestRender(): void {
     if (this.disposed || this.renderScheduled) return;
     this.renderScheduled = true;
-    requestAnimationFrame(this.tick);
+    this.win.requestAnimationFrame(this.tick);
   }
 
   private tick = () => {
