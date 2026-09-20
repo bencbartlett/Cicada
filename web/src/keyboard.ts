@@ -131,8 +131,14 @@ export function handleHotkey(event: KeyboardEvent): boolean {
     // false mid-playback and an Esc gated on it alone cleared the selection
     // and let the loop run (review 2026-08-21).
     const playing = state.transport?.view.playing ?? false;
-    if (state.summary.running || playing) {
-      if (needsLease(state.summary.running ? "cancel the solve" : "pause the transport")) return true;
+    // A display pass in flight counts as running: the solve has finished
+    // (`summary.running` is false) but the generation is still painting,
+    // and the server's Esc during a pass — `cut_by: "esc"`, the generation
+    // reported cancelled (docs/13 §The display edge) — must be reachable
+    // from the keyboard (review finding L4-4: it was not).
+    const painting = state.display?.phase === "painting";
+    if (state.summary.running || playing || painting) {
+      if (needsLease(state.summary.running ? "cancel the solve" : painting ? "stop the display pass" : "pause the transport")) return true;
       state.send({ type: "cancel", payload: {} });
       return true;
     }

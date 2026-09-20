@@ -123,6 +123,29 @@ describe("handleHotkey", () => {
     });
   });
 
+  it("Esc during a display pass sends cancel — the solve is done, the picture is still painting", () => {
+    const pass = { generation: 3, phase: "painting" as const, outputs: 2, frames: 0, bytes: 0, tessellateMs: 0, encodeMs: 0, cancelled: false, cutBy: null, beganAt: 0, paintedMs: null };
+    useCicada.setState({ display: pass, summary: { ...useCicada.getState().summary, running: false } });
+    useInspectorTab.setState({ tab: "profile" });
+    useCicada.getState().selectNodes(["a"]);
+    expect(handleHotkey(key("Escape"))).toBe(true);
+    expect(sent, "the server's Esc during a pass (docs/13 §The display edge) is reachable from the keyboard").toEqual([{ type: "cancel", payload: {} }]);
+    expect(useInspectorTab.getState().tab, "the one thing this Esc did").toBe("profile");
+    expect(useCicada.getState().selection.nodes).toEqual(["a"]);
+    // An observer gets the lease notice, worded for the pass.
+    sent = [];
+    useCicada.setState({ role: "observer" });
+    expect(handleHotkey(key("Escape"))).toBe(true);
+    expect(sent).toEqual([]);
+    expect(useCicada.getState().notices.at(-1)?.message).toMatch(/take the lease to stop the display pass/);
+    // Painted: nothing runs, Esc falls through to the profiler's tab.
+    useCicada.setState({ role: "writer", display: { ...pass, phase: "painted" } });
+    expect(handleHotkey(key("Escape"))).toBe(true);
+    expect(sent).toEqual([]);
+    expect(useInspectorTab.getState().tab).toBe("inspect");
+    useCicada.setState({ display: null });
+  });
+
   it("Ctrl+S opens the commit dialog for writer and observer alike; a key repeat does nothing more", () => {
     useCicada.setState({ commitDialog: false });
     expect(handleHotkey(key("s", { ctrlKey: true }))).toBe(true);
