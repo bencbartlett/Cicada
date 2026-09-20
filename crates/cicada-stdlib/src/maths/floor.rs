@@ -16,7 +16,13 @@ use super::UnaryIn;
 /// ```cic
 /// whole = floor(x=2.7)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Round")]
+#[node(
+    category = "Maths & logic",
+    sub = "Util",
+    tier = "1",
+    version = 1,
+    gh = "Round"
+)]
 #[must_use]
 pub fn floor(input: UnaryIn) -> f64 {
     input.x.floor()

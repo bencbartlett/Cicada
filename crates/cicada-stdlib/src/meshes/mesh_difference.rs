@@ -40,6 +40,7 @@ pub struct MeshDifferenceIn {
 /// ```
 #[node(
     category = "Mesh & field",
+    sub = "Boolean",
     tier = "S",
     version = 1,
     gh = "Mesh Difference"

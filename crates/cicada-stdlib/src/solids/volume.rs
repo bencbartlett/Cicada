@@ -38,7 +38,13 @@ pub struct VolumeOut {
 /// block = box(x=span, y=span, z=span)
 /// size, middle = volume(solid=block)
 /// ```
-#[node(category = "Surface & solid", tier = "1", version = 1, gh = "Volume")]
+#[node(
+    category = "Surface & solid",
+    sub = "Analysis",
+    tier = "1",
+    version = 1,
+    gh = "Volume"
+)]
 #[must_use]
 pub fn volume(input: VolumeIn) -> VolumeOut {
     let props = red(cicada_geom::solid::volume(&input.solid));

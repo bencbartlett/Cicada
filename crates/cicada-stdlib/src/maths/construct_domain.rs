@@ -25,6 +25,7 @@ pub struct ConstructDomainIn {
 /// ```
 #[node(
     category = "Maths & logic",
+    sub = "Domain",
     tier = "S",
     version = 1,
     gh = "Construct Domain"

@@ -88,7 +88,7 @@ use crate::scripts::ScriptCancel;
 use crate::scrub::{self, SCRUB_PORT, WarmQueue};
 use crate::sidecar::Sidecar;
 use crate::solve::{IdleError, Job, JobKind, SolveLoop, SolveSink, Superseded};
-use crate::viewmodel::{self, GraphView, NodeRefs, WireEnd};
+use crate::viewmodel::{self, GraphView, NodeRefs, NodeView, WireEnd};
 
 /// Bytes for a notice: `612 MiB`, `1.5 GiB`, `96 KiB` — binary units, one
 /// decimal below ten.
@@ -961,6 +961,123 @@ struct Kept {
     cut: Option<Superseded>,
 }
 
+/// The hash of `view`'s `index`-th output in a kept generation: a literal
+/// binding IS its value; a port binding reads the node's outcome at the
+/// port the binding names (a multi-target line `a, b = …` names one port
+/// per target); a whole-node binding reads the outcome at `index`. `None`
+/// when the binding did not lower or the node has no outcome (red,
+/// blocked, cancelled). The one path under every value the inspector and
+/// the face show — outputs and, through the wires, inputs.
+fn output_hash(kept: &Kept, view: &NodeView, index: usize) -> Option<ValueHash> {
+    match kept.lowered.bindings.get(&view.name)? {
+        LoweredBinding::Value(value) => Some(value.hash()),
+        LoweredBinding::Port {
+            node: id,
+            output: port,
+        } => {
+            let port = if view.targets.len() > 1 {
+                match view
+                    .targets
+                    .get(index)
+                    .and_then(|t| kept.lowered.bindings.get(t))
+                {
+                    Some(LoweredBinding::Port { output, .. }) => *output,
+                    _ => *port,
+                }
+            } else {
+                *port
+            };
+            kept.report
+                .outcome(*id)
+                .output_hashes()
+                .and_then(|h| h.get(port).copied())
+        }
+        LoweredBinding::Node { node: id } => kept
+            .report
+            .outcome(*id)
+            .output_hashes()
+            .and_then(|h| h.get(index).copied()),
+    }
+}
+
+/// A node's outputs and inputs resolved to the hashes behind them in the
+/// kept generation — the cheap, under-the-lock half of an `inspect`; the
+/// loads and summaries ([`Core::summaries`]) are the other half, off it.
+struct NodeHashes {
+    /// The kept generation (0 when none has completed).
+    generation: u64,
+    /// Per output port, in order: its value's hash, `None` without one.
+    outputs: Vec<(String, Option<ValueHash>)>,
+    /// Per input port, in order: the wire's source output's hash — by the
+    /// same path as that output above ([`output_hash`] on the source node
+    /// at the port the wire names); `None` for a literal, an unwired port,
+    /// and a source without a value.
+    inputs: Vec<(String, Option<ValueHash>)>,
+}
+
+/// See [`NodeHashes`]. An unknown node resolves to nothing; before the
+/// first complete generation every port is `None` (named, so the answer
+/// keeps its shape).
+fn node_hashes(inner: &Inner, node: &str) -> NodeHashes {
+    let Some(view) = inner.graph.node(node) else {
+        return NodeHashes {
+            generation: 0,
+            outputs: Vec::new(),
+            inputs: Vec::new(),
+        };
+    };
+    let Some(kept) = inner.last_complete.as_ref() else {
+        return NodeHashes {
+            generation: 0,
+            outputs: view
+                .outputs
+                .iter()
+                .map(|o| (o.name.clone(), None))
+                .collect(),
+            inputs: view.inputs.iter().map(|i| (i.name.clone(), None)).collect(),
+        };
+    };
+    let outputs = view
+        .outputs
+        .iter()
+        .enumerate()
+        .map(|(index, output)| (output.name.clone(), output_hash(kept, view, index)))
+        .collect();
+    let inputs = view
+        .inputs
+        .iter()
+        .map(|input| {
+            let hash = input.wired.as_ref().and_then(|wire| {
+                let source = inner.graph.node(&wire.node)?;
+                let index = source.outputs.iter().position(|o| o.name == wire.port)?;
+                output_hash(kept, source, index)
+            });
+            (input.name.clone(), hash)
+        })
+        .collect();
+    NodeHashes {
+        generation: kept.generation,
+        outputs,
+        inputs,
+    }
+}
+
+/// The session's summary memo ([`Core::summaries`]): the kept generation's
+/// summaries by value hash. A summary is a function of the value and of
+/// what the display cache holds for its solids (the tier drawn, or nothing
+/// yet), so the memo lives ONE generation — it empties when a newer one is
+/// kept, and the release's fine-tier summaries replace a drag's coarse
+/// ones — and never keeps a summary that read undisplayed solids
+/// (`display::reads_undisplayed_solids`): the next read may find them
+/// drawn. `computed` / `hits` are the counters `/debug/state` reports.
+#[derive(Default)]
+struct SummaryMemo {
+    generation: u64,
+    entries: HashMap<ValueHash, ValueSummary>,
+    computed: u64,
+    hits: u64,
+}
+
 /// The display tier of a generation: a slider drag's generations draw
 /// coarse, everything structural draws fine.
 fn tier_of(kind: JobKind) -> DisplayTier {
@@ -1352,6 +1469,15 @@ struct Core {
     /// emit path decides under `inner` when the graph changed since the
     /// warm-up); never the reverse.
     verdicts: Mutex<VerdictMemo>,
+    /// The value summaries of the kept generation (`inspect`,
+    /// `inspect_wire`, `/debug/state?values=true`) by value hash
+    /// ([`SummaryMemo`]): each distinct value is loaded and summarized once
+    /// per generation however many nodes carry it — a producer and every
+    /// consumer of its output share one entry. Its own mutex, so the loads
+    /// and `display::summarize` run OFF the session lock (lock order:
+    /// `inner` → `summaries`, never the reverse); counters in
+    /// `/debug/state` → `summaries`.
+    summaries: Mutex<SummaryMemo>,
     /// The scrub worker's shared state ([`ScrubShared`]). Lock order:
     /// `inner` → `scrub` — the worker decides under both; everything else
     /// takes `scrub` alone or under `inner`.
@@ -1615,6 +1741,7 @@ impl Session {
             transport_wake: Condvar::new(),
             solids: SolidCache::new(config.solid_cache_bytes),
             verdicts: Mutex::new(VerdictMemo::default()),
+            summaries: Mutex::new(SummaryMemo::default()),
             scrub: Mutex::new(ScrubShared::new()),
             scrub_wake: Condvar::new(),
             config,
@@ -2328,15 +2455,23 @@ impl Session {
                 Ok(())
             }
             ClientMessage::Inspect { node } => {
+                // Resolved under the lock (cheap), summarized OFF it: the
+                // store loads and `display::summarize` — a 1,000-element
+                // list's walk over its cached meshes — hold up no delta and
+                // no generation (wave 5 N1 review CR-2: a second client's
+                // `set_param` once waited 6 s behind one inspect).
+                let hashes = node_hashes(&self.core.lock_inner(), &node);
+                let outputs = self.core.summaries(hashes.generation, hashes.outputs);
+                let inputs = self.core.summaries(hashes.generation, hashes.inputs);
                 let inner = self.core.lock_inner();
-                let (generation, outputs) = self.core.node_values(&inner, &node);
                 send_to(
                     &inner,
                     client,
                     &ServerMessage::NodeValues {
                         node,
                         outputs,
-                        generation,
+                        inputs,
+                        generation: hashes.generation,
                     },
                 );
                 Ok(())
@@ -2350,23 +2485,29 @@ impl Session {
                 Ok(())
             }
             ClientMessage::InspectWire { to } => {
-                let inner = self.core.lock_inner();
-                let Some(wire) = inner.graph.wires.iter().find(|w| w.to == to).cloned() else {
-                    return Err(IntentError::Unknown(format!(
-                        "no wire into {}.{}",
-                        to.node, to.port
-                    )));
+                let (wire, generation, hash) = {
+                    let inner = self.core.lock_inner();
+                    let Some(wire) = inner.graph.wires.iter().find(|w| w.to == to).cloned() else {
+                        return Err(IntentError::Unknown(format!(
+                            "no wire into {}.{}",
+                            to.node, to.port
+                        )));
+                    };
+                    let source = node_hashes(&inner, &wire.from.node);
+                    let hash = source
+                        .outputs
+                        .into_iter()
+                        .find(|(port, _)| *port == wire.from.port)
+                        .and_then(|(_, hash)| hash);
+                    (wire, source.generation, hash)
                 };
-                let (_, outputs) = self.core.node_values(&inner, &wire.from.node);
-                let summary = outputs
-                    .into_iter()
-                    .find(|(port, _)| *port == wire.from.port)
-                    .and_then(|(_, summary)| summary);
+                let summary = hash.and_then(|hash| self.core.summary_of(generation, &hash));
                 let pairing = match (wire.lift, summary.as_ref().and_then(|s| s.count)) {
                     (0, _) => "direct (no iteration)".to_owned(),
                     (depth, Some(count)) => format!("map ×{depth} over {count} elements"),
                     (depth, None) => format!("map ×{depth}"),
                 };
+                let inner = self.core.lock_inner();
                 send_to(
                     &inner,
                     client,
@@ -3718,10 +3859,12 @@ impl Session {
                 .nodes
                 .iter()
                 .map(|node| {
-                    let (generation, outputs) = self.core.node_values(&inner, &node.name);
+                    let hashes = node_hashes(&inner, &node.name);
+                    let outputs = self.core.summaries(hashes.generation, hashes.outputs);
+                    let inputs = self.core.summaries(hashes.generation, hashes.inputs);
                     (
                         node.name.clone(),
-                        serde_json::json!({ "generation": generation, "outputs": outputs }),
+                        serde_json::json!({ "generation": hashes.generation, "outputs": outputs, "inputs": inputs }),
                     )
                 })
                 .collect()
@@ -3765,6 +3908,7 @@ impl Session {
             // The last complete generation's profile — what a `profile`
             // read answers; null until a generation completes.
             "profile": self.core.profile_view(&inner, None).ok(),
+            "summaries": self.core.summary_stats(),
             "lease": lease_view(&inner),
             "transport": self.core.transport_view(&inner),
             "scrub": self.core.scrub_debug(&inner),
@@ -4563,13 +4707,41 @@ fn broadcast_lease(inner: &Inner) {
 
 /// The reference text for a wire source: a bare name for value bindings
 /// (single-output calls, literals, expressions), `name.port` for a port
-/// of a multi-output node.
+/// of a multi-output node — and, for a port of a multi-target line's node
+/// (`{lo, end}` of `lo, hi = deconstruct_domain(…)`, the spelling the
+/// view-model draws and the canvas hands back), the TARGET that unpacks
+/// it (`hi`): the first target's name is the node's, never the port's.
 fn reference_text(inner: &Inner, from: &WireEnd) -> Result<String, IntentError> {
     if inner.loaded.document.find_binding(&from.node).is_none() {
         return Err(IntentError::Unknown(format!(
             "no node named `{}`",
             from.node
         )));
+    }
+    if let Some(view) = inner.graph.node(&from.node)
+        && view.targets.len() > 1
+    {
+        let Some(index) = view.outputs.iter().position(|o| o.name == from.port) else {
+            return Err(IntentError::Unknown(format!(
+                "`{}` has no output `{}` (outputs: {})",
+                from.node,
+                from.port,
+                view.outputs
+                    .iter()
+                    .map(|o| o.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        };
+        return match view.targets.get(index) {
+            Some(target) => Ok(target.clone()),
+            None => Err(IntentError::Refused(format!(
+                "`{}.{}` is not unpacked by `{} = …` — add a target for it in the text first",
+                from.node,
+                from.port,
+                view.targets.join(", ")
+            ))),
+        };
     }
     match inner.loaded.resolution.bindings.get(&from.node) {
         Some(BindingType::Node { .. }) => Ok(format!("{}.{}", from.node, from.port)),
@@ -6705,63 +6877,71 @@ impl Core {
         emitted
     }
 
-    /// Per-output value summaries for a node from the last complete
-    /// generation.
-    fn node_values(&self, inner: &Inner, node: &str) -> (u64, Vec<(String, Option<ValueSummary>)>) {
-        let Some(view) = inner.graph.node(node) else {
-            return (0, Vec::new());
-        };
-        let Some(kept) = inner.last_complete.as_ref() else {
-            return (
-                0,
-                view.outputs
-                    .iter()
-                    .map(|o| (o.name.clone(), None))
-                    .collect(),
-            );
-        };
-        let store = self.scheduler.store();
-        let mut outputs = Vec::new();
-        for (index, output) in view.outputs.iter().enumerate() {
-            let hash = match kept.lowered.bindings.get(&view.name) {
-                Some(LoweredBinding::Value(value)) => Some(value.hash()),
-                Some(LoweredBinding::Port {
-                    node: id,
-                    output: port,
-                }) => {
-                    let port = if view.targets.len() > 1 {
-                        match view
-                            .targets
-                            .get(index)
-                            .and_then(|t| kept.lowered.bindings.get(t))
-                        {
-                            Some(LoweredBinding::Port { output, .. }) => *output,
-                            _ => *port,
-                        }
-                    } else {
-                        *port
-                    };
-                    kept.report
-                        .outcome(*id)
-                        .output_hashes()
-                        .and_then(|h| h.get(port).copied())
-                }
-                Some(LoweredBinding::Node { node: id }) => kept
-                    .report
-                    .outcome(*id)
-                    .output_hashes()
-                    .and_then(|h| h.get(index).copied()),
-                None => None,
-            };
-            let summary = hash.and_then(|hash| {
-                store
-                    .load_value(&hash)
-                    .ok()
-                    .map(|v| display::summarize(&v, &self.display_context(DisplayTier::Fine)))
-            });
-            outputs.push((output.name.clone(), summary));
+    /// The summaries behind resolved port hashes ([`node_hashes`]), in
+    /// order — the half of an `inspect` that costs: each hash is loaded
+    /// from the store and summarized ONCE per kept generation through
+    /// [`Self::summary_of`], whichever node asks (v0.1 wave 5 N1 — a WIRED
+    /// input carries its source output's summary, the very entry the
+    /// source's own answer has for that port: one hash, one summary; a
+    /// literal kwarg and an unwired port stay `None`). Takes no session
+    /// lock: the caller resolves under it and summarizes off it.
+    fn summaries(
+        &self,
+        generation: u64,
+        ports: Vec<(String, Option<ValueHash>)>,
+    ) -> Vec<(String, Option<ValueSummary>)> {
+        ports
+            .into_iter()
+            .map(|(name, hash)| {
+                let summary = hash.and_then(|hash| self.summary_of(generation, &hash));
+                (name, summary)
+            })
+            .collect()
+    }
+
+    /// The compact summary of a stored value in the kept `generation`,
+    /// memoized ([`SummaryMemo`]); `None` when the store has no such value
+    /// — never a re-solve. A summary that read solids no display pass has
+    /// drawn is answered but not kept (the next read may find them drawn).
+    fn summary_of(&self, generation: u64, hash: &ValueHash) -> Option<ValueSummary> {
+        {
+            let mut memo = self.lock_summaries();
+            if generation > memo.generation {
+                memo.entries.clear();
+                memo.generation = generation;
+            }
+            if let Some(found) = memo.entries.get(hash).cloned() {
+                memo.hits += 1;
+                return Some(found);
+            }
         }
-        (kept.generation, outputs)
+        let value = self.scheduler.store().load_value(hash).ok()?;
+        let summary = display::summarize(&value, &self.display_context(DisplayTier::Fine));
+        let mut memo = self.lock_summaries();
+        memo.computed += 1;
+        if generation >= memo.generation && !display::reads_undisplayed_solids(&summary) {
+            memo.entries.insert(*hash, summary.clone());
+        }
+        Some(summary)
+    }
+
+    fn lock_summaries(&self) -> std::sync::MutexGuard<'_, SummaryMemo> {
+        self.summaries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The memo's counters, as `/debug/state` → `summaries` reports them:
+    /// the generation it holds, the entries, and how many summaries were
+    /// computed / served from the memo since the session opened.
+    fn summary_stats(&self) -> serde_json::Value {
+        let memo = self.lock_summaries();
+        serde_json::json!({
+            "generation": memo.generation,
+            "entries": memo.entries.len(),
+            "computed": memo.computed,
+            "hits": memo.hits,
+        })
     }
 
     /// Fill statuses from a finished report.
@@ -7444,6 +7624,342 @@ mod tests {
             seq_before,
             "a notice is not an op"
         );
+    }
+
+    /// Wave 5 N1 (docs/16 §Canvas conventions — the face shows what each
+    /// input receives): `inspect` answers `inputs` beside `outputs`, in
+    /// port order — a WIRED input carries its source output's summary, the
+    /// very one the source's own `inspect` answers for that port (one hash,
+    /// one path); a literal kwarg and an unwired optional port are `null`.
+    /// `/debug/state?values=true` carries the same per node. The sources
+    /// that pin WHICH output and WHICH node (the review's false-PASS lens,
+    /// 2026-09-19): a multi-target line consumed from its second AND its
+    /// first target, and a port selection on a multi-output node — two
+    /// distinct values each, so a lookup that always reads the first
+    /// output, or one that cannot find a target's node, fails here.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one fixture, every source shape
+    fn inspect_answers_each_input_with_its_wire_source_value() {
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             twice = construct_domain(start=size, end=size)\n\
+             lo, hi = deconstruct_domain(domain=span)\n\
+             m = negative(x=hi)\n\
+             n = negative(x=lo)\n\
+             d = deconstruct_domain(domain=span)\n\
+             e = add(a=d.end, b=1.0)\n\
+             f = add(a=d.start, b=1.0)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        drain(&mut rx);
+        let nodes = ["size", "span", "twice", "lo", "m", "n", "d", "e", "f"];
+        for node in nodes {
+            session.handle(id, None, ClientMessage::Inspect { node: node.into() });
+        }
+        let messages = texts(&drain(&mut rx));
+        let answers: Vec<&serde_json::Value> = messages
+            .iter()
+            .filter(|m| m["type"] == "node_values")
+            .map(|m| &m["payload"])
+            .collect();
+        assert_eq!(answers.len(), nodes.len(), "{messages:?}");
+        let answer = |name: &str| answers[nodes.iter().position(|n| *n == name).unwrap()];
+        let (size, span, twice) = (answer("size"), answer("span"), answer("twice"));
+        assert_eq!(size["node"], "size");
+        assert_eq!(span["node"], "span");
+
+        // The multi-target line `lo, hi = …` is ONE node `lo` with the
+        // spec's two outputs; `m ← hi` reads the SECOND, `n ← lo` the
+        // first — distinct values (0 and 2), each the entry the node's own
+        // answer carries for that port.
+        let lo = answer("lo");
+        assert_eq!(lo["outputs"][0][0], "start");
+        assert_eq!(lo["outputs"][1][0], "end");
+        assert_eq!(lo["outputs"][0][1]["samples"][0], "0");
+        assert_eq!(lo["outputs"][1][1]["samples"][0], "2");
+        assert_eq!(answer("m")["inputs"][0][0], "x");
+        assert_eq!(
+            answer("m")["inputs"][0][1],
+            lo["outputs"][1][1],
+            "{}",
+            answer("m")
+        );
+        assert_eq!(
+            answer("n")["inputs"][0][1],
+            lo["outputs"][0][1],
+            "{}",
+            answer("n")
+        );
+        assert_ne!(answer("m")["inputs"][0][1], answer("n")["inputs"][0][1]);
+        // A port selection on a multi-output node: `e ← d.end`, `f ← d.start`.
+        let d = answer("d");
+        assert_eq!(
+            answer("e")["inputs"][0][1],
+            d["outputs"][1][1],
+            "{}",
+            answer("e")
+        );
+        assert_eq!(
+            answer("f")["inputs"][0][1],
+            d["outputs"][0][1],
+            "{}",
+            answer("f")
+        );
+        assert_ne!(answer("e")["inputs"][0][1], answer("f")["inputs"][0][1]);
+        // `inspect_wire` answers the same entry, from the same end.
+        session.handle(
+            id,
+            None,
+            ClientMessage::InspectWire {
+                to: WireEnd {
+                    node: "m".into(),
+                    port: "x".into(),
+                },
+            },
+        );
+        let wire = texts(&drain(&mut rx))
+            .into_iter()
+            .find(|m| m["type"] == "wire_values")
+            .unwrap();
+        assert_eq!(
+            wire["payload"]["from"],
+            serde_json::json!({"node": "lo", "port": "end"})
+        );
+        assert_eq!(wire["payload"]["summary"], lo["outputs"][1][1]);
+        // … and the other direction: a wire dragged from that node's `end`
+        // handle is written as the target that unpacks it, `hi`; from
+        // `start`, `lo`; a port the node has not is refused by name.
+        for (port, into, spelled) in [
+            ("start", "m", "m = negative(x=lo)"),
+            ("end", "n", "n = negative(x=hi)"),
+        ] {
+            session.handle(
+                id,
+                Some(format!("connect-{port}")),
+                ClientMessage::Connect {
+                    from: WireEnd {
+                        node: "lo".into(),
+                        port: port.into(),
+                    },
+                    to: WireEnd {
+                        node: into.into(),
+                        port: "x".into(),
+                    },
+                    lift: false,
+                },
+            );
+            let text = session.debug_state(false)["text"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            assert!(text.contains(spelled), "{text}");
+        }
+        session.handle(
+            id,
+            Some("connect-nope".into()),
+            ClientMessage::Connect {
+                from: WireEnd {
+                    node: "lo".into(),
+                    port: "out".into(),
+                },
+                to: WireEnd {
+                    node: "m".into(),
+                    port: "x".into(),
+                },
+                lift: false,
+            },
+        );
+        let refused = texts(&drain(&mut rx))
+            .into_iter()
+            .find(|m| m["type"] == "error")
+            .unwrap();
+        assert_eq!(
+            refused["payload"]["message"],
+            "`lo` has no output `out` (outputs: start, end)"
+        );
+        session.wait_idle();
+
+        // The slider's five inputs are literals or unwired defaults: all null,
+        // named in port order.
+        let ports = |payload: &serde_json::Value| -> Vec<String> {
+            payload["inputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|pair| pair[0].as_str().unwrap().to_owned())
+                .collect()
+        };
+        assert_eq!(ports(size), ["value", "min", "max", "step", "scrub"]);
+        assert!(
+            size["inputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|pair| pair[1].is_null()),
+            "literals and unwired ports carry no wire value: {}",
+            size["inputs"]
+        );
+
+        // `span.start` is a literal → null; `span.end` is wired from
+        // `size.out` → exactly the summary `size`'s own answer has for `out`.
+        let size_out = &size["outputs"][0][1];
+        assert_eq!(size_out["kind"], "Number", "{size_out}");
+        assert_eq!(ports(span), ["start", "end"]);
+        assert!(span["inputs"][0][1].is_null(), "{}", span["inputs"]);
+        assert_eq!(span["inputs"][1][1], *size_out);
+        assert_eq!(span["generation"], size["generation"]);
+        // Two inputs fed by the one output: both carry it.
+        assert_eq!(twice["inputs"][0][1], *size_out);
+        assert_eq!(twice["inputs"][1][1], *size_out);
+        // The outputs keep their shape beside the new field.
+        assert_eq!(span["outputs"][0][0], "out");
+        assert_eq!(span["outputs"][0][1]["kind"], "Domain");
+
+        // The debug oracle says the same.
+        let state = session.debug_state(true);
+        assert_eq!(state["values"]["span"]["inputs"][1][1], *size_out);
+        assert!(state["values"]["span"]["inputs"][0][1].is_null());
+    }
+
+    /// Wave 5 N1 review CR-2 / C-4 (2026-09-19): `inspect` reads the
+    /// display cache and never meshes a solid nobody displays — a consumer
+    /// of a hidden solid answers `tessellation: "not displayed"` with no
+    /// kernel call (the eye-off remedy for U30 held through a consumer's
+    /// auto-inspect) — and summarizes each value ONCE per kept generation
+    /// whichever node asks: the producer's output and its consumer's input
+    /// are one entry (`/debug/state` → `summaries`), and the entry the
+    /// display later draws is not kept stale.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one story: displayed → hidden → drawn again
+    fn inspect_reads_the_display_cache_and_memoizes_each_value_once_per_generation() {
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n\
+             vol, cen = volume(solid=block)\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        drain(&mut rx);
+        let cache = |session: &Session| session.debug_state(false)["display_cache"].clone();
+        let memo = |session: &Session| session.debug_state(false)["summaries"].clone();
+        let inspect = |rx: &mut tokio::sync::mpsc::UnboundedReceiver<Outgoing>, node: &str| {
+            session.handle(id, None, ClientMessage::Inspect { node: node.into() });
+            texts(&drain(rx))
+                .into_iter()
+                .find(|m| m["type"] == "node_values")
+                .unwrap()["payload"]
+                .clone()
+        };
+        assert_eq!(cache(&session)["misses"], 1, "the open drew the block once");
+
+        // Displayed: the consumer's input summary reads the drawn mesh —
+        // faces, bounds — and the producer's own answer is the same entry:
+        // computed once, served from the memo after, no kernel call. The
+        // producer's three inputs are one `span.out` too: one entry, two
+        // hits.
+        let vol = inspect(&mut rx, "vol");
+        let solid_in = vol["inputs"][0][1].clone();
+        assert_eq!(solid_in["kind"], "Solid", "{vol}");
+        assert!(solid_in["facts"]["faces"].is_number(), "{solid_in}");
+        assert!(solid_in["bounds"].is_array(), "{solid_in}");
+        let block = inspect(&mut rx, "block");
+        assert_eq!(block["outputs"][0][1], solid_in);
+        let input_of = |payload: &serde_json::Value, port: &str| {
+            payload["inputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|pair| pair[0] == port)
+                .unwrap()[1]
+                .clone()
+        };
+        assert_eq!(input_of(&block, "x")["kind"], "Domain", "{block}");
+        assert_eq!(input_of(&block, "x"), input_of(&block, "z"));
+        let stats = memo(&session);
+        assert_eq!(
+            stats["computed"], 4,
+            "the solid, volume, centroid and span's domain, each once: {stats}"
+        );
+        assert_eq!(
+            stats["hits"], 3,
+            "the producer's output read the consumer's entry; its y and z read x's: {stats}"
+        );
+        assert_eq!(cache(&session)["misses"], 1, "no summary called the kernel");
+
+        // Hidden: preview off, then a value the display never meshes. The
+        // consumer's inspect says so and calls no kernel; the answer is not
+        // memoized, so the drawn facts arrive once the eye is back on.
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetPreview {
+                node: "block".into(),
+                on: Some(false),
+            },
+        );
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "3.0".into(),
+            },
+        );
+        session.wait_idle();
+        drain(&mut rx);
+        assert_eq!(
+            cache(&session)["misses"],
+            1,
+            "hidden: the display meshed nothing"
+        );
+        let vol = inspect(&mut rx, "vol");
+        let hidden = vol["inputs"][0][1].clone();
+        assert_eq!(hidden["kind"], "Solid", "{vol}");
+        assert_eq!(hidden["facts"]["tessellation"], "not displayed", "{hidden}");
+        assert!(hidden["facts"].get("faces").is_none(), "{hidden}");
+        assert!(hidden["bounds"].is_null(), "{hidden}");
+        assert_eq!(
+            cache(&session)["misses"],
+            1,
+            "an inspect of a hidden solid calls no kernel"
+        );
+        let stats = memo(&session);
+        assert_eq!(
+            stats["entries"], 2,
+            "volume and centroid kept, the undisplayed solid not: {stats}"
+        );
+        session.handle(
+            id,
+            None,
+            ClientMessage::SetPreview {
+                node: "block".into(),
+                on: Some(true),
+            },
+        );
+        session.wait_idle();
+        drain(&mut rx);
+        assert_eq!(
+            cache(&session)["misses"],
+            2,
+            "the eye back on drew the new solid"
+        );
+        let vol = inspect(&mut rx, "vol");
+        let drawn = vol["inputs"][0][1].clone();
+        assert!(drawn["facts"]["faces"].is_number(), "{drawn}");
+        assert!(drawn["facts"].get("tessellation").is_none(), "{drawn}");
+        assert_eq!(drawn["hash"], hidden["hash"], "the same value, now drawn");
+        assert_eq!(cache(&session)["misses"], 2);
+        assert_eq!(memo(&session)["entries"], 3, "{}", memo(&session));
     }
 
     #[test]

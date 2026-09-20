@@ -19,7 +19,13 @@ use super::UnaryIn;
 /// ```cic
 /// angle = asin(x=0.5)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "ArcSine")]
+#[node(
+    category = "Maths & logic",
+    sub = "Trig",
+    tier = "1",
+    version = 1,
+    gh = "ArcSine"
+)]
 #[must_use]
 pub fn asin(input: UnaryIn) -> f64 {
     assert!(

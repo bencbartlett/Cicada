@@ -30,7 +30,13 @@ pub struct LogIn {
 /// decades = log(x=1000.0)
 /// octaves = log(x=8.0, base=2.0)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Logarithm")]
+#[node(
+    category = "Maths & logic",
+    sub = "Util",
+    tier = "1",
+    version = 1,
+    gh = "Logarithm"
+)]
 #[must_use]
 #[allow(clippy::float_cmp)] // exact base detection — the contract says bases 10 and 2
 pub fn log(input: LogIn) -> f64 {

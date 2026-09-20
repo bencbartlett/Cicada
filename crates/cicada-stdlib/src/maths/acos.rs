@@ -19,7 +19,13 @@ use super::UnaryIn;
 /// ```cic
 /// angle = acos(x=0.5)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "ArcCosine")]
+#[node(
+    category = "Maths & logic",
+    sub = "Trig",
+    tier = "1",
+    version = 1,
+    gh = "ArcCosine"
+)]
 #[must_use]
 pub fn acos(input: UnaryIn) -> f64 {
     assert!(

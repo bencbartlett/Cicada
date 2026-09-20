@@ -79,6 +79,21 @@ export function showsPortValues(tier: LodTier): boolean {
   return tier !== "far";
 }
 
+/**
+ * Whether a node's status is settled enough for the canvas to ask its
+ * values (`inspect`, once per generation per visible node): solved (`done`,
+ * `cached`) — and, since the answer carries the INPUTS (wave 5 N1), `red`
+ * and `blocked` too: a red node's inputs are the computed sources the user
+ * most wants to see, and a blocked node's wired input reads `—` (review
+ * finding C-2, 2026-09-19 — the gate predated the inputs and skipped both,
+ * so their faces showed nothing). A node still `queued` / `running`,
+ * `idle` or `cancelled` has nothing settled to show yet.
+ */
+export function wantsValues(status: NodeStatus | undefined): status is NodeStatus {
+  if (status === undefined) return false;
+  return status.state === "done" || status.state === "cached" || status.state === "red" || status.state === "blocked";
+}
+
 /** One search-to-place hit: the catalog node plus the ports a probed wire could land on. */
 export interface SearchHit {
   node: CatalogNode;

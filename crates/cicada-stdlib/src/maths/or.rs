@@ -14,7 +14,13 @@ use super::GateIn;
 /// ```cic
 /// both = or(a=True, b=False)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Gate Or")]
+#[node(
+    category = "Maths & logic",
+    sub = "Logic",
+    tier = "1",
+    version = 1,
+    gh = "Gate Or"
+)]
 #[must_use]
 pub fn or(input: GateIn) -> bool {
     input.a || input.b

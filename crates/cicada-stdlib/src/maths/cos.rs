@@ -14,7 +14,13 @@ use super::AngleIn;
 /// ```cic
 /// value = cos(x=0.5)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Cosine")]
+#[node(
+    category = "Maths & logic",
+    sub = "Trig",
+    tier = "1",
+    version = 1,
+    gh = "Cosine"
+)]
 #[must_use]
 pub fn cos(input: AngleIn) -> f64 {
     input.x.cos()

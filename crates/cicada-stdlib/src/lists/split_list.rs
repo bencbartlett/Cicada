@@ -38,7 +38,13 @@ pub struct SplitListOut {
 /// xs = [1.0, 2.0, 3.0, 4.0, 5.0]
 /// head, tail = split_list(list=xs, index=2)
 /// ```
-#[node(category = "List & axis", tier = "1", version = 1, gh = "Split List")]
+#[node(
+    category = "List & axis",
+    sub = "List",
+    tier = "1",
+    version = 1,
+    gh = "Split List"
+)]
 #[must_use]
 pub fn split_list(input: SplitListIn) -> SplitListOut {
     let mut a = input.list;

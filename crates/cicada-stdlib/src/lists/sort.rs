@@ -42,7 +42,13 @@ pub struct SortOut {
 /// labels = ["tall", "short", "mid"]
 /// ordered_heights, ordered_labels, sources = sort(keys=heights, values=labels)
 /// ```
-#[node(category = "List & axis", tier = "1", version = 1, gh = "Sort List")]
+#[node(
+    category = "List & axis",
+    sub = "List",
+    tier = "1",
+    version = 1,
+    gh = "Sort List"
+)]
 #[must_use]
 pub fn sort(input: SortIn) -> SortOut {
     assert!(

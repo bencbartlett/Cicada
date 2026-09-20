@@ -183,7 +183,7 @@ catalog, the canvas port labels, and dialect kwargs (doc 10).
 
 ```rust
 /// Move — translate geometry along a vector.
-#[node(category = "Transform", tier = "S")]
+#[node(category = "Transform", sub = "Euclidean", tier = "S")]
 fn move_<T: Transformable>(input: MoveIn<T>) -> T {
     input.geometry.transform(&Xform::translation(input.motion))
 }
@@ -195,7 +195,7 @@ struct MoveIn<T> {
 }
 
 /// Divide Curve — points, tangents, and parameters along a curve.
-#[node(category = "Curve", tier = "S")]
+#[node(category = "Curve", sub = "Division", tier = "S")]
 fn divide_curve(input: DivideIn) -> DivideOut { /* … */ }
 
 #[derive(Ports)]
@@ -215,7 +215,8 @@ struct DivideOut {
 
 `#[derive(Ports)]` reflects fields into typed ports — a field with a
 default is an optional port; `#[node]` assembles the `NodeSpec`: name,
-title (doc comment first line), category, ports, generic bounds,
+title (doc comment first line), category and sub-group (`sub`, the menu
+bar's column — §Catalog lists each category's), ports, generic bounds,
 purity, tier, and the runtime contract (the rustdoc `# Panics` section,
 rendered in the catalog as "Red when: …") — registered at compile time.
 Single-output nodes may return a bare value (port named `out`). The
@@ -245,7 +246,25 @@ Signature notation: `name(port: Type, …) → (port: Type, …)`; `[T]` list
 along an axis; `T?` optional; defaults shown as `= x`. Rows marked with
 variants ("/") compress sibling nodes.
 
+**Sub-groups (v0.1 wave 5, C2c — DECISIONS.md row of 2026-08-25).** Every
+node also names its sub-group within the category — `#[node(sub =
+"Operators")]`, required like `gh` — and the menu bar lays a category's
+tab out as one column per sub-group (docs/16 §Application layout). Each
+section below opens with its **Sub-groups:** line, the category's
+columns in menu order; the lines ARE `cicada_core::spec::SUBGROUPS` (the
+stdlib's conformance test holds the document to the table and every
+node to its category's list), `catalog.json` carries the table as
+`subgroups` and each node's column as `sub`, and `CATALOG.md` groups
+each category by it. Names are Title Case, one or two words,
+Grasshopper's where Grasshopper has them; a sub-group is listed only
+once a node lives in it — Curve's `Spline` and `Analysis`, Mesh &
+field's `Field`, List & axis's `Sets` join the table with their first
+node (an empty column is a promise the menu cannot keep). The project's
+`scripts/*.py` nodes are the `Script` category's one `Script` sub-group.
+
 ### 1 · Params & input
+
+**Sub-groups:** Input · Time
 
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
@@ -259,6 +278,8 @@ variants ("/") compress sibling nodes.
 
 ### 2 · Sequences & random
 
+**Sub-groups:** Sequence · Random
+
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
 | Series | `(start: Number = 0, step: Number = 1, count: Integer) → [Number]` | S | |
@@ -268,6 +289,8 @@ variants ("/") compress sibling nodes.
 | Repeat | `(pattern: [E], count: Integer) → [E]` | 1 | shipped (C1): GH Repeat Data — the node form of the cyclic zip policy (docs/09 calls it `cycle`; that name is the §1 time param's) |
 
 ### 3 · Maths & logic
+
+**Sub-groups:** Operators · Trig · Util · Domain · Logic
 
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
@@ -284,6 +307,8 @@ variants ("/") compress sibling nodes.
 | Mass Addition / Average / Bounds | `mass_addition(list) → (result: Number, partial: [Number])` / `average(list) → Number` / `bounds(list) → Domain` | 1 | shipped (C1): left-to-right sums (the order is the contract); `average`/`bounds` red on an empty list |
 
 ### 4 · List & axis
+
+**Sub-groups:** List · Axis
 
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
@@ -304,6 +329,8 @@ it (doc 09).
 
 ### 5 · Point · Vector · Plane
 
+**Sub-groups:** Point · Vector · Plane
+
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
 | Construct / Deconstruct Point | `(x, y, z: Number) ↔ Point` | S | |
@@ -321,6 +348,8 @@ it (doc 09).
 | Plane Normal | `plane_normal(origin: Point, z: Vector) → Plane` | 1 | shipped (C2a): x is the world axis least aligned with the normal, projected into the plane (ties go to x, then y), `y = z × x` — so `z = unit_z` gives the XY plane and `unit_x` the YZ plane; deterministic for a given normal, not continuous across a tie (no normal-to-frame rule is); red when `z` has no length at tolerance |
 
 ### 6 · Curve
+
+**Sub-groups:** Primitive · Division · Util
 
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
@@ -351,6 +380,8 @@ it (doc 09).
 
 ### 7 · Surface & solid
 
+**Sub-groups:** Primitive · Freeform · Boolean · Analysis
+
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
 | Extrude | `(profile: Closed<Curve>, direction: Vector) → Solid` | S | **shipped 2026-08-20 (WP-C), OCCT-backed**: exact edges for every curve kind — a polyline/rectangle is a prism of planar faces, a circle an exact cylinder (no `segments`: the mesh tier's `mesh_extrude` tessellates); planarity, simplicity and the direction-leaves-the-plane check are the mesh tier's, word for word, before the kernel sees anything; oblique prisms are legal |
@@ -375,6 +406,8 @@ it (doc 09).
 
 ### 8 · Mesh & field
 
+**Sub-groups:** Primitive · Freeform · Boolean · Util
+
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
 | Mesh Plane | `mesh_plane(plane: Plane = xy_plane, x: Domain, y: Domain, x_count: Integer = 1, y_count: Integer = 1) → Mesh` | 1 | **shipped 2026-08-24 (C2b)**: a flat grid of `x_count × y_count` cells (two triangles each) over the `x × y` rectangle in the plane's frame — the mesh tier's ground plane and sampling grid; `mesh_box`'s plane + domains shape rather than Grasshopper's rectangle input, so it is statically total; triangles wind counter-clockwise seen from the frame's +z (the sheet faces the normal), an open `Mesh` (not `Watertight`), decreasing domains normalize, vertices x fastest; the vertex count is a product charged through the shared ceilings before any buffer is sized. The mesh-tier box and sphere are the `mesh_box` / `mesh_sphere` row below |
@@ -393,6 +426,8 @@ it (doc 09).
 
 ### 9 · Intersect & regions
 
+**Sub-groups:** Shape · Region
+
 | Node | Signature | Tier | Notes |
 |---|---|---|---|
 | Voronoi | `(seeds: [Point], boundary: Closed<Curve>, segments: Integer = 64) → cells: [Closed<Curve>]` | S | spade; the wall's partition; cells index-aligned with seeds; spike scope: convex planar boundary (concave arrives with `i_overlay`, v0.1); `segments` tessellates curved boundaries |
@@ -406,6 +441,8 @@ it (doc 09).
 | Point in Curve / in Solid | `(point: Point, region…) → Boolean` | 1 | |
 
 ### 10 · Transform
+
+**Sub-groups:** Affine · Euclidean · Array · Util
 
 All kind-preserving over `T: Transformable`.
 
@@ -421,6 +458,8 @@ All kind-preserving over `T: Transformable`.
 | Compose Xform / Transform / Construct Xform | `compose_xform(xforms: [Xform]) → Xform` / `transform(geometry: T, xform: Xform) → T` / `construct_xform(rows: [Number]) → Xform` | 1 | **shipped 2026-08-24 (C2b)**. `compose_xform` folds the list in application order — the first acts first, `transform(g, compose_xform([a, b]))` is `transform(transform(g, a), b)`; an empty list is the identity. `transform` applies any `Xform`: a similarity (what `move` / `rotate` / `scale` / `mirror` / `orient` build) exactly to every kind, a Solid through the kernel; a general affine (a stretch, a shear) under `scale_nu`'s exactness rule above — the kinds it carries exactly carry, the rest are red with the numbers. `construct_xform` is the one producer of `Xform` values and a C2b addition to this table (the contract's `compose_xform` / `transform` had nothing to compose or apply — no node emitted an `Xform`): the 3×4 affine matrix row by row, `[a, b, c, tx, d, e, f, ty, g, h, i, tz]` mapping `(x, y, z)` to `(ax + by + cz + tx, …)` — the order the kernel reads and `Similarity::coefficients` emits; twelve finite numbers or red; any affine, a shear included, is admitted here and `transform` decides per kind. `gh = "Construct Matrix"` (GH's Matrix casts to a Transform); the transform components' `X` outputs have no counterpart yet — a second output on the similarity nodes would change every `move(...)` consumer's binding shape, so a constructor per motion (`translation(v) → Xform` …) is the road if the matrix form proves too raw in use |
 
 ### 11 · Output, display & export
+
+**Sub-groups:** Display · Text · Files
 
 | Node | Signature | Tier | Notes |
 |---|---|---|---|

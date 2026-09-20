@@ -929,12 +929,19 @@ pub enum ServerMessage {
         /// Per catalog node (only nodes with at least one accepting port).
         catalog: Vec<ProbeCatalogEntry>,
     },
-    /// A node's current output values (inspector).
+    /// A node's current values (inspector, the node face): what sits on
+    /// each output, and what each input receives.
     NodeValues {
         /// The node.
         node: String,
         /// Per output port.
         outputs: Vec<(String, Option<ValueSummary>)>,
+        /// Per input port, in port order (additive, v0.1 wave 5 N1): a
+        /// WIRED input carries its source output's summary — the same
+        /// summary the source's own `node_values` answers for that port; a
+        /// literal kwarg and an unwired port carry `null` (their value is
+        /// the text's or the default's, never a solve result to look up).
+        inputs: Vec<(String, Option<ValueSummary>)>,
         /// The generation the values come from.
         generation: u64,
     },
@@ -1356,7 +1363,7 @@ pub enum ClientMessage {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         role: Option<Role>,
     },
-    /// Place a node (search-to-place / ribbon / drag-to-empty-canvas).
+    /// Place a node (search-to-place / the menu bar / drag-to-empty-canvas).
     PlaceNode {
         /// Dialect name.
         func: String,
@@ -2573,6 +2580,46 @@ mod tests {
             serde_json::json!({"kind": "pipeline", "message": "no pipeline", "reason": "unnamed"}),
             "{value}"
         );
+    }
+
+    // Wave 5 N1: `node_values` answers the INPUT values beside the outputs —
+    // `[port, summary | null]` pairs in port order, the same shape as
+    // `outputs`, so a client renders both with one path. Additive: a client
+    // that never heard of `inputs` still reads `outputs`.
+    #[test]
+    fn node_values_carry_inputs_beside_outputs() {
+        let number = ValueSummary {
+            kind: "Number".into(),
+            hash: "ab".repeat(32),
+            count: None,
+            absent: None,
+            axis: None,
+            bounds: None,
+            samples: vec!["2".into()],
+            facts: BTreeMap::new(),
+        };
+        let text = encode(
+            7,
+            &ServerMessage::NodeValues {
+                node: "span".into(),
+                outputs: vec![("out".into(), None)],
+                inputs: vec![("start".into(), None), ("end".into(), Some(number))],
+                generation: 3,
+            },
+        );
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["type"], "node_values");
+        let payload = &value["payload"];
+        assert_eq!(payload["node"], "span");
+        assert_eq!(payload["generation"], 3);
+        assert_eq!(payload["outputs"], serde_json::json!([["out", null]]));
+        let inputs = payload["inputs"].as_array().unwrap();
+        assert_eq!(inputs.len(), 2, "{payload}");
+        assert_eq!(inputs[0], serde_json::json!(["start", null]));
+        assert_eq!(inputs[1][0], "end");
+        assert_eq!(inputs[1][1]["kind"], "Number");
+        assert_eq!(inputs[1][1]["samples"], serde_json::json!(["2"]));
+        assert_eq!(inputs[1][1]["hash"], "ab".repeat(32));
     }
 
     #[test]

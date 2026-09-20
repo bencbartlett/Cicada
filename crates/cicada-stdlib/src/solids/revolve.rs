@@ -57,6 +57,7 @@ pub struct RevolveIn {
 /// ```
 #[node(
     category = "Surface & solid",
+    sub = "Freeform",
     tier = "1",
     version = 1,
     gh = "Revolution",

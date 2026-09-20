@@ -49,6 +49,7 @@ pub struct AreaOut {
 /// ```
 #[node(
     category = "Surface & solid",
+    sub = "Analysis",
     tier = "1",
     version = 1,
     gh = "Area",

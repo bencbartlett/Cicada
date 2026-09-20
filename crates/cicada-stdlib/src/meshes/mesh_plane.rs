@@ -55,6 +55,7 @@ pub struct MeshPlaneIn {
 /// ```
 #[node(
     category = "Mesh & field",
+    sub = "Primitive",
     tier = "1",
     version = 1,
     gh = "Mesh Plane",

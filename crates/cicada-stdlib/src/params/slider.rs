@@ -50,6 +50,7 @@ pub struct SliderIn {
 /// ```
 #[node(
     category = "Params & input",
+    sub = "Input",
     tier = "S",
     version = 2,
     gh = "Number Slider"

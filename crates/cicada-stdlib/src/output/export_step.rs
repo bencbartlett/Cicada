@@ -44,6 +44,7 @@ pub struct ExportStepIn {
 /// ```
 #[node(
     category = "Output, display & export",
+    sub = "Files",
     tier = "1",
     version = 1,
     gh = none,

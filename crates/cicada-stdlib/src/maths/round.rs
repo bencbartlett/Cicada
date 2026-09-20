@@ -17,7 +17,13 @@ use super::UnaryIn;
 /// ```cic
 /// nearest = round(x=2.5)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Round")]
+#[node(
+    category = "Maths & logic",
+    sub = "Util",
+    tier = "1",
+    version = 1,
+    gh = "Round"
+)]
 #[must_use]
 pub fn round(input: UnaryIn) -> f64 {
     input.x.round()

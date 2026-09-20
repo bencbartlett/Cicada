@@ -36,6 +36,7 @@ pub struct Vector2PtIn {
 /// ```
 #[node(
     category = "Point · Vector · Plane",
+    sub = "Vector",
     tier = "S",
     version = 1,
     gh = "Vector 2Pt",

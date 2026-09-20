@@ -254,6 +254,7 @@ fn assert_tool_list(tools: &[Value]) {
         "outputs",
         "panics",
         "gh",
+        "sub",
         "signature",
         "effectful",
         "examples",
@@ -287,6 +288,7 @@ fn assert_catalog_search(client: &mut Client) {
     assert_eq!(hits["nodes"][0]["name"], "slider");
     assert_eq!(hits["nodes"][0]["gh"], "Number Slider");
     assert_eq!(hits["nodes"][0]["category"], "Params & input");
+    assert_eq!(hits["nodes"][0]["sub"], "Input", "the menu column (C2c)");
     assert!(
         hits["nodes"][0]["signature"]
             .as_str()
@@ -314,7 +316,7 @@ fn assert_catalog_search(client: &mut Client) {
     assert_eq!(addition["nodes"][1]["name"], "mass_addition");
 }
 
-/// `list_categories`: ribbon order, counts sum to the catalog.
+/// `list_categories`: menu order, counts sum to the catalog.
 fn assert_list_categories(client: &mut Client) {
     let categories = client.call("list_categories", &json!({}));
     let categories = structured(&categories);
@@ -337,6 +339,7 @@ fn assert_node_doc(client: &mut Client) {
     let doc = structured(&doc);
     assert_eq!(doc["name"], "slider");
     assert_eq!(doc["gh"], "Number Slider");
+    assert_eq!(doc["sub"], "Input");
     assert_eq!(doc["title"], "Number Slider");
     assert_eq!(doc["pure"], true);
     assert_eq!(doc["effectful"], false);
@@ -491,6 +494,9 @@ fn project_scripts_join_the_catalog_and_check_resolves_project_paths() {
     assert_eq!(hits["nodes"][0]["name"], "triple_up", "{hits}");
     assert_eq!(hits["nodes"][0]["title"], "Triple Up");
     assert!(hits["nodes"][0]["gh"].is_null());
+    // A project script node defaults to the one `Script` sub-group.
+    assert_eq!(hits["nodes"][0]["category"], "Script");
+    assert_eq!(hits["nodes"][0]["sub"], "Script");
 
     let doc = client.call("node_doc", &json!({"name": "triple_up"}));
     let doc = structured(&doc);

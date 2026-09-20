@@ -14,7 +14,13 @@ use super::GateIn;
 /// ```cic
 /// both = and(a=True, b=False)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Gate And")]
+#[node(
+    category = "Maths & logic",
+    sub = "Logic",
+    tier = "1",
+    version = 1,
+    gh = "Gate And"
+)]
 #[must_use]
 pub fn and(input: GateIn) -> bool {
     input.a && input.b

@@ -20,7 +20,13 @@ pub struct DegreesIn {
 /// ```cic
 /// readable = degrees(radians=1.5707963267948966)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Degrees")]
+#[node(
+    category = "Maths & logic",
+    sub = "Trig",
+    tier = "1",
+    version = 1,
+    gh = "Degrees"
+)]
 #[must_use]
 pub fn degrees(input: DegreesIn) -> f64 {
     input.radians.to_degrees()

@@ -41,7 +41,13 @@ pub struct CullOut {
 /// keep = [True, False, True, True]
 /// kept, sources = cull(list=xs, pattern=keep)
 /// ```
-#[node(category = "List & axis", tier = "S", version = 1, gh = "Cull Pattern")]
+#[node(
+    category = "List & axis",
+    sub = "List",
+    tier = "S",
+    version = 1,
+    gh = "Cull Pattern"
+)]
 #[must_use]
 pub fn cull(input: CullIn) -> CullOut {
     assert!(

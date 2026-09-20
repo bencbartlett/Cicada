@@ -31,6 +31,8 @@ import { pendingHint, pendingTitle } from "../panels/format";
 import { mergeScrub } from "../state/scrub";
 import { pendingFor, scrubProgressFor, useCicada } from "../state/store";
 import { paramValueText, sliderStep, snapToStep } from "./grid";
+import { LiteralEditor } from "./LiteralChip";
+import { spellEdit } from "./literalFace";
 import { LiteralWidget } from "./LiteralWidgets";
 import { ScrubBar } from "./ScrubBar";
 import { useParamSender } from "./useParamSender";
@@ -40,9 +42,19 @@ interface Props {
   param: ParamView;
   /** `canWrite` — widgets are disabled otherwise. */
   writer: boolean;
+  /**
+   * The collapsed row's slider (wave 5 N1, finding U17 — "a collapsed
+   * slider's value should be an editable text field"): double-clicking
+   * the value label opens the typed-literal editor in its place — Enter is
+   * ONE `set_param` spelled by the one literal rule, Esc cancels, an
+   * unspellable value is a notice and no write, the committed value typed
+   * back writes nothing; a single click still selects the node. The
+   * expanded face and the params row keep the plain label.
+   */
+  valueEditor?: boolean;
 }
 
-function SliderWidget({ view, param, writer }: Props) {
+function SliderWidget({ view, param, writer, valueEditor = false }: Props) {
   const min = param.min ?? 0;
   const max = param.max ?? 10;
   const step = sliderStep(min, max, param.step);
@@ -77,6 +89,26 @@ function SliderWidget({ view, param, writer }: Props) {
   // — the writer's); else the committed value.
   const pendingNumber = pending === undefined ? NaN : Number(pending.value);
   const shown = !engaged && Number.isFinite(pendingNumber) ? pendingNumber : local;
+
+  // The typed value (the collapsed row): the chip's rule — the dialect's
+  // number spellings and nothing else — then the one `set_param`. Nothing
+  // streams from the editor, so a cancelled edit leaves no preview behind;
+  // a value outside the bounds is written as typed and the node says so
+  // (the slider's contract is a loud red, never a silent clamp).
+  const [editing, setEditing] = useState(false);
+  const typed = (held: string | boolean) => {
+    setEditing(false);
+    const spelling = spellEdit("number", held);
+    if ("skip" in spelling) return;
+    if ("error" in spelling) {
+      useCicada.getState().addNotice("warning", `${view.name}.value: ${spelling.error} — nothing written`);
+      return;
+    }
+    // The committed value typed back is no edit (by value: `2` over `2.0`).
+    if (spelling.value === authoritative) return;
+    commit(spelling.spelled);
+  };
+  const editable = valueEditor && writer;
 
   const onChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const x = snapToStep(Number(event.target.value), min, step);
@@ -143,13 +175,42 @@ function SliderWidget({ view, param, writer }: Props) {
         aria-label={`${view.name} value`}
         data-testid={`slider-${view.name}`}
       />
-      <span
-        className="cn-widget-value mono"
-        title={pending === undefined ? undefined : pendingTitle(pending)}
-        data-testid={`slider-value-${view.name}`}
-      >
-        {text(shown)}
-      </span>
+      {editing ? (
+        <span className="cn-literal-edit cn-value-edit">
+          <LiteralEditor
+            kind="number"
+            startText={text(shown)}
+            startChecked={false}
+            label={`${view.name}.value`}
+            testId={`slider-value-${view.name}-input`}
+            onCommit={typed}
+            onCancel={() => setEditing(false)}
+          />
+        </span>
+      ) : (
+        <span
+          className={`cn-widget-value mono${editable ? " editable" : ""}`}
+          title={
+            pending !== undefined
+              ? pendingTitle(pending)
+              : editable
+                ? `${view.name}.value = ${text(shown)} — double-click to type a value`
+                : undefined
+          }
+          data-testid={`slider-value-${view.name}`}
+          data-editable={editable ? "true" : undefined}
+          onDoubleClick={
+            editable
+              ? (event) => {
+                  event.stopPropagation();
+                  setEditing(true);
+                }
+              : undefined
+          }
+        >
+          {text(shown)}
+        </span>
+      )}
       {pending !== undefined && (
         <span
           className="cn-pending mono"

@@ -19,11 +19,24 @@ import {
   statusBadge,
   stepDecimals,
   transportDrivenSignal,
+  wantsValues,
   wireStrokeWidth,
   wireStyle,
   durationLabel,
   durationTitle,
 } from "./grid";
+
+describe("wantsValues — which nodes the canvas inspects", () => {
+  it("asks for solved nodes and, since the answer carries inputs, red and blocked ones; never the unsettled", () => {
+    for (const state of ["done", "cached", "red", "blocked"] as const) {
+      expect(wantsValues({ state, generation: 3 }), state).toBe(true);
+    }
+    for (const state of ["idle", "queued", "running", "cancelled"] as const) {
+      expect(wantsValues({ state, generation: 3 }), state).toBe(false);
+    }
+    expect(wantsValues(undefined)).toBe(false);
+  });
+});
 
 describe("grid maths", () => {
   it("maps cells to pixels and back", () => {
@@ -116,6 +129,7 @@ const node = (
   pure: true,
   uses_tolerance: false,
   gh,
+  sub: "Util",
   examples: [],
   inputs: [],
   outputs,
@@ -133,7 +147,8 @@ const port = (name: string, doc?: string): CatalogNode["outputs"][number] => ({
 // A slice of the real catalog's shape: dialect names, titles and the
 // Grasshopper names the nodes replace (docs/generated/catalog.json).
 const catalog: Catalog = {
-  format: 2,
+  format: 3,
+  subgroups: [],
   nodes: [
     node("sphere", "Sphere", "Sphere", [port("out", "The watertight UV-sphere mesh.")]),
     node("box", "Box", "Domain Box"),
@@ -188,7 +203,8 @@ describe("filterCatalog", () => {
   });
   it("ranks name exact > gh exact > title exact > name prefix > title/gh prefix > substring", () => {
     const ranked: Catalog = {
-      format: 2,
+      format: 3,
+      subgroups: [],
       nodes: [
         node("emerge", "Emergency", null), // substring
         node("merge_tree", "Merge", null), // title exact (and name prefix)

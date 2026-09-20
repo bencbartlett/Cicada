@@ -10,6 +10,7 @@ import {
   pendingFor,
   pruneKeys,
   roleChangeNotice,
+  settingsFrom,
   useCicada,
   writeBlockReason,
 } from "./store";
@@ -328,6 +329,56 @@ test("a delta prunes dead bindings from statuses and follows renames / my placem
     },
   });
   expect(useCicada.getState().selection.nodes).toEqual(["add_1"]);
+});
+
+describe("node_values (the inspect answer; wave 5 N1 carries inputs beside outputs)", () => {
+  const number = { kind: "Number", hash: "ab".repeat(32), samples: ["2.5"] };
+  it("stores outputs AND inputs per node, and an older engine's answer without inputs as none (review L2-5, C-6)", () => {
+    useCicada.setState({ nodeValues: {} });
+    useCicada.getState().applyServerMessage({
+      v: 1,
+      seq: 4,
+      type: "node_values",
+      payload: { node: "span", generation: 4, outputs: [["out", null]], inputs: [["start", null], ["end", number]] },
+    });
+    expect(useCicada.getState().nodeValues.span).toEqual({
+      generation: 4,
+      outputs: [["out", null]],
+      inputs: [["start", null], ["end", number]],
+    });
+    useCicada.getState().applyServerMessage({
+      v: 1,
+      seq: 5,
+      type: "node_values",
+      payload: { node: "old", generation: 4, outputs: [["out", number]] },
+    });
+    expect(useCicada.getState().nodeValues.old).toEqual({ generation: 4, outputs: [["out", number]], inputs: [] });
+    expect(useCicada.getState().nodeValues.span, "other nodes' answers stay").toBeDefined();
+  });
+  it("a snapshot clears every answer (the values are re-asked)", () => {
+    useCicada.setState({
+      nodeValues: { span: { generation: 4, outputs: [], inputs: [["end", number]] } },
+      selection: { nodes: [], wire: null, element: null },
+      snapshots: 0,
+    });
+    useCicada.getState().applyServerMessage({
+      v: 1,
+      seq: 6,
+      type: "snapshot",
+      payload: {
+        graph: graph("span"),
+        text: "# cicada 1\nspan = 1.0\n",
+        statuses: {},
+        summary: useCicada.getState().summary,
+        lease: { writer: null, clients: [] },
+        barrier: false,
+        reason: "initial",
+        history: EMPTY_HISTORY,
+        transport: TRANSPORT_AT_REST,
+      },
+    });
+    expect(useCicada.getState().nodeValues).toEqual({});
+  });
 });
 
 describe("history (docs/13 §Undo/redo)", () => {
@@ -736,7 +787,7 @@ describe("compute-on-release (docs/13 §Slider drags — the frozen client contr
 
 describe("resetSession (File → Open / Recent / Close, Back)", () => {
   it("sets the identity and clears every pipeline-bound slice; settings, notices and the catalog survive; the viewport's ledger is told", () => {
-    const catalog = { format: 2 as const, nodes: [] };
+    const catalog = { format: 3 as const, subgroups: [], nodes: [] };
     useCicada.setState({
       connection: "open",
       connectionMessage: "",
@@ -769,7 +820,8 @@ describe("resetSession (File → Open / Recent / Close, Back)", () => {
       displayGeneration: 4,
       displayResets: 2,
       catalog,
-      nodeValues: { deboss: { generation: 4, outputs: [] } },
+      catalogError: "catalog: HTTP 503",
+      nodeValues: { deboss: { generation: 4, outputs: [], inputs: [] } },
       wireValues: { "a.out->b.x": { from: { node: "a", port: "out" }, to: { node: "b", port: "x" }, summary: null, pairing: "" } },
       probe: { from: { node: "a", port: "out" }, targets: {}, catalog: [], intentId: null },
       transport: { view: TRANSPORT_AT_REST, receivedAt: 1 },
@@ -815,6 +867,7 @@ describe("resetSession (File → Open / Recent / Close, Back)", () => {
     expect(s.search).toBeNull();
     expect([s.commitDialog, s.fileDialog]).toEqual([false, false]);
     expect(s.catalog, "the catalog stays until the join's snapshot re-reads it").toBe(catalog);
+    expect(s.catalogError, "and its failure record with it — the same re-read clears or renews it").toBe("catalog: HTTP 503");
     expect(s.notices.map((n) => n.message)).toEqual(["kept"]);
     expect(s.settings).toBe(settings);
   });
@@ -1069,4 +1122,22 @@ describe("the profile read cache (v0.1 wave 5 P1)", () => {
     useCicada.getState().resetSession("t", "other.cic");
     expect(useCicada.getState().profile, "the old pipeline's profile goes with it").toBeNull();
   });
+});
+
+describe("settingsFrom (the stored per-user settings → this build's)", () => {
+  it("keeps the keys this build has, fills the missing ones with defaults, and DROPS a removed key — a stored `ribbonCollapsed` is ignored", () => {
+    const settings = settingsFrom({ theme: "light", ribbonCollapsed: true, split: "even" });
+    expect(settings.theme).toBe("light");
+    expect(settings.split).toBe("even");
+    expect(settings.swap).toBe(false);
+    expect(settings.navigation).toBe("rhino");
+    expect(Object.hasOwn(settings, "ribbonCollapsed")).toBe(false);
+    // And what `updateSettings` would write back carries no removed key.
+    expect(Object.keys(settings).sort()).toEqual(["displayMode", "navigation", "split", "swap", "textPanel", "theme", "wireMode"]);
+  });
+  it("anything that is not a settings object is the defaults", () => {
+    for (const raw of [null, undefined, 3, "x", [], true]) {
+      expect(settingsFrom(raw), String(raw)).toEqual(settingsFrom({}));
+    }
+    expect(settingsFrom({}).theme).toBe("dark");  });
 });

@@ -576,7 +576,7 @@ export interface TransportView {
 
 /**
  * One port of a catalog entry (`crates/cicada-server/src/catalog.rs::Port`,
- * catalog format 2). `doc` is the port's one-line doc — for a node that
+ * catalog format 3). `doc` is the port's one-line doc — for a node that
  * returns one bare value it is the `# Returns` line (docs/14 §node file
  * format); the server omits the key when the doc is empty.
  */
@@ -602,18 +602,22 @@ export interface CatalogPort {
 }
 
 /**
- * One node of `GET /api/catalog` (`catalog.rs::Node`, format 2). `gh` and
- * `examples` are ALWAYS written by the server (the `#[node]` attribute
- * requires `gh = "…" | none`): `gh` is the Grasshopper component this node
- * replaces — `null` for a Cicada-only node — and feeds search-to-place;
- * `examples` are runnable `.cic` snippets (no `# cicada 1` header) that CI
- * solves, empty for the project's script nodes.
+ * One node of `GET /api/catalog` (`catalog.rs::Node`, format 3). `gh`,
+ * `sub` and `examples` are ALWAYS written by the server (the `#[node]`
+ * attribute requires `gh = "…" | none` and `sub = "…"`): `gh` is the
+ * Grasshopper component this node replaces — `null` for a Cicada-only node
+ * — and feeds search-to-place; `sub` is the sub-group within the category,
+ * the menu bar's column under the category's tab (v0.1 wave 5, C2c; one of
+ * the names `Catalog.subgroups` lists for the category — `Script` for the
+ * project's script nodes); `examples` are runnable `.cic` snippets (no
+ * `# cicada 1` header) that CI solves, empty for the project's script nodes.
  */
 export interface CatalogNode {
   name: string;
   title: string;
   description: string;
   category: string;
+  sub: string;
   tier: string;
   version: number;
   pure: boolean;
@@ -625,8 +629,20 @@ export interface CatalogNode {
   outputs: CatalogPort[];
 }
 
+/**
+ * One category's sub-groups in menu order (`catalog.rs::SubgroupRow` —
+ * `cicada_core::spec::SUBGROUPS`, the ONE table docs/08 mirrors): the menu
+ * bar lays a tab's columns out in this order and never keeps a copy of it.
+ */
+export interface CatalogSubgroups {
+  category: string;
+  subgroups: string[];
+}
+
 export interface Catalog {
+  /** 3 since v0.1 wave 5 (C2c): `sub` per node and the `subgroups` table. */
   format: number;
+  subgroups: CatalogSubgroups[];
   nodes: CatalogNode[];
 }
 
@@ -996,8 +1012,23 @@ export type ServerMessage =
       };
     }
   | {
+      /**
+       * The answer to `inspect`: what sits on each output and — additive,
+       * v0.1 wave 5 N1 — what each input receives, in port order: a wired
+       * input carries its source output's summary (the same one the
+       * source's own answer has for that port); a literal kwarg and an
+       * unwired port are `null`. Optional here because it is ADDITIVE at
+       * protocol 1: an engine from before N1 answers without it (a dev SPA
+       * on an older `cicada serve`), and the store reads that as "no input
+       * values" rather than throwing (review C-6).
+       */
       type: "node_values";
-      payload: { node: string; outputs: [string, ValueSummary | null][]; generation: number };
+      payload: {
+        node: string;
+        outputs: [string, ValueSummary | null][];
+        inputs?: [string, ValueSummary | null][];
+        generation: number;
+      };
     }
   | {
       type: "wire_values";

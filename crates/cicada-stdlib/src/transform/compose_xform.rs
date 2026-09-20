@@ -35,7 +35,13 @@ pub struct ComposeXformIn {
 /// corner = construct_point(x=1.0, y=0.0, z=0.0)
 /// placed = transform(geometry=corner, xform=shift_then_double)
 /// ```
-#[node(category = "Transform", tier = "1", version = 1, gh = "Compound")]
+#[node(
+    category = "Transform",
+    sub = "Util",
+    tier = "1",
+    version = 1,
+    gh = "Compound"
+)]
 #[must_use]
 pub fn compose_xform(input: ComposeXformIn) -> Xform {
     input

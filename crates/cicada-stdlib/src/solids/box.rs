@@ -51,6 +51,7 @@ pub struct BoxIn {
 // Solid-typed node, green (the review's blocker). Old caches recompute once.
 #[node(
     category = "Surface & solid",
+    sub = "Primitive",
     tier = "S",
     version = 2,
     gh = "Domain Box",

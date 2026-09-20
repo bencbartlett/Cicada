@@ -30,6 +30,7 @@ pub struct ConstructPointIn {
 /// ```
 #[node(
     category = "Point · Vector · Plane",
+    sub = "Point",
     tier = "S",
     version = 1,
     gh = "Construct Point"

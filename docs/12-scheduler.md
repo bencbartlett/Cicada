@@ -202,6 +202,18 @@ session (`Core.solids`), NOT in the value store and NOT in the value:
   class, and a corrected value is a new hash that misses as it should.
   A mesh that merely did not close is NOT a refusal: it is drawn and
   reported (docs/03 §Display tessellation, closure policy).
+- **The inspector summary READS the cache and never the kernel** (fix
+  round 2026-09-19, wave 5 N1 review CR-2): `inspect`'s summary of a
+  solid — bare or inside a list — reads whatever tier is cached and, for
+  a solid no display pass has meshed (its preview is off, its output not
+  yet drawn), reports `tessellation: "not displayed"` (a list:
+  `not_displayed: k` beside the mesh facts of the drawn ones) instead of
+  meshing it at the fine tier under the session lock — a consumer's
+  `inspect` of a 1,001-solid list hidden with the eye exactly to spare
+  that work once stalled the session 41 s. What is tessellated is the
+  display path's decision alone (and D1's budget's). The session
+  memoizes summaries per kept generation by value hash (docs/13 §Solve
+  streaming), never one that read an undisplayed solid.
 - **Observable**: `/debug/state` → `display_cache` carries `entries`,
   `bytes`, `budget`, `hits`, `misses`, `evictions`, `oversized`,
   `refusals` (additive; asserted by the session's debug-state test and

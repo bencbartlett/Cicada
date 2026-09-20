@@ -125,8 +125,20 @@ async fn serve_snapshot_frames_intents_and_debug_state() {
             .unwrap();
     assert_eq!(status, 200);
     let catalog: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(catalog["format"], 2);
+    assert_eq!(catalog["format"], 3);
     assert!(catalog["nodes"].as_array().unwrap().len() > 30);
+    // Format 3 (v0.1 wave 5, C2c): every node names its sub-group and the
+    // catalog carries the table the menu bar orders its columns by.
+    assert!(
+        catalog["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|node| node["sub"].as_str().is_some_and(|sub| !sub.is_empty())),
+        "{catalog}"
+    );
+    assert_eq!(catalog["subgroups"][0]["category"], "Params & input");
+    assert_eq!(catalog["subgroups"][0]["subgroups"][0], "Input");
     let (status, _) = tokio::task::spawn_blocking(move || {
         http_get(
             addr,

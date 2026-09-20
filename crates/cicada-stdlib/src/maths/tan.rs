@@ -14,7 +14,13 @@ use super::AngleIn;
 /// ```cic
 /// value = tan(x=0.5)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Tangent")]
+#[node(
+    category = "Maths & logic",
+    sub = "Trig",
+    tier = "1",
+    version = 1,
+    gh = "Tangent"
+)]
 #[must_use]
 pub fn tan(input: AngleIn) -> f64 {
     input.x.tan()

@@ -1,11 +1,13 @@
 //! Rendering the node registry to `docs/generated/CATALOG.md` (doc 14
 //! §Documentation pipeline): one line per registered node — signature plus
-//! title line — grouped by category. Committed and CI-checked fresh, like a
-//! lockfile. Agents read this instead of grepping crates.
+//! title line — grouped by category, then by sub-group within it (v0.1
+//! wave 5, C2c: `spec::SUBGROUPS` order, unlisted sub-groups after).
+//! Committed and CI-checked fresh, like a lockfile. Agents read this
+//! instead of grepping crates.
 
 use core::fmt::Write as _;
 
-use crate::spec::NodeSpec;
+use crate::spec::{NodeSpec, subgroup_rank};
 
 /// Canonical category order, matching docs/08 §Catalog section order.
 /// Categories not listed here render after these, alphabetically.
@@ -48,7 +50,10 @@ pub fn render_markdown(specs: &[&NodeSpec]) -> String {
          One line per registered node: `signature` — Title · GH: the Grasshopper\n\
          component it replaces (absent for Cicada-only nodes) — description, plus the\n\
          node's runtime contract (its `# Panics` conditions — when it goes red) where\n\
-         one exists. Type variables: `T` = any transformable kind (kind-preserving),\n\
+         one exists. Nodes are grouped by category (`##`, the menu bar's tabs) and,\n\
+         within it, by sub-group (`###`, the tab's columns — `#[node(sub = …)]`, the\n\
+         table `cicada_core::spec::SUBGROUPS` that docs/08 §Catalog mirrors), then by\n\
+         name. Type variables: `T` = any transformable kind (kind-preserving),\n\
          `E` = any element kind, optionality included (an `E` port takes absent slots;\n\
          the `?` rides through to `E` outputs — except through an `E?` port, which keeps\n\
          the `?` itself, so `compact` returns a present `[E]`), `Any` = display-sink\n\
@@ -71,39 +76,62 @@ pub fn render_markdown(specs: &[&NodeSpec]) -> String {
 
     for category in categories {
         // write! to a String is infallible; the discarded Result is fmt noise.
-        let _ = write!(out, "\n## {category}\n\n");
+        let _ = write!(out, "\n## {category}\n");
+        // The category's sub-groups as its nodes name them, in table order
+        // (unlisted ones after, alphabetically) — the same rule the menu
+        // bar's columns follow. A sub-group with no node here has no
+        // heading: the document lists what exists.
+        let mut subgroups: Vec<&'static str> = Vec::new();
         for spec in specs.iter().filter(|spec| spec.category == category) {
-            let _ = write!(out, "- `{}` — {}", spec.signature(), spec.title);
-            if let Some(gh) = spec.gh {
-                let _ = write!(out, " · GH: {gh}");
+            if !subgroups.contains(&spec.sub) {
+                subgroups.push(spec.sub);
             }
-            if spec.volatile {
-                // Uncached by design (docs/12 §Volatile nodes): an agent
-                // must know a node recomputes every generation before
-                // wiring a heavy cone behind it.
-                out.push_str(" · volatile");
+        }
+        subgroups.sort_by_key(|sub| subgroup_rank(category, sub));
+        for sub in subgroups {
+            let _ = write!(out, "\n### {sub}\n\n");
+            for spec in specs
+                .iter()
+                .filter(|spec| spec.category == category && spec.sub == sub)
+            {
+                node_line(&mut out, spec);
             }
-            for port in spec.inputs {
-                // The transport owns this port in the app (hidden on the
-                // canvas, filled from the playhead): an agent writing the
-                // text must know the kwarg is the headless value only.
-                if let Some(signal) = port.transport_driven {
-                    let _ = write!(
-                        out,
-                        " · transport-driven `{}` ({})",
-                        port.name,
-                        signal.as_str()
-                    );
-                }
-            }
-            let _ = write!(out, " — {}", spec.description);
-            if let Some(panics) = spec.panics {
-                let _ = write!(out, " Red when: {panics}");
-            }
-            out.push('\n');
         }
     }
     out
+}
+
+/// One node's line: signature, title, the `· GH:` / `· volatile` /
+/// `· transport-driven` tags, the description, the red-when contract.
+fn node_line(out: &mut String, spec: &NodeSpec) {
+    let _ = write!(out, "- `{}` — {}", spec.signature(), spec.title);
+    if let Some(gh) = spec.gh {
+        let _ = write!(out, " · GH: {gh}");
+    }
+    if spec.volatile {
+        // Uncached by design (docs/12 §Volatile nodes): an agent must know
+        // a node recomputes every generation before wiring a heavy cone
+        // behind it.
+        out.push_str(" · volatile");
+    }
+    for port in spec.inputs {
+        // The transport owns this port in the app (hidden on the canvas,
+        // filled from the playhead): an agent writing the text must know
+        // the kwarg is the headless value only.
+        if let Some(signal) = port.transport_driven {
+            let _ = write!(
+                out,
+                " · transport-driven `{}` ({})",
+                port.name,
+                signal.as_str()
+            );
+        }
+    }
+    let _ = write!(out, " — {}", spec.description);
+    if let Some(panics) = spec.panics {
+        let _ = write!(out, " Red when: {panics}");
+    }
+    out.push('\n');
 }
 
 #[cfg(test)]
@@ -126,6 +154,7 @@ mod tests {
             title,
             description: "Test node.",
             category,
+            sub: "Util",
             tier: Tier::S,
             version: 1,
             pure: true,
@@ -160,6 +189,56 @@ mod tests {
     fn node_line_is_signature_title_description() {
         let rendered = render_markdown(&[&MATHS_NODE]);
         assert!(rendered.contains("- `add() → Number` — Add — Test node.\n"));
+    }
+
+    // A category's rows sit under `###` sub-group headings in the table's
+    // order (v0.1 wave 5, C2c) — Operators before Util before Logic however
+    // the specs arrive — and a sub-group the table does not list trails the
+    // listed ones; a listed sub-group with no node gets no heading.
+    #[test]
+    fn a_category_groups_its_rows_by_sub_group_in_table_order() {
+        static LOGIC: NodeSpec = NodeSpec {
+            sub: "Logic",
+            ..spec("and", "And", "Maths & logic")
+        };
+        static OPERATOR: NodeSpec = NodeSpec {
+            sub: "Operators",
+            ..spec("add", "Add", "Maths & logic")
+        };
+        static UNLISTED: NodeSpec = NodeSpec {
+            sub: "Anything",
+            ..spec("odd", "Odd", "Maths & logic")
+        };
+        // `MATHS_NODE` is `Util`; `TRANSFORM_NODE` is another category.
+        let rendered =
+            render_markdown(&[&UNLISTED, &LOGIC, &MATHS_NODE, &OPERATOR, &TRANSFORM_NODE]);
+        let heading = |text: &str| {
+            rendered
+                .find(text)
+                .unwrap_or_else(|| panic!("`{text}` in:\n{rendered}"))
+        };
+        let maths = heading("## Maths & logic");
+        let operators = heading("### Operators");
+        let util = heading("### Util");
+        let logic = heading("### Logic");
+        let anything = heading("### Anything");
+        let transform = heading("## Transform");
+        assert!(maths < operators && operators < util && util < logic && logic < anything);
+        assert!(
+            anything < transform,
+            "the unlisted sub-group stays in its category"
+        );
+        assert!(
+            !rendered.contains("### Trig"),
+            "no heading for an empty sub-group"
+        );
+        // Each row is under its own heading.
+        let add = heading("- `add()");
+        let and = heading("- `and()");
+        assert!(operators < add && add < util && logic < and && and < anything);
+        // One `###` per sub-group present, the category's `Util` heading
+        // shared by nothing else (the Transform `move` is under its own).
+        assert_eq!(rendered.matches("### Util").count(), 2, "{rendered}");
     }
 
     // The GH name sits between the title and the description so a migrant

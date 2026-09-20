@@ -736,8 +736,25 @@
   bottom: 1px;
 }
 
+/* on the collapsed row the widget's box has dissolved into the row's grid
+   (below): the bar is placed on the TRACK's column, flush with the row's
+   bottom edge, and the pending chip under the track + value. Both are
+   absolutely positioned grid children, and for those an `auto` END line
+   resolves to the grid container's padding edge (CSS Grid §9.1) — so the
+   end line is named explicitly: `2 / 3` is the track alone, and the bar's
+   segments map the positions onto the track's own width, its ringed notch
+   under the thumb (the first cut wrote `grid-column: 2` and the bar ran on
+   under the value and the chevron — wave 5 N1 review, 2026-09-19). */
 .cn-collapsed .cn-slider .scrub-bar {
-  bottom: -5px;
+  grid-column: 2 / 3;
+  left: 0;
+  right: 0;
+  bottom: 1px;
+}
+
+.cn-collapsed .cn-slider .cn-pending {
+  grid-column: 2 / 4;
+  top: calc(100% + 1px);
 }
 
 .cn-pending {
@@ -770,9 +787,32 @@
 }
 
 /* the collapsed slider (wave 4 B4, docs/16 §Canvas conventions): one grid
-   unit tall — name · track · value · the output handle on one row, GH-like;
-   no header, no port rows (its bounds are literals by the server's rule, so
-   nothing is wired into it) */
+   unit tall — name · track · value · (badges) · chevron · the output handle
+   on one row, GH-like; no header, no port rows (its bounds are literals by
+   the server's rule, so nothing is wired into it).
+
+   NAME FIRST (wave 5 N1, finding U17): two nested CSS grids. The ROW is
+   body | tail: the tail (badges, the chevron) takes its own width and the
+   body the rest. The BODY is name | track | value: grid sizing lays the
+   `auto` name column out at its whole text BEFORE the `1fr` track column
+   takes what is left, while the track's `minmax` floor is honoured first
+   of all — so the name is never truncated until the track is at its
+   floor, and only then does the name lose letters to an ellipsis. The
+   floor is 40 % of the track's FULL width — the width it has with no name
+   at all — and inside the body that is `100%` minus the value label's
+   30 px and the two gaps, nothing else: whatever the tail holds (a git
+   badge, a state badge, the chevron, or nothing on an observer's row) is
+   OUTSIDE the body and never enters the arithmetic. (The first cut was
+   one grid over the whole row with a fixed 62 px for the tail: an
+   observer's chevron-less row sat 5 px under 40 %, and a badge — every
+   node's `+` once the suite's git spec had made the scratch a repository —
+   raised the floor 7 px and cut a name the track had room for; wave 5 N1
+   review L1-2 / C-9 and the whole-suite run, 2026-09-19.) The slider
+   widget's own box dissolves into the body's grid (`display: contents`) so
+   its range and value are the grid's items; its absolutely positioned bar
+   and chip are placed on the body's columns (above). Pinned by
+   `web/e2e/slider.spec.ts` with long-named sliders — plain, red (a badge
+   in the tail) and as an observer (no chevron). */
 .cn.cn-collapsed {
   justify-content: center;
 }
@@ -780,30 +820,48 @@
 .cn-collapsed-row {
   position: relative;
   height: var(--unit);
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 6px;
+  column-gap: 6px;
   padding: 0 12px 0 8px;
   min-width: 0;
+}
+
+/* 42 px = the value label's `min-width: 3em` at ITS 10 px font (30 px — an
+   `em` here would be the body's font) plus the two 6 px gaps */
+.cn-collapsed-body {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(calc((100% - 42px) * 0.4), 1fr) auto;
+  align-items: center;
+  column-gap: 6px;
+  min-width: 0;
+  height: 100%;
 }
 
 .cn-collapsed-name {
   font-weight: 700;
   font-size: 11px;
-  flex: 0 1 auto;
-  min-width: 2em;
-  max-width: 40%;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .cn-collapsed .cn-widget {
-  flex: 1 1 auto;
+  display: contents;
+}
+
+.cn-collapsed .cn-widget input[type="range"] {
   min-width: 0;
-  height: auto;
-  border-top: none;
-  padding: 0;
+  width: 100%;
+}
+
+.cn-collapsed-tail {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .cn-collapsed .cn-badges {
@@ -811,6 +869,72 @@
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+/* the collapse chevron (wave 5 N1, finding U17): on a slider's face. On
+   the expanded face a small tab centred on the bottom edge, over the
+   border — absolutely positioned so the face's layout (the server's
+   `size`) never changes; on the collapsed row inline at the right, before
+   the output handle. Greyed with the mirror's reason while a bound is wired
+   (`data-blocked`; the server still decides — the click is refused with a
+   notice); hidden at the far tier with the rest of the chrome. */
+.cn-chevron {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-elev);
+  color: var(--fg-dim);
+}
+
+.cn-chevron svg {
+  display: block;
+}
+
+.cn-chevron:hover,
+.cn-chevron:focus-visible {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+.cn-chevron.blocked {
+  color: var(--fg-faint);
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.cn-chevron.expanded {
+  position: absolute;
+  left: 50%;
+  bottom: -8px;
+  transform: translateX(-50%);
+  width: 22px;
+  z-index: 2;
+}
+
+.cicada-canvas[data-lod="far"] .cn-chevron {
+  visibility: hidden;
+}
+
+/* the collapsed value's editor in the label's place (wave 5 N1): the chip
+   editor, right-aligned like the label it replaces */
+.cn .cn-widget-value.editable {
+  cursor: text;
+}
+
+.cn-value-edit {
+  justify-content: flex-end;
+}
+
+.cn-value-edit .lit-input.compact {
+  width: 4.2em;
+  text-align: right;
 }
 
 /* progress bar (running nodes) */
@@ -841,6 +965,20 @@
 }
 
 .cn-port.cn-out.with-value .cn-port-label {
+  font-size: 9px;
+  line-height: 10px;
+}
+
+/* a wired input shows what it receives the same way (wave 5 N1): the
+   label over the source's value, left-aligned under the handle's row */
+.cn-port.cn-in.with-value {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0;
+}
+
+.cn-port.cn-in.with-value .cn-port-label {
   font-size: 9px;
   line-height: 10px;
 }
@@ -1192,6 +1330,9 @@
 .cv-search-empty {
   padding: 6px 10px;
   font-size: 11px;
+}
+.cv-search-empty.error {
+  color: var(--error);
 }
 
 /* the slider shortcut's row (wave 4 B4): `1<20` previews the slider it

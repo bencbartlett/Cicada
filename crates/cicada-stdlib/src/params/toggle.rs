@@ -22,6 +22,7 @@ pub struct ToggleIn {
 /// ```
 #[node(
     category = "Params & input",
+    sub = "Input",
     tier = "S",
     version = 1,
     gh = "Boolean Toggle"

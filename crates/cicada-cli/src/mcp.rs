@@ -347,8 +347,9 @@ fn build_router() -> anyhow::Result<ToolRouter<McpServer>> {
                  nodes) by how well each word of `query` matches a node's dialect name, \
                  title, Grasshopper component name (`gh` — Grasshopper users search by \
                  the component they know, e.g. `Number Slider`, `Move`), port names and \
-                 description. Returns one line per node — name, title, gh, category, and \
-                 the signature `name(port: Type = default, …) → Type` — enough to write \
+                 description. Returns one line per node — name, title, gh, category, sub \
+                 (the sub-group within the category — the menu bar's column) and the \
+                 signature `name(port: Type = default, …) → Type` — enough to write \
                  the binding; call `node_doc` for port docs and the red-when contract. An \
                  empty `query` lists the catalog (optionally one `category`).",
             )?,
@@ -359,6 +360,7 @@ fn build_router() -> anyhow::Result<ToolRouter<McpServer>> {
                 "node_doc",
                 "The full specification of one node by its dialect name — the same object \
                  `/api/catalog` serves: `signature`; `title`; `description`; `category`; \
+                 `sub` (the sub-group within the category — the menu bar's column); \
                  `tier` (S = spike set, 1 = v0.1, 2 = v0.2); `version` (semantic node \
                  version); `pure` and `effectful` (effectful nodes — exporters — never run \
                  unless a human or `cicada run --node` names them); `volatile` (never memoized — recomputed every generation); `uses_tolerance`; \
@@ -382,7 +384,7 @@ fn build_router() -> anyhow::Result<ToolRouter<McpServer>> {
         .with_route((
             tool::<NoArgs, CategoriesResult>(
                 "list_categories",
-                "The catalog's categories (the app's ribbon tabs, in ribbon order) with \
+                "The catalog's categories (the app's menu-bar tabs, in menu order) with \
                  the number of nodes in each — the shape of what exists. Use it to scope \
                  a `catalog_search` by `category` or to learn what the catalog covers \
                  before planning a pipeline.",
@@ -500,7 +502,7 @@ struct SearchArgs {
     /// Words to match against node names, titles, Grasshopper component
     /// names, port names and descriptions (case-insensitive; every word
     /// scores independently, the best-matching nodes come first). Empty =
-    /// list the catalog in ribbon order.
+    /// list the catalog in menu order.
     #[serde(default)]
     query: String,
     /// Restrict to one category — a name from `list_categories`.
@@ -520,8 +522,10 @@ struct SearchHit {
     title: String,
     /// The Grasshopper component this node replaces; null for Cicada-only nodes.
     gh: Option<String>,
-    /// Catalog category (ribbon tab).
+    /// Catalog category (menu bar tab).
     category: String,
+    /// The sub-group within the category (the tab's column).
+    sub: String,
     /// `name(port: Type = default, …) → Type` — the signature to write a binding from.
     signature: String,
     /// One-line description.
@@ -602,6 +606,7 @@ fn search(server: &McpServer, args: &SearchArgs) -> Result<SearchResult, Refusal
             title: spec.title.to_owned(),
             gh: spec.gh.map(str::to_owned),
             category: spec.category.to_owned(),
+            sub: spec.sub.to_owned(),
             signature: spec.signature(),
             description: spec.description.to_owned(),
             score,
@@ -712,8 +717,11 @@ struct NodeDoc {
     title: String,
     /// What the node does (one sentence, lowercase, ends with a period).
     description: String,
-    /// Catalog category (ribbon tab).
+    /// Catalog category (menu bar tab).
     category: String,
+    /// The sub-group within the category (the tab's column; `Script` for
+    /// the project's script nodes).
+    sub: String,
     /// `S` = spike set, `1` = v0.1, `2` = v0.2.
     tier: String,
     /// Semantic node version (part of the cache key).
@@ -856,7 +864,7 @@ struct CategoryCount {
 /// Result of `list_categories`.
 #[derive(Debug, Serialize, JsonSchema)]
 struct CategoriesResult {
-    /// Categories in ribbon order.
+    /// Categories in menu order.
     categories: Vec<CategoryCount>,
     /// Nodes in the whole catalog.
     total: usize,
@@ -880,7 +888,7 @@ fn list_categories(
     }))
 }
 
-/// Categories with counts, in the catalog's order (docs/08 ribbon order,
+/// Categories with counts, in the catalog's order (docs/08 menu order,
 /// unknown categories after, alphabetically).
 fn categories_of(specs: &[&'static NodeSpec]) -> Vec<(&'static str, usize)> {
     let mut counts: HashMap<&'static str, usize> = HashMap::new();
@@ -1241,6 +1249,7 @@ mod tests {
         let server = stdlib_server();
         let doc = doc_of(&server, "slider").unwrap();
         assert_eq!(doc["gh"], "Number Slider");
+        assert_eq!(doc["sub"], "Input", "the sub-group rides along (C2c)");
         assert_eq!(
             doc["signature"],
             "slider(value: Number, min: Number = 0.0, max: Number = 10.0, step: Number = 0.0, scrub: Boolean = false) → Number"
@@ -1285,6 +1294,7 @@ mod tests {
             "outputs",
             "panics",
             "gh",
+            "sub",
             "signature",
             "effectful",
         ] {
@@ -1299,6 +1309,10 @@ mod tests {
         assert!(
             required.contains(&"gh"),
             "gh is always present (null = Cicada-only)"
+        );
+        assert!(
+            required.contains(&"sub"),
+            "sub is always present (the attribute is required)"
         );
         let port_schema = &schema["$defs"]["PortDoc"];
         let port_properties = port_schema["properties"].as_object().unwrap();
@@ -1353,7 +1367,7 @@ mod tests {
     }
 
     #[test]
-    fn categories_cover_the_registry_in_ribbon_order() {
+    fn categories_cover_the_registry_in_menu_order() {
         let specs = cicada_stdlib::registry().to_vec();
         let categories = categories_of(&specs);
         assert_eq!(categories[0].0, "Params & input");

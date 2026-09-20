@@ -32,6 +32,7 @@ interface Props {
 export function SearchBox({ left, top }: Props) {
   const search = useCicada((s) => s.search);
   const catalog = useCicada((s) => s.catalog);
+  const catalogError = useCicada((s) => s.catalogError);
   const probe = useCicada((s) => s.probe);
   const closeSearch = useCicada((s) => s.closeSearch);
   const clearProbe = useCicada((s) => s.clearProbe);
@@ -166,7 +167,11 @@ export function SearchBox({ left, top }: Props) {
         data-testid="search-input"
       />
       <ul className="cv-search-list" ref={listRef} role="listbox">
-        {catalog === null && <li className="cv-search-empty faint">catalog not loaded yet</li>}
+        {catalog === null && (
+          <li className={`cv-search-empty ${catalogError === null ? "faint" : "error"}`} data-testid="search-catalog-state">
+            {catalogError ?? "catalog not loaded yet"}
+          </li>
+        )}
         {awaitingProbe && <li className="cv-search-empty faint">probing compatible ports…</li>}
         {shortcut !== null && (
           <ShortcutRow shortcut={shortcut} onPlace={() => placeShortcut(shortcut)} />

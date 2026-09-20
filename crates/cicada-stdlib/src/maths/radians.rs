@@ -19,7 +19,13 @@ pub struct RadiansIn {
 /// ```cic
 /// quarter_turn = radians(degrees=90.0)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Radians")]
+#[node(
+    category = "Maths & logic",
+    sub = "Trig",
+    tier = "1",
+    version = 1,
+    gh = "Radians"
+)]
 #[must_use]
 pub fn radians(input: RadiansIn) -> f64 {
     input.degrees.to_radians()

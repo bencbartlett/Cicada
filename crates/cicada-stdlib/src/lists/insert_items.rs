@@ -42,7 +42,13 @@ pub struct InsertItemsIn {
 /// extra = [10.0, 20.0]
 /// widened = insert_items(list=xs, items=extra, indices=[1, 3])
 /// ```
-#[node(category = "List & axis", tier = "1", version = 1, gh = "Insert Items")]
+#[node(
+    category = "List & axis",
+    sub = "List",
+    tier = "1",
+    version = 1,
+    gh = "Insert Items"
+)]
 #[must_use]
 pub fn insert_items(input: InsertItemsIn) -> Vec<ElemSlot> {
     let InsertItemsIn {

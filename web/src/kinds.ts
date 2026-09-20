@@ -55,7 +55,13 @@ export function depthOfType(type: string): number {
   return depth;
 }
 
-/** The docs/08 category order, for the ribbon (mirrors core::catalog::CATEGORY_ORDER). */
+/**
+ * The docs/08 category order — the menu bar's tabs and the params panel's
+ * groups (mirrors `core::catalog::CATEGORY_ORDER` + `Script`). The web's
+ * one copy of the order: `protocol/catalog.test.ts` holds it to the served
+ * catalog's `subgroups` rows, so a category the server adds or moves is
+ * red there, never a tab silently out of menu order.
+ */
 export const CATEGORY_ORDER = [
   "Params & input",
   "Sequences & random",
@@ -71,7 +77,7 @@ export const CATEGORY_ORDER = [
   "Script",
 ];
 
-/** Short ribbon tab label per category. */
+/** Short menu-bar tab label per category. */
 export function categoryLabel(category: string): string {
   const short: Record<string, string> = {
     "Params & input": "Params",

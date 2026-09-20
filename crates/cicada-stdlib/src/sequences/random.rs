@@ -41,6 +41,7 @@ pub struct RandomIn {
 /// ```
 #[node(
     category = "Sequences & random",
+    sub = "Random",
     tier = "S",
     version = 2,
     gh = "Random"

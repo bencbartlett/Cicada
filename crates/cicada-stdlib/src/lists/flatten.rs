@@ -33,7 +33,13 @@ pub struct FlattenIn {
 /// pairs = chunk(list=xs, size=2)
 /// flat = flatten(list=pairs)
 /// ```
-#[node(category = "List & axis", tier = "S", version = 1, gh = "Flatten Tree")]
+#[node(
+    category = "List & axis",
+    sub = "Axis",
+    tier = "S",
+    version = 1,
+    gh = "Flatten Tree"
+)]
 #[must_use]
 pub fn flatten(input: FlattenIn) -> Vec<ElemSlot> {
     input.list.into_iter().flatten().collect()

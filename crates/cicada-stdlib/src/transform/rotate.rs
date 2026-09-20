@@ -42,6 +42,7 @@ pub struct RotateIn {
 /// ```
 #[node(
     category = "Transform",
+    sub = "Euclidean",
     tier = "S",
     version = 1,
     gh = "Rotate",

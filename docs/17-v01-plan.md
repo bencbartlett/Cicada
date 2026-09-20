@@ -23,7 +23,7 @@ runs in parallel from day 1:
 | 4 | Time transport — Cycle thin slice + orbit example; Clock via `volatile` | foreground | ~1 week | **DONE** 2026-08-20 (`wt/transport`): engine — `cycle` / `clock` with the `transport_driven` port attribute, the playhead injected at lowering, per-session transport state + the five `transport_*` intents + `TransportView` in every snapshot and the `transport` broadcast, playback over the preview loop, `examples/08-orbit.cic` (orbit second pass 120 generations, 0 computed / 1,800 cached, p50 0.43 ms); web — the play bar (play/pause, the frame scrubber, speed, reset), `Space`, the transport-driven ports hidden on the canvas and in the inspector (each driven port carrying its own loop; the server owns the wire-target rule — `probe_wire`/`connect` refuse), observers read-only, `web/e2e/transport.spec.ts` |
 | 5 | Scrub caching — bounded-position sliders only, toggleable, buffer bar | foreground | 1–2 weeks | **S1 (engine) done** 2026-08-24 (`wt/scrub`): eligibility as a pure function (32 positions, `step > 0`, literal bounds), `slider`'s `scrub = False` kwarg (version 2), the idle-class warmer (nearest-first alternating, one position at a time, dry-run skips, the 256 MiB cap, dropped on a text change, blocked by a live drag / playback, parked after a pre-emption), the additive protocol (`ParamView.scrub`, `scrub_progress`, `set_scrub`, `/debug/state.scrub`), `02-solids`' cone slider opted in; the DoD sweep (`slider_loop.mjs --snap --expect warm`) — §Item 5; **S2 (web) done** 2026-08-24 (`wt/scrub`): the one buffer bar under both slider widgets (`ScrubBar.tsx`), the toggle in the inspector's actions, the params row and the node menu greyed with the server's reason (`ScrubToggle.tsx`, `state/scrub.ts`), `scrub_progress` as a store overlay beside the graph; the `scrub` port row stays; `web/e2e/scrub.spec.ts` — 02-solids warm / toggled and a Python-burn pipeline for the live-vs-withheld tie-in (warm drag: every preview `computed: 0`, the viewport following; cold un-scrubbed drag: the pending chip on writer and observer) — §Item 5 |
 | 6 | WASM script host — load precompiled guests, epoch cancellation, `cicada-guest` SDK | last | weeks | pending |
-| C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); **C1 done** (2026-08-20: 48 nodes — lists, maths tail, sequences; the diagnostics name real nodes and a test keeps it so; `compact` satisfiable at check time; `examples/06-lists.cic`); **`cicada mcp` done** (2026-08-20: the four doc-11 read tools over stdio on `rmcp`); **C2a done** (2026-08-24, `wt/catalog-c2`: the 12 Point · Vector · Plane rows — `distance`, `closest_point` (a flat scan, no new dependency), `cull_duplicates`, `construct_vector` / `deconstruct_vector`, `amplitude` / `vector_length`, `cross_product` / `dot_product` / `angle`, `rotate_vector`, `plane_normal`; `examples/09-vectors.cic`); **C2b done** (2026-08-24, `wt/catalog-c2`: `rotate_axis`, `scale_nu`, `polar_array`, `rectangular_array`, `compose_xform`, `transform`, `center_box`, `mesh_plane`, the dropdown param as `choice` (the ledger's name; the contract's `value_list`) with its `<select>` on both param surfaces, plus `construct_xform` as the one `Xform` producer; `cicada_geom::transform::Affine`; `examples/06-lists.cic` gains the pegboard; the record and its deviations are under the wave-4 second-half contract); next C3+ |
+| C | Catalog — one-node-per-file restructure, node-format conformance test, then the docs/08 S+1 list in tranches; `cicada mcp` | parallel worktrees, continuous | continuous | **C0 done** (2026-08-20); **C1 done** (2026-08-20: 48 nodes — lists, maths tail, sequences; the diagnostics name real nodes and a test keeps it so; `compact` satisfiable at check time; `examples/06-lists.cic`); **`cicada mcp` done** (2026-08-20: the four doc-11 read tools over stdio on `rmcp`); **C2a done** (2026-08-24, `wt/catalog-c2`: the 12 Point · Vector · Plane rows — `distance`, `closest_point` (a flat scan, no new dependency), `cull_duplicates`, `construct_vector` / `deconstruct_vector`, `amplitude` / `vector_length`, `cross_product` / `dot_product` / `angle`, `rotate_vector`, `plane_normal`; `examples/09-vectors.cic`); **C2b done** (2026-08-24, `wt/catalog-c2`: `rotate_axis`, `scale_nu`, `polar_array`, `rectangular_array`, `compose_xform`, `transform`, `center_box`, `mesh_plane`, the dropdown param as `choice` (the ledger's name; the contract's `value_list`) with its `<select>` on both param surfaces, plus `construct_xform` as the one `Xform` producer; `cicada_geom::transform::Affine`; `examples/06-lists.cic` gains the pegboard; the record and its deviations are under the wave-4 second-half contract); **C2c done** (2026-08-25, `wt/menu`, wave 5 Track M: the required `#[node(sub = …)]`, `NodeSpec.sub`, `spec::SUBGROUPS` mirrored by docs/08 and enforced by the conformance tests, catalog format 3 with `sub` + the `subgroups` table and the web mirror's refusal of any other format, CATALOG.md grouped by sub-group, `cicada mcp` carrying `sub`; the record and its deviations are under §Wave 5 Track M); next C3+ |
 
 Out of v0.1 (unchanged from doc 05): fillets/chamfers and B-rep
 maturity, the Blender bridge, fidget, the .gh importer, Tauri, the AI
@@ -2116,13 +2116,13 @@ DECISIONS.md row of 2026-08-11 (UI contracts) revised for the tiers.
 |---|---|---|---|
 | U15 | Start doing releases; an **About** entry in the settings menu with the exact version and commit hash. | Build. Today the binary knows only `CARGO_PKG_VERSION` (`0.0.1`, every build) and nothing of its commit; there are no tags and no release workflow. The version + commit (+ build date) are stamped at build time (a build script reading `git describe`, `CICADA_GIT_SHA` for CI checkouts), ride `hello` additively, and show in About and in `cicada --version`; a `v*` tag builds the three OS bundles (`tools/launch/bundle.py --out dist/ --check`) and attaches them to a GitHub Release; pre-releases `v0.1.0-alpha.N` from now, `v0.1.0` when the plan's items close. | R1 |
 | U16 | Replace the pop-out button with a three-way toggle — **Split** (today's panes), **Floating** (a resizable, draggable viewport inside the main window), **Window** (picture-in-picture style, not a full browser window with tabs — as a video call's PiP behaves). | Build. Window = the browser's Document Picture-in-Picture window (an always-on-top, chrome-less window the page renders INTO — the same document, the same WebGL scene, no second socket; Chromium ≥ 116, which the `--app` window is) with the wave-4 observer pop-out as the fallback where the API is missing (Firefox/Safari), said in a notice; Floating = an overlay panel over the canvas with a drag handle and a resize corner, its place and size per-user settings; the three are one `viewportMode` setting. docs/16 §Viewport conventions and the DECISIONS row of 2026-08-24 (the observer pop-out) are revised when this lands — the observer window stays as the fallback and for a true second monitor. | V1 |
-| U17 | The collapse toggle should be **part of the node** (a chevron on the face); a collapsed slider's value should be an **editable text field**; the name should not be truncated — shrink the slider track by up to 60 % to fit it, truncate only after that. | Build: the chevron on the expanded face's bottom edge and on the collapsed row (sliders — the one collapsible node — today; the same control carries groups later); the collapsed value is the chip editor (one `set_param` on Enter, Esc cancels, like the literal chips); the row lays out name-first with the track's `flex-shrink` bounded at 60 % of its full width. | N1 |
+| U17 | The collapse toggle should be **part of the node** (a chevron on the face); a collapsed slider's value should be an **editable text field**; the name should not be truncated — shrink the slider track by up to 60 % to fit it, truncate only after that. | Build: the chevron on the expanded face's bottom edge and on the collapsed row (sliders — the one collapsible node — today; the same control carries groups later); the collapsed value is the chip editor (one `set_param` on Enter, Esc cancels, like the literal chips); the row lays out name-first with the track's `flex-shrink` bounded at 60 % of its full width. **Built 2026-08-25 (wave 5 N1; §Wave 5 Track N)**, fix round 2026-09-19. | N1 |
 | U18 | Zoomed far out you see only the title; zoom in and the title moves to the bar but the arguments are blank; zoom in more and they appear. The latter two should coincide: **either only the title, or the full preview.** | **Done 2026-08-25** (fast lane): the `mid` tier is gone — `lodTier` is `far` (< 0.35) · `near` · `closest` (≥ 1.6, reserved); `showsPortValues` is every tier but `far`; docs/16 LOD table, DECISIONS row revised. | — |
 | U19 | Zoomed far out the port dots shift and the edges no longer meet them. Keep the positions the same across zoom levels. | **Done 2026-08-25** (fast lane): the far tier took the header out of the flow (`position: absolute; inset: 0`), pulling the rows and their handles up a unit; now the header keeps its slot and only the name is lifted over the face. `visuals.spec.ts` compares every handle's place in node units at `near` and `far` (≤ 1 px). | — |
 | U20 | The preview icon should be an **eye**; off = an eye with a slash. | **Done 2026-08-25** (fast lane): an inline SVG (`EyeIcon`, `data-icon="eye" / "eye-off"`). | — |
 | U21 | Make the **hover** effect on an edge far more noticeable — like the selected-edge effect at a slightly lower opacity. | **Done 2026-08-25** (fast lane): the glow path is drawn under every wire; hover shows it at 0.2, the selected wire at 0.32 (`canvas.css`). | — |
 | U22 | Selecting a node highlights all its connected edges with the hover effect. | **Done 2026-08-25** (fast lane): each edge reads one boolean from the store's selection (`attached`) and wears the hover glow. | — |
-| U23 | Nodes should show the values of their **inputs** as well as their outputs at close zoom; numbers (and vectors of numbers) to **4 significant figures** on the node (full in the inspector); value text 30 % smaller and fainter. | **Half done 2026-08-25** (fast lane): `valueText.ts` rounds every decimal on the face to four significant figures (the hover and the inspector keep the server's rendering); the value text is 5.25 px / `--fg-faint`. **Input values → N1**: `inspect` answers outputs only today; the server resolves each wired input to its source output's summary (the view-model knows the wire) and the face shows it beside the port like an output's. | N1 |
+| U23 | Nodes should show the values of their **inputs** as well as their outputs at close zoom; numbers (and vectors of numbers) to **4 significant figures** on the node (full in the inspector); value text 30 % smaller and fainter. | **Half done 2026-08-25** (fast lane): `valueText.ts` rounds every decimal on the face to four significant figures (the hover and the inspector keep the server's rendering); the value text is 5.25 px / `--fg-faint`. **Input values: built 2026-08-25 (wave 5 N1; §Wave 5 Track N)** — `inspect` answers `inputs` beside `outputs`, each wired input its source output's summary, shown after the port label like an output's; fix round 2026-09-19 (unpacked sources, red/blocked nodes). | N1 |
 | U24 | Mouseover text boxes should appear ~50 % faster. | Build. The delay is the browser's (native `title` tooltips, ~1 s in Chromium, not configurable), so a tooltip layer of our own: one listener on the document, the hovered element's `title` shown after ~250 ms in a themed box, the attribute parked in `data-title` while hovered so the native one never doubles it, restored on leave — 125 `title=` sites keep working unchanged; the e2e specs that read `title` do so unhovered. | T1 |
 | U25 | Profiling badge: slightly smaller; drop the word "cached" — always the last timing, grey and in parentheses when cached; 3 significant figures in the hover; `ns` below 1 µs. | **Done 2026-08-25** (fast lane): `durationLabel` / `durationTitle` in `grid.ts`; `(1.2ms)` in `--fg-faint` for a memo hit (the entry's recorded cost — the word stays only for an entry that recorded none), `done in 1.24 ms` hovers, `640ns`. | — |
 | U26 | Adopt GH's wire convention: single line = one value, double line = list, thick dashed = tree / nested / complex. | **Done 2026-08-25** (fast lane): `wireStyle(depth)` — single · double (a 4 px stroke with a 1.5 px background core) · thick dashed (depth ≥ 2); docs/09 and docs/16 said "double / hatched" and now say what is drawn. | — |
@@ -2803,6 +2803,123 @@ proves wrong is revised here, dated, in the landing commit.
     editable value, the layout rule; inputs' values), docs/13 (`inspect`
     additive).
 
+  *Built 2026-08-25 (`wt/face`: `CicadaNode.tsx` — `Chevron`, the input
+  value on `InputRow`, the collapsed row's tail; `ParamWidget.tsx` —
+  `valueEditor`; `LiteralChip.tsx` exports its `LiteralEditor`;
+  `canvas.css` — the collapsed row as a grid, the chevron; `Inspector.tsx`
+  — input values in full; `session.rs` — `node_input_values` over the one
+  `output_hash` path `node_values` now shares, `protocol.rs` —
+  `NodeValues.inputs`; `messages.ts` / `store.ts` mirror it;
+  `inputValues.test.tsx`, `nodeFace.test.tsx`, the server unit test
+  `inspect_answers_each_input_with_its_wire_source_value`, the protocol
+  shape test; `slider.spec.ts` + `visuals.spec.ts`; docs/13 §Solve
+  streaming, docs/16 §Sliders + the LOD table).* Built as contracted, with
+  four calls the contract left open, each the smaller honest one: (1) the
+  **greyed chevron is not a disabled one** — a wired bound greys it
+  (`blocked`, `data-blocked` = the mirror's reason, the rule in the
+  tooltip) and the click still sends `set_collapsed`, so the SERVER
+  refuses with the notice exactly as it does for the menu item and the
+  inspector action; a disabled button would have made the client the
+  decider, which the wave-4 review ruled out. (2) The **40 % floor** is
+  40 % of the track's FULL width — the width it has with no name at all.
+  *Revised in the fix round of 2026-09-19 (review findings L1-2 / C-9,
+  and the whole-suite run):* the first cut was one grid over the whole
+  row subtracting a fixed 62 px (the value label's 3em, the chevron, three
+  gaps), so an observer's chevron-less row sat 5.6 px UNDER 40 % and a
+  badge in the tail — every node's `+` once git.spec has made the shared
+  scratch a repository — raised the floor 7 px and cut `long_named` while
+  its track had room. Now the row is body | tail and the body name |
+  track | value, and the floor is 40 % of the body minus the value label
+  and two gaps — exact whatever the tail holds; only a value label wider
+  than 3em still raises it (the e2e holds the cut name to exactly the
+  floor for a plain, a red-badged and an observer's row). To lay the name
+  out first the slider widget's box dissolves into the body's grid
+  (`display: contents`), which costs the collapsed row the widget's
+  `slider 0.5 … 5` hover (the value label's hover names the port and the
+  gesture instead; the expanded face keeps it). (3) **A literal input
+  shows no value text** — its chip IS its value, so the `null` the server
+  answers for it is not rendered as a `—` placeholder; a wired input whose
+  source has no value yet does read `—`, like an output; the inspector
+  lists a value box under wired inputs only. (4) `/debug/state?values=true`
+  carries `inputs` per node beside `outputs` (the oracle the e2e and
+  agents read; additive). What the contract did not foresee: nothing that
+  changed its shape — the `inspect` answer, the op, the intents and the
+  drag protocol are untouched.
+
+  *Fix round 2026-09-19 (the wave 5 N1 review — four lenses, then a
+  critic; `wt/face`).* (a) **Wires out of a multi-target line** (L1-1 /
+  L2-1 / L5-1 / C-1 critical, C-7 major, CR-1): the view-model spelled a
+  reference to a target of `lo, hi = deconstruct_domain(…)` as `{node:
+  hi, port: out}`, which named no node — the canvas drew no edge for it
+  (React Flow drops an edge whose source is no node; 06-lists lost four
+  wires), `inspect_wire` answered nothing and N1's `inputs` answered
+  `null` — the docs' "the source has no value" — for every consumer of an
+  unpacked value, the commonest wire shape in the examples. A wire's ends
+  are NODES of the view and their ports now (`WireEnd`): `hi` is `{lo,
+  end}`, an expression's free variable the same, a `#off` ghost's targets
+  too; `connect` / `probe_wire` from that node's `end` handle write `hi`
+  into the text (they wrote the first target for every port before) and
+  refuse a port the node has not by name. `node_input_values` needed no
+  change once the wire was spelled right — it resolves the source node +
+  output index → `output_hash`, the binding → its hash in the kept
+  report, as contracted; its unit test now reads a multi-target source
+  from its second AND first target and a port selection, with distinct
+  values (the review's `index = 0` mutation fails it), plus
+  `inspect_wire` and `connect` on such a wire; a view-model test holds
+  every wire to a port its node has. (b) **The inspect cost** (CR-2 / C-4
+  major): `inspect` summarized every wired source's value under the
+  session lock, per consumer, per generation — and a summary of a solid
+  the display never meshed computed the FINE tessellation on the spot, so
+  a consumer's auto-inspect of a 1,001-sphere list hidden with the eye
+  (the U30 remedy) stalled the session 41 s. Now (i) the summary READS
+  the display cache and never the kernel — an undrawn solid says
+  `tessellation: "not displayed"`, a list `not_displayed: k` beside the
+  drawn ones' facts (docs/12 §Display cache); (ii) each distinct value is
+  summarized once per kept generation whichever node asks (`Core::
+  summaries`, a memo by value hash emptied when a newer generation is
+  kept, never keeping a summary that read undisplayed solids; `/debug/
+  state.summaries`); (iii) the ports are resolved under the lock and the
+  loads + summaries run off it (docs/13 §Solve streaming). Measured
+  (debug build, 150 B-rep spheres behind `count = length(list=balls)`,
+  the scratch probe `inspect_probe.mjs` over the WebSocket): displayed —
+  `inspect count` 15.8 ms once, then 0.5 / 0.3 ms from the memo and
+  `inspect balls` 0.4 ms (the verifier measured 14.6–15.1 ms on every
+  inspect of either); hidden (`balls` eye-off, a new radius) — `inspect
+  count` 0.5 ms with `not_displayed: 150` and `display_cache.misses`
+  unchanged at 150 (the verifier: 6,153 ms and +150 misses, ≈41 s at the
+  reviewer's 1,001); a second client's `set_param` landed its delta
+  14.6 ms after an observer's in-flight `inspect balls` (6,009 ms
+  before). Server tests: the display's `a_summary_reads_the_cache_and_
+  never_meshes`, the session's `inspect_reads_the_display_cache_and_
+  memoizes_each_value_once_per_generation`. (c) **The collapsed row's
+  scrub bar** (L1-2 / L5-2 / C-3 major) ran to the row's right edge — an
+  absolutely positioned grid child's `auto` end line is the container's
+  padding edge — so its ringed notch sat right of the thumb; `grid-column:
+  2 / 3` names the track's column, and `slider.spec.ts` holds the
+  collapsed bar's box to the range input's (a scrub-cached `long_named`).
+  The 40 % floor's observer case is call 2's revision above. (d) **Red
+  and blocked nodes are inspected too** (C-2 major, reproduced on the
+  face before the change): the canvas's per-generation trigger asked only
+  `done` / `cached` nodes — harmless while the answer was outputs alone,
+  wrong once it carried inputs: a red node's face never showed the
+  computed sources it choked on, a blocked node's `—` was unreachable
+  (L5-5). `wantsValues` (grid.ts) admits `red` and `blocked`; a red
+  node's outputs read `—` above its inputs' values. (e) The minors: the
+  expression's free-variable hover keeps `← value` (L5-3); the chevron
+  blurs after its click so Space stays the transport's (C-8); the store
+  reads an older engine's `node_values` without `inputs` as none instead
+  of the inspector throwing (C-6; `inputs?` in the mirror, additive);
+  store.test pins the `node_values` reducer and the snapshot's clearing
+  (L2-5); visuals.spec pins the chevron hidden at far and visible at near
+  (L2-4 / C-5) and gains `multi.cic` — every wire drawn from a port its
+  node has, the unpacked values on the consumers, the red node's input,
+  the blocked node's `—` (C-1 / C-7 / C-2 on the canvas); slider.spec's
+  single-click check deselects first (L2-3) and its chevron comment credits
+  the geometry checks, not the declared height (L2-6); the U17 / U23 rows
+  of the findings table say built (L1-5). Not changed: the 40 % floor's
+  `--tail` mechanism is a class the row sets (`has-chevron`), not
+  `:has()` — one explicit token the vitest can read.
+
 **Track M — `wt/menu` (catalog + web; the catalog half one review, the UI half one review).**
 - **C2c — the sub-group attribute.** `#[node(…, sub = "…")]` is
   REQUIRED on every node, like `gh`: cicada-macros parses it (a node
@@ -2829,6 +2946,93 @@ proves wrong is revised here, dated, in the landing commit.
   signature — the conformance test says so). The `add-stdlib-node`
   skill and docs/14 §node file format gain the attribute. Catalog
   regenerated in the same commit.
+  *Built 2026-08-25 (`wt/menu`).* The macro requires `sub = "…"` (a
+  missing one, a blank one and a padded one are trybuild cases — one
+  witness per shape rule; presence and shape are the macro's,
+  membership is the conformance test's — cicada-macros has
+  no workspace dependency to read the table from), `NodeSpec.sub`, the
+  table `spec::SUBGROUPS` (unit-tested to cover exactly
+  `CATEGORY_ORDER` + `Script`, Title Case one-or-two-word names, no
+  duplicates), `subgroups_of` / `subgroup_rank`; `CATALOG.md` renders
+  `###` sub-group headings under each category in table order (a
+  sub-group the table does not list trails; an empty one gets no
+  heading); `catalog.json` is format 3; the four conformance tests —
+  membership, every listed column of a shipped category filled (`Script`
+  the one row the stdlib never fills), docs/08's Sub-groups lines equal
+  to the table, and the ledger row unchanged by a move between columns;
+  `cicada mcp`'s `catalog_search` hits and `node_doc` carry `sub` (the
+  schema test holds the latter); the web mirror (`CatalogNode.sub`,
+  `Catalog.subgroups`) and `catalog.test.ts` against the committed
+  bytes; script nodes `Script`; docs/08, docs/13, docs/14, DECISIONS.md
+  row 23 and the skill revised; the catalog regenerated. *What the
+  contract did not foresee, recorded here as it asks:* (1) **150
+  assignments, not 159** — the registry holds 150 stdlib nodes (the
+  three `cfg(test)` fixtures in `lib.rs` are `Util`). (2) **The table as
+  built differs from the contract's sketch where a listed sub-group
+  would have been empty** — the contract's own rule ("every listed
+  sub-group non-empty") and the menu's (an empty column is a promise the
+  menu cannot keep) decide: *Params & input* → Input · **Time**
+  (`cycle` / `clock` are time params, not GH's "Primitive" containers —
+  Cicada's literals are bare bindings, so "Primitive" had no node);
+  *List & axis* → List · **Axis** (no set node ships; `Sets` joins with
+  the first; "Axis", not the sketch's "Tree" — see (4)); *Curve* →
+  Primitive · Division · Util (`Spline` / `Analysis` wait for
+  `interpolate` / `length` & co.); *Mesh & field* → Primitive ·
+  **Freeform** · Boolean · **Util** (`mesh_extrude` / `mesh_loft` sit
+  where their B-rep twins sit — see (4); `as_watertight` and
+  `tessellate` are the mesh tier's conversions, GH's Mesh › Util;
+  `Analysis` / `Field` wait for their nodes); *Output, display & export*
+  → Display · **Text** ·
+  **Files** (`text_outlines` / `text_solids` are real geometry, neither
+  display nor export; `import_step` belongs with the STEP/OBJ file nodes
+  and "Export" would have misnamed it). Maths, Point · Vector · Plane,
+  Surface & solid, Sequences, Intersect, Transform and Script are the
+  contract's. (3) **`catalog.json` also carries the table** (top-level
+  `subgroups: [{category, subgroups}]`, additive) — M1's columns are "in
+  table order", and without it the web would hold a second copy of the
+  order (as `kinds.ts` already does for `CATEGORY_ORDER`); the contract's
+  "ONE table" is kept literally by serving it. The web's `Catalog` type
+  carries it; the ribbon of today ignores it. (4) **Two table revisions
+  from the catalog review (fix round 1, 2026-08-25)** — the contract hands
+  the table to the review's judgement: the sketch's "Tree" column is the
+  vocabulary DECISIONS.md's 2026-08-11 row retired ("lists are lists";
+  graft / flatten / Path Mapper replaced by typed combinators), and
+  `flatten` / `nest` / `transpose` / `chunk` / `partition` / `group_by` /
+  `concat` / `compact` are exactly those combinators, so the column is
+  **Axis** — the category's own word (each row's `gh` hint — Graft Tree,
+  Flatten Tree, Clean Tree — is the migrant's bridge; the column title
+  need not be); and `mesh_extrude` / `mesh_loft` moved from Mesh &
+  field's Primitive to a **Freeform** column beside their B-rep twins'
+  (`extrude` / `loft` under Surface & solid) — the two tiers are
+  documented as the same four nodes under `mesh_*` names, and a user who
+  learns one tier's column must find the other in it. The
+  `add-stdlib-node` skill now points at docs/08's Sub-groups lines instead
+  of carrying a third copy of the table (nothing tested that copy). The two
+  new trybuild cases carry `# Returns`, so the `sub` error is their only
+  one — a regressed macro compiles them and trybuild says "should not have
+  compiled" in every mode, the overwrite bless included (before, the cases
+  still failed on `# Returns`, and a bless would have rewritten the
+  snapshot to that error, retiring the `sub` check without a word). And the web
+  REFUSES a catalog whose `format` is not the `CATALOG_FORMAT` it mirrors
+  (`web/src/protocol/version.ts`, beside `PROTOCOL_VERSION`; `fetchCatalog`
+  throws naming both numbers, the state layer raises the notice and keeps
+  the catalog it has) — a format-2 engine under a format-3 app (an older
+  engine on the proxy port, a stale embedded SPA) would otherwise have
+  been the silent category-only menu the server's bump exists to prevent;
+  and the mirror's `sub` / `subgroups` are pinned REQUIRED at the type
+  level in `catalog.test.ts` (`expectTypeOf` — `sub?: string` had passed
+  every runtime assertion). *Fix round of 2026-08-26:* the blank-`sub`
+  trybuild case had used `" "`, which BOTH halves of the macro's shape
+  rule refuse — dropping either half alone left the suite green — so it
+  is now two witnesses, `sub_blank.rs` (`""`) and `sub_padded.rs`
+  (`" Operators "`), each red under exactly one mutation; docs/11's
+  `catalog_search` / `node_doc` field lists and docs/14's CATALOG.md
+  bullet name `sub` and the sub-group grouping; and the web's one copy
+  of the CATEGORY order (`kinds.ts::CATEGORY_ORDER`, which `ribbonTabs`
+  and the params panel order by) is held to the served `subgroups` rows
+  by `catalog.test.ts` — the column order is read from the server and
+  kept nowhere else, the category order is one pinned copy.
+
 - **M1 — the menu bar.** The ribbon becomes a menu bar: one tab per
   category (label · count); a click opens a panel under it whose
   columns are the category's sub-groups in table order, each a titled
@@ -2844,6 +3048,64 @@ proves wrong is revised here, dated, in the landing commit.
   the view's centre cell ± 1). docs/16 §Application layout (the ribbon
   paragraph becomes the menu bar's), DECISIONS.md row 2026-08-11
   revised ("GH-style category ribbon" → a menu bar with sub-groups).
+  *Built 2026-08-25 (`wt/menu`).* `web/src/panels/MenuBar.tsx` replaces
+  `Ribbon.tsx`: one tab per category (label · count, docs/08 order, the
+  `Project` tab for script nodes); a click drops the panel under the tab
+  (pulled left when it would overrun the bar's right edge), its columns
+  the category's filled sub-groups in the catalog's `subgroups` order —
+  the model keeps the contract's name, `ribbonTabs(nodes, subgroups)`,
+  now with `columns` per tab; an empty sub-group has no column, and a
+  sub-group the table does not list for the category trails under its
+  own name rather than folding into a listed column silently (a
+  defensive rule no shipped node reaches: the script decorator declares
+  a title and a description, never a category, so every script node is
+  `Script` / `Script` on the Project tab). Node buttons
+  carry title + name; the hover the description, `GH: <name>` when it
+  differs from the title (`ghHint`) and `Red when: …`. Hovering another
+  tab while a panel is open switches (`onPointerEnter`, only while open);
+  an outside `pointerdown`, Esc, a re-click of the tab and a placement
+  close it — the File / settings menus' listener pattern. That Esc
+  closes the panel and nothing else: the clicked tab keeps focus and the
+  keyboard router passes no plain key from a button (`hotkeysReach`), so
+  the selection stays — as with those menus.
+  A placement is one `place_node {func, cell: canvasCenter}` (null before
+  the canvas's first fit → the server's auto-layout), then the panel
+  closes. `settings.ribbonCollapsed` is gone from `Settings`, the
+  defaults and the settings menu; `settingsFrom(raw)` builds the settings
+  from the keys this build has, so a stored `ribbonCollapsed` is dropped
+  — never carried in memory or written back. `.app-main` is an isolated
+  stacking context so the canvas's own layers (search box, context menu)
+  stay under the panel while the top bar's menus stay above the bar.
+  Tests: `ribbonTabs.test.ts` (columns in table order, the empty and
+  trailing rules, every tab of the committed catalog against its table
+  row), `MenuBar.test.tsx` (jsdom against the committed catalog: open,
+  hover-switch, the four closings, one `place_node` at the centre, the
+  observer's disabled buttons with the reason, the loading state),
+  `store.test.ts` (`settingsFrom`), `web/e2e/menu.spec.ts` (Maths opens
+  with exactly the server's row — five columns — hover switches, outside
+  click / Esc / re-click close, `add` lands within ± 1 of the centre cell
+  computed from the DOM's viewport transform and equal to the store's
+  `canvasCenter`, the settings menu offers no "ribbon collapsed").
+  docs/16 §Application layout (diagram + paragraph), docs/14's node file
+  format line and DECISIONS.md row 2026-08-11 revised in the same
+  commit. *What the contract did not foresee:* nothing of substance —
+  the test ids are the menu's (`menubar`, `menu-tab-<label>`,
+  `menu-panel`, `menu-col-<sub>`, `menu-node-<name>`; no spec had used
+  the ribbon's), and a hover's GH hint follows search-to-place's rule
+  (shown only when it says something the title does not). *Fix round of
+  2026-08-26 (the UI half's review):* a refused catalog with none to
+  keep — a first connect to an engine of another format — is recorded in
+  the store (`catalogError`, set by `readCatalog`'s failure, cleared by
+  a good read; `store.test.ts`'s `resetSession` leaves it with the
+  catalog) and the menu bar's and the search box's empty states render
+  it (`menu-catalog-error`, `.cv-search-empty.error`) in place of
+  `catalog loading…` / `catalog not loaded yet`, which had described a
+  pending load for a read that will never succeed once the one error
+  notice is dismissed; the two sentences above on script nodes'
+  "declared category" and on Esc clearing the selection were corrected to
+  what is built (the decorator declares no category; a focused tab
+  button keeps plain keys from the router — Delete included — while
+  Ctrl chords pass, as every button does).
 
 **Round 2** (launched as Round-1 worktrees merge and free their slots).
 

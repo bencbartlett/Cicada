@@ -54,7 +54,7 @@ import {
   type CanvasEdge,
   type CanvasNode,
 } from "./flow";
-import { pxToCell, showsPortValues } from "./grid";
+import { pxToCell, showsPortValues, wantsValues } from "./grid";
 import { useLodTier } from "./lod";
 import { scrubMenuItems } from "./scrubMenu";
 import { SearchBox } from "./SearchBox";
@@ -167,7 +167,7 @@ function CanvasInner() {
     setEdges(buildEdges(graph, state.selection.wire));
   }, [graph, unit]);
 
-  // The cell under the view's centre, for the ribbon's placements (U29):
+  // The cell under the view's centre, for the menu bar's placements (U29):
   // reported after every pan / zoom end and after the first fit; null
   // once this canvas is gone.
   const recordCenter = useCallback(() => {
@@ -510,7 +510,7 @@ function CanvasInner() {
     const rect = container.getBoundingClientRect();
     for (const node of rf.getNodes()) {
       const status = state.statuses[node.id];
-      if (status === undefined || (status.state !== "done" && status.state !== "cached")) continue;
+      if (!wantsValues(status)) continue;
       const w = node.measured?.width ?? node.width ?? 0;
       const h = node.measured?.height ?? node.height ?? 0;
       const tl = rf.flowToScreenPosition(node.position);

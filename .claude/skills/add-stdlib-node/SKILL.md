@@ -1,6 +1,6 @@
 ---
 name: add-stdlib-node
-description: Add or modify a node in cicada-stdlib end to end — one file per node under src/<category>/, the self-documenting node format (title line, port docs, # Returns, # Panics, # Examples, gh =), table + property + determinism tests in that file, catalog regeneration. Use for ANY node-catalog work, including editing an existing node's ports or docs.
+description: Add or modify a node in cicada-stdlib end to end — one file per node under src/<category>/, the self-documenting node format (title line, port docs, # Returns, # Panics, # Examples, gh =, sub =), table + property + determinism tests in that file, catalog regeneration. Use for ANY node-catalog work, including editing an existing node's ports or docs.
 ---
 
 # Add a stdlib node
@@ -29,7 +29,7 @@ multi-line example), `src/maths/deconstruct_domain.rs` (multi-output),
 ## Layout — one node per file
 
 `crates/cicada-stdlib/src/<category>/<node>.rs`, where `<category>` is the
-ribbon tab (docs/08 §Catalog) in snake_case:
+menu bar tab (docs/08 §Catalog) in snake_case:
 
 | Category string in `#[node]` | Directory |
 |---|---|
@@ -44,6 +44,17 @@ ribbon tab (docs/08 §Catalog) in snake_case:
 | `Intersect & regions` | `intersect/` |
 | `Transform` | `transform/` |
 | `Output, display & export` | `output/` |
+
+Every node also names its **sub-group** — `sub = "…"`, the tab's column.
+The names per category are ONE table, `cicada_core::spec::SUBGROUPS`;
+read them from the **Sub-groups:** line that opens the node's category
+section in docs/08 §Catalog (the conformance test holds that line to the
+table and refuses any other name). This skill carries no copy on purpose:
+a third copy nothing tests would drift. A node that fits none of its
+category's sub-groups is a design addition: add the sub-group to
+`spec::SUBGROUPS` AND docs/08's line in the same commit (a sub-group is
+listed only with its first node — the conformance test fails an empty
+one).
 
 - The file is named after the DIALECT name (`solids/box.rs` for `fn box_`);
   keyword names are declared `pub mod r#box;` in the category's `mod.rs`.
@@ -95,7 +106,7 @@ pub struct RemapIn {
 /// percent = construct_domain(start=0.0, end=100.0)
 /// scaled = remap(value=0.25, source=unit, target=percent)
 /// ```
-#[node(category = "Maths & logic", tier = "S", version = 1, gh = "Remap Numbers")]
+#[node(category = "Maths & logic", sub = "Domain", tier = "S", version = 1, gh = "Remap Numbers")]
 #[must_use]
 pub fn remap(input: RemapIn) -> f64 { /* … */ }
 
@@ -140,8 +151,12 @@ mod tests { /* table, property, golden hash */ }
      runner solves its inputs and skips the effectful call itself, as
      `cicada run` does. The fence must be tagged `cic` — a bare fence is
      refused at compile time (rustdoc would doctest it as Rust).
-3. **`#[node(category = "…", tier = "S", version = 1, gh = …)]`** — all
-   four required. `gh = "Grasshopper Component Name"` is the component the
+3. **`#[node(category = "…", sub = "…", tier = "S", version = 1, gh = …)]`**
+   — all five required. `sub` is the sub-group within the category (the
+   menu bar's column — one of the names on the category's **Sub-groups:**
+   line in docs/08 §Catalog; the macro refuses a missing or blank one, the
+   conformance test an unlisted one).
+   `gh = "Grasshopper Component Name"` is the component the
    node replaces, spelled as Grasshopper spells it (`"Number Slider"`,
    `"Domain Box"`, `"PolyLine"`); `gh = none` for a Cicada-only node
    (`as_closed`, the exporters). Choose honestly — the name feeds
@@ -208,7 +223,10 @@ mod tests { /* table, property, golden hash */ }
    The conformance test (`crates/cicada-stdlib/tests/conformance.rs`)
    fails the build when any registered node lacks a title line, a
    description, a doc line on ANY port (inputs, named outputs, and the
-   bare `out` via `# Returns`), a `gh` answer, or an example that calls it
+   bare `out` via `# Returns`), a `gh` answer, a `sub` that is one of its
+   category's sub-groups (and it fails when a listed sub-group has no
+   node, or when docs/08's "Sub-groups" lines drift from
+   `spec::SUBGROUPS`), or an example that calls it
    (as a whole identifier — `polyline(` is not a call of `line`); and
    when its file is not `src/<category>/<node>.rs` with exactly one
    `#[node]`, or lacks any of the three tests; and when a `(name, version)`
@@ -224,8 +242,8 @@ mod tests { /* table, property, golden hash */ }
    compile/lower path and the scheduler meet without breaking the
    dependency law.
 7. **Regenerate the catalog** and commit both generated files in the same
-   commit (CATALOG.md gains the `· GH:` tag; catalog.json gains `gh` and
-   `examples`):
+   commit (CATALOG.md places the row under its `###` sub-group heading with
+   the `· GH:` tag; catalog.json carries `gh`, `sub` and `examples`):
 
    ```
    cargo run -p cicada-cli -- catalog
@@ -237,7 +255,7 @@ mod tests { /* table, property, golden hash */ }
 ## Macro error UX
 
 `#[node]`/`#[derive(Ports)]` refuse malformed input loudly — missing
-version, missing `gh` (or `gh = None`/`gh = ""`), a bad doc line, missing
+version, missing `gh` (or `gh = None`/`gh = ""`), missing or blank `sub`, a bad doc line, missing
 field docs, a single-output node without `# Returns` (or `# Returns` on a
 multi-output node or a sink — these two surface as `evaluation panicked`
 errors at the `#[node]` line: the check runs when the output ports are

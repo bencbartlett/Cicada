@@ -42,6 +42,7 @@ pub struct ConeIn {
 /// ```
 #[node(
     category = "Surface & solid",
+    sub = "Primitive",
     tier = "1",
     version = 1,
     gh = "Cone",

@@ -14,7 +14,13 @@ use super::UnaryIn;
 /// ```cic
 /// flipped = negative(x=2.5)
 /// ```
-#[node(category = "Maths & logic", tier = "1", version = 1, gh = "Negative")]
+#[node(
+    category = "Maths & logic",
+    sub = "Operators",
+    tier = "1",
+    version = 1,
+    gh = "Negative"
+)]
 #[must_use]
 pub fn negative(input: UnaryIn) -> f64 {
     -input.x

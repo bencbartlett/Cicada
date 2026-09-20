@@ -1,15 +1,21 @@
 /**
  * `GET /api/catalog?pipeline=…` (docs/13 §HTTP surface): the project-aware
  * node catalog — the stdlib plus the served pipeline's `scripts/*.py` — in
- * format 2 (`Catalog` in `messages.ts`; `catalog.test.ts` pins the shape to
- * the server's own rendering). A read, token-gated like every API route;
- * `fetchImpl` is injectable for tests, the app passes nothing.
+ * format 3 (`Catalog` in `messages.ts`; `catalog.test.ts` pins the shape to
+ * the server's own rendering). The body's `format` must be the
+ * `CATALOG_FORMAT` this build mirrors (`version.ts`) or the read REFUSES,
+ * naming both numbers — the state layer turns that into a notice and keeps
+ * the catalog it has; a shape the app does not know is never parsed into
+ * one it does (a format-2 body under a format-3 menu would be a menu
+ * silently grouped by category alone). A read, token-gated like every API
+ * route; `fetchImpl` is injectable for tests, the app passes nothing.
  *
  * WHEN the app reads it is the state layer's business (`state/catalog.ts`):
  * the catalog is the one piece of authoritative state a `snapshot` does not
  * carry, so every snapshot re-reads it.
  */
 import type { Catalog } from "./messages";
+import { CATALOG_FORMAT } from "./version";
 
 /** What the read needs: the session token and the pipeline the catalog is for. */
 export interface CatalogSession {
@@ -26,12 +32,24 @@ export interface CatalogAnswer {
   text: string;
 }
 
-/** The catalog the server serves for `session.pipeline`, with its text; any non-OK answer throws with the HTTP status. */
+/**
+ * The catalog the server serves for `session.pipeline`, with its text. Any
+ * non-OK answer throws with the HTTP status; a body whose `format` is not
+ * `CATALOG_FORMAT` throws naming both numbers (the engine and the app are
+ * from different builds) — never a guess at the shape.
+ */
 export async function fetchCatalog(session: CatalogSession, fetchImpl: FetchLike = fetch): Promise<CatalogAnswer> {
   const response = await fetchImpl(`/api/catalog?pipeline=${encodeURIComponent(session.pipeline)}`, {
     headers: { "X-Cicada-Token": session.token },
   });
   if (!response.ok) throw new Error(`catalog: HTTP ${response.status}`);
   const text = await response.text();
-  return { catalog: JSON.parse(text) as Catalog, text };
+  const parsed: unknown = JSON.parse(text);
+  const format = typeof parsed === "object" && parsed !== null ? (parsed as { format?: unknown }).format : undefined;
+  if (format !== CATALOG_FORMAT) {
+    throw new Error(
+      `catalog: format ${String(format)} from the engine — this app reads format ${CATALOG_FORMAT}; the engine and the app are from different builds`,
+    );
+  }
+  return { catalog: parsed as Catalog, text };
 }

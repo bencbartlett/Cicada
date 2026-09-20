@@ -50,6 +50,7 @@ pub struct DivideCurveOut {
 /// ```
 #[node(
     category = "Curve",
+    sub = "Division",
     tier = "S",
     version = 3,
     gh = "Divide Curve",

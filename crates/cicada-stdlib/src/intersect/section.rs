@@ -59,6 +59,7 @@ pub struct SectionIn {
 // same (the rule is the rule; a section recomputes in milliseconds).
 #[node(
     category = "Intersect & regions",
+    sub = "Shape",
     tier = "1",
     version = 2,
     gh = "Brep | Plane",

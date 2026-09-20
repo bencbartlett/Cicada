@@ -399,12 +399,6 @@ function SettingsMenu() {
               setTab(e.target.checked ? "text" : "inspect");
             }}
           />
-          <label>ribbon collapsed</label>
-          <input
-            type="checkbox"
-            checked={settings.ribbonCollapsed}
-            onChange={(e) => updateSettings({ ribbonCollapsed: e.target.checked })}
-          />
           <span className="menu-h">canvas</span>
           <label>wires</label>
           {seg("wireMode", WIRE_MODES)}

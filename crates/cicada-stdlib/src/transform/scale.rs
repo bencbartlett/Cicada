@@ -41,6 +41,7 @@ pub struct ScaleIn {
 /// ```
 #[node(
     category = "Transform",
+    sub = "Affine",
     tier = "S",
     version = 1,
     gh = "Scale",

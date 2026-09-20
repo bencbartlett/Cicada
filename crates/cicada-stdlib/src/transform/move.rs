@@ -33,7 +33,13 @@ pub struct MoveIn {
 /// shift = unit_x(factor=10.0)
 /// moved = move(geometry=corner, motion=shift)
 /// ```
-#[node(category = "Transform", tier = "S", version = 1, gh = "Move")]
+#[node(
+    category = "Transform",
+    sub = "Euclidean",
+    tier = "S",
+    version = 1,
+    gh = "Move"
+)]
 #[must_use]
 pub fn move_(input: MoveIn) -> Transformable {
     Similarity::translation(input.motion).apply(&input.geometry)

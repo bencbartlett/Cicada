@@ -36,7 +36,13 @@ pub struct CompactOut {
 /// xs = [3.0, 1.0, 2.0]
 /// present, sources = compact(list=xs)
 /// ```
-#[node(category = "List & axis", tier = "S", version = 1, gh = "Clean Tree")]
+#[node(
+    category = "List & axis",
+    sub = "Axis",
+    tier = "S",
+    version = 1,
+    gh = "Clean Tree"
+)]
 #[must_use]
 pub fn compact(input: CompactIn) -> CompactOut {
     let mut values = Vec::new();

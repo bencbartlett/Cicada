@@ -30,7 +30,7 @@ pub struct AsWatertightIn {
 /// block = mesh_box(x=span, y=span, z=span)
 /// sealed = as_watertight(mesh=block)
 /// ```
-#[node(category = "Mesh & field", tier = "S", version = 1, gh = none)]
+#[node(category = "Mesh & field", sub = "Util", tier = "S", version = 1, gh = none)]
 #[must_use]
 pub fn as_watertight(input: AsWatertightIn) -> Watertight<Mesh> {
     assert!(

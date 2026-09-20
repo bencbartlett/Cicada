@@ -24,6 +24,7 @@ pub struct VectorLengthIn {
 /// ```
 #[node(
     category = "Point · Vector · Plane",
+    sub = "Vector",
     tier = "1",
     version = 1,
     gh = "Vector Length"

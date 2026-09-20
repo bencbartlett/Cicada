@@ -601,31 +601,36 @@ impl SolidCache {
         (result, Served::Miss)
     }
 
-    /// The display mesh a SUMMARY should read: whatever is cached for this
-    /// solid at either tier (the fine one preferred), or the fine one
-    /// computed — so an inspector read during a drag costs a lookup, not a
-    /// fine tessellation under the session lock.
+    /// The display mesh a SUMMARY reads: whatever is cached for this solid
+    /// at either tier (the fine one preferred) — a read, NEVER a kernel
+    /// call. `None` when no display pass has meshed the solid (its preview
+    /// is off, or its output is not yet drawn): the summary says so instead
+    /// of meshing it at the fine tier under the session lock. The first cut
+    /// computed the fine mesh on a miss, and a consumer's `inspect` of a
+    /// hidden 1,001-solid list — hidden with the eye exactly to spare that
+    /// work — stalled the session 41 s (wave 5 N1 review CR-2, 2026-09-19).
+    /// What is tessellated is the display path's decision alone.
     ///
     /// # Errors
     ///
-    /// As [`SolidCache::tessellation`].
+    /// A cached refusal is `Some(Err(reason))`, as [`SolidCache::tessellation`]
+    /// reports it.
     pub fn tessellation_for_summary(
         &self,
         hash: ValueHash,
-        solid: &Solid,
         config: &ProjectConfig,
-    ) -> Result<Arc<DisplayMesh>, String> {
+    ) -> Option<Result<Arc<DisplayMesh>, String>> {
         for tier in [DisplayTier::Fine, DisplayTier::Preview] {
             let key = TessellationKey::new(hash, tier.deflection(config));
             if let Some(found) = self.lookup(key) {
                 self.hits.fetch_add(1, Ordering::Relaxed);
-                return match found {
+                return Some(match found {
                     Cached::Mesh(mesh) => Ok(mesh),
                     Cached::Refused(reason) => Err(reason.to_string()),
-                };
+                });
             }
         }
-        self.tessellation(hash, solid, DisplayTier::Fine.deflection(config))
+        None
     }
 
     fn lookup(&self, key: TessellationKey) -> Option<Cached> {
@@ -1523,28 +1528,9 @@ fn summarize_list(
             triangles += mesh.triangle_count();
         }
     }
-    let mut faces = 0;
-    let mut unclosed = 0;
     let mut errors = Vec::new();
-    for (element, value) in &solids {
-        let ValueData::Solid(solid) = value.data() else {
-            continue;
-        };
-        match context
-            .solids
-            .tessellation_for_summary(value.hash(), solid, context.config)
-        {
-            Ok(display) => {
-                stats.grow(display.mesh().positions());
-                triangles += display.mesh().triangle_count();
-                faces += display.faces;
-                if !display.watertight {
-                    unclosed += 1;
-                }
-            }
-            Err(reason) => errors.push(format!("element {element} (Solid): {reason}")),
-        }
-    }
+    let drawn = listed_solid_facts(&solids, context, &mut stats, &mut errors);
+    triangles += drawn.triangles;
     if triangles > 0 {
         summary
             .facts
@@ -1554,13 +1540,23 @@ fn summarize_list(
         summary
             .facts
             .insert("solids".to_owned(), serde_json::json!(solids.len()));
-        summary
-            .facts
-            .insert("faces".to_owned(), serde_json::json!(faces));
-        if unclosed > 0 {
+        // The mesh-derived facts (`faces`, `triangles`, the bounds) cover the
+        // displayed solids; `not_displayed` says how many they leave out.
+        if drawn.not_displayed < solids.len() {
             summary
                 .facts
-                .insert("unclosed".to_owned(), serde_json::json!(unclosed));
+                .insert("faces".to_owned(), serde_json::json!(drawn.faces));
+        }
+        if drawn.not_displayed > 0 {
+            summary.facts.insert(
+                "not_displayed".to_owned(),
+                serde_json::json!(drawn.not_displayed),
+            );
+        }
+        if drawn.unclosed > 0 {
+            summary
+                .facts
+                .insert("unclosed".to_owned(), serde_json::json!(drawn.unclosed));
         }
     }
     if !errors.is_empty() {
@@ -1571,10 +1567,55 @@ fn summarize_list(
     summary.bounds = stats.bounds;
 }
 
+/// What a list's solids contribute to its summary, read off the display
+/// cache ([`SolidCache::tessellation_for_summary`]): the drawn ones grow
+/// `stats` and count their triangles, faces and unclosed meshes; a cached
+/// refusal is an `errors` line; a solid no pass has meshed is counted in
+/// `not_displayed` and never meshed here.
+#[derive(Default)]
+struct ListedSolidFacts {
+    triangles: usize,
+    faces: usize,
+    unclosed: usize,
+    not_displayed: usize,
+}
+
+fn listed_solid_facts(
+    solids: &[(u32, &HashedValue)],
+    context: &DisplayContext<'_>,
+    stats: &mut DisplayStats,
+    errors: &mut Vec<String>,
+) -> ListedSolidFacts {
+    let mut facts = ListedSolidFacts::default();
+    for (element, value) in solids {
+        if !matches!(value.data(), ValueData::Solid(_)) {
+            continue;
+        }
+        match context
+            .solids
+            .tessellation_for_summary(value.hash(), context.config)
+        {
+            Some(Ok(display)) => {
+                stats.grow(display.mesh().positions());
+                facts.triangles += display.mesh().triangle_count();
+                facts.faces += display.faces;
+                if !display.watertight {
+                    facts.unclosed += 1;
+                }
+            }
+            Some(Err(reason)) => errors.push(format!("element {element} (Solid): {reason}")),
+            None => facts.not_displayed += 1,
+        }
+    }
+    facts
+}
+
 /// The solid arm of [`summarize`] — "Solid, N faces, bbox": the facts come
 /// from the display tessellation (a cache hit when the value is on screen,
 /// at whichever tier drew it); a solid the kernel cannot tessellate says
-/// why instead, and one whose mesh did not close says `watertight: false`.
+/// why instead, one whose mesh did not close says `watertight: false`, and
+/// one no display pass has meshed says `tessellation: "not displayed"` —
+/// the summary never meshes anything itself.
 fn summarize_solid(
     value: &HashedValue,
     solid: &Solid,
@@ -1587,9 +1628,9 @@ fn summarize_solid(
         .insert("bytes".to_owned(), serde_json::json!(solid.bytes().len()));
     match context
         .solids
-        .tessellation_for_summary(value.hash(), solid, context.config)
+        .tessellation_for_summary(value.hash(), context.config)
     {
-        Ok(display) => {
+        Some(Ok(display)) => {
             summary
                 .facts
                 .insert("faces".to_owned(), serde_json::json!(display.faces));
@@ -1605,12 +1646,31 @@ fn summarize_solid(
             stats.grow(display.mesh().positions());
             summary.bounds = stats.bounds;
         }
-        Err(reason) => {
+        Some(Err(reason)) => {
             summary
                 .facts
                 .insert("error".to_owned(), serde_json::json!(reason));
         }
+        None => {
+            summary
+                .facts
+                .insert("tessellation".to_owned(), serde_json::json!(NOT_DISPLAYED));
+        }
     }
+}
+
+/// The `tessellation` fact of a solid summary no display pass has meshed
+/// (and the `not_displayed` count of a list's): the mesh-derived facts and
+/// bounds are missing because nothing drew the value, not because it has
+/// none. A summary carrying either is not memoized by the session — the
+/// next read may find the mesh drawn.
+pub const NOT_DISPLAYED: &str = "not displayed";
+
+/// Does `summary` read solids no display pass has meshed yet?
+#[must_use]
+pub fn reads_undisplayed_solids(summary: &ValueSummary) -> bool {
+    summary.facts.contains_key("not_displayed")
+        || summary.facts.get("tessellation").and_then(|v| v.as_str()) == Some(NOT_DISPLAYED)
 }
 
 /// Compact human rendering of a value (the inspector's sample text; the
@@ -2008,6 +2068,65 @@ mod tests {
     }
 
     // ------------------------------------------------------------ solids --
+
+    /// The summary READS the display cache and never calls the kernel
+    /// (wave 5 N1 review CR-2, 2026-09-19): a solid no pass has drawn says
+    /// `tessellation: "not displayed"` — no mesh facts, no bounds, no miss
+    /// — and a list counts such elements as `not_displayed`, reporting the
+    /// mesh facts of the drawn ones alone; once the display has drawn the
+    /// solid the same summary carries its facts, and the session's memo
+    /// rule (`reads_undisplayed_solids`) tells the two apart.
+    #[test]
+    fn a_summary_reads_the_cache_and_never_meshes() {
+        let test = TestContext::new();
+        let solid = probe_box();
+        let summary = summarize(&solid, &test.context());
+        assert_eq!(summary.kind, "Solid");
+        assert_eq!(summary.facts["tessellation"], NOT_DISPLAYED);
+        assert!(!summary.facts.contains_key("faces"), "{:?}", summary.facts);
+        assert!(!summary.facts.contains_key("triangles"));
+        assert!(summary.bounds.is_none());
+        assert!(reads_undisplayed_solids(&summary));
+        let list = HashedValue::new(ValueData::List(List {
+            axis: None,
+            slots: vec![Some(solid.clone()), Some(solid.clone())],
+        }))
+        .unwrap();
+        let summary = summarize(&list, &test.context());
+        assert_eq!(summary.facts["solids"], 2);
+        assert_eq!(summary.facts["not_displayed"], 2);
+        assert!(!summary.facts.contains_key("faces"), "{:?}", summary.facts);
+        assert!(summary.bounds.is_none());
+        assert!(reads_undisplayed_solids(&summary));
+        let stats = test.solids.stats();
+        assert_eq!(
+            (stats.misses, stats.entries),
+            (0, 0),
+            "no summary called the kernel: {stats:?}"
+        );
+        // Drawn once: every summary reads the one entry.
+        let mut picks = PickTable::default();
+        let out = frames_for_value(
+            &solid,
+            1,
+            7,
+            0,
+            &mut |e| picks.ids_for(7, 0, e),
+            &test.context(),
+        );
+        assert_eq!(out.stats.solids, 1);
+        let summary = summarize(&solid, &test.context());
+        assert_eq!(summary.facts["triangles"], 12);
+        assert!(summary.facts["faces"].is_number());
+        assert!(!summary.facts.contains_key("tessellation"));
+        assert!(summary.bounds.is_some());
+        assert!(!reads_undisplayed_solids(&summary));
+        let summary = summarize(&list, &test.context());
+        assert!(!summary.facts.contains_key("not_displayed"));
+        assert_eq!(summary.facts["triangles"], 24);
+        assert!(!reads_undisplayed_solids(&summary));
+        assert_eq!(test.solids.stats().misses, 1, "the one draw");
+    }
 
     /// One bare solid: the box as the display path reports it — a real
     /// cube through the kernel, one miss for the frames, hits after.

@@ -280,6 +280,8 @@ function NodeInspect({ name, extra }: { name: string; extra: number }) {
             // A `#off` ghost takes no in-place edits (enable it first).
             writer={writer && !off}
             onSelect={(n) => selectNodes([n])}
+            value={values?.inputs.find(([n]) => n === input.name)}
+            stale={stale}
           />
         ))}
       </section>
@@ -413,11 +415,16 @@ function InputRow({
   input,
   writer,
   onSelect,
+  value,
+  stale,
 }: {
   node: string;
   input: InputView;
   writer: boolean;
   onSelect: (node: string) => void;
+  /** The `inspect` answer's entry for this port (wave 5 N1); `undefined` until it arrives. */
+  value: [string, ValueSummary | null] | undefined;
+  stale: boolean;
 }) {
   const color = kindColor(input.base === "?" ? "" : baseOfType(input.base));
   // An unwired literal-typed port wears the typed-literal chip (the same
@@ -484,6 +491,10 @@ function InputRow({
         )}
         {input.dimension !== undefined && <span className="faint"> · {input.dimension}</span>}
       </span>
+      {/* What the wire feeds this port, in full (the face compacts it): the
+          source output's summary from the same `inspect` answer. A literal
+          or unwired port has no wire value to show — its value is the chip. */}
+      {input.wired !== undefined && value !== undefined && <ValueSummaryView summary={value[1]} stale={stale} />}
     </div>
   );
 }

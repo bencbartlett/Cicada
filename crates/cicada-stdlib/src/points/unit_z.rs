@@ -18,6 +18,7 @@ use super::UnitIn;
 /// ```
 #[node(
     category = "Point · Vector · Plane",
+    sub = "Vector",
     tier = "S",
     version = 1,
     gh = "Unit Z"

@@ -32,7 +32,13 @@ pub struct TransposeIn {
 /// rows = chunk(list=xs, size=3)
 /// columns = transpose(list=rows)
 /// ```
-#[node(category = "List & axis", tier = "S", version = 1, gh = "Flip Matrix")]
+#[node(
+    category = "List & axis",
+    sub = "Axis",
+    tier = "S",
+    version = 1,
+    gh = "Flip Matrix"
+)]
 #[must_use]
 pub fn transpose(input: TransposeIn) -> Vec<Vec<ElemSlot>> {
     let Some(width) = input.list.first().map(Vec::len) else {

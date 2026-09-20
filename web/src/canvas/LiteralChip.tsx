@@ -52,8 +52,12 @@ interface EditorProps {
   onCancel: () => void;
 }
 
-/** The opened input: focused on mount, Enter/blur commit, Esc cancels, one outcome only. */
-function LiteralEditor({ kind, startText, startChecked, label, testId, onCommit, onCancel }: EditorProps) {
+/**
+ * The opened input: focused on mount, Enter/blur commit, Esc cancels, one
+ * outcome only. Shared with the collapsed slider's value (wave 5 N1), which
+ * opens it in the label's place.
+ */
+export function LiteralEditor({ kind, startText, startChecked, label, testId, onCommit, onCancel }: EditorProps) {
   const ref = useRef<HTMLInputElement>(null);
   const [text, setText] = useState(startText);
   const [checked, setChecked] = useState(startChecked);

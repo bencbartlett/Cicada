@@ -38,6 +38,7 @@ pub struct ChoiceIn {
 /// ```
 #[node(
     category = "Params & input",
+    sub = "Input",
     tier = "1",
     version = 1,
     gh = "Value List"

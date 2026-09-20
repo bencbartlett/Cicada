@@ -43,7 +43,13 @@ pub struct LinearArrayIn {
 /// step = unit_x(factor=3.0)
 /// row = linear_array(geometry=ring, direction=step, count=4)
 /// ```
-#[node(category = "Transform", tier = "S", version = 2, gh = "Linear Array")]
+#[node(
+    category = "Transform",
+    sub = "Array",
+    tier = "S",
+    version = 2,
+    gh = "Linear Array"
+)]
 #[must_use]
 pub fn linear_array(input: LinearArrayIn) -> Vec<Transformable> {
     // A copy costs its `Transformable` slot AND the geometry it transforms:

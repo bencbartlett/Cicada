@@ -67,6 +67,7 @@ pub struct ScaleNuIn {
 /// ```
 #[node(
     category = "Transform",
+    sub = "Affine",
     tier = "1",
     version = 1,
     gh = "Scale NU",

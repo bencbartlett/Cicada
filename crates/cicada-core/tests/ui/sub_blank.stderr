@@ -1,0 +1,5 @@
+error: sub = "…" names the node's sub-group within its category (docs/08 §Catalog lists each category's sub-groups) — a non-empty name without surrounding whitespace
+  --> tests/ui/sub_blank.rs:22:42
+   |
+22 | #[node(category = "Maths & logic", sub = "", tier = "S", version = 1, gh = none)]
+   |                                          ^^

@@ -37,7 +37,13 @@ pub struct ShiftListIn {
 /// rolled = shift_list(list=xs, offset=1)
 /// clipped = shift_list(list=xs, offset=-1, wrap=False)
 /// ```
-#[node(category = "List & axis", tier = "1", version = 1, gh = "Shift List")]
+#[node(
+    category = "List & axis",
+    sub = "List",
+    tier = "1",
+    version = 1,
+    gh = "Shift List"
+)]
 #[must_use]
 pub fn shift_list(input: ShiftListIn) -> Vec<ElemSlot> {
     let mut list = input.list;
