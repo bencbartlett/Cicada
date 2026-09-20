@@ -3255,12 +3255,33 @@ proves wrong is revised here, dated, in the landing commit.
   `<repo>/releases/tag/v<semver>`; (7) the CHANGELOG's section date is
   the day it was written — the tag's run carries the release date — and
   it says V1 / T1 land beside it (move them in when the tag includes
-  them). *Open, for Ben:* the bundles the workflow publishes carry no
+  them). *Open, for Ben — the tag is HELD until this is done (fix round
+  2026-09-20, finding R1-C3):* the release workflow's first job now
+  refuses to publish while the repository root lacks `LICENSE` or
+  `THIRD_PARTY_NOTICES.md` (both absent today — a stray tag stops there
+  with the ledger's reason and ships nothing), `bundle.py` copies both
+  beside the README when they exist, records them in its stamp and holds
+  them in `--check`, and the release job attaches them as assets beside
+  the Linux binary. What only Ben can write: the licence itself (row
+  2026-08-11 — chosen at first public release; the statically linked LGPL
+  `opencascade-sys` glue is acceptable under §6(a) "only if Cicada itself
+  is open source", row 2026-08-20) and the notices file — the prominent
+  OCCT acknowledgement, the LGPL-2.1 + Open CASCADE Exception texts
+  (upstream's; the conda `occt` package ships none in its `info/`), the
+  corresponding-source pointer (upstream `V7_8_1` + feedstock commit
+  `4237a64ca19105111b57b8d18535e9de717d8870`), and the closure's texts:
+  `fetch_occt.py` extracts each package's `info/licenses/` into the
+  prefix's `.cicada-occt-meta/<package>/`, where 18 of win-64's 29
+  packages carry one (`occt`, `freeimage`, `imath`, `jasper`, `jxrlib`,
+  `lcms2`, `libfreetype`, `libintl`, `openjpeg` do not — their texts come
+  from upstream, the licence ids are in the manifest), plus the Rust
+  crates' notices (`cargo about` or `cargo deny list`). Before this
+  round the bundles the workflow publishes carried no
   third-party notices — DECISIONS.md row 2026-08-20 names the
   obligations "at go-public, shipping binaries" (the LGPL notices, the
   prominent OCCT acknowledgement, the corresponding-source pointer for
   the exact OCCT build; `fetch_occt.py` extracts every package's license
-  texts into the prefix, `bundle.py` copies none of them), and row
+  texts into the prefix, `bundle.py` copied none of them), and row
   2026-08-11's license choice is due "at first public release" — a tag
   makes both due; not R1's contract, so not built here, and the workflow
   publishes nothing until a tag is pushed.

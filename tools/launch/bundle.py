@@ -17,7 +17,8 @@ script builds nothing):
     .cicada-occt-bundle.json        Cicada.app/Contents/MacOS/cicada          (the binary)
     Cicada.cmd                      Cicada.app/Contents/MacOS/lib/*.dylib      (the closure)
     README.txt                      Cicada.app/Contents/MacOS/.cicada-occt-bundle.json
-    .cicada-bundle.json             README.txt
+    LICENSE, THIRD_PARTY_NOTICES.md README.txt
+    .cicada-bundle.json             LICENSE, THIRD_PARTY_NOTICES.md
                                     .cicada-bundle.json
 
 The libraries and the macOS rpath come from `fetch_occt.bundle` (L2): the
@@ -44,7 +45,10 @@ README's version and commit are the BINARY's own stamp (`cicada --version`:
 in -- a `--binary` from elsewhere is named for what it is (finding R1-C4).
 `--release` writes a tagged release's README (a pre-release, not the
 launcher's "development build") and refuses a binary whose stamp is
-`-dirty` or `unknown`; the release workflow passes it.
+`-dirty` or `unknown`; the release workflow passes it. The repository's
+`LICENSE` and `THIRD_PARTY_NOTICES.md` (`NOTICE_FILES`) are copied beside
+the README when they exist, recorded in the stamp and held by `--check`;
+the release workflow refuses to publish without them (finding R1-C3).
 
 The binary must embed the SPA (`embeds_spa`: two lines of `web/index.html`
 an `embed` build carries verbatim -- rust-embed stores the files
@@ -116,6 +120,14 @@ WINDOWS_LAUNCHER = "Cicada.cmd"
 README_NAME = "README.txt"
 #: L3's own stamp at the bundle's root (L2's sits beside the binary).
 STAMP_NAME = ".cicada-bundle.json"
+#: The licensing files a bundle carries beside its README when the
+#: repository root has them (DECISIONS.md 2026-08-11 and 2026-08-20: Cicada's
+#: own licence, and the third-party notices for the LGPL kernel libraries
+#: beside the binary -- the OCCT acknowledgement, the corresponding-source
+#: pointer, every shipped package's licence text). Copied when present,
+#: recorded in the stamp, held by `--check`; the release workflow refuses to
+#: publish without them (fix round 2026-09-20, finding R1-C3).
+NOTICE_FILES = ("LICENSE", "THIRD_PARTY_NOTICES.md")
 #: How long one console line of the smoke's server may take before the
 #: smoke fails -- a bound on a hang, never a wait the pass path takes.
 LINE_TIMEOUT_SECONDS = 60
@@ -304,7 +316,9 @@ def info_plist_text(version: str) -> str:
     return plistlib.dumps(info, sort_keys=True).decode("utf-8")
 
 
-def readme_text(subdir: str, version: str, commit: str | None, spa: bool = True, release: bool = False) -> str:
+def readme_text(
+    subdir: str, version: str, commit: str | None, spa: bool = True, release: bool = False, notices: tuple[str, ...] = ()
+) -> str:
     """`README.txt` -- ASCII only, like the launchers: `type README.txt` in a
     cp1252 console and Notepad must agree. `spa=False` is the engine-only
     bundle (`--allow-no-spa`), whose launcher would stop at `cicada app`.
@@ -313,7 +327,8 @@ def readme_text(subdir: str, version: str, commit: str | None, spa: bool = True,
     (fix round 2026-09-20, finding R1-C4). `release=True` is the wording of
     a tagged release's asset (`--release`, the release workflow): a
     pre-release, not the launcher's "development build" -- which a GitHub
-    Release's own zip once disclaimed being."""
+    Release's own zip once disclaimed being. `notices` names the licensing
+    files copied beside the README (`NOTICE_FILES`, those present)."""
     windows = subdir.startswith("win-")
     launcher = WINDOWS_LAUNCHER if windows else MACOS_APP
     binary = "cicada.exe" if windows else f"{MACOS_APP}/Contents/MacOS/cicada"
@@ -386,6 +401,18 @@ def readme_text(subdir: str, version: str, commit: str | None, spa: bool = True,
         "  The engine's cache lives in your user cache directory, never beside your",
         "  files. The app WRITES the project it serves (the .cic file and a layout",
         "  sidecar) as you edit -- open a copy if you only want to look.",
+    ]
+    if notices:
+        lines += ["", "Licensing"]
+        if "LICENSE" in notices:
+            lines.append("  LICENSE is Cicada's own licence.")
+        if "THIRD_PARTY_NOTICES.md" in notices:
+            lines += [
+                "  THIRD_PARTY_NOTICES.md names the third-party libraries in this folder --",
+                "  Open CASCADE Technology and the libraries it needs -- with their licences",
+                "  and where their source is.",
+            ]
+    lines += [
         "",
         "The source, its documentation and the design ledger are in the Cicada",
         "repository (README.md, AGENTS.md, docs/).",
@@ -532,12 +559,16 @@ def make_bundle(
     which=shutil.which,
     allow_no_spa: bool = False,
     release: bool = False,
+    notices_dir: Path | None = None,
 ) -> Places:
     """Produce (or refresh) the bundle in `out` from `binary`; refused, before
     anything is written, when the binary embeds no SPA and `allow_no_spa` is
     not set (module docstring). `release` writes a tagged release's README
     and requires the binary's stamp to name a clean commit -- a `-dirty` or
-    `unknown` build is refused, never shipped under release wording."""
+    `unknown` build is refused, never shipped under release wording. The
+    `NOTICE_FILES` present in `notices_dir` (the repository root) are copied
+    beside the README and recorded in the stamp."""
+    notices_dir = REPO if notices_dir is None else notices_dir
     environ = dict(os.environ if environ is None else environ)
     system = "windows" if layout.is_windows else "darwin"
     if not binary.is_file():
@@ -581,8 +612,19 @@ def make_bundle(
     changed.append(write_if_changed(spots.launcher, windows_launcher_text() if spots.is_windows else macos_launcher_text(), executable=True))
     if spots.plist is not None:
         changed.append(write_if_changed(spots.plist, info_plist_text(version)))
-    changed.append(write_if_changed(spots.readme, readme_text(layout.subdir, version, commit, spa, release)))
-    stamp = {"binary_source": source, "commit": commit, "release": release, "spa": spa, "subdir": layout.subdir, "version": version}
+    notices = tuple(name for name in NOTICE_FILES if (notices_dir / name).is_file())
+    for name in notices:
+        changed.append(write_if_changed(out / name, (notices_dir / name).read_text(encoding="utf-8")))
+    changed.append(write_if_changed(spots.readme, readme_text(layout.subdir, version, commit, spa, release, notices)))
+    stamp = {
+        "binary_source": source,
+        "commit": commit,
+        "notices": list(notices),
+        "release": release,
+        "spa": spa,
+        "subdir": layout.subdir,
+        "version": version,
+    }
     changed.append(write_if_changed(spots.stamp, json.dumps(stamp, indent=1, sort_keys=True) + "\n"))
     log(
         f"bundle {out}: cicada {version}{'' if spa else ' (engine only -- no SPA)'}, {spots.launcher.relative_to(out)}, {README_NAME}"
@@ -659,6 +701,14 @@ def check_bundle(out: Path, log: Callable[[str], None], environ: dict[str, str] 
             f"{'does' if recorded else 'does not'} -- not the binary this bundle was made from; remake the bundle (bundle.py --out)"
         ]
     log(f"{spots.binary.name} {'embeds the SPA' if actual else 'embeds no SPA (engine only, as the bundle records)'}")
+    # The licensing files the bundle was made with are still there and not
+    # empty (a release ships nothing without them; the workflow gates on the
+    # repository's copies, this holds the bundle's).
+    recorded_notices = (read_json(spots.stamp) or {}).get("notices", [])
+    for name in recorded_notices if isinstance(recorded_notices, list) else []:
+        path = out / str(name)
+        if not path.is_file() or path.stat().st_size == 0:
+            problems.append(f"{name} is recorded in {STAMP_NAME} but is missing or empty")
     if spots.plist is not None:
         try:
             info = plistlib.loads(spots.plist.read_bytes())

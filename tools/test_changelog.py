@@ -100,6 +100,8 @@ class CheckTest(unittest.TestCase):
         for name in ["Cicada-0.1.0-alpha.1-windows.zip", "Cicada-0.1.0-alpha.1-macos.zip", "cicada-0.1.0-alpha.1-linux-x86_64"]:
             self.assertIn(name, text)
         self.assertIn("cicada 0.1.0-alpha.1 (<commit>, <build date>)", text)
+        # The licensing files ride as assets (R1-C3): the release job attaches them.
+        self.assertIn("`LICENSE` and `THIRD_PARTY_NOTICES.md`", text)
 
 
 class RepositoryTest(unittest.TestCase):

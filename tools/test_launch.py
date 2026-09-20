@@ -642,6 +642,48 @@ class MakeAndCheckTest(unittest.TestCase):
         self.assertIn("commit a82eb39d1c2e-dirty", spots.readme.read_text(encoding="utf-8"))
         self.assertIn("not a release", spots.readme.read_text(encoding="utf-8"))
 
+    def test_the_licensing_files_ride_beside_the_readme_when_the_repository_has_them(self):
+        # DECISIONS.md 2026-08-11 / 2026-08-20 (finding R1-C3): LICENSE and the
+        # third-party notices are copied when present, recorded, held by --check.
+        layout = self.windows_prefix()
+        binary = self.windows_binary()
+        environ = {"SystemRoot": r"C:\Windows"}
+        # Absent (the repository today): nothing copied, the README silent, the stamp says so.
+        bare = self.root / "notices-none"
+        bare.mkdir()
+        spots = bundle.make_bundle(binary, self.root / "dist-a", layout, self.manifest, self.log, environ, run=self.runner(), notices_dir=bare)
+        self.assertEqual(json.loads(spots.stamp.read_text(encoding="utf-8"))["notices"], [])
+        self.assertNotIn("Licensing", spots.readme.read_text(encoding="utf-8"))
+        self.assertFalse((self.root / "dist-a" / "LICENSE").exists())
+        self.assertEqual(bundle.check_bundle(self.root / "dist-a", self.log, environ, run=self.runner()), [])
+        # Present: both copied byte for byte, named in the README, recorded, checked.
+        source = self.root / "notices-both"
+        source.mkdir()
+        (source / "LICENSE").write_text("the licence text\n", encoding="utf-8")
+        (source / "THIRD_PARTY_NOTICES.md").write_text("# Third-party notices\n\nOCCT 7.8.1 -- LGPL-2.1 with the exception.\n", encoding="utf-8")
+        out = self.root / "dist-b"
+        spots = bundle.make_bundle(binary, out, layout, self.manifest, self.log, environ, run=self.runner(), notices_dir=source)
+        self.assertEqual((out / "LICENSE").read_text(encoding="utf-8"), "the licence text\n")
+        self.assertIn("OCCT 7.8.1", (out / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8"))
+        self.assertEqual(json.loads(spots.stamp.read_text(encoding="utf-8"))["notices"], ["LICENSE", "THIRD_PARTY_NOTICES.md"])
+        readme = spots.readme.read_text(encoding="utf-8")
+        self.assertIn("Licensing", readme)
+        self.assertIn("LICENSE is Cicada's own licence.", readme)
+        self.assertIn("THIRD_PARTY_NOTICES.md names the third-party libraries", readme)
+        self.assertTrue(all(ord(c) < 128 for c in readme))
+        self.assertEqual(bundle.check_bundle(out, self.log, environ, run=self.runner()), [])
+        # A notices file gone (or emptied) after the bundle was made: the check names it.
+        (out / "THIRD_PARTY_NOTICES.md").write_text("", encoding="utf-8")
+        (out / "LICENSE").unlink()
+        problems = bundle.check_bundle(out, self.log, environ, run=self.runner())
+        self.assertEqual(
+            problems,
+            [
+                "LICENSE is recorded in .cicada-bundle.json but is missing or empty",
+                "THIRD_PARTY_NOTICES.md is recorded in .cicada-bundle.json but is missing or empty",
+            ],
+        )
+
     def test_check_names_every_problem(self):
         layout = self.windows_prefix()
         binary = self.windows_binary()

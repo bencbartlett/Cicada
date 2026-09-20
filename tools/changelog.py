@@ -106,6 +106,7 @@ def assets(version: str) -> str:
             f"- `Cicada-{version}-windows.zip` — unzip and double-click `Cicada.cmd` (the engine with the app embedded and the OpenCASCADE run-time libraries beside it; needs Python 3 and the VC++ runtime — `README.txt` inside says so).",
             f"- `Cicada-{version}-macos.zip` — unzip and open `Cicada.app` (right-click → Open the first time: not notarized; needs Python 3).",
             f"- `cicada-{version}-linux-x86_64` — the bare engine binary with the app embedded: needs the OpenCASCADE 7.8.1 run-time libraries on `LD_LIBRARY_PATH` (`python tools/fetch_occt.py --print-env bash` from a checkout) and Python 3.",
+            "- `LICENSE` and `THIRD_PARTY_NOTICES.md` — Cicada's licence, and the third-party libraries the bundles carry with their licences and source; the zips hold the same two files beside their `README.txt`.",
             "",
             f"Every binary answers `cicada --version` with `cicada {version} (<commit>, <build date>)`; the app's About dialog shows the same.",
         ]
