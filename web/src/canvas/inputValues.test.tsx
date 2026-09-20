@@ -146,7 +146,7 @@ function seed(selected: string) {
       dbl: { generation: 4, outputs: [["out", { ...number, samples: ["5"] }]], inputs: [["size", number]] },
     },
     notices: [],
-    hello: { clientId: 1, role: "writer", protocol: 1, engine: "x", project: "p", pipeline: "p.cic", unitPx: 24 },
+    hello: { clientId: 1, role: "writer", protocol: 1, engine: "x", project: "p", pipeline: "p.cic", unitPx: 24, version: null, threads: null },
   });
   useCicada.getState().installSender(() => "");
 }

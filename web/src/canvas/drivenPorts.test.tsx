@@ -192,7 +192,7 @@ describe("transport-driven ports are hidden", () => {
       transport: { view: driving, receivedAt: 0 },
       statuses: {},
       nodeValues: {},
-      hello: { clientId: 1, role: "writer", protocol: 1, engine: "x", project: "p", pipeline: "07-orbit.cic", unitPx: 24 },
+      hello: { clientId: 1, role: "writer", protocol: 1, engine: "x", project: "p", pipeline: "07-orbit.cic", unitPx: 24, version: null, threads: null },
     });
     useCicada.getState().installSender(() => "");
   });
@@ -348,7 +348,7 @@ describe("each transport-driven port shows the value it is fed, on its own loop"
       transport: { view: atTwoSeconds, receivedAt: 0 },
       statuses: {},
       nodeValues: {},
-      hello: { clientId: 1, role: "writer", protocol: 1, engine: "x", project: "p", pipeline: "loops.cic", unitPx: 24 },
+      hello: { clientId: 1, role: "writer", protocol: 1, engine: "x", project: "p", pipeline: "loops.cic", unitPx: 24, version: null, threads: null },
     });
     useCicada.getState().installSender(() => "");
   });
@@ -431,7 +431,7 @@ describe("a hand-wired transport-driven port keeps its wire visible", () => {
       transport: { view, receivedAt: 0 },
       statuses: {},
       nodeValues: {},
-      hello: { clientId: 1, role: "writer", protocol: 1, engine: "x", project: "p", pipeline: "wired.cic", unitPx: 24 },
+      hello: { clientId: 1, role: "writer", protocol: 1, engine: "x", project: "p", pipeline: "wired.cic", unitPx: 24, version: null, threads: null },
     });
     useCicada.getState().installSender(() => "");
   });

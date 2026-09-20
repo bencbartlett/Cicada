@@ -31,6 +31,7 @@ import type {
   ServerEnvelope,
   SolveSummary,
   ValueSummary,
+  VersionInfo,
   WireEnd,
 } from "../protocol/messages";
 import { frameBus } from "./frameBus";
@@ -89,6 +90,13 @@ export interface HelloInfo {
   project: string;
   pipeline: string;
   unitPx: number;
+  /**
+   * The build behind the engine (v0.1 wave 5 R1) — `null` when this engine
+   * did not report one (a build from before R1); About says so.
+   */
+  version: VersionInfo | null;
+  /** The session's resolved worker threads; `null` when not reported. */
+  threads: number | null;
 }
 
 /** A picked geometry element (backward picking, docs/04). */
@@ -750,6 +758,8 @@ export const useCicada = create<CicadaState>((set, get) => ({
             project: p.project,
             pipeline: p.pipeline,
             unitPx: p.unit_px,
+            version: p.version ?? null,
+            threads: p.threads ?? null,
           },
           role: p.role,
         });

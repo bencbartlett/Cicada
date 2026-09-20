@@ -954,6 +954,19 @@ export interface DragEndedPayload {
   port?: string;
 }
 
+/**
+ * The build behind the engine (`protocol::VersionInfo`; v0.1 wave 5 R1):
+ * what `cicada --version` prints, in fields — the workspace version, git's
+ * 12-digit short hash of HEAD (`-dirty` for uncommitted tracked changes;
+ * `unknown` when the build could not tell) and the build's UTC date. On
+ * `hello` as `version` and on `GET /api/version`; the About dialog shows it.
+ */
+export interface VersionInfo {
+  semver: string;
+  commit: string;
+  built: string;
+}
+
 export type ServerMessage =
   | {
       type: "hello";
@@ -965,6 +978,15 @@ export type ServerMessage =
         project: string;
         pipeline: string;
         unit_px: number;
+        /**
+         * The build (additive, v0.1 wave 5 R1) and the session's resolved
+         * worker threads. Optional here because they are ADDITIVE at
+         * protocol 1: an engine from before R1 says hello without them (a
+         * dev SPA on an older `cicada serve`), and the store reads that as
+         * "not reported" rather than throwing — the N1 rule for `inputs`.
+         */
+        version?: VersionInfo;
+        threads?: number;
       };
     }
   | {

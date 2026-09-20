@@ -135,7 +135,7 @@ function seed(role: "writer" | "observer", selected: NodeView) {
     statuses: {},
     nodeValues: {},
     notices: [],
-    hello: { clientId: 1, role, protocol: 1, engine: "x", project: "p", pipeline: "p.cic", unitPx: 24 },
+    hello: { clientId: 1, role, protocol: 1, engine: "x", project: "p", pipeline: "p.cic", unitPx: 24, version: null, threads: null },
   });
   useCicada.getState().installSender((message) => {
     sent.push(message);

@@ -6,9 +6,10 @@
  * the counts in the hover) · the `profile` button (→ the profiler tab) ·
  * the caches indicator (display cache bytes / budget · meshes; warn tone
  * while over budget or thrashing; click → the profiler's caches section)
- * · connection · settings menu (with the display cache size). Everything
- * here reads the store mirror; the intents it sends are `undo`, `redo`,
- * `cancel`, `take_lease` and `set_display_cache`.
+ * · connection · settings menu (with the display cache size, and About —
+ * the build behind the session, wave 5 R1). Everything here reads the store
+ * mirror; the intents it sends are `undo`, `redo`, `cancel`, `take_lease`
+ * and `set_display_cache`.
  */
 import { useEffect, useRef, useState } from "react";
 import {
@@ -19,6 +20,7 @@ import {
   type SplitPreset,
   type WireMode,
 } from "../state/store";
+import { AboutDialog } from "./AboutDialog";
 import { DisplayCachePicker } from "./DisplayCachePicker";
 import { FileMenu } from "./FileMenu";
 import { basename, cachesText, cachesTitle, currentPass, summaryText, summaryTitle, withStatusCounts } from "./format";
@@ -37,6 +39,9 @@ export function TopBar() {
   const connectionMessage = useCicada((s) => s.connectionMessage);
   const display = useCicada((s) => s.display);
   const send = useCicada((s) => s.send);
+  // About is a modal over the whole app, opened from the settings menu
+  // (which closes as it opens) — so it lives here, not inside the menu.
+  const [about, setAbout] = useState(false);
 
   const project = hello === null ? "…" : basename(hello.project);
   const clients = lease.clients.length;
@@ -156,7 +161,8 @@ export function TopBar() {
         )}
       </span>
 
-      <SettingsMenu />
+      <SettingsMenu onAbout={() => setAbout(true)} />
+      {about && <AboutDialog onClose={() => setAbout(false)} />}
     </header>
   );
 }
@@ -320,7 +326,12 @@ const DISPLAY_MODES: [DisplayMode, string][] = [
   ["wireframe", "wireframe"],
 ];
 
-function SettingsMenu() {
+/**
+ * The settings menu (docs/16 §Settings): per-user choices, never project
+ * state — and, last, **About**, which closes the menu and opens the dialog
+ * (`onAbout`).
+ */
+function SettingsMenu({ onAbout }: { onAbout: () => void }) {
   const settings = useCicada((s) => s.settings);
   const updateSettings = useCicada((s) => s.updateSettings);
   const setTab = useInspectorTab((s) => s.setTab);
@@ -417,6 +428,18 @@ function SettingsMenu() {
             solid meshes
           </label>
           <DisplayCachePicker />
+          <span className="menu-h">about</span>
+          <button
+            className="tb-menu-item about-item"
+            title="the build behind this session: version, commit, date, protocol, threads — and the release notes"
+            onClick={() => {
+              setOpen(false);
+              onAbout();
+            }}
+            data-testid="tb-about"
+          >
+            About Cicada…
+          </button>
         </div>
       )}
     </span>

@@ -398,7 +398,7 @@ describe("gitWriteBlockReason", () => {
     useCicada.setState({
       connection: "open",
       role: "writer",
-      hello: { clientId: 1, role: "writer", protocol: 1, engine: "x", project: "p", pipeline: "p.cic", unitPx: 24 },
+      hello: { clientId: 1, role: "writer", protocol: 1, engine: "x", project: "p", pipeline: "p.cic", unitPx: 24, version: null, threads: null },
     });
   beforeEach(() => {
     writer();

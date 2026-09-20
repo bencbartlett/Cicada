@@ -1367,6 +1367,59 @@ aside.inspector {
   margin-left: auto;
 }
 
+/* About (the settings menu's last entry; docs/16 §Settings, wave 5 R1):
+   the build's facts as a key/value grid, the commit as a copy button. */
+.about-item {
+  grid-column: 1 / -1;
+}
+
+.about-dialog {
+  width: min(460px, 92vw);
+}
+
+.about-grid {
+  gap: 4px 12px;
+}
+
+.about-commit-row {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.about-copy {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  cursor: copy;
+}
+
+.about-copy:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.about-links {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.about-links a {
+  color: var(--accent);
+}
+
+.about-engine {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
 /* The File menu: a single column of items, anchored left under its button. */
 .tb-menu.tb-menu-left {
   left: 0;

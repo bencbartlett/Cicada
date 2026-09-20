@@ -118,6 +118,8 @@ describe("disconnect / reconnect bookkeeping", () => {
         project: "p",
         pipeline: "a.cic",
         unitPx: 24,
+        version: null,
+        threads: null,
       },
       notices: [],
       probe: null,
@@ -153,6 +155,21 @@ describe("disconnect / reconnect bookkeeping", () => {
     expect(s.hello?.clientId).toBe(7);
     expect(canWrite(s)).toBe(true);
     expect(s.notices.at(-1)?.message).toMatch(/reconnected as client #7/);
+  });
+
+  it("hello carries the build and the threads into HelloInfo (wave 5 R1); an engine that reports neither leaves them null", () => {
+    const base = { client_id: 7, role: "writer" as const, protocol: 1, engine: "x", project: "p", pipeline: "a.cic", unit_px: 24 };
+    useCicada.getState().applyServerMessage({
+      v: 1,
+      seq: 0,
+      type: "hello",
+      payload: { ...base, version: { semver: "0.1.0-alpha.1", commit: "a82eb39d1c2e", built: "2026-08-25" }, threads: 6 },
+    });
+    expect(useCicada.getState().hello?.version).toEqual({ semver: "0.1.0-alpha.1", commit: "a82eb39d1c2e", built: "2026-08-25" });
+    expect(useCicada.getState().hello?.threads).toBe(6);
+    useCicada.getState().applyServerMessage({ v: 1, seq: 0, type: "hello", payload: base });
+    expect(useCicada.getState().hello?.version).toBeNull();
+    expect(useCicada.getState().hello?.threads).toBeNull();
   });
 });
 
@@ -793,7 +810,7 @@ describe("resetSession (File → Open / Recent / Close, Back)", () => {
       connection: "open",
       connectionMessage: "",
       reconnect: { attempt: 2, nextAt: 5 },
-      hello: { clientId: 3, role: "writer", protocol: 1, engine: "x", project: "p", pipeline: "a.cic", unitPx: 24 },
+      hello: { clientId: 3, role: "writer", protocol: 1, engine: "x", project: "p", pipeline: "a.cic", unitPx: 24, version: null, threads: null },
       role: "writer",
       lease: { writer: 3, clients: [[3, "writer"]] },
       token: "t",
