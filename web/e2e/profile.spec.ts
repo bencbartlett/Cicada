@@ -167,7 +167,7 @@ test("the profiler: the ring, every node with its state and cost, cached rows af
   const clipped = await page.locator(".prof-table th, .prof-table td").evaluateAll((cells) =>
     cells
       .filter((cell) => cell.scrollWidth > cell.clientWidth)
-      .map((cell) => `${(cell as HTMLElement).cellIndex}:${cell.textContent?.trim() ?? ""}`),
+      .map((cell) => `${(cell as HTMLTableCellElement).cellIndex}:${cell.textContent?.trim() ?? ""}`),
   );
   expect(clipped.filter((c) => !c.startsWith("0:")), `only the name column may ellipsise; clipped: ${clipped.join(" | ")}`).toEqual([]);
   const untitledNames = await page.locator(".prof-table td:first-child").evaluateAll((cells) =>
