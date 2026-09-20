@@ -10,6 +10,7 @@
 //! runs a program.
 
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 /// The commit a build could not name: no `CICADA_GIT_SHA`, and git could
 /// not answer (not installed, not a repository, a source tarball). The
@@ -39,6 +40,35 @@ pub const BUILD_INPUTS: &[&str] = &[
 /// terminator dropped, relative to the directory git ran in.
 pub fn tracked_paths(listing: &str) -> impl Iterator<Item = &str> {
     listing.split('\0').filter(|path| !path.is_empty())
+}
+
+/// Where cargo watches one tracked build input (`rerun-if-changed`): the
+/// file itself when it exists; for a file missing at stamp time — deleted,
+/// so the build is `-dirty` through the porcelain — its nearest existing
+/// ancestor directory BELOW `root`, which cargo scans for any modification,
+/// so the file's return by any route (`git checkout`, a copy, an editor's
+/// undo) re-takes the stamp. A missing FILE path would re-run the script on
+/// every build until the file is back, and registering nothing left
+/// `-dirty` standing after a restore that never touched the index (fix
+/// round 2 2026-09-20, finding L3A-1). `None` when nothing below the root
+/// exists on the way up — a file at the root itself (`Cargo.toml`), or a
+/// whole build-input tree gone: the root is never registered (on CI it
+/// holds the target directory), and such a restore waits for git to touch
+/// the index.
+pub fn watch_target(
+    root: &Path,
+    path: &Path,
+    is_file: impl Fn(&Path) -> bool,
+    is_dir: impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    if is_file(path) {
+        return Some(path.to_path_buf());
+    }
+    path.ancestors()
+        .skip(1)
+        .take_while(|ancestor| *ancestor != root)
+        .find(|ancestor| is_dir(ancestor))
+        .map(Path::to_path_buf)
 }
 
 /// A stamping input the build must refuse rather than guess around.
@@ -291,6 +321,49 @@ mod tests {
         assert_eq!(
             tracked_paths("web/a b.ts\0").collect::<Vec<_>>(),
             ["web/a b.ts"]
+        );
+    }
+
+    #[test]
+    fn a_tracked_input_is_watched_as_itself_or_by_its_nearest_existing_directory() {
+        let root = Path::new("/repo");
+        let present = ["/repo/web/src/App.tsx", "/repo/Cargo.toml"];
+        let dirs = [
+            "/repo/web/src",
+            "/repo/web",
+            "/repo/crates/cicada-cli",
+            "/repo/crates",
+        ];
+        let is_file = |p: &Path| present.contains(&p.to_str().unwrap());
+        let is_dir = |p: &Path| dirs.contains(&p.to_str().unwrap());
+        // Present: the file itself.
+        assert_eq!(
+            watch_target(root, Path::new("/repo/web/src/App.tsx"), is_file, is_dir),
+            Some(PathBuf::from("/repo/web/src/App.tsx"))
+        );
+        // Deleted: its directory, so a restore by any route is seen.
+        assert_eq!(
+            watch_target(root, Path::new("/repo/web/src/gone.ts"), is_file, is_dir),
+            Some(PathBuf::from("/repo/web/src"))
+        );
+        // Its directory gone too: the nearest one that is there.
+        assert_eq!(
+            watch_target(
+                root,
+                Path::new("/repo/crates/cicada-cli/src/gone.rs"),
+                is_file,
+                is_dir
+            ),
+            Some(PathBuf::from("/repo/crates/cicada-cli"))
+        );
+        // Nothing below the root on the way up: the root is never registered.
+        assert_eq!(
+            watch_target(root, Path::new("/repo/Cargo.lock"), is_file, is_dir),
+            None
+        );
+        assert_eq!(
+            watch_target(root, Path::new("/repo/docs/gone.md"), is_file, is_dir),
+            None
         );
     }
 

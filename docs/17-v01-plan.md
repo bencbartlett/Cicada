@@ -3273,7 +3273,14 @@ proves wrong is revised here, dated, in the landing commit.
   nothing wrote the index, and the `-dirty`-stripping test could not see
   it). The price is one relink of cicada-cli per such change and per
   external index write (`git add`, an IDE's status refresh after an edit
-  — L2-6, accepted and said in the header); the script's own git calls
+  — L2-6, accepted and said in the header); a tracked input MISSING at
+  stamp time is watched through its nearest existing ancestor directory
+  (`stamp::watch_target`, unit-tested), so its return by any route — a
+  copy, an editor's undo, not only git — re-takes the stamp (fix round 2
+  2026-09-20, L3A-1: the missing file was dropped from the watch list, so a
+  non-git restore left `-dirty` standing until git touched the index; a
+  file at the root itself, `Cargo.toml`, still waits for git — the root is
+  never registered); the script's own git calls
   carry `GIT_OPTIONAL_LOCKS=0` so its `status` never rewrites the index
   behind cargo (L3-1: that re-ran the script on the very next build); the
   repository must be this workspace (`git rev-parse --show-toplevel` =

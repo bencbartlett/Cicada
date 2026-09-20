@@ -23,7 +23,10 @@
 //! of `cicada-cli` per such change, and per external index write (`git
 //! add`, an IDE's status refresh after an edit — finding L2-6, accepted:
 //! the index is watched because staging a NEW file changes nothing else
-//! this script could see). The script's own git calls run with
+//! this script could see). A tracked file that is MISSING when the stamp is
+//! taken is watched through its nearest existing ancestor directory, so its
+//! return by any route re-takes the stamp (finding L3A-1; `watched_paths`
+//! says the price and the one exception). The script's own git calls run with
 //! `GIT_OPTIONAL_LOCKS=0`, so its `status` never rewrites the index behind
 //! cargo's back (that re-ran the script on the very next build — finding
 //! L3-1). The repository must be THIS workspace: a source tree unpacked
@@ -190,10 +193,17 @@ fn git_commit(root: &Path) -> Result<String, String> {
 
 /// The paths whose change re-takes the stamp: HEAD, its reflog and the
 /// index (through `git rev-parse --git-path`, so a worktree's own files are
-/// watched, not the main checkout's) and every tracked file under the build
-/// inputs — those that exist (a deleted tracked file is `-dirty` through
-/// the porcelain; registering a missing path would re-run this script on
-/// every build until it is back, and its return rewrites the index anyway).
+/// watched, not the main checkout's — those that exist) and every tracked
+/// file under the build inputs. A tracked file MISSING at stamp time
+/// (deleted: `-dirty` through the porcelain) is watched through its nearest
+/// existing ancestor directory (`stamp::watch_target`): cargo scans a
+/// registered directory for any modification, so the file's return by any
+/// route — `git checkout`, a copy, an editor's undo — re-takes the stamp
+/// and the `-dirty` goes with it (finding L3A-1: registering nothing left
+/// it standing until git touched the index; registering the missing path
+/// would re-run this script on every build until the file was back). The
+/// price, only while such a file is missing: cargo walks that directory
+/// on every build.
 fn watched_paths(root: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if let Ok(listing) = git(
@@ -213,14 +223,19 @@ fn watched_paths(root: &Path) -> Vec<PathBuf> {
                 .lines()
                 .map(str::trim)
                 .filter(|line| !line.is_empty())
-                .map(|line| root.join(line)),
+                .map(|line| root.join(line))
+                .filter(|path| path.is_file()),
         );
     }
     let mut ls_files = vec!["ls-files", "-z", "--"];
     ls_files.extend_from_slice(stamp::BUILD_INPUTS);
     if let Ok(listing) = git(root, &ls_files) {
-        paths.extend(stamp::tracked_paths(&listing).map(|path| root.join(path)));
+        paths.extend(stamp::tracked_paths(&listing).filter_map(|path| {
+            stamp::watch_target(root, &root.join(path), Path::is_file, Path::is_dir)
+        }));
     }
-    paths.retain(|path| path.is_file());
+    // Several missing files in one directory register it once.
+    paths.sort();
+    paths.dedup();
     paths
 }
