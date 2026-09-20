@@ -4,15 +4,19 @@
  * browser's own tooltip takes ~1 s in Chromium and cannot be tuned, so this
  * layer shows the same text itself after `TOOLTIP_DELAY_MS`: ONE listener set
  * on the document (`pointerover`, `pointerout`, `pointermove`, `pointerdown`,
- * `keydown` Esc — all in the capture phase, so a component that stops a
- * pointer event's propagation, as the dialogs do, still hovers) and every
- * hover text in the app changes nothing — the `title=` sites and the two SVG
- * `<title>` children (every wire's, the profiler ring's arcs) alike, the
- * platform's two tooltip sources.
+ * `pointerup`, `keydown` Esc — all in the capture phase, so a component that
+ * stops a pointer event's propagation, as the dialogs do, still hovers) and
+ * every hover text in the app changes nothing — the `title=` sites and the
+ * two SVG `<title>` children (every wire's, the profiler ring's arcs) alike,
+ * the platform's two tooltip sources.
  *
  * Entering an element whose closest ancestor-or-self carries a title starts
  * the delay; the box shows that text (newlines kept) until the pointer leaves
- * the element, a pointer goes down, or Esc is pressed. While the element is
+ * the element, a pointer goes down, or Esc is pressed. No hover starts while
+ * a button is held — a node or wire drag crossing titled elements shows
+ * nothing, as the platform shows no tooltip with a button down — and the
+ * element under the pointer at the release is entered then (Chromium fires
+ * no boundary event on a wire's drop target). While the element is
  * hovered its title is PARKED: the text moves to `data-title` and the source
  * is left EMPTY — an empty `title` attribute, or an empty `<title>` child, is
  * what the platform itself reads as "no tooltip here", so the native box
@@ -151,6 +155,10 @@ function pointOf(event: Event): TooltipPoint {
   return { x: clientX, y: clientY };
 }
 
+function buttonsHeld(event: Event): boolean {
+  return ((event as PointerEvent).buttons ?? 0) !== 0;
+}
+
 /**
  * Install the layer on `doc`. One controller per document: a second install
  * would park and restore the same titles twice.
@@ -239,12 +247,19 @@ export function installTooltips(doc: Document, delayMs = TOOLTIP_DELAY_MS): Tool
     }, delayMs);
   };
 
-  const onPointerOver = (event: Event) => {
+  // A pointer arriving over an element — a boundary event, or the release
+  // that ends a drag over it.
+  const arrive = (event: Event) => {
     const next = sourceFor(event.target);
     if (session !== null && next !== null && session.source.anchor === next.anchor) return;
     leave();
-    if (next !== null) enter(next, pointOf(event));
+    // A button held (a node or wire drag crossing titled elements): no hover,
+    // as the platform shows no tooltip with a button down.
+    if (next === null || buttonsHeld(event)) return;
+    enter(next, pointOf(event));
   };
+
+  const onPointerOver = (event: Event) => arrive(event);
 
   const onPointerOut = (event: Event) => {
     if (session === null) return;
@@ -269,6 +284,11 @@ export function installTooltips(doc: Document, delayMs = TOOLTIP_DELAY_MS): Tool
     setShown(null);
   };
   const onPointerDown = () => dismiss();
+  // The release that ends a drag: the element under the pointer is entered
+  // as if the pointer had just arrived — a wire's drop target sees no
+  // boundary event of its own. A click's release lands on the pressed
+  // element, whose session it keeps (still dismissed).
+  const onPointerUp = (event: Event) => arrive(event);
   const onKeyDown = (event: Event) => {
     if ((event as KeyboardEvent).key === "Escape") dismiss();
   };
@@ -277,6 +297,7 @@ export function installTooltips(doc: Document, delayMs = TOOLTIP_DELAY_MS): Tool
   doc.addEventListener("pointerout", onPointerOut, true);
   doc.addEventListener("pointermove", onPointerMove, true);
   doc.addEventListener("pointerdown", onPointerDown, true);
+  doc.addEventListener("pointerup", onPointerUp, true);
   doc.addEventListener("keydown", onKeyDown, true);
 
   return {
@@ -293,6 +314,7 @@ export function installTooltips(doc: Document, delayMs = TOOLTIP_DELAY_MS): Tool
       doc.removeEventListener("pointerout", onPointerOut, true);
       doc.removeEventListener("pointermove", onPointerMove, true);
       doc.removeEventListener("pointerdown", onPointerDown, true);
+      doc.removeEventListener("pointerup", onPointerUp, true);
       doc.removeEventListener("keydown", onKeyDown, true);
       listeners.clear();
     },

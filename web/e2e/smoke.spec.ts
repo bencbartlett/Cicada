@@ -129,7 +129,17 @@ test("serve → load → place → wire → drag → screenshot asserts geometry
   const t = await target.boundingBox();
   if (t === null) throw new Error("no radius handle");
   await page.mouse.move(t.x + t.width / 2, t.y + t.height / 2, { steps: 12 });
+  // Held over the drop target (its row carries the probe's verdict as a
+  // title): the tooltip layer starts no hover while a button is down, so
+  // nothing shows and nothing is parked, however long the drag (docs/16
+  // §Theme; wave 5 T1 fix round 1). A fixed wait is right here: the claim
+  // is an absence, and the layer's own delay is a quarter of it.
+  await page.waitForTimeout(TOOLTIP_DELAY_MS * 4);
+  await expect(page.getByTestId("tooltip")).toHaveCount(0);
+  await expect(page.locator(`[${PARKED_ATTR}]`)).toHaveCount(0);
   await page.mouse.up();
+  // The release is the arrival: the drop target's own box comes after it.
+  await expect(page.getByTestId("tooltip")).toBeVisible();
   await expect
     .poll(async () => (await debugState(page)).text)
     .toContain("sphere_1 = sphere(radius=size)");

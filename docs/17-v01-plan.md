@@ -3428,7 +3428,24 @@ proves wrong is revised here, dated, in the landing commit.
   `<title>` text under the pointer), the layer placing at the pointer,
   and a wire hovered in `smoke.spec.ts` (a point along its own path that
   hit-tests to the wire; the box below the pointer, the `<title>` emptied
-  and `data-title` set while hovered, both back on leave).
+  and `data-title` set while hovered, both back on leave). (7) *(fix
+  round 1, L5-1 / T1-C2)* **A hover that begins with a button held**
+  started the delay like any other, so a dragged node — which follows the
+  pointer across its own header and port rows — showed its box under the
+  held button a quarter second into every drag, and a wire drag showed the
+  drop target's probe verdict; the platform shows no tooltip with a button
+  down. The controller reads `PointerEvent.buttons` on arrival and starts
+  nothing while one is held; the RELEASE is an arrival of its own (a
+  `pointerup` listener, the sixth) because Chromium fires a boundary event
+  on a dropped node's header (the node snaps under the pointer) but none on
+  a wire's drop target — measured with a document listener — so without it
+  the drop target would have stayed un-hovered, its native tooltip due on
+  the next wiggle. A click's release lands on the pressed element and
+  keeps its (dismissed) session. Tests: the controller (held: nothing
+  parked or shown; the release enters; a press then a move with the button
+  held restores the first title and starts nothing; a click restarts
+  nothing) and the smoke's wire drag held over the target for 4 × the delay
+  (no box, nothing parked) with the box due after the release.
   Not built: a scroll or resize listener (the box is placed once, at
   show; Chromium re-hovers after layout moves the element away from
   under the pointer and the layer ends the hover then); a hover timer

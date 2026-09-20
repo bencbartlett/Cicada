@@ -151,6 +151,55 @@ describe("the tooltip controller", () => {
     expect(undo.getAttribute("title")).toBe(UNDO);
   });
 
+  it("no hover starts while a button is held; the release enters the element under the pointer; a click's release restarts nothing", () => {
+    const undo = el("undo");
+    const redo = el("redo");
+    const pane = el("pane");
+    // A node drag crossing the undo button: nothing parked, nothing shown.
+    pane.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, buttons: 1 }));
+    undo.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, relatedTarget: pane, buttons: 1 }));
+    expect(undo.getAttribute("title"), "not parked under a held button").toBe(UNDO);
+    vi.advanceTimersByTime(TOOLTIP_DELAY_MS * 4);
+    expect(tooltips.shown()).toBeNull();
+    expect(seen).toEqual([]);
+    // The release over it is the arrival: the box comes at the delay.
+    undo.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, buttons: 0 }));
+    expect(undo.getAttribute("title")).toBe("");
+    vi.advanceTimersByTime(TOOLTIP_DELAY_MS - 1);
+    expect(tooltips.shown()).toBeNull();
+    vi.advanceTimersByTime(1);
+    expect(tooltips.shown()).toEqual({ anchor: undo, text: UNDO });
+
+    // A press on the shown box's element, then moving onto its neighbour
+    // with the button still held: the undo title is back, redo untouched.
+    undo.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, buttons: 1 }));
+    expect(tooltips.shown()).toBeNull();
+    undo.dispatchEvent(new PointerEvent("pointerout", { bubbles: true, relatedTarget: redo, buttons: 1 }));
+    redo.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, relatedTarget: undo, buttons: 1 }));
+    expect(undo.getAttribute("title")).toBe(UNDO);
+    expect(redo.getAttribute("title")).toBe(REDO);
+    vi.advanceTimersByTime(TOOLTIP_DELAY_MS * 4);
+    expect(tooltips.shown()).toBeNull();
+    redo.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, buttons: 0 }));
+    vi.advanceTimersByTime(TOOLTIP_DELAY_MS);
+    expect(tooltips.shown()).toEqual({ anchor: redo, text: REDO });
+    move(redo, pane);
+
+    // A plain click: the press dismisses, the release on the same element
+    // keeps the session as it is — no box comes back until the pointer leaves.
+    move(pane, undo);
+    vi.advanceTimersByTime(TOOLTIP_DELAY_MS);
+    expect(tooltips.shown()).not.toBeNull();
+    undo.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, buttons: 1 }));
+    undo.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, buttons: 0 }));
+    expect(tooltips.shown()).toBeNull();
+    expect(undo.getAttribute("title"), "still parked").toBe("");
+    vi.advanceTimersByTime(TOOLTIP_DELAY_MS * 4);
+    expect(tooltips.shown()).toBeNull();
+    move(undo, pane);
+    expect(undo.getAttribute("title")).toBe(UNDO);
+  });
+
   it("Esc dismisses a shown or pending box without consuming the key", () => {
     const undo = el("undo");
     move(el("pane"), undo);
