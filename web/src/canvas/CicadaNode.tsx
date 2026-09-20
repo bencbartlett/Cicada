@@ -627,6 +627,9 @@ function CicadaNodeImpl({ data, selected }: NodeProps<CanvasNode>) {
               type="button"
               className={`cn-eye nodrag${view.preview ? " on" : ""}`}
               title={view.preview ? "preview on — click to hide" : "preview off — click to show"}
+              // The button's only name is its title, which the tooltip layer
+              // parks while hovered: the same text as a label keeps the name.
+              aria-label={view.preview ? "preview on — click to hide" : "preview off — click to show"}
               onClick={togglePreview}
               onDoubleClick={(event) => event.stopPropagation()}
               aria-pressed={view.preview}

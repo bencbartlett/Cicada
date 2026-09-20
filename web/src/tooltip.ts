@@ -38,13 +38,17 @@
  * and the restore writes the empty value back — and a title removed under
  * the pointer takes the box down and restores nothing.
  *
- * What the layer does not do: it never consumes a key (Esc hides the box
- * and goes on to the keyboard map and the modals — the layer fights
- * neither), never special-cases disabled controls (Chromium dispatches
- * pointer events over them — measured on 151: every mouse and pointer
- * event but `click` — so their "why disabled" titles show at the same
- * 250 ms; a browser that withholds those events keeps its native tooltip
- * there), and never takes the pointer (the box is `pointer-events: none`).
+ * What the layer does not do: it never consumes a key or a press (Esc hides
+ * the box and goes on to the keyboard map and the modals; a press goes on
+ * to the slider's drag and the dialogs — the layer fights none of them),
+ * never special-cases disabled controls (Chromium dispatches pointer events
+ * over them — measured on 151: every pointer event arrives; only the mouse
+ * events `mousedown`, `mouseup` and `click` are withheld — so their "why
+ * disabled" titles show at the same 250 ms; a browser that withholds the
+ * pointer events keeps its native tooltip there), never shows a box on
+ * keyboard focus (pointer events only, as the native tooltip; a focused
+ * control's `title` stays unparked for assistive technology), and never
+ * takes the pointer (the box is `pointer-events: none`).
  *
  * `installTooltips` is the controller — DOM in, a subscription out — so
  * the whole behaviour runs under jsdom with fake timers; `TooltipLayer`

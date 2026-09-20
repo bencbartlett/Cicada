@@ -3390,8 +3390,10 @@ proves wrong is revised here, dated, in the landing commit.
   it). (2) **Disabled controls DO
   fire pointer events in Chromium** (measured on 151 with a document
   listener: `pointerover` / `pointerout` / `pointerdown` / `pointerup`
-  and the mouse events arrive over a disabled button; only `click` is
-  withheld), so "they keep the native tooltip" would have to be a rule
+  and the mouse boundary and move events arrive over a disabled button;
+  the mouse events `mousedown`, `mouseup` and `click` are withheld —
+  fix round 1, L2-5, corrected "only `click`"), so "they keep the native
+  tooltip" would have to be a rule
   of ours making the "why disabled" titles — the ones a user wants
   first — slower on purpose; the layer special-cases nothing and they
   show at 250 ms too, and where a browser withholds those events the
@@ -3485,7 +3487,15 @@ proves wrong is revised here, dated, in the landing commit.
   re-hovers after layout moves the element away from under the pointer
   and the layer ends the hover then — for a moved element, not a removed
   one, which (9) covers); a hover timer restart when a title reappears
-  on the same element.
+  on the same element; an `aria-describedby` from the hovered element to
+  the box (the box is transient and the parked `title` returns on leave;
+  instead the controls named by their title alone — the node face's eye,
+  the splitter — carry the text as an `aria-label` too, so parking never
+  empties an accessible name — fix round 1, L5-3 / T1-C6; keyboard focus
+  shows no box, as the native tooltip shows none, and a focused control's
+  `title` stays unparked). The contract's "125 `title=` sites" was the
+  count at the freeze; the branch carried 150 at the fix round (L1-T1-3)
+  — the number is a snapshot, not a rule.
 
 **Answered in place**, not in the wave: U28 (the icon workflow — a
 track-C package when Ben wants it).

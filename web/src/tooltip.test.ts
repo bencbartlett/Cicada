@@ -146,12 +146,20 @@ describe("the tooltip controller", () => {
     expect(seen).toEqual([{ anchor: wrap, text: "3 undoable" }, null]);
   });
 
-  it("a pointer down dismisses the box and keeps the title parked until the pointer leaves", () => {
+  it("a pointer down dismisses the box and keeps the title parked until the pointer leaves, and the press goes on to the app", () => {
     const undo = el("undo");
     move(el("pane"), undo);
     vi.advanceTimersByTime(TOOLTIP_DELAY_MS);
     expect(tooltips.shown()).not.toBeNull();
+    // The bubble phase at the window: where every React `onPointerDown`
+    // (the slider's drag start, the dialog backdrops) stands after the
+    // layer's capture listener — a `stopPropagation` there would starve them.
+    const reached: string[] = [];
+    const onWindow = (event: Event) => reached.push(event.type);
+    window.addEventListener("pointerdown", onWindow);
     undo.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    window.removeEventListener("pointerdown", onWindow);
+    expect(reached, "the press is not consumed").toEqual(["pointerdown"]);
     expect(tooltips.shown()).toBeNull();
     expect(undo.getAttribute("title"), "the native tooltip must not surface in place of the dismissed one").toBe("");
     vi.advanceTimersByTime(TOOLTIP_DELAY_MS * 4);
@@ -214,9 +222,15 @@ describe("the tooltip controller", () => {
     move(el("pane"), undo);
     vi.advanceTimersByTime(TOOLTIP_DELAY_MS);
     const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    // The keyboard map and About's Esc listen on the window, bubble phase.
+    const reached: string[] = [];
+    const onWindow = (event: Event) => reached.push(event.type);
+    window.addEventListener("keydown", onWindow);
     undo.dispatchEvent(escape);
+    window.removeEventListener("keydown", onWindow);
     expect(tooltips.shown()).toBeNull();
     expect(escape.defaultPrevented, "the keyboard map and the modals see the same Esc").toBe(false);
+    expect(reached, "…and it reaches them").toEqual(["keydown"]);
     move(undo, el("pane"));
 
     // Pending: an Esc inside the delay means no box at all for this hover.
@@ -480,6 +494,8 @@ describe("placeTooltip", () => {
     });
     // Exactly the margin left below: still below.
     expect(placeTooltip({ left: 500, top: 830, width: 100, height: 20 }, box, viewport).side).toBe("below");
+    // Two pixels less — the box would end inside the margin band (898 > 896): above.
+    expect(placeTooltip({ left: 500, top: 832, width: 100, height: 20 }, box, viewport).side).toBe("above");
   });
 
   it("clamps to the viewport's edges", () => {

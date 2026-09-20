@@ -79,6 +79,7 @@ export function App() {
             role="separator"
             aria-orientation="horizontal"
             title="drag to resize · double-click for presets"
+            aria-label="drag to resize · double-click for presets"
             onPointerDown={onSplitterDown}
             onPointerMove={onSplitterMove}
             onPointerUp={onSplitterUp}
