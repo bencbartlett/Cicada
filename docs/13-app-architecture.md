@@ -374,7 +374,11 @@ contents) — additive, `PROTOCOL_VERSION` unchanged:
   presenting it as a complete pass that happened to draw nothing while
   the chip said `cancelled gen N`. An edit's cut (`cut_by: "edit"`) is no
   cancellation and its record stands only until the edit's generation
-  completes.
+  completes: while that generation is in flight the profile IS the cut
+  generation's — `cut_by: "edit"`, no `cancelled`, no rows, no bytes —
+  and the successor's record replaces it, unmarked, when it completes
+  (pinned in fix round 2, review finding L2-P1-F1: the arm was documented
+  and unread — every test's profile read landed after the successor).
 - `profile_view` — the payload IS `ProfileView {generation, kind, phases:
   {queued_ms, solve_ms, tessellate_ms, encode_ms, bytes}, cancelled?,
   cut_by?, nodes: [{name, state, nanos?, last_nanos?, elements?}],

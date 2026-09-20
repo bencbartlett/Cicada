@@ -11993,7 +11993,11 @@ size = slider(value=4.0, min=0.5, max=5.0)
     /// warm-up becomes the pending structural job; the pass resumes, sees it
     /// and stops — `display_end {cancelled: true, cut_by: "edit", outputs:
     /// 0}`, no frame of it — and the edit's generation paints both outputs;
-    /// the generation is not reported cancelled (the edit follows at once).
+    /// the generation is not reported cancelled (the edit follows at once),
+    /// and while the edit's own generation is in flight the profile is the
+    /// cut generation's — `cut_by: "edit"`, no `cancelled` — replaced by
+    /// the successor's record when it completes (review finding L2-P1-F1:
+    /// the arm was documented and unread).
     /// (b) The same edit landing after the LAST verdict — the pass parked
     /// before its encode — is seen by the encode's own check: the same
     /// end, nothing sent. Each of the two documented check sites is pinned
@@ -12062,9 +12066,65 @@ size = slider(value=4.0, min=0.5, max=5.0)
                 || session.solve.superseded() == Some(Superseded::Edit),
                 || hold.release(),
             );
+            // Re-arm before the release: the edit's own generation parks in
+            // its warm-up too, so the cut generation stands as the kept
+            // record — the profile's — while its successor is in flight
+            // (docs/13 §The profiler: an edit's cut is no cancellation, and
+            // its record stands only until the edit's generation completes).
+            // Read it there: `cut_by: "edit"` and NO `cancelled` — the arm
+            // no test reached before (review finding L2-P1-F1: reporting an
+            // edit-cut generation cancelled survived the suite, every read
+            // landing after `wait_idle`, when the successor had replaced it).
+            hold.arm(1);
+            hold.release();
+            let successor = hold.parked();
+            assert!(successor > parked, "{successor} vs {parked}");
+            // The successor meshed its first output; the cut pass nothing
+            // more (with `at == 1` it had one output left).
+            assert_eq!(
+                misses() - meshed_when_parked,
+                1,
+                "the successor's first output alone"
+            );
+            let mut got = drain(&mut rx);
+            let state = session.debug_state(false);
+            assert_eq!(
+                state["solve"]["last_complete_generation"], parked,
+                "{}",
+                state["solve"]
+            );
+            assert_eq!(state["summary"]["cancelled"], false, "{}", state["summary"]);
+            let profile = &state["profile"];
+            assert_eq!(profile["generation"], parked, "{profile}");
+            assert_eq!(profile["cut_by"], "edit", "{profile}");
+            assert!(
+                profile.get("cancelled").is_none(),
+                "an edit's cut is no cancellation: {profile}"
+            );
+            assert_eq!(profile["display"], serde_json::json!([]), "{profile}");
+            assert_eq!(profile["phases"]["bytes"], 0, "{profile}");
+            session.handle(
+                id,
+                Some("prof".into()),
+                ClientMessage::Profile { generation: None },
+            );
+            let answers = drain(&mut rx);
+            let answer_texts = texts(&answers);
+            let views = of_kind(&answer_texts, "profile_view");
+            assert_eq!(views.len(), 1, "{answer_texts:?}");
+            let view = &views[0]["payload"];
+            assert_eq!(view["generation"], parked, "{view}");
+            assert_eq!(view["cut_by"], "edit", "{view}");
+            assert!(
+                view.get("cancelled").is_none(),
+                "an edit's cut is no cancellation: {view}"
+            );
+            assert_eq!(view["display"], serde_json::json!([]), "{view}");
+            got.extend(answers);
             hold.release();
             session.wait_idle();
-            // Across the release the cache misses exactly the edit's
+            got.extend(drain(&mut rx));
+            // Across the two releases the cache misses exactly the edit's
             // generation's two new solids: the cut pass meshed nothing
             // more — with `at == 1` it had one output left, and the
             // warm-up's own check is what keeps it from meshing it (the
@@ -12075,7 +12135,6 @@ size = slider(value=4.0, min=0.5, max=5.0)
                 2,
                 "the cut pass meshed nothing more; the edit's generation its two new solids"
             );
-            let got = drain(&mut rx);
             let msgs = texts(&got);
             let ends = of_kind(&msgs, "display_end");
             assert_eq!(ends.len(), 2, "the cut pass's and the edit's: {msgs:?}");
@@ -12127,6 +12186,14 @@ size = slider(value=4.0, min=0.5, max=5.0)
             assert_eq!(cut_timing["frame_bytes"], 0);
             assert_eq!(cut_timing["cancelled"], false);
             assert!(cut_timing.get("cancel_to_idle_ms").is_none());
+            // And once the edit's generation completed, its record replaced
+            // the cut one: the profile is the successor's, unmarked, with
+            // both rows.
+            let profile = &state["profile"];
+            assert_eq!(profile["generation"], newer_generation, "{profile}");
+            assert!(profile.get("cut_by").is_none(), "{profile}");
+            assert!(profile.get("cancelled").is_none(), "{profile}");
+            assert_eq!(profile["display"].as_array().unwrap().len(), 2, "{profile}");
             newer_generation
         };
         // (a) seen in the warm-up, between the two outputs.

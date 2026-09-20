@@ -2753,7 +2753,19 @@ proves wrong is revised here, dated, in the landing commit.
   between two encoded outputs and an Esc-cut pass has no rows and no bytes
   (an edit's supersession is set off the lock — the debounce's submit — so
   that clause was true of an edit's cut only, which the sentence was not
-  about).
+  about). **An edit-cut generation is read while it stands** (L2-P1-F1,
+  re-graded minor: right today, untested): `cancelled: kept.cut ==
+  Some(Esc)` against `is_some()` was unguarded — docs/13 says an edit's cut
+  is no cancellation and its record stands only until the edit's
+  generation completes, and the edit case read the profile only after
+  `wait_idle`, when the successor had replaced the record (the protocol
+  test builds a `CutBy::Edit` view by hand). The `cut_by_edit` closure
+  re-arms the hold so the edit's own generation parks in its warm-up,
+  reads `/debug/state.profile` and the `profile` intent while the cut
+  generation is the kept one (`cut_by: "edit"`, no `cancelled`, no rows,
+  no bytes; the cache one miss further — the successor's first output),
+  then releases and asserts the successor's record replaced it, unmarked,
+  with both rows; docs/13 says the same in one sentence.
 
 **Track N — `wt/face` (web + one server addition; one review).**
 - **N1 — the node face.**
