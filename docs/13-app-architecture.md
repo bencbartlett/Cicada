@@ -374,7 +374,12 @@ contents) — additive, `PROTOCOL_VERSION` unchanged:
   cache_misses}], caches: CachesView}`: `kind` is the job's (`structural`
   / `preview` / `transport`); `cancelled` (omitted when false) and
   `cut_by` (omitted when nothing cut the pass) are the display pass's
-  fate as above; the phases are the server's wall milliseconds — the wait
+  fate as above; the `display` rows are recorded WITH the pass, under the
+  lock it records under, with the names of that moment, and never
+  resolved afresh at read time (fix round 2026-09-19, review finding C7:
+  a rename keeps the node ref, so a read that resolved the ref through
+  the current refs wore the new name on the kept generation's row); the
+  phases are the server's wall milliseconds — the wait
   before the solve, the solve itself (start to the last node — what the
   chip's `solve` reads), the pass's tessellation warm-up on the pool and
   its encode under the lock, and the frame bytes the pass sent — written

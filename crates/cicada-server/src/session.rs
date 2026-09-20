@@ -945,8 +945,14 @@ struct Kept {
     /// that recorded this generation, once its encode was timed — so a
     /// `profile` read under the same lock never sees a half-filled record.
     phases: ProfilePhases,
-    /// The outputs its display pass drew ([`Emitted::drawn`]).
-    drawn: Vec<(u32, u32)>,
+    /// The outputs its display pass drew ([`Emitted::drawn`]), as the
+    /// profile's rows — SNAPSHOT under the lock the pass records under,
+    /// with the names and stats of that moment: a read resolves nothing
+    /// through the current graph, refs or display table, so a rename or a
+    /// delete whose own generation never completed (Esc during its solve,
+    /// a reload's) cannot rename or drop a row of the kept generation
+    /// (review finding C7).
+    drawn: Vec<ProfileDisplay>,
     /// What cut its display pass between outputs, when something did
     /// (docs/13 §The display edge): the solve completed and the memo holds
     /// its values — which is why the generation is kept — but its picture
@@ -5447,7 +5453,8 @@ impl Core {
                 Superseded::Esc => CutBy::Esc,
             }),
             nodes: Self::profile_nodes(kept),
-            display: Self::profile_display(inner, kept),
+            // The rows as the pass recorded them — never resolved afresh.
+            display: kept.drawn.clone(),
             caches: self.caches_view(inner),
         })
     }
@@ -5534,12 +5541,15 @@ impl Core {
         nodes
     }
 
-    /// The profile's display rows: the outputs the kept generation's pass
-    /// drew, as the display table holds them (the table entry is that
-    /// pass's — a later pass overwriting it would have become the kept
-    /// generation).
-    fn profile_display(inner: &Inner, kept: &Kept) -> Vec<ProfileDisplay> {
-        kept.drawn
+    /// The profile's display rows for the outputs a pass just drew
+    /// (`Emitted::drawn`), built at RECORD time under the lock the pass
+    /// writes its `Kept` under — from the display table entries that pass
+    /// wrote and the names of that moment — and kept as they are: a read
+    /// resolves nothing through the current graph, refs or display table
+    /// (review finding C7: a rename or a delete whose own generation never
+    /// completed renamed or dropped the kept generation's rows).
+    fn profile_display(inner: &Inner, drawn: &[(u32, u32)]) -> Vec<ProfileDisplay> {
+        drawn
             .iter()
             .filter_map(|&(node_ref, output)| {
                 let displayed = inner.display.get(&(node_ref, output))?;
@@ -7136,13 +7146,20 @@ impl Core {
         }
         let cut = warm.cut.or(emitted.cut);
         let encode_ms = encode_began.elapsed().as_secs_f64() * 1000.0;
+        // The profile's display rows, resolved NOW — the names and the table
+        // entries of this pass — and kept as they are (review finding C7).
+        let rows = if recorded {
+            Self::profile_display(&inner, &emitted.drawn)
+        } else {
+            Vec::new()
+        };
         if recorded && let Some(kept) = inner.last_complete.as_mut() {
             // Still under the lock that wrote the record above: no
             // `profile` read sees the encode unfinished — nor a cut pass
             // presented as a complete one.
             kept.phases.encode_ms = encode_ms;
             kept.phases.bytes = emitted.bytes as u64;
-            kept.drawn.clone_from(&emitted.drawn);
+            kept.drawn = rows;
             kept.cut = cut;
         }
         let end = encode(
@@ -11505,6 +11522,113 @@ size = slider(value=4.0, min=0.5, max=5.0)
         assert!(got[0]["payload"].get("cancelled").is_none());
         let state = session.debug_state(false);
         assert_eq!(state["profile"]["generation"], parked);
+    }
+
+    /// The profile's display rows are the kept generation's OWN, recorded
+    /// when its pass drew them — never resolved afresh through the current
+    /// graph, refs or display table at read time (review finding C7): a
+    /// rename keeps the node ref, so while a newer pass is parked in its
+    /// warm-up (the kept generation unchanged) and the rename lands under
+    /// it, the first build's read wore the CURRENT name on the kept
+    /// generation's row (`orb.out` for a pass that drew `ball.out`); the
+    /// same for a rename whose own generation never completes (Esc during
+    /// its solve). The renamed output's row arrives with its generation.
+    #[test]
+    fn profile_display_rows_are_recorded_with_the_pass_not_resolved_at_read() {
+        let (_dir, mut config) = project(
+            "# cicada 1\n\
+             size = slider(value=2.0, min=0.5, max=5.0)\n\
+             span = construct_domain(start=0.0, end=size)\n\
+             block = box(x=span, y=span, z=span)\n\
+             ball = sphere(radius=size)\n",
+        );
+        let hold = PassHold::new();
+        config.display_hold = Some(hold.seam());
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        let _ = drain(&mut rx);
+        let rows = |view: &serde_json::Value| -> Vec<String> {
+            let mut rows: Vec<String> = view["display"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|d| {
+                    format!(
+                        "{}.{}",
+                        d["node"].as_str().unwrap(),
+                        d["output"].as_str().unwrap()
+                    )
+                })
+                .collect();
+            rows.sort();
+            rows
+        };
+        let state = session.debug_state(false);
+        let kept = state["profile"]["generation"].as_u64().unwrap();
+        assert_eq!(rows(&state["profile"]), ["ball.out", "block.out"]);
+        // An edit's generation parks in its warm-up after its first output's
+        // verdict (both outputs pending: the value changed) — the kept
+        // generation is unchanged while it is parked.
+        hold.arm(1);
+        session.handle(
+            id,
+            Some("edit".into()),
+            ClientMessage::SetParam {
+                node: "size".into(),
+                port: Some("value".into()),
+                value: "2.5".into(),
+            },
+        );
+        let parked = hold.parked();
+        assert!(parked > kept);
+        // The rename lands UNDER the parked pass (the lock is free): the
+        // graph and the refs now say `orb` for the ref `ball.out` was drawn
+        // under (a rename keeps the ref), and the rename's own generation
+        // queues behind the loop.
+        session.handle(
+            id,
+            Some("rename".into()),
+            ClientMessage::Rename {
+                node: "ball".into(),
+                new: "orb".into(),
+            },
+        );
+        assert!(
+            session.core.lock_inner().graph.node("ball").is_none(),
+            "the graph already knows `orb`"
+        );
+        // The kept generation is still the profile, and its rows are its
+        // own — `ball.out` by the name of its day, never the current
+        // graph's `orb.out` (the first build resolved the ref at read time).
+        session.handle(
+            id,
+            Some("prof".into()),
+            ClientMessage::Profile { generation: None },
+        );
+        let got = texts(&drain(&mut rx));
+        let answer = of_kind(&got, "profile_view");
+        assert_eq!(answer.len(), 1, "{got:?}");
+        assert_eq!(answer[0]["payload"]["generation"], kept);
+        assert_eq!(
+            rows(&answer[0]["payload"]),
+            ["ball.out", "block.out"],
+            "the kept generation's rows, not the current graph's names"
+        );
+        hold.release();
+        session.wait_idle();
+        // The last generation to complete (the rename's, which cut the
+        // parked pass — latest-wins) drew both outputs under the new name.
+        let state = session.debug_state(false);
+        let last = state["profile"]["generation"].as_u64().unwrap();
+        assert!(last > parked, "{last} vs {parked}");
+        assert_eq!(
+            rows(&state["profile"]),
+            ["block.out", "orb.out"],
+            "the rename's generation drew both under the new name: {}",
+            state["profile"]["display"]
+        );
     }
 
     /// `set_display_cache` (docs/13 §The display edge): writer-only, 64 ..=

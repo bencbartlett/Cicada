@@ -2706,6 +2706,18 @@ proves wrong is revised here, dated, in the landing commit.
   the display outputs; the built display table — a handful of rows, one
   per drawn output, in the pass's order — has no sort or filter, the
   nodes table has both.
+  **The display rows are recorded with the pass** (C7): `profile_display`
+  resolved the kept generation's `(node ref, output)` pairs through the
+  CURRENT refs, graph and display table at read time; a rename keeps the
+  ref, so with a newer pass parked in its warm-up and a rename landing
+  under it the kept generation's row wore the new name (`orb.out` for a
+  pass that drew `ball.out`). `Kept.drawn` is now the rows themselves,
+  built under the lock the pass records under; the session test parks an
+  edit, renames under it and reads. Not changed: `last_complete` survives
+  a reload barrier (a `git revert`, an external edit) until the reload's
+  own generation completes moments later — the inspector's values read
+  the same record, and clearing it there is a change to what the
+  inspector shows during a reload, outside P1 (open).
   **Every arm of the node and display mapping is held** (L2-P1-2 /
   L2-P1-3 / L2-P1-4 / L2-P1-5 / L2-P1-8): the fixture gains a
   red-by-diagnostics cylinder with a consumer that type-checks itself
