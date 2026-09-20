@@ -181,6 +181,13 @@ describe("the profiler tab", () => {
     expect(rows[0]!.textContent).toContain("fine");
     expect(rows[0]!.textContent).toContain("0 / 1");
     expect(rows[1]!.textContent).toContain("—");
+    // The totals row: the generation's sum over its outputs — the triangle
+    // budget is per output, and docs/12 §Display says the profiler shows the
+    // sum (L1-3). 8,000 + 0 triangles; 160,100 + 48 bytes = 156.4 KB.
+    const total = screen.getByTestId("profile-display-total");
+    expect(total.textContent).toContain("2 outputs");
+    expect(total.textContent).toContain("8,000");
+    expect(total.textContent).toContain("156.4 KB");
   });
 
   it("a pass Esc cut is presented as cut, never as a complete pass that drew nothing", () => {

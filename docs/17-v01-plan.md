@@ -2679,6 +2679,11 @@ proves wrong is revised here, dated, in the landing commit.
   scrolled, the jsdom test spies `scrollIntoView` per render, and
   `display.spec.ts` asserts `toBeInViewport()` after the profile landed
   (its `toBeVisible()` passed with the scroll removed).
+  **The display table has a totals row** (L1-3): docs/12 §Display
+  justifies the per-output triangle budget with "the profiler (P1) shows
+  the sum", and the built table listed per-output triangles only; the
+  outputs' triangles and bytes are summed in a `tfoot` (the smaller
+  honest closure — docs/12's sentence stands), pinned in the jsdom test.
   **Every arm of the node and display mapping is held** (L2-P1-2 /
   L2-P1-3 / L2-P1-4 / L2-P1-5 / L2-P1-8): the fixture gains a
   red-by-diagnostics cylinder with a consumer that type-checks itself

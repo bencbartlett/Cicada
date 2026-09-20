@@ -279,6 +279,17 @@ export function ProfilePanel() {
                 <DisplayRow key={`${row.node}.${row.output}`} row={row} />
               ))}
             </tbody>
+            <tfoot>
+              {/* The generation's sum — what the per-output triangle budget
+                  does not bound and docs/12 §Display says the profiler shows. */}
+              <tr data-testid="profile-display-total" title="this pass's outputs summed: the triangle budget is per output, the picture's total is here">
+                <td className="faint">{profile.display.length === 1 ? "1 output" : `${profile.display.length} outputs`}</td>
+                <td />
+                <td className="mono">{profile.display.reduce((sum, row) => sum + row.triangles, 0).toLocaleString("en-US")}</td>
+                <td className="mono">{formatBytes(profile.display.reduce((sum, row) => sum + row.bytes, 0))}</td>
+                <td />
+              </tr>
+            </tfoot>
           </table>
         )}
       </section>
