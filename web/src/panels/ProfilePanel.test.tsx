@@ -222,15 +222,36 @@ describe("the profiler tab", () => {
     expect(useCicada.getState().selection.nodes).toEqual(["arms"]);
   });
 
-  it("the caches section shows the session's view with its budget control, before and after a profile, and takes the indicator's focus", () => {
-    useInspectorTab.setState({ tab: "profile", profileFocus: "caches" });
-    render(<ProfilePanel />);
-    expect(screen.getByTestId("profile-caches")).toBeTruthy();
-    expect(screen.getByTestId("profile-cache-held").textContent).toBe("4.0 KB of 1024.00 MB");
-    expect((screen.getByTestId("profile-display-cache") as HTMLSelectElement).value).toBe("");
-    expect(screen.getByTestId("profile-display-cache-now").textContent).toBe("session: 1G");
-    expect(useInspectorTab.getState().profileFocus, "consumed once the section rendered").toBeNull();
-    act(() => useCicada.setState({ profile }));
+  it("the caches section shows the session's view with its budget control, before and after a profile, and takes the indicator's focus once the full view has scrolled", () => {
+    // jsdom has no `scrollIntoView`: a spy stands in, so the scroll is
+    // asserted to happen on the render that HAS the profile — the focus
+    // consumed on the placeholder render left the section below the fold
+    // once the ring and the table rendered above it (L2-P1-1).
+    const scrolled: string[] = [];
+    const proto = HTMLElement.prototype as unknown as { scrollIntoView?: (this: HTMLElement, options?: unknown) => void };
+    const before = proto.scrollIntoView;
+    proto.scrollIntoView = function scrollIntoView(this: HTMLElement) {
+      scrolled.push(`${this.id}:${screen.getByTestId("profile-view").getAttribute("data-generation")}`);
+    };
+    try {
+      useInspectorTab.setState({ tab: "profile", profileFocus: "caches" });
+      render(<ProfilePanel />);
+      expect(screen.getByTestId("profile-caches")).toBeTruthy();
+      expect(screen.getByTestId("profile-cache-held").textContent).toBe("4.0 KB of 1024.00 MB");
+      expect((screen.getByTestId("profile-display-cache") as HTMLSelectElement).value).toBe("");
+      expect(screen.getByTestId("profile-display-cache-now").textContent).toBe("session: 1G");
+      expect(scrolled, "scrolled on the placeholder render (harmless)").toEqual(["profile-caches:none"]);
+      expect(useInspectorTab.getState().profileFocus, "NOT consumed before the full view rendered").toBe("caches");
+      act(() => useCicada.setState({ profile }));
+      expect(scrolled, "scrolled again once the ring and the table rendered above the section").toEqual(["profile-caches:none", "profile-caches:12"]);
+      expect(useInspectorTab.getState().profileFocus, "consumed after that scroll").toBeNull();
+      // A later profile does not scroll again: the focus is spent.
+      act(() => useCicada.setState({ profile: { ...profile, generation: 13 } }));
+      expect(scrolled).toHaveLength(2);
+    } finally {
+      if (before === undefined) delete proto.scrollIntoView;
+      else proto.scrollIntoView = before;
+    }
     expect(screen.getByTestId("profile-caches").getAttribute("data-warn")).toBe("false");
     fireEvent.change(screen.getByTestId("profile-display-cache"), { target: { value: "512" } });
     expect(sent.at(-1)).toEqual({ type: "set_display_cache", payload: { mib: 512 } });

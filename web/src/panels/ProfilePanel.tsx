@@ -98,12 +98,18 @@ export function ProfilePanel() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // The caches indicator's click lands on the caches section.
+  // The caches indicator's click lands on the caches section — once the
+  // FULL view has rendered: on the `profile === null` render the section
+  // sits right under the title (nothing to scroll), and when the profile
+  // lands the ring, the phases and the node table render above it; a focus
+  // consumed on the first render left the section 500 px below the fold
+  // (review finding L2-P1-1). So the scroll runs on every render while the
+  // focus stands, and the focus is consumed only after the view with the
+  // profile has been scrolled. (jsdom has no `scrollIntoView`.)
   useEffect(() => {
     if (focus !== "caches" || cachesRef.current === null) return;
-    // (jsdom has no `scrollIntoView`; the focus is consumed either way.)
     if (typeof cachesRef.current.scrollIntoView === "function") cachesRef.current.scrollIntoView({ block: "start" });
-    consumeFocus();
+    if (profile !== null) consumeFocus();
   }, [focus, consumeFocus, profile]);
 
   // The client's phases: the frame bus's record of this generation's

@@ -204,11 +204,15 @@ test("a heavy output is drawn at preview, the chip and the viewport show the dis
   expect(first.caches.display.over_budget).toBe(false);
   expect(first.caches.display.thrash).toBe(false);
   expect(first.caches.memo.bytes).toBeGreaterThan(0);
-  // The click lands on the profiler's caches section (P1); Esc closes the tab.
+  // The click lands on the profiler's caches section (P1) — IN the viewport
+  // once the full view (the ring, the phases, the node table above the
+  // section) has rendered, not merely "visible" (Playwright's toBeVisible
+  // does not read the scroll position: L2-P1-1); Esc closes the tab.
   await caches.click();
   await expect(page.getByTestId("insp-tab-profile")).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByTestId("profile-view")).not.toHaveAttribute("data-generation", "none");
   const cachesSection = page.getByTestId("profile-caches");
-  await expect(cachesSection).toBeVisible();
+  await expect(cachesSection).toBeInViewport();
   await expect(cachesSection).toContainText("display cache");
   await expect(cachesSection).toContainText("memo store");
   await expect(page.getByTestId("profile-cache-held")).toHaveText(new RegExp(`of ${(1024).toFixed(2)} MB$`));

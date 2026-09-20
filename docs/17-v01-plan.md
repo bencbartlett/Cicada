@@ -2670,6 +2670,15 @@ proves wrong is revised here, dated, in the landing commit.
   connect and the snapshot keys); the store matches the refusal to its
   outstanding read (`profileRefusal`) and the panel shows the message in
   place; no protocol change.
+  **The caches indicator's click lands on the caches section for real**
+  (L2-P1-1): the focus was consumed on the `profile === null` render —
+  the section right under the title, nothing to scroll — and when the
+  profile landed the ring, the phases and the node table rendered above
+  it, 500 px below the fold; the scroll now runs while the focus stands
+  and the focus is consumed only after the view WITH the profile has
+  scrolled, the jsdom test spies `scrollIntoView` per render, and
+  `display.spec.ts` asserts `toBeInViewport()` after the profile landed
+  (its `toBeVisible()` passed with the scroll removed).
   **Every arm of the node and display mapping is held** (L2-P1-2 /
   L2-P1-3 / L2-P1-4 / L2-P1-5 / L2-P1-8): the fixture gains a
   red-by-diagnostics cylinder with a consumer that type-checks itself
