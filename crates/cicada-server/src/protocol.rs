@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::display::SolidCacheStats;
+use crate::display::{DisplayTier, SolidCacheStats};
 use crate::viewmodel::{GraphView, WireEnd};
 
 /// Control-plane version. 1 = the stage-5 protocol.
@@ -1119,6 +1119,103 @@ pub enum ServerMessage {
     /// `set_display_cache`; the same object rides every `snapshot`. The
     /// payload IS the [`CachesView`]; the client replaces its copy.
     Caches(CachesView),
+    /// The answer to a `profile` read (v0.1 wave 5 P1; docs/13 §The
+    /// profiler; additive): the last complete generation's profile,
+    /// unicast to the asking client. The payload IS the [`ProfileView`].
+    ProfileView(ProfileView),
+}
+
+/// The profile of ONE generation — the last complete one, the only
+/// generation whose per-node costs the session keeps (v0.1 wave 5 P1;
+/// docs/13 §The profiler; docs/16 §Inspector contents): the phases of its
+/// solve and display pass, every node with what it cost, the outputs its
+/// display pass drew, and the caches as they stand. `/debug/state.profile`
+/// is the same object.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProfileView {
+    /// The generation profiled.
+    pub generation: u64,
+    /// `structural` / `preview` / `transport` — the generation's job kind.
+    pub kind: String,
+    /// The generation's phases on the server, wall milliseconds.
+    pub phases: ProfilePhases,
+    /// Every node of the generation's lowering (the solved ones with their
+    /// cost), plus the bindings it excluded and its literal values.
+    pub nodes: Vec<ProfileNode>,
+    /// The outputs the generation's display pass drew (frames sent) — an
+    /// output kept on screen from an earlier generation cost this one
+    /// nothing and is not listed.
+    pub display: Vec<ProfileDisplay>,
+    /// The two caches as they stand when the profile is read.
+    pub caches: CachesView,
+}
+
+/// A generation's phases on the server (`ProfileView::phases`). The
+/// client adds its own — decode, upload, first paint — beside them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProfilePhases {
+    /// Wall milliseconds the job waited before its solve started (the
+    /// intent's arrival or the debounce firing to the generation's start).
+    pub queued_ms: f64,
+    /// Wall milliseconds of the solve itself (start to the last node).
+    pub solve_ms: f64,
+    /// Wall milliseconds of the display pass's tessellation warm-up (the
+    /// worker pool, off the session lock).
+    pub tessellate_ms: f64,
+    /// Wall milliseconds of the frame encode under the session lock.
+    pub encode_ms: f64,
+    /// Bytes of frames the pass sent.
+    pub bytes: u64,
+}
+
+/// One node in a profile (`ProfileView::nodes`): its state in the
+/// generation and what it cost — `nanos` for a node computed this
+/// generation, `last_nanos` (the memo entry's recorded cost) for a cached
+/// one, neither for a red / blocked / cancelled / idle node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileNode {
+    /// The binding.
+    pub name: String,
+    /// The state word (docs/16's one vocabulary).
+    pub state: NodeState,
+    /// Measured work nanoseconds (CPU, summed across chunks) of THIS
+    /// generation's compute. `done` nodes only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nanos: Option<u64>,
+    /// What the LAST compute of this key cost, from its memo entry — never
+    /// this generation's, which paid a cache read. `cached` nodes whose
+    /// entry recorded it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_nanos: Option<u64>,
+    /// Elements processed (this generation's for `done`, the last compute's
+    /// for `cached`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elements: Option<u64>,
+}
+
+/// One output a generation's display pass drew (`ProfileView::display`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProfileDisplay {
+    /// The binding.
+    pub node: String,
+    /// The output port.
+    pub output: String,
+    /// Triangles in its frames.
+    pub triangles: u64,
+    /// Bytes of its frames on the wire.
+    pub bytes: u64,
+    /// The tier its solids were tessellated at; absent for an output
+    /// without solids (a mesh, a curve — no tier, no budget).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<DisplayTier>,
+    /// Solids drawn through tessellation.
+    pub solids: u64,
+    /// Display-cache lookups the pass made for this output's value that the
+    /// cache answered (the budget's tally and the fetch of the drawn tier's
+    /// meshes; outputs sharing one value share the count).
+    pub cache_hits: u64,
+    /// Lookups that called the kernel.
+    pub cache_misses: u64,
 }
 
 /// What cut a display pass between outputs (`display_end.cut_by`; docs/13
@@ -1461,6 +1558,16 @@ pub enum ClientMessage {
         /// Node.
         node: String,
     },
+    /// Ask for a generation's profile (v0.1 wave 5 P1; docs/13 §The
+    /// profiler) — a read any client may make; the answer is a unicast
+    /// `profile_view`. Absent `generation` = the last complete generation,
+    /// the only one whose per-node costs are kept; naming any other is
+    /// refused (kind `invalid`) with that limit in the message.
+    Profile {
+        /// The generation asked for, when one is.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        generation: Option<u64>,
+    },
     /// Ask for a wire's value + pairing.
     InspectWire {
         /// Target end.
@@ -1729,6 +1836,143 @@ mod tests {
         assert!(!is_gesture(&intent.message));
         assert!(!is_transport(&intent.message));
         assert_eq!(type_tag(&intent.message), "set_display_cache");
+    }
+
+    // The frozen wire shapes of the profiler (v0.1 wave 5 P1; the web
+    // client mirrors exactly these in messages.ts): the `profile_view`
+    // answer — a computed node with `nanos`, a cached one with `last_nanos`,
+    // a red one with neither, a display row with a tier and one without —
+    // and the `profile` read, with and without a generation: not a write,
+    // not a gesture, not a transport control.
+    #[test]
+    #[allow(clippy::too_many_lines)] // every documented shape of the profiler, in one place
+    fn profile_view_encodes_the_documented_shape_and_the_read_intent() {
+        let caches = CachesView {
+            display: DisplayCacheView {
+                stats: SolidCacheStats {
+                    entries: 2,
+                    bytes: 4096,
+                    budget: 1 << 30,
+                    hits: 1,
+                    misses: 2,
+                    evictions: 0,
+                    oversized: 0,
+                    refusals: 0,
+                },
+                working_set: 4096,
+                over_budget: false,
+                thrash: false,
+            },
+            memo: MemoCacheView {
+                bytes: 700,
+                entries: 5,
+            },
+        };
+        let view = ProfileView {
+            generation: 7,
+            kind: "structural".to_owned(),
+            phases: ProfilePhases {
+                queued_ms: 31.5,
+                solve_ms: 12.25,
+                tessellate_ms: 40.0,
+                encode_ms: 1.5,
+                bytes: 2048,
+            },
+            nodes: vec![
+                ProfileNode {
+                    name: "ball".to_owned(),
+                    state: NodeState::Done,
+                    nanos: Some(3_000_000),
+                    last_nanos: None,
+                    elements: Some(1),
+                },
+                ProfileNode {
+                    name: "block".to_owned(),
+                    state: NodeState::Cached,
+                    nanos: None,
+                    last_nanos: Some(900_000),
+                    elements: Some(1),
+                },
+                ProfileNode {
+                    name: "bad".to_owned(),
+                    state: NodeState::Red,
+                    nanos: None,
+                    last_nanos: None,
+                    elements: None,
+                },
+            ],
+            display: vec![
+                ProfileDisplay {
+                    node: "ball".to_owned(),
+                    output: "out".to_owned(),
+                    triangles: 8000,
+                    bytes: 2000,
+                    tier: Some(DisplayTier::Fine),
+                    solids: 1,
+                    cache_hits: 0,
+                    cache_misses: 1,
+                },
+                ProfileDisplay {
+                    node: "pts".to_owned(),
+                    output: "out".to_owned(),
+                    triangles: 0,
+                    bytes: 48,
+                    tier: None,
+                    solids: 0,
+                    cache_hits: 0,
+                    cache_misses: 0,
+                },
+            ],
+            caches: caches.clone(),
+        };
+        let text = encode(11, &ServerMessage::ProfileView(view.clone()));
+        let wire: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(wire["type"], "profile_view");
+        assert_eq!(wire["seq"], 11);
+        assert_eq!(
+            wire["payload"],
+            serde_json::json!({
+                "generation": 7,
+                "kind": "structural",
+                "phases": {"queued_ms": 31.5, "solve_ms": 12.25, "tessellate_ms": 40.0, "encode_ms": 1.5, "bytes": 2048},
+                "nodes": [
+                    {"name": "ball", "state": "done", "nanos": 3_000_000, "elements": 1},
+                    {"name": "block", "state": "cached", "last_nanos": 900_000, "elements": 1},
+                    {"name": "bad", "state": "red"},
+                ],
+                "display": [
+                    {"node": "ball", "output": "out", "triangles": 8000, "bytes": 2000, "tier": "fine",
+                     "solids": 1, "cache_hits": 0, "cache_misses": 1},
+                    {"node": "pts", "output": "out", "triangles": 0, "bytes": 48,
+                     "solids": 0, "cache_hits": 0, "cache_misses": 0},
+                ],
+                "caches": serde_json::to_value(&caches).unwrap(),
+            }),
+            "{text}"
+        );
+        // The view round-trips: the renderer is held to the type (the
+        // client mirror and `/debug/state.profile` read exactly this).
+        let back: ProfileView = serde_json::from_value(wire["payload"].clone()).unwrap();
+        assert_eq!(back, view);
+        // The read intent, with and without a generation.
+        let bare: IntentEnvelope =
+            serde_json::from_str(r#"{"v":1,"id":"p","type":"profile","payload":{}}"#).unwrap();
+        assert_eq!(bare.message, ClientMessage::Profile { generation: None });
+        let named: IntentEnvelope =
+            serde_json::from_str(r#"{"v":1,"id":"p","type":"profile","payload":{"generation":7}}"#)
+                .unwrap();
+        assert_eq!(
+            named.message,
+            ClientMessage::Profile {
+                generation: Some(7)
+            }
+        );
+        for intent in [&bare.message, &named.message] {
+            assert!(!is_write(intent), "a read: observers ask too");
+            assert!(!is_gesture(intent));
+            assert!(!is_transport(intent));
+            assert_eq!(type_tag(intent), "profile");
+        }
     }
 
     // The frozen wire shape of the compute-on-release announcement (v0.1

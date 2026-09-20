@@ -80,8 +80,9 @@ use crate::lower::{
 use crate::protocol::{
     Actor, ApplyTextRequest, CachesView, ClientMessage, CutBy, DeltaSource, DisplayCacheView,
     DrivenSignal, DrivenView, HistoryView, LeaseView, LoopView, MemoCacheView, NodeState,
-    NodeStatus, PreviewMode, ProbeCatalogEntry, ProbeVerdict, Role, ServerMessage, SolveSummary,
-    TransportView, ValueSummary, encode, is_gesture, is_write, type_tag,
+    NodeStatus, PreviewMode, ProbeCatalogEntry, ProbeVerdict, ProfileDisplay, ProfileNode,
+    ProfilePhases, ProfileView, Role, ServerMessage, SolveSummary, TransportView, ValueSummary,
+    encode, is_gesture, is_write, type_tag,
 };
 use crate::scripts::ScriptCancel;
 use crate::scrub::{self, SCRUB_PORT, WarmQueue};
@@ -410,7 +411,9 @@ pub enum IntentError {
     #[error("{0}")]
     Transport(String),
     /// A value outside its documented range: `set_display_cache` below 64
-    /// MiB or above 64 GiB (docs/13 §The display edge).
+    /// MiB or above 64 GiB (docs/13 §The display edge); `profile` naming a
+    /// generation other than the last complete one, the only one kept
+    /// (docs/13 §The profiler).
     #[error("{0}")]
     Invalid(String),
     /// A `batch` element failed; the whole batch was rolled back.
@@ -759,6 +762,11 @@ struct Displayed {
     hash: ValueHash,
     generation: u64,
     stats: DisplayStats,
+    /// Display-cache lookups the pass that drew it made for its value —
+    /// answered by the cache, and by the kernel (the profiler's display
+    /// rows, v0.1 wave 5 P1).
+    cache_hits: u64,
+    cache_misses: u64,
     /// The tier its solids were tessellated at: a preview-tier drawing of
     /// a value is redrawn by the next fine-tier generation of the same
     /// value (docs/03 §Display tessellation), a fine one never by a
@@ -828,7 +836,7 @@ impl VerdictMemo {
 }
 
 /// What one display pass sent under the session lock.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 struct Emitted {
     /// Frame bytes sent.
     bytes: usize,
@@ -839,6 +847,10 @@ struct Emitted {
     /// The pass stopped between outputs, and why: an edit is waiting on
     /// the loop, or Esc — latest-wins for the display edge.
     cut: Option<Superseded>,
+    /// The outputs drawn — `(node ref, output)` of every entry the pass
+    /// wrote into the display table (clears excluded: nothing is on screen
+    /// for them). The profiler's display rows.
+    drawn: Vec<(u32, u32)>,
 }
 
 /// One output a generation's display pass may have to draw
@@ -895,6 +907,11 @@ struct Warm {
 struct Decided {
     value: Arc<HashedValue>,
     verdict: display::BudgetStats,
+    /// Display-cache lookups the warm-up made for this value — the budget's
+    /// tally and the fetch of the drawn tier's meshes — answered by the
+    /// cache and by the kernel.
+    hits: u64,
+    misses: u64,
 }
 
 impl Warm {
@@ -905,11 +922,31 @@ impl Warm {
     }
 }
 
-/// A generation's report kept for the inspector.
+/// [`Core::verdict_for`]'s answer: the budget's verdict for a value at the
+/// requested tier, the drawn tier's meshes when the verdict was just
+/// computed (the tally fetched them), and how the cache served the tally's
+/// lookups (nothing when the verdict came from the memo).
+struct Judged {
+    verdict: display::BudgetStats,
+    fresh: Option<display::DrawnMeshes>,
+    hits: u64,
+    misses: u64,
+}
+
+/// A generation's report kept for the inspector and the profiler (v0.1
+/// wave 5 P1): the last complete generation is the only one whose per-node
+/// costs are kept — an honest limit, said in docs/13 §The profiler.
 struct Kept {
     generation: u64,
+    kind: JobKind,
     lowered: Arc<Lowered>,
     report: Arc<SolveReport>,
+    /// The generation's phases; written under the `Inner` lock by the pass
+    /// that recorded this generation, once its encode was timed — so a
+    /// `profile` read under the same lock never sees a half-filled record.
+    phases: ProfilePhases,
+    /// The outputs its display pass drew ([`Emitted::drawn`]).
+    drawn: Vec<(u32, u32)>,
 }
 
 /// The display tier of a generation: a slider drag's generations draw
@@ -1330,6 +1367,10 @@ pub struct GenerationTiming {
     pub queued_ms: f64,
     /// Wall milliseconds from start to completion (frames included).
     pub elapsed_ms: Option<f64>,
+    /// Wall milliseconds of the solve alone (start to the last node) — what
+    /// the chip's `solve` and the profiler's `solve_ms` read; `elapsed_ms`
+    /// minus the display pass (v0.1 wave 5 P1, additive).
+    pub solve_ms: f64,
     /// Ended cancelled.
     pub cancelled: bool,
     /// Present only when an explicit cancel (Esc) ended this generation:
@@ -2286,6 +2327,14 @@ impl Session {
                         generation,
                     },
                 );
+                Ok(())
+            }
+            ClientMessage::Profile { generation } => {
+                // A read: any client, under the lock the pass writes the
+                // record under (docs/13 §The profiler).
+                let inner = self.core.lock_inner();
+                let view = self.core.profile_view(&inner, generation)?;
+                send_to(&inner, client, &ServerMessage::ProfileView(view));
                 Ok(())
             }
             ClientMessage::InspectWire { to } => {
@@ -3441,12 +3490,15 @@ impl Session {
             .map_err(|e| e.to_string())?;
         self.core
             .finish_statuses(generation, &lowered, &report, false);
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
         self.core.record_timing(GenerationTiming {
             generation,
             kind: "explicit",
             started_ms: (started - self.core.epoch).as_secs_f64() * 1000.0,
             queued_ms: 0.0,
-            elapsed_ms: Some(started.elapsed().as_secs_f64() * 1000.0),
+            elapsed_ms: Some(elapsed_ms),
+            // No display pass: the run is the solve.
+            solve_ms: elapsed_ms,
             cancelled: report.cancelled,
             cancel_to_idle_ms: None,
             computed: report
@@ -3698,6 +3750,9 @@ impl Session {
             "picks": picks,
             "display_cache": self.core.solids.stats(),
             "caches": self.core.caches_view(&inner),
+            // The last complete generation's profile — what a `profile`
+            // read answers; null until a generation completes.
+            "profile": self.core.profile_view(&inner, None).ok(),
             "lease": lease_view(&inner),
             "transport": self.core.transport_view(&inner),
             "scrub": self.core.scrub_debug(&inner),
@@ -4356,6 +4411,8 @@ impl Core {
             started_ms: (started - self.epoch).as_secs_f64() * 1000.0,
             queued_ms: 0.0,
             elapsed_ms: Some(elapsed.as_secs_f64() * 1000.0),
+            // Paints nothing: the run is the solve.
+            solve_ms: elapsed.as_secs_f64() * 1000.0,
             cancelled: run.report.cancelled,
             cancel_to_idle_ms: None,
             computed,
@@ -5268,14 +5325,15 @@ impl Core {
     /// hit `None` — the caller fetches them through the cache
     /// ([`Self::drawn_meshes`]) if it is going to encode the output. A
     /// value without solids is drawn as asked.
-    fn verdict_for(
-        &self,
-        value: &Arc<HashedValue>,
-        requested: DisplayTier,
-    ) -> (display::BudgetStats, Option<display::DrawnMeshes>) {
+    fn verdict_for(&self, value: &Arc<HashedValue>, requested: DisplayTier) -> Judged {
         let key = (value.hash(), requested);
         if let Some(verdict) = self.lock_verdicts().get(&key) {
-            return (verdict, None);
+            return Judged {
+                verdict,
+                fresh: None,
+                hits: 0,
+                misses: 0,
+            };
         }
         let solids = display::distinct_solids(std::slice::from_ref(value));
         let map = |items: Vec<(ValueHash, Solid)>,
@@ -5291,7 +5349,12 @@ impl Core {
             &map,
         );
         self.lock_verdicts().insert(key, chosen.stats);
-        (chosen.stats, Some(chosen.meshes))
+        Judged {
+            verdict: chosen.stats,
+            fresh: Some(chosen.meshes),
+            hits: chosen.hits,
+            misses: chosen.misses,
+        }
     }
 
     /// The display meshes of `value`'s distinct solids at `tier`, through
@@ -5301,7 +5364,7 @@ impl Core {
     /// encode then re-tessellated every evicted mesh serially under the
     /// session lock — 17 s for 400 spheres in a 64 MiB cache, every intent
     /// and Esc waiting; review finding 2026-08-25).
-    fn drawn_meshes(&self, value: &Arc<HashedValue>, tier: DisplayTier) -> display::DrawnMeshes {
+    fn drawn_meshes(&self, value: &Arc<HashedValue>, tier: DisplayTier) -> display::Fetched {
         let solids = display::distinct_solids(std::slice::from_ref(value));
         let map = |items: Vec<(ValueHash, Solid)>,
                    f: &(dyn Fn((ValueHash, Solid)) -> Option<u64> + Sync)| {
@@ -5328,6 +5391,158 @@ impl Core {
             .as_ref()
             .and_then(std::sync::Weak::upgrade)
             .and_then(|solve| solve.superseded())
+    }
+
+    /// The profile of the last complete generation (docs/13 §The profiler;
+    /// v0.1 wave 5 P1): its phases, every node with its cost, the outputs
+    /// its display pass drew, and the caches as they stand. `generation`,
+    /// when given, must name that generation — it is the only one whose
+    /// per-node costs are kept, and asking for another is refused with the
+    /// limit rather than answered with the wrong generation's numbers.
+    ///
+    /// # Errors
+    ///
+    /// `IntentError::Invalid` when no generation has completed yet, or when
+    /// `generation` names another generation than the last complete one.
+    fn profile_view(
+        &self,
+        inner: &Inner,
+        generation: Option<u64>,
+    ) -> Result<ProfileView, IntentError> {
+        let Some(kept) = inner.last_complete.as_ref() else {
+            return Err(IntentError::Invalid(
+                "profile: no generation has completed yet".to_owned(),
+            ));
+        };
+        if let Some(asked) = generation
+            && asked != kept.generation
+        {
+            return Err(IntentError::Invalid(format!(
+                "profile: only the last complete generation ({}) is kept — asked for {asked}",
+                kept.generation
+            )));
+        }
+        Ok(ProfileView {
+            generation: kept.generation,
+            kind: match kept.kind {
+                JobKind::Structural => "structural",
+                JobKind::Preview => "preview",
+                JobKind::Transport => "transport",
+            }
+            .to_owned(),
+            phases: kept.phases.clone(),
+            nodes: Self::profile_nodes(kept),
+            display: Self::profile_display(inner, kept),
+            caches: self.caches_view(inner),
+        })
+    }
+
+    /// The profile's node rows: every node of the kept lowering's graph with
+    /// its outcome — `done` with this generation's `nanos`, `cached` with the
+    /// memo entry's `last_nanos`, `red` / `blocked` / `cancelled` with
+    /// neither, `idle` for one outside the requested cone — then the
+    /// bindings that lowering excluded (the checker's red / blocked, `#off`)
+    /// and its literal values (always `done`, no cost — the status board's
+    /// rule), so the table lists every binding of the pipeline as that
+    /// generation saw it.
+    fn profile_nodes(kept: &Kept) -> Vec<ProfileNode> {
+        let mut nodes: Vec<ProfileNode> = kept
+            .report
+            .outcomes
+            .iter()
+            .enumerate()
+            .map(|(index, outcome)| {
+                let name = kept.lowered.graph.node(NodeId(index)).name.clone();
+                let mut node = ProfileNode {
+                    name,
+                    state: NodeState::Idle,
+                    nanos: None,
+                    last_nanos: None,
+                    elements: None,
+                };
+                match outcome {
+                    NodeOutcome::Skipped => {}
+                    NodeOutcome::CacheHit { cost, .. } => {
+                        node.state = NodeState::Cached;
+                        if let Some(cost) = cost {
+                            node.last_nanos = Some(cost.nanos);
+                            node.elements = Some(cost.elements);
+                        }
+                    }
+                    NodeOutcome::Computed {
+                        elements, nanos, ..
+                    } => {
+                        node.state = NodeState::Done;
+                        node.nanos = Some(*nanos);
+                        node.elements = Some(*elements);
+                    }
+                    NodeOutcome::Failed(_) => node.state = NodeState::Red,
+                    NodeOutcome::Blocked { .. } => node.state = NodeState::Blocked,
+                    NodeOutcome::Cancelled => node.state = NodeState::Cancelled,
+                }
+                node
+            })
+            .collect();
+        for (name, exclusion) in &kept.lowered.excluded {
+            nodes.push(ProfileNode {
+                name: name.clone(),
+                state: if exclusion.status() == "blocked" {
+                    NodeState::Blocked
+                } else {
+                    NodeState::Red
+                },
+                nanos: None,
+                last_nanos: None,
+                elements: None,
+            });
+        }
+        let mut literals: Vec<&String> = kept
+            .lowered
+            .bindings
+            .iter()
+            .filter(|(_, binding)| matches!(binding, LoweredBinding::Value(_)))
+            .map(|(name, _)| name)
+            .collect();
+        literals.sort_unstable();
+        for name in literals {
+            nodes.push(ProfileNode {
+                name: name.clone(),
+                state: NodeState::Done,
+                nanos: None,
+                last_nanos: None,
+                elements: None,
+            });
+        }
+        nodes
+    }
+
+    /// The profile's display rows: the outputs the kept generation's pass
+    /// drew, as the display table holds them (the table entry is that
+    /// pass's — a later pass overwriting it would have become the kept
+    /// generation).
+    fn profile_display(inner: &Inner, kept: &Kept) -> Vec<ProfileDisplay> {
+        kept.drawn
+            .iter()
+            .filter_map(|&(node_ref, output)| {
+                let displayed = inner.display.get(&(node_ref, output))?;
+                let node = inner.refs.name_of(node_ref)?;
+                let port = inner
+                    .graph
+                    .node(node)
+                    .and_then(|n| n.outputs.get(output as usize))
+                    .map_or_else(|| output.to_string(), |o| o.name.clone());
+                Some(ProfileDisplay {
+                    node: node.to_owned(),
+                    output: port,
+                    triangles: displayed.stats.triangles as u64,
+                    bytes: displayed.stats.bytes as u64,
+                    tier: displayed.stats.tier,
+                    solids: displayed.stats.solids as u64,
+                    cache_hits: displayed.cache_hits,
+                    cache_misses: displayed.cache_misses,
+                })
+            })
+            .collect()
     }
 
     /// The `caches` view (docs/13 §The display edge): the display cache's
@@ -6281,18 +6496,37 @@ impl Core {
                 },
             };
             if let Some(value) = value {
-                let (verdict, fresh) = self.verdict_for(&value, requested);
+                let Judged {
+                    verdict,
+                    fresh,
+                    mut hits,
+                    mut misses,
+                } = self.verdict_for(&value, requested);
                 let encodes = pending.on_screen.is_none_or(|tier| tier < verdict.drawn);
                 if encodes && warm.pinned_for.insert((pending.hash, verdict.drawn)) {
-                    let meshes = fresh.unwrap_or_else(|| self.drawn_meshes(&value, verdict.drawn));
+                    let meshes = if let Some(meshes) = fresh {
+                        meshes
+                    } else {
+                        let fetched = self.drawn_meshes(&value, verdict.drawn);
+                        hits += fetched.hits;
+                        misses += fetched.misses;
+                        fetched.meshes
+                    };
                     let deflection = verdict.drawn.deflection(config);
                     for (hash, mesh) in meshes {
                         warm.pinned
                             .insert(display::TessellationKey::new(hash, deflection), mesh);
                     }
                 }
-                warm.decided
-                    .insert(pending.hash, Decided { value, verdict });
+                warm.decided.insert(
+                    pending.hash,
+                    Decided {
+                        value,
+                        verdict,
+                        hits,
+                        misses,
+                    },
+                );
             }
             if let Some(hold) = &self.config.display_hold {
                 hold(generation, done + 1);
@@ -6414,12 +6648,15 @@ impl Core {
                 emitted.frames += 1;
                 broadcast_binary(inner, &Bytes::from(frame));
             }
+            emitted.drawn.push((node_ref, output));
             inner.display.insert(
                 (node_ref, output),
                 Displayed {
                     hash,
                     generation,
                     stats: frames.stats,
+                    cache_hits: decided.hits,
+                    cache_misses: decided.misses,
                     tier: verdict.drawn,
                     solids: frames.solids,
                 },
@@ -6823,7 +7060,11 @@ impl Core {
     /// (latest-wins between outputs), then `display_end` on the display lane
     /// behind the last frame, the cache verdict with its notice, and the
     /// `caches` broadcast. Returns what was sent, the encode's wall time,
-    /// and what cut the pass, if anything did.
+    /// and what cut the pass, if anything did. `queued_ms` and `solve_ms`
+    /// are the generation's earlier phases, kept with its report for the
+    /// profiler (`Kept::phases`, filled under the same lock hold once the
+    /// encode is timed).
+    #[allow(clippy::too_many_arguments)] // the pass's phases, handed on to the one record that keeps them
     fn finish_display_pass(
         &self,
         generation: u64,
@@ -6831,6 +7072,8 @@ impl Core {
         report: &Arc<SolveReport>,
         tier: DisplayTier,
         warm: &Warm,
+        queued_ms: f64,
+        solve_ms: f64,
         tessellate_ms: f64,
     ) -> (Emitted, f64, Option<Superseded>) {
         let encode_began = Instant::now();
@@ -6840,18 +7083,35 @@ impl Core {
             .last_complete
             .as_ref()
             .is_none_or(|kept| generation > kept.generation);
-        if newer && !report.cancelled {
+        let recorded = newer && !report.cancelled;
+        if recorded {
             inner.last_complete = Some(Kept {
                 generation,
+                kind: job.kind,
                 lowered: Arc::clone(&job.lowered),
                 report: Arc::clone(report),
+                phases: ProfilePhases {
+                    queued_ms,
+                    solve_ms,
+                    tessellate_ms,
+                    encode_ms: 0.0,
+                    bytes: 0,
+                },
+                drawn: Vec::new(),
             });
         }
-        if newer && !report.cancelled && warm.cut.is_none() {
+        if recorded && warm.cut.is_none() {
             emitted = self.emit_frames(&mut inner, generation, &job.lowered, report, tier, warm);
         }
         let cut = warm.cut.or(emitted.cut);
         let encode_ms = encode_began.elapsed().as_secs_f64() * 1000.0;
+        if recorded && let Some(kept) = inner.last_complete.as_mut() {
+            // Still under the lock that wrote the record above: no
+            // `profile` read sees the encode unfinished.
+            kept.phases.encode_ms = encode_ms;
+            kept.phases.bytes = emitted.bytes as u64;
+            kept.drawn.clone_from(&emitted.drawn);
+        }
         let end = encode(
             inner.seq,
             &ServerMessage::DisplayEnd {
@@ -6902,6 +7162,9 @@ impl Core {
             )
         };
         self.finish_statuses(generation, &job.lowered, report, true);
+        // The solve's own wall (`finish_statuses` measured it from the
+        // generation's start): the chip's `solve`, the profiler's `solve_ms`.
+        let solve_ms = self.lock_status().summary.elapsed_ms;
         let began = Instant::now();
         let tier = tier_of(job.kind);
         // The display pass (docs/12 §Display, docs/13 §The display edge).
@@ -6943,8 +7206,16 @@ impl Core {
         // 3. Under the lock: encode and send (stopping between outputs if
         //    superseded), then `display_end` on the display lane behind the
         //    last frame, the cache verdict, its notice, and `caches`.
-        let (emitted, encode_ms, cut) =
-            self.finish_display_pass(generation, job, report, tier, &warm, tessellate_ms);
+        let (emitted, encode_ms, cut) = self.finish_display_pass(
+            generation,
+            job,
+            report,
+            tier,
+            &warm,
+            queued_ms,
+            solve_ms,
+            tessellate_ms,
+        );
         // Esc cut the pass: the generation is reported cancelled — the
         // chip's `cancelled gen N`, the timing — as its solve would be.
         // The solve finished and the memo holds its values, but its
@@ -6972,6 +7243,7 @@ impl Core {
             started_ms,
             queued_ms,
             elapsed_ms: Some(elapsed),
+            solve_ms,
             cancelled: report.cancelled || esc,
             cancel_to_idle_ms: None,
             computed: report
@@ -10751,6 +11023,262 @@ size = slider(value=4.0, min=0.5, max=5.0)
                 "evictions": 0, "oversized": 0, "refusals": 0,
                 "working_set": 0, "over_budget": false, "thrash": false,
             })
+        );
+    }
+
+    /// The `profile` read (docs/13 §The profiler; v0.1 wave 5 P1): the last
+    /// complete generation's phases, every binding with its cost — `done`
+    /// with this generation's `nanos`, `cached` with the memo's `last_nanos`,
+    /// red / blocked / the `#off` ghost / the literal with neither — the
+    /// outputs its pass drew with the cache lookups made for each, and the
+    /// caches; any client reads it; `/debug/state.profile` is the same
+    /// object; another generation than the last complete one is refused
+    /// with the limit; a preview generation says `preview`; a redraw of a
+    /// value whose meshes the cache holds counts hits, not misses.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one session, every documented behaviour of the read
+    fn profile_reports_the_last_complete_generation_for_any_client() {
+        let (_dir, config) = project(
+            "# cicada 1\n\
+             r = slider(value=1.0, min=0.5, max=2.0)\n\
+             span = construct_domain(start=0.0, end=r)\n\
+             block = box(x=span, y=span, z=span)\n\
+             ball = sphere(radius=r)\n\
+             fixed = sphere(radius=0.6)\n\
+             bad = cylinder(radius=0.0, height=1.0)\n\
+             vol, cen = volume(solid=bad)\n\
+             #off ghost = sphere(radius=2.0)\n\
+             k = 3.0\n",
+        );
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (writer, _) = session.connect(ClientLanes::merged(tx));
+        let (tx2, mut rx2) = unbounded_channel();
+        let (observer, role) = session.connect(ClientLanes::merged(tx2));
+        assert_eq!(role, Role::Observer);
+        let _ = drain(&mut rx);
+        let _ = drain(&mut rx2);
+        let profile = |client: u32,
+                       rx: &mut tokio::sync::mpsc::UnboundedReceiver<Outgoing>,
+                       generation: Option<u64>| {
+            session.handle(
+                client,
+                Some("prof".into()),
+                ClientMessage::Profile { generation },
+            );
+            let got = texts(&drain(rx));
+            assert_eq!(got.len(), 1, "one answer: {got:?}");
+            got.into_iter().next().unwrap()
+        };
+        let node_of = |view: &serde_json::Value, name: &str| -> serde_json::Value {
+            view["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|n| n["name"] == name)
+                .unwrap_or_else(|| panic!("no node `{name}` in {}", view["nodes"]))
+                .clone()
+        };
+        let row_of = |view: &serde_json::Value, node: &str| -> Option<serde_json::Value> {
+            view["display"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|d| d["node"] == node && d["output"] == "out")
+                .cloned()
+        };
+
+        // ---- the first generation: everything computed, one red, one blocked.
+        let answer = profile(writer, &mut rx, None);
+        assert_eq!(answer["type"], "profile_view", "{answer}");
+        let view = answer["payload"].clone();
+        let state = session.debug_state(false);
+        let generation = state["solve"]["last_complete_generation"].as_u64().unwrap();
+        assert_eq!(view["generation"], generation);
+        assert_eq!(view["kind"], "structural");
+        // Every binding of the pipeline is a row: the solved ones, the red
+        // cylinder and the volume it blocks, the `#off` ghost, the literal.
+        let listed: Vec<&str> = view["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["name"].as_str().unwrap())
+            .collect();
+        for node in state["graph"]["nodes"].as_array().unwrap() {
+            let name = node["name"].as_str().unwrap();
+            assert!(listed.contains(&name), "`{name}` missing from {listed:?}");
+        }
+        for computed in ["r", "span", "block", "ball", "fixed"] {
+            let node = node_of(&view, computed);
+            assert_eq!(node["state"], "done", "{node}");
+            assert!(
+                node["nanos"].as_u64().is_some(),
+                "this generation's cost: {node}"
+            );
+            assert!(node.get("last_nanos").is_none(), "not a memo hit: {node}");
+            assert_eq!(node["elements"], 1, "{node}");
+        }
+        let bad = node_of(&view, "bad");
+        assert_eq!(bad["state"], "red", "{bad}");
+        assert!(
+            bad.get("nanos").is_none() && bad.get("last_nanos").is_none(),
+            "{bad}"
+        );
+        assert_eq!(node_of(&view, "vol")["state"], "blocked");
+        assert_eq!(
+            node_of(&view, "ghost")["state"],
+            "red",
+            "excluded by `#off`"
+        );
+        let k = node_of(&view, "k");
+        assert_eq!(k["state"], "done", "a literal is always done: {k}");
+        assert!(k.get("nanos").is_none(), "and costs nothing: {k}");
+        // The phases are the timing's, and the pass's bytes.
+        let timing = state["timings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["generation"] == generation)
+            .unwrap()
+            .clone();
+        let phases = &view["phases"];
+        assert_eq!(phases["queued_ms"], timing["queued_ms"], "{phases}");
+        assert_eq!(phases["solve_ms"], timing["solve_ms"], "{phases}");
+        assert_eq!(phases["tessellate_ms"], timing["tessellate_ms"], "{phases}");
+        assert_eq!(phases["encode_ms"], timing["encode_ms"], "{phases}");
+        assert_eq!(phases["bytes"], timing["frame_bytes"], "{phases}");
+        assert!(
+            phases["solve_ms"].as_f64().unwrap() > 0.0,
+            "the kernel ran: {phases}"
+        );
+        assert!(
+            phases["tessellate_ms"].as_f64().unwrap() > 0.0,
+            "solids were meshed: {phases}"
+        );
+        assert!(phases["encode_ms"].as_f64().unwrap() > 0.0, "{phases}");
+        assert!(phases["bytes"].as_u64().unwrap() > 0, "{phases}");
+        assert!(
+            timing["solve_ms"].as_f64().unwrap() < timing["elapsed_ms"].as_f64().unwrap(),
+            "the solve alone is less than solve + pass: {timing}"
+        );
+        // The display rows: the sphere and the box were drawn at fine on a
+        // fresh cache — every lookup a kernel call, none a hit.
+        let ball = row_of(&view, "ball").expect("ball.out was drawn");
+        assert_eq!(ball["tier"], "fine", "{ball}");
+        assert_eq!(ball["solids"], 1, "{ball}");
+        assert!(ball["triangles"].as_u64().unwrap() > 0, "{ball}");
+        assert!(ball["bytes"].as_u64().unwrap() > 0, "{ball}");
+        assert_eq!(ball["cache_hits"], 0, "{ball}");
+        assert!(ball["cache_misses"].as_u64().unwrap() >= 1, "{ball}");
+        assert!(row_of(&view, "block").is_some(), "{}", view["display"]);
+        assert!(row_of(&view, "bad").is_none(), "a red node drew nothing");
+        assert_eq!(view["caches"], state["caches"]);
+        // `/debug/state.profile` is the same object.
+        assert_eq!(state["profile"], view);
+        // An observer reads it too.
+        let theirs = profile(observer, &mut rx2, None);
+        assert_eq!(theirs["type"], "profile_view", "{theirs}");
+        assert_eq!(theirs["payload"]["generation"], generation);
+        assert!(drain(&mut rx).is_empty(), "unicast");
+        // Naming the kept generation answers; any other is refused with the limit.
+        let named = profile(writer, &mut rx, Some(generation));
+        assert_eq!(named["type"], "profile_view", "{named}");
+        let other = profile(writer, &mut rx, Some(generation + 1));
+        assert_eq!(other["type"], "error", "{other}");
+        assert_eq!(other["payload"]["kind"], "invalid");
+        assert_eq!(other["payload"]["intent_id"], "prof");
+        let message = other["payload"]["message"].as_str().unwrap();
+        assert!(
+            message.contains(&format!("only the last complete generation ({generation})"))
+                && message.contains(&format!("asked for {}", generation + 1)),
+            "{message}"
+        );
+
+        // ---- a second generation: `fixed` is a memo hit with its last cost;
+        // its output stays on screen and is not among this pass's rows.
+        session.handle(
+            writer,
+            Some("r".into()),
+            ClientMessage::SetParam {
+                node: "r".into(),
+                port: Some("value".into()),
+                value: "1.5".into(),
+            },
+        );
+        session.wait_idle();
+        let _ = drain(&mut rx);
+        let view = profile(writer, &mut rx, None)["payload"].clone();
+        assert!(view["generation"].as_u64().unwrap() > generation, "{view}");
+        assert_eq!(view["kind"], "structural");
+        let fixed = node_of(&view, "fixed");
+        assert_eq!(fixed["state"], "cached", "{fixed}");
+        assert!(
+            fixed.get("nanos").is_none(),
+            "a cache read cost this generation nothing: {fixed}"
+        );
+        assert!(
+            fixed["last_nanos"].as_u64().is_some(),
+            "the memo's recorded cost: {fixed}"
+        );
+        assert_eq!(fixed["elements"], 1, "{fixed}");
+        let ball = node_of(&view, "ball");
+        assert_eq!(ball["state"], "done", "{ball}");
+        assert!(ball["nanos"].as_u64().is_some(), "{ball}");
+        assert!(
+            row_of(&view, "ball").is_some(),
+            "redrawn: {}",
+            view["display"]
+        );
+        assert!(
+            row_of(&view, "fixed").is_none(),
+            "kept on screen, not this pass's: {}",
+            view["display"]
+        );
+        let old = profile(writer, &mut rx, Some(generation));
+        assert_eq!(
+            old["payload"]["kind"], "invalid",
+            "the first generation is gone: {old}"
+        );
+
+        // ---- a redraw of a value whose meshes the cache holds: the eye off
+        // and on again fetches the sphere's mesh through the cache — a hit.
+        for on in [false, true] {
+            session.handle(
+                writer,
+                Some(format!("eye-{on}")),
+                ClientMessage::SetPreview {
+                    node: "fixed".into(),
+                    on: Some(on),
+                },
+            );
+            session.wait_idle();
+            let _ = drain(&mut rx);
+        }
+        let view = profile(writer, &mut rx, None)["payload"].clone();
+        let fixed = row_of(&view, "fixed").expect("the toggle's generation drew it");
+        assert_eq!(fixed["cache_hits"], 1, "{fixed}");
+        assert_eq!(fixed["cache_misses"], 0, "{fixed}");
+        assert_eq!(fixed["tier"], "fine", "{fixed}");
+
+        // ---- a preview generation says so.
+        session.handle(
+            writer,
+            Some("tick".into()),
+            ClientMessage::ParamPreview {
+                node: "r".into(),
+                port: Some("value".into()),
+                value: "1.7".into(),
+            },
+        );
+        session.wait_idle();
+        let _ = drain(&mut rx);
+        let view = profile(writer, &mut rx, None)["payload"].clone();
+        assert_eq!(view["kind"], "preview", "{view}");
+        let ball = row_of(&view, "ball").expect("the tick redrew the ball");
+        assert_eq!(
+            ball["tier"], "preview",
+            "a drag's generation draws coarse: {ball}"
         );
     }
 

@@ -168,7 +168,9 @@ pub const DISPLAY_TRIANGLE_BUDGET: u64 = 1_000_000;
 /// release, a joining client and the inspector. Ordered: a fine drawing
 /// satisfies a preview request, never the reverse, so an output drawn at
 /// `Preview` is redrawn by the next `Fine` generation of the same value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum DisplayTier {
     /// The coarse tier (`Deflection::preview`).
@@ -441,6 +443,16 @@ impl Default for SolidCache {
     }
 }
 
+/// How [`SolidCache::tessellation_served`] answered: from the cache, or by
+/// calling the kernel (and caching the result — a refusal included).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Served {
+    /// A cache hit (a cached refusal is a hit too).
+    Hit,
+    /// A kernel call.
+    Miss,
+}
+
 impl SolidCache {
     /// An empty cache with a byte budget.
     #[must_use]
@@ -547,19 +559,35 @@ impl SolidCache {
         solid: &Solid,
         deflection: Deflection,
     ) -> Result<Arc<DisplayMesh>, String> {
+        self.tessellation_served(hash, solid, deflection).0
+    }
+
+    /// [`Self::tessellation`] saying how it was answered — a cache hit or
+    /// a kernel call — so a display pass can attribute its lookups to the
+    /// output it made them for (the profiler's `cache_hits` /
+    /// `cache_misses` per display row, v0.1 wave 5 P1) without reading the
+    /// cache-wide counters, which a restream or an inspector summary on
+    /// another thread moves too.
+    pub fn tessellation_served(
+        &self,
+        hash: ValueHash,
+        solid: &Solid,
+        deflection: Deflection,
+    ) -> (Result<Arc<DisplayMesh>, String>, Served) {
         let key = TessellationKey::new(hash, deflection);
         if let Some(found) = self.lookup(key) {
             self.hits.fetch_add(1, Ordering::Relaxed);
-            return match found {
+            let found = match found {
                 Cached::Mesh(mesh) => Ok(mesh),
                 Cached::Refused(reason) => Err(reason.to_string()),
             };
+            return (found, Served::Hit);
         }
         self.misses.fetch_add(1, Ordering::Relaxed);
         let result = solids::tessellate_display(solid, deflection)
             .map_err(|error| error.to_string())
             .and_then(DisplayMesh::new);
-        match result {
+        let result = match result {
             Ok(mesh) => {
                 let mesh = Arc::new(mesh);
                 self.insert(key, Cached::Mesh(Arc::clone(&mesh)));
@@ -569,7 +597,8 @@ impl SolidCache {
                 self.insert(key, Cached::Refused(Arc::from(reason.as_str())));
                 Err(reason)
             }
-        }
+        };
+        (result, Served::Miss)
     }
 
     /// The display mesh a SUMMARY should read: whatever is cached for this
@@ -783,6 +812,33 @@ pub struct Chosen {
     pub stats: BudgetStats,
     /// The distinct solids' meshes at `stats.drawn`.
     pub meshes: DrawnMeshes,
+    /// Cache lookups the decision made that the cache answered (both
+    /// tiers' tallies when the fine one exceeded the limit).
+    pub hits: u64,
+    /// Cache lookups the decision made that called the kernel.
+    pub misses: u64,
+}
+
+/// [`fetch_meshes`]'s answer: the meshes, and how the cache served them.
+#[derive(Debug, Default)]
+pub struct Fetched {
+    /// The distinct solids' meshes at the asked tier (a refused solid is
+    /// absent).
+    pub meshes: DrawnMeshes,
+    /// Lookups the cache answered.
+    pub hits: u64,
+    /// Lookups that called the kernel (an evicted mesh, meshed again).
+    pub misses: u64,
+}
+
+/// What one [`tally`] did: the triangle total, whether it passed the limit,
+/// the meshes it fetched, and how the cache served its lookups.
+struct Tallied {
+    triangles: u64,
+    exceeded: bool,
+    meshes: DrawnMeshes,
+    hits: u64,
+    misses: u64,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if signature
@@ -806,25 +862,32 @@ pub type ParallelMap<'a> = &'a (
 /// it (the verdict "exceeds" is already certain, and the work wasted
 /// before it is bounded by the limit plus one solid per worker). A refusal
 /// counts no triangles — the emit reports it. Returns the total, whether
-/// the limit was exceeded, and the meshes fetched (every solid's when
-/// nothing was skipped): when the true total fits, nothing is skipped and
-/// the total is exact; when it does not, the total is a partial sum
-/// already past the limit — either way the verdict is the value set's,
-/// never the meshing order's.
+/// the limit was exceeded, the meshes fetched (every solid's when nothing
+/// was skipped) and how the cache served the lookups: when the true total
+/// fits, nothing is skipped and the total is exact; when it does not, the
+/// total is a partial sum already past the limit — either way the verdict
+/// is the value set's, never the meshing order's.
 fn tally(
     solids: &[(ValueHash, Solid)],
     deflection: Deflection,
     cache: &SolidCache,
     limit: Option<u64>,
     map: ParallelMap<'_>,
-) -> (u64, bool, DrawnMeshes) {
+) -> Tallied {
     let total = AtomicU64::new(0);
+    let hits = AtomicU64::new(0);
+    let misses = AtomicU64::new(0);
     let fetched = std::sync::Mutex::new(Vec::with_capacity(solids.len()));
     let _ = map(solids.to_vec(), &|(hash, solid): (ValueHash, Solid)| {
         if limit.is_some_and(|limit| total.load(Ordering::Relaxed) > limit) {
             return None;
         }
-        let triangles = match cache.tessellation(hash, &solid, deflection) {
+        let (result, served) = cache.tessellation_served(hash, &solid, deflection);
+        match served {
+            Served::Hit => hits.fetch_add(1, Ordering::Relaxed),
+            Served::Miss => misses.fetch_add(1, Ordering::Relaxed),
+        };
+        let triangles = match result {
             Ok(mesh) => {
                 let triangles = u64::try_from(mesh.mesh().triangle_count()).unwrap_or(u64::MAX);
                 fetched
@@ -838,11 +901,17 @@ fn tally(
         total.fetch_add(triangles, Ordering::Relaxed);
         Some(triangles)
     });
-    let total = total.load(Ordering::Relaxed);
-    let fetched = fetched
+    let triangles = total.load(Ordering::Relaxed);
+    let meshes = fetched
         .into_inner()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    (total, limit.is_some_and(|limit| total > limit), fetched)
+    Tallied {
+        triangles,
+        exceeded: limit.is_some_and(|limit| triangles > limit),
+        meshes,
+        hits: hits.load(Ordering::Relaxed),
+        misses: misses.load(Ordering::Relaxed),
+    }
 }
 
 /// The display meshes of `solids` at `tier`, through the cache on the
@@ -851,7 +920,8 @@ fn tally(
 /// the memo already knew (the verdict says which tier; the meshes may
 /// have left the cache since — an undo/redo flip after a shrink, or
 /// enough other value sets through it; review finding 2026-08-25). A
-/// refused solid is absent.
+/// refused solid is absent; the hits and misses say how the cache served
+/// the lookups (the profiler's per-output counters).
 #[must_use]
 pub fn fetch_meshes(
     solids: &[(ValueHash, Solid)],
@@ -859,8 +929,13 @@ pub fn fetch_meshes(
     config: &ProjectConfig,
     cache: &SolidCache,
     map: ParallelMap<'_>,
-) -> DrawnMeshes {
-    tally(solids, tier.deflection(config), cache, None, map).2
+) -> Fetched {
+    let tallied = tally(solids, tier.deflection(config), cache, None, map);
+    Fetched {
+        meshes: tallied.meshes,
+        hits: tallied.hits,
+        misses: tallied.misses,
+    }
 }
 
 /// The triangle budget's decision for one output (docs/12 §Display; the
@@ -893,24 +968,31 @@ pub fn choose_tier(
         return Chosen {
             stats: verdict(requested, 0),
             meshes: Vec::new(),
+            hits: 0,
+            misses: 0,
         };
     }
+    let (mut hits, mut misses) = (0, 0);
     if requested == DisplayTier::Fine {
-        let (fine, exceeded, meshes) = tally(
+        let fine = tally(
             solids,
             DisplayTier::Fine.deflection(config),
             cache,
             Some(limit),
             map,
         );
-        if !exceeded {
+        hits += fine.hits;
+        misses += fine.misses;
+        if !fine.exceeded {
             return Chosen {
-                stats: verdict(DisplayTier::Fine, fine),
-                meshes,
+                stats: verdict(DisplayTier::Fine, fine.triangles),
+                meshes: fine.meshes,
+                hits,
+                misses,
             };
         }
     }
-    let (preview, _, meshes) = tally(
+    let preview = tally(
         solids,
         DisplayTier::Preview.deflection(config),
         cache,
@@ -918,8 +1000,10 @@ pub fn choose_tier(
         map,
     );
     Chosen {
-        stats: verdict(DisplayTier::Preview, preview),
-        meshes,
+        stats: verdict(DisplayTier::Preview, preview.triangles),
+        meshes: preview.meshes,
+        hits: hits + preview.hits,
+        misses: misses + preview.misses,
     }
 }
 
@@ -2791,6 +2875,9 @@ mod tests {
         );
         assert_eq!(verdict.stats.drawn, DisplayTier::Preview);
         assert_eq!(fresh.solids.stats().misses, 2);
+        // The decision reports its own lookups (the profiler's per-output
+        // counters): two kernel calls, no hit.
+        assert_eq!((verdict.hits, verdict.misses), (0, 2));
         // `fetch_meshes` at that tier is two hits — what a pass does for an
         // output whose verdict the memo knew; after an eviction it is the
         // kernel again, on the pool, never under the session lock.
@@ -2801,7 +2888,8 @@ mod tests {
             &fresh.solids,
             &map,
         );
-        assert_eq!(again.len(), 2);
+        assert_eq!(again.meshes.len(), 2);
+        assert_eq!((again.hits, again.misses), (2, 0));
         assert_eq!(
             (fresh.solids.stats().hits, fresh.solids.stats().misses),
             (2, 2)
@@ -2815,7 +2903,8 @@ mod tests {
             &fresh.solids,
             &map,
         );
-        assert_eq!(refetched.len(), 2, "served although too big to keep");
+        assert_eq!(refetched.meshes.len(), 2, "served although too big to keep");
+        assert_eq!((refetched.hits, refetched.misses), (0, 2));
         assert_eq!(fresh.solids.stats().misses, 4);
     }
 

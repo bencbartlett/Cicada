@@ -340,6 +340,68 @@ DECISIONS.md row 2026-08-25) — additive, `PROTOCOL_VERSION` unchanged:
   restream interleaved with a live pass carries older generations by
   design — so it was not built (docs/17 §Wave 5, D1).
 
+**The profiler** (v0.1 wave 5 P1, 2026-09-19; docs/16 §Inspector
+contents) — additive, `PROTOCOL_VERSION` unchanged:
+
+- `profile {generation?}` — a READ any client may make (observers too;
+  not a write, not a gesture, never an op), answered by a unicast
+  `profile_view`. The session keeps the per-node costs of ONE generation:
+  the last complete one (the `Kept` record the inspector's values also
+  read from — its report, its lowering, its phases, the outputs its pass
+  drew). That is an honest limit, not a window: an absent `generation`
+  means that generation; naming it answers; naming any other is refused
+  (kind `invalid`, "profile: only the last complete generation (12) is
+  kept — asked for 11") rather than answered with another generation's
+  numbers; before the first generation completes the read is refused the
+  same way ("no generation has completed yet"). A cancelled generation
+  never becomes the last complete one, so after Esc the profile is the
+  previous generation's, and says which.
+- `profile_view` — the payload IS `ProfileView {generation, kind, phases:
+  {queued_ms, solve_ms, tessellate_ms, encode_ms, bytes}, nodes: [{name,
+  state, nanos?, last_nanos?, elements?}], display: [{node, output,
+  triangles, bytes, tier?, solids, cache_hits, cache_misses}], caches:
+  CachesView}`: `kind` is the job's (`structural` / `preview` /
+  `transport`); the phases are the server's wall milliseconds — the wait
+  before the solve, the solve itself (start to the last node — what the
+  chip's `solve` reads), the pass's tessellation warm-up on the pool and
+  its encode under the lock, and the frame bytes the pass sent — written
+  into the kept record under the session lock once the encode is timed,
+  so no read sees a half-filled record; `nodes` lists every binding of
+  that generation's lowering — the solved nodes with `nanos` (this
+  generation's measured work, CPU summed across chunks) for `done`,
+  `last_nanos` (the memo entry's recorded cost of the LAST compute, never
+  this generation's cache read) for `cached`, neither for `red` /
+  `blocked` / `cancelled`, `idle` for a node outside the requested cone
+  (a drag's preview generation solves its cone alone) — then the bindings
+  the lowering excluded (the checker's red / blocked, the `#off` ghosts)
+  and its literal values (`done`, no cost — the status board's rule), so a
+  table over it lists every node of the pipeline as that generation saw
+  it; `display` lists the outputs the generation's OWN pass drew (frames
+  sent) — an output kept on screen from an earlier generation cost this
+  one nothing and is not a row — each with its frames' triangles and
+  bytes, the tier its solids were meshed at (absent for an output without
+  solids: a mesh or a curve has no tier), the solids drawn, and the
+  display-cache lookups the pass made for its value: `cache_hits` answered
+  by the cache, `cache_misses` by the kernel (the budget's tally plus the
+  fetch of the drawn tier's meshes; two outputs of one value share the
+  count — `SolidCache::tessellation_served` says per lookup how it was
+  answered, so the counts are the pass's own, never a delta of the
+  cache-wide counters a restream or an inspector summary moves too);
+  `caches` is the `caches` view as it stands at the read.
+- The client adds its OWN phases beside the server's (docs/16 §Inspector
+  contents): `decode_ms` (the binary frames decoded), `upload_ms` (the
+  frames applied — the scene's geometry built for the GPU) and
+  `first_paint_ms` (`display_begin` to the first render after the last
+  frame applied — the viewport indicator's `painted in`), measured per
+  generation as the frames arrive; the socket's share is what remains of
+  the client's wall from `display_begin` to the last frame applied once
+  the server's tessellation and encode and the client's decode and upload
+  are taken out (transfer and queueing; the rate shown is the pass's
+  bytes over it). Nothing of the client's is sent to the server.
+- `/debug/state.profile` = the same `ProfileView` a `profile` read
+  answers (`null` before a generation completes); `timings[].solve_ms` =
+  the solve's own wall (additive; `elapsed_ms` stays solve + pass).
+
 **Slider drags get a dedicated ephemeral path**: during the drag, the
 client streams `param_preview` messages (not ops, not undoable); the
 scheduler runs **latest-wins supersession with no debounce** — each
@@ -935,7 +997,7 @@ playback; 0 deltas, 0 ops, the file's bytes untouched.
 | `GET /api/git/status` | `?pipeline=` → `{state, pipeline: {path, tracked, ignored, dirty, nodes: [{name, change, from?}], removed: [{name, line_in_head}]}, scope: [{path, status, in_head}], text_hash}` (doc 10 §Git integration, slice 1: working tree vs HEAD). `state` is tagged `kind`: `repo {root, prefix, branch, head_short, upstream: {name, ahead, behind}?, unborn, operation?}` \| `locked` (the SAME fields as `repo` — `index.lock` is held, by another git or by our own commit: status still answers, writes wait, the branch chip keeps its facts) \| `not_a_repo` \| `git_not_found`. `operation` ∈ `merge` / `rebase` / `cherry_pick` / `revert` when the shell left one unfinished (`MERGE_HEAD` etc.) — writes refuse `operation_in_progress` until it is done. `change` ∈ `added` / `modified` / `removed` / `renamed` (`from` = the HEAD name); markers are computed FROM `git diff -U0 HEAD -- <path>` (hunks → binding lines, one binding per line), so they cannot disagree with it; a rename pairs a removed + added line with a byte-identical right-hand side **within one hunk** (the writer's `rename` gesture rewrites one line; a deletion here and an unrelated same-literal addition elsewhere are two hunks → `removed` + `added`); the sidecar never marks a node; an untracked pipeline is every node `added`; an ignored one (`.gitignore`) is `ignored: true`, every node `added`, nothing in the scope. `scope` = the dirty files of the commit scope — this pipeline's `.cic`, its sidecar, `scripts/*.py` beside it (the `apply_text` set), project-relative, `status` ∈ `modified` / `added` / `deleted` / `untracked` / `renamed`, and `in_head` = HEAD has a version of the path — the rule `revert` restores by, published per file so no client re-derives it from `status` (they disagree: porcelain `AD`, added to the index then deleted from disk, is `deleted` with no HEAD version; everything on an unborn branch has none); ignored files are left out (git does not list them and `git add` refuses a list containing one). `text_hash` = blake3 of the working file the markers were computed against (clients dedupe on it). Reads only: every invocation carries `--no-optional-locks`, so a refresh never touches the project and never wakes the watcher — the route test asserts `.git/index` is byte-for-byte untouched across refreshes of a dirty tree (what the flag buys) and the command builder's unit test asserts the flag on every invocation — and no session is opened for it (status is a read about a file: polling it for a pipeline nobody has open must not start hydrating and solving one) |
 | `POST /api/git/commit` | `{message, client?}` (writer-gated: `client` or `X-Cicada-Client` must be the lease holder of the pipeline's OPEN session — committing is a git action on the project, not a document edit, hence unlike `apply_text`; a pipeline nobody has open is 403 `lease` with the reason, never opened on the caller's behalf) → `git add -- <scope>` then `git commit --cleanup=verbatim -F - -- <scope>` (the message verbatim on stdin, written from its own thread so a git that exits early — a failing hook — still reports ITS exit code and stderr whatever the message's length; `-- <paths>` commits ONLY the scope, so whatever else the user staged in a shell stays staged; never `add -A`) → `{hash, short, summary, files}`. 422 `empty_message`, 409 `nothing_to_commit` / `not_a_repo` / `git_not_found` / `ignored` (the pipeline is matched by `.gitignore`: git refuses to add it) / `operation_in_progress` (+ `operation`), 423 `locked`, 403 `lease`, 500 `git_failed` (with `command`, `code`, `stderr`) / `git_timeout` / `internal` |
 | `POST /api/git/revert` | `{paths?, client?}` (writer-gated as above) → `git checkout HEAD -- <paths>` for the dirty scope files that HAVE a HEAD version (the status's `in_head`; `paths` narrows the set — the client's confirm step lists exactly the `in_head` files and names exactly those; 422 `path_not_allowed` outside the scope) → the session reloads through the external-change path (`reload_from_disk` → ONE barrier snapshot, `reason: "git revert"`, op log cleared). Checkout and reload run under the session's **write hold** (`Session::hold_writes` → `reload_from_disk_held`): no intent, undo, `apply_text` or watcher reload can persist between the two — a slider drag arriving mid-revert applies to the REVERTED text afterwards instead of overwriting the restored file (which would have made the reload a no-op and the revert silently lost) — so `reloaded` is always `true` when the files changed and the barrier's reason is always ours; the watcher's later wake finds disk == memory and does nothing. → `{reverted, untracked, reloaded}`. Files without a HEAD version are never deleted: `untracked` lists the ones left alone; an untracked (or ignored) pipeline, or an explicit ask for one, is 409 `untracked`; 409 `nothing_to_revert` / `operation_in_progress`; 500 `reload_failed` when the files are back on disk but the session could not load them (previous state stays live). Measured (route test, debug build, Windows): POST → barrier snapshot on the socket ≤ 35 ms. Every git-route failure body is `{kind, message, …}` with `kind` the snake_case `GitErrorKind` enum in `protocol.rs`, mirrored by the client — including pipeline resolution (`protocol` 400, `no_such_pipeline` 404 with `path`) and server-side failures (`internal` 500); the one exception is the token middleware's 401, text like every route's |
-| `GET /debug/state`, `GET /debug/screenshot` | The agent/dev verification loop (doc 14). `state` (`?pipeline=&values=&wait=`) is the authoritative JSON oracle — graph view-model, text, statuses, summary, per-output display stats with bounds/triangles (plus, additive since v0.1 item 3 WP-B, `stats.solids` = solids drawn through tessellation, `stats.tier` = `preview` / `fine`, the deflection tier those solids were meshed at (a drag's generations draw coarse; the release redraws fine — docs/03 §Display tessellation), `stats.warnings` = per-element caveats for solids drawn although the kernel's mesh did not close, and `stats.errors` = per-element reasons for what could not be drawn; all omitted when zero/empty), `display_cache` = the session's solid tessellation cache counters (`entries`, `bytes`, `budget`, `hits`, `misses`, `evictions`, `oversized`, `refusals` = cached negative entries; docs/12 §Display cache), `caches` = the `caches` view (the same counters with the working set and the `over_budget` / `thrash` flags, and the memo store's `bytes` / `entries`; §The display edge), each displayed output's `stats.budget` = the triangle budget's verdict `{limit, requested, drawn, triangles, over_budget?}`, `watched` = the SERVER's watched directories (§External changes: every open pipeline's directory and its `scripts/`, root-relative, `/`-separated, sorted, `""` = the root — so an agent or a test can tell before an external edit whether the watcher will see it), lease, and `timings` (the last 1,024 generations: kind, `queued_ms` intent-arrival → start, `elapsed_ms`, `cancelled` — a solve Esc stopped, or a display pass Esc cut — computed/cached counts, frame bytes, `tessellate_ms` / `encode_ms` (the display pass's two phases), and `cancel_to_idle_ms` on a generation Esc ended — measured server-side, poll-free; the doc-15 measurement currency); `screenshot` (`?target=viewport`) asks a connected client to render the WebGL viewport to PNG (503 when no client is connected — loud, never blank; whole-page shots are Playwright's job) |
+| `GET /debug/state`, `GET /debug/screenshot` | The agent/dev verification loop (doc 14). `state` (`?pipeline=&values=&wait=`) is the authoritative JSON oracle — graph view-model, text, statuses, summary, per-output display stats with bounds/triangles (plus, additive since v0.1 item 3 WP-B, `stats.solids` = solids drawn through tessellation, `stats.tier` = `preview` / `fine`, the deflection tier those solids were meshed at (a drag's generations draw coarse; the release redraws fine — docs/03 §Display tessellation), `stats.warnings` = per-element caveats for solids drawn although the kernel's mesh did not close, and `stats.errors` = per-element reasons for what could not be drawn; all omitted when zero/empty), `display_cache` = the session's solid tessellation cache counters (`entries`, `bytes`, `budget`, `hits`, `misses`, `evictions`, `oversized`, `refusals` = cached negative entries; docs/12 §Display cache), `caches` = the `caches` view (the same counters with the working set and the `over_budget` / `thrash` flags, and the memo store's `bytes` / `entries`; §The display edge), each displayed output's `stats.budget` = the triangle budget's verdict `{limit, requested, drawn, triangles, over_budget?}`, `watched` = the SERVER's watched directories (§External changes: every open pipeline's directory and its `scripts/`, root-relative, `/`-separated, sorted, `""` = the root — so an agent or a test can tell before an external edit whether the watcher will see it), lease, `profile` = the last complete generation's `ProfileView` — what a `profile` read answers, `null` before one completes (§The profiler), and `timings` (the last 1,024 generations: kind, `queued_ms` intent-arrival → start, `elapsed_ms`, `solve_ms` = the solve alone (v0.1 wave 5 P1), `cancelled` — a solve Esc stopped, or a display pass Esc cut — computed/cached counts, frame bytes, `tessellate_ms` / `encode_ms` (the display pass's two phases), and `cancel_to_idle_ms` on a generation Esc ended — measured server-side, poll-free; the doc-15 measurement currency); `screenshot` (`?target=viewport`) asks a connected client to render the WebGL viewport to PNG (503 when no client is connected — loud, never blank; whole-page shots are Playwright's job) |
 | `GET /health` | Readiness (no token) — Playwright's `webServer` waits on it |
 
 ## Stage-5 slice, stated honestly
