@@ -391,6 +391,7 @@ function SettingsMenu() {
           <label>swap panes</label>
           <input
             type="checkbox"
+            data-testid="settings-swap"
             checked={settings.swap}
             onChange={(e) => updateSettings({ swap: e.target.checked })}
           />

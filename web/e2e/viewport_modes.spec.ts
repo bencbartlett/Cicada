@@ -76,6 +76,11 @@ async function box(page: Page, testId: string): Promise<Box> {
 
 const rounded = (b: Box): Box => ({ x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) });
 
+/** The work area's children in DOM order, by test id (the splitter by its class). */
+async function workOrder(page: Page): Promise<string[]> {
+  return page.locator(".app-work > *").evaluateAll((els) => els.map((el) => (el as HTMLElement).dataset.testid ?? el.className));
+}
+
 /** `inner` lies within `outer` (to half a pixel). */
 function inside(inner: Box, outer: Box): boolean {
   const eps = 0.5;
@@ -166,6 +171,22 @@ test("floating: the panel over the canvas — the same scene, drag + resize pers
   const workArea = await page.locator(".app-work").boundingBox();
   expect(workArea).not.toBeNull();
   expect(work.height).toBeLessThan(workArea!.height - 100);
+
+  // ---- swap: the work area's children are KEYED, so the swap reorders the
+  // viewport's wrapper and remounts nothing — the marked canvas element and
+  // its scene survive (review finding F3: without the keys a swap remounted
+  // the viewport and its WebGL context, and nothing went red).
+  expect(await workOrder(page)).toEqual(["canvas-pane", "splitter", "viewport-pane"]);
+  await page.getByTestId("tb-settings").click();
+  await page.getByTestId("settings-swap").check();
+  await expect.poll(() => workOrder(page)).toEqual(["viewport-pane", "splitter", "canvas-pane"]);
+  await expect(page.getByTestId("viewport-canvas")).toHaveAttribute("data-marker", "same-canvas");
+  expect(triangles(await scene(page))).toBeGreaterThan(500);
+  await page.getByTestId("settings-swap").uncheck();
+  await expect.poll(() => workOrder(page)).toEqual(["canvas-pane", "splitter", "viewport-pane"]);
+  await expect(page.getByTestId("viewport-canvas")).toHaveAttribute("data-marker", "same-canvas");
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("settings-swap")).toHaveCount(0);
 
   // ---- floating: the canvas takes the whole work area, the panel floats over it, the canvas element is the same.
   await page.getByTestId("viewport-mode-floating").click();
