@@ -204,9 +204,17 @@ describe("chooseViewportMode", () => {
       parentAtClose = element.parentElement;
       pip.fire("pagehide");
     });
+    // The element must be home BEFORE the store's mode changes: React
+    // re-renders on that change and looks for the node in its wrapper.
+    let parentAtModeChange: HTMLElement | null = null;
+    const unsubscribe = useCicada.subscribe((state, prev) => {
+      if (state.settings.viewportMode !== prev.settings.viewportMode) parentAtModeChange = element.parentElement;
+    });
     chooseViewportMode("floating", win);
+    unsubscribe();
     expect(pip.close).toHaveBeenCalledTimes(1);
     expect(parentAtClose).toBe(home);
+    expect(parentAtModeChange).toBe(home);
     expect(mode()).toBe("floating");
     expect(viewportWindowOpen()).toBe(false);
     // A late pagehide from the closed window changes nothing either.
