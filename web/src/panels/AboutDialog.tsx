@@ -19,7 +19,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useCicada } from "../state/store";
-import { COPIED_MS, NOT_REPORTED, REPOSITORY_URL, releaseNotesUrl } from "./about";
+import { COPIED_MS, NOT_REPORTED, REPOSITORY_URL, UNKNOWN_COMMIT, releaseNotesUrl } from "./about";
 import "./panels.css";
 
 export function AboutDialog() {
@@ -63,9 +63,13 @@ export function AboutDialog() {
   // Not connected yet: nothing to say. Connected to an engine that reports
   // no build: say that — the two are different facts.
   const missing = hello === null ? "—" : NOT_REPORTED;
+  // A hash is offered to copy; `unknown` (a build git could not name) is a
+  // word, shown as text — a click that "copied" it would report a success
+  // for something that is not a commit.
+  const copyable = commit !== null && commit !== UNKNOWN_COMMIT;
 
   const copy = async () => {
-    if (commit === null) return;
+    if (!copyable) return;
     try {
       await navigator.clipboard.writeText(commit);
       setCopied("copied");
@@ -101,8 +105,8 @@ export function AboutDialog() {
           </span>
           <span className="k">commit</span>
           <span className="v about-commit-row">
-            {commit === null ? (
-              <span data-testid="about-commit">{missing}</span>
+            {!copyable ? (
+              <span data-testid="about-commit">{commit ?? missing}</span>
             ) : (
               <button
                 className="about-copy"

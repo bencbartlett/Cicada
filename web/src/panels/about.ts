@@ -11,6 +11,13 @@ export const REPOSITORY_URL = "https://github.com/bencbartlett/Cicada";
 /** What a field reads when the engine's `hello` carried no build (before R1). */
 export const NOT_REPORTED = "not reported by this engine (before 0.1.0-alpha.1)";
 
+/**
+ * The commit a build could not name — `stamp::UNKNOWN`, the one sentinel
+ * docs/13 names: no `CICADA_GIT_SHA` and git could not answer. Shown as
+ * plain text, never as a hash to copy (finding L3-8).
+ */
+export const UNKNOWN_COMMIT = "unknown";
+
 /** How long the "copied" note stays beside the commit. */
 export const COPIED_MS = 1500;
 

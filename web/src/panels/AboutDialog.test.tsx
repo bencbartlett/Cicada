@@ -98,6 +98,21 @@ describe("the About dialog", () => {
     expect(screen.getByTestId("about-notes").getAttribute("href")).toBe(`${REPOSITORY_URL}/releases`);
   });
 
+  it("a build git could not name shows `unknown` as text, not as a hash to copy", () => {
+    seed({ ...stamped, version: { semver: "0.1.0-alpha.1", commit: "unknown", built: "2026-09-20" } });
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    installClipboard(writeText);
+    render(<AboutDialog />);
+    const commit = screen.getByTestId("about-commit");
+    expect(commit.textContent).toBe("unknown");
+    expect(commit.tagName, "plain text: nothing to copy").toBe("SPAN");
+    fireEvent.click(commit);
+    expect(writeText).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("about-copied")).toBeNull();
+    // The release-notes link still stands: the version is known.
+    expect(screen.getByTestId("about-notes").getAttribute("href")).toBe(`${REPOSITORY_URL}/releases/tag/v0.1.0-alpha.1`);
+  });
+
   it("before the engine says hello every field is a dash and the dialog says it is not connected", () => {
     seed(null);
     render(<AboutDialog />);
