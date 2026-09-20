@@ -2635,6 +2635,17 @@ proves wrong is revised here, dated, in the landing commit.
   server's clock now starts once the begin is on the wire, a non-positive
   residual reads `—` with "not measurable" in the hover, and
   `profile.spec.ts` accepts a time WITH a rate or `—`, never `0.00 ms`.
+  **A restream never re-accumulates into a kept generation's client
+  phases** (L3-P1-4): the frame bus keyed its record by the frame's
+  generation and never closed it, so a `resync_display` (six frames
+  re-delivered, three of them the kept generation's) doubled its decode
+  and upload and moved its last stamp to the restream — `socket 152 ms ·
+  157 KB at 1.0 MB/s` for a pass measured at 6.3 ms; the store seals the
+  record at `display_end` and every record at `display_reset`, a
+  generation never seen records the join's restream once, and the bus's
+  clock is injectable so its apply time and last stamp are asserted
+  against known numbers (L2-P1-6: `>= 0` held for a bus that never
+  moved).
   **Every arm of the node and display mapping is held** (L2-P1-2 /
   L2-P1-3 / L2-P1-4 / L2-P1-5 / L2-P1-8): the fixture gains a
   red-by-diagnostics cylinder with a consumer that type-checks itself

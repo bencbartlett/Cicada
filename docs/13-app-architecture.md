@@ -422,8 +422,18 @@ contents) — additive, `PROTOCOL_VERSION` unchanged:
   applying), so on a heavy pass the wall can come out shorter than the
   server's phases (fix round 2026-09-19, review finding L3-P1-3; the
   server's `tessellate_ms` starts once `display_begin` is on the wire, so
-  the lock wait before the begin is charged to neither side). Nothing of
-  the client's is sent to the server.
+  the lock wait before the begin is charged to neither side). A
+  generation's client phases are FINAL once its `display_end` is heard,
+  and every recorded generation is final at a `display_reset`: a
+  restream (`resync_display`, a reconnect's re-hydration) re-sends every
+  displayed output at the generation that drew it, and those frames are
+  not that pass's work — the first build counted them (a resync doubled
+  the decode and upload of the kept generation and moved its last frame
+  stamp to the restream, so the socket read a rate the pass never had:
+  fix round 2026-09-19, review finding L3-P1-4); a generation a page
+  never saw a pass of still records the join's restream once, so its
+  decode and upload are measured. Nothing of the client's is sent to the
+  server.
 - `/debug/state.profile` = the same `ProfileView` a `profile` read
   answers (`null` before a generation completes); `timings[].solve_ms` =
   the solve's own wall (additive; `elapsed_ms` stays solve + pass).

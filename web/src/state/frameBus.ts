@@ -49,6 +49,8 @@ class FrameBus {
   private replay: [Frame, number][] = [];
   private screenshotHandler: ScreenshotHandler | null = null;
   private generations = new Map<number, GenerationFrames>();
+  /** Generations whose record is final (`seal` / `sealAll`); pruned with `generations`. */
+  private sealed = new Set<number>();
   received = 0;
   bytes = 0;
   /** `performance.now()` of the last frame — the client end of the preview-latency measurement. */
@@ -81,6 +83,13 @@ class FrameBus {
     for (const listener of this.listeners) listener(frame, byteLength);
     const applied = this.now();
     const generation = frame.header.generation;
+    // A sealed generation's record is final: a restream (a `resync_display`,
+    // a reconnect's re-hydration) re-sends every displayed output at the
+    // generation that drew it, and those frames are not that pass's work —
+    // counting them doubled the decode and upload and moved the last stamp
+    // to the restream, so the socket residual read a rate the pass never
+    // had (review finding L3-P1-4).
+    if (this.sealed.has(generation)) return;
     const stats = this.generations.get(generation) ?? {
       frames: 0,
       bytes: 0,
@@ -101,6 +110,7 @@ class FrameBus {
         const oldest = this.generations.keys().next().value;
         if (oldest === undefined) break;
         this.generations.delete(oldest);
+        this.sealed.delete(oldest);
       }
     }
   }
@@ -109,6 +119,22 @@ class FrameBus {
   generation(generation: number): GenerationFrames | null {
     const stats = this.generations.get(generation);
     return stats === undefined ? null : { ...stats };
+  }
+
+  /**
+   * The pass of `generation` has landed (`display_end` heard behind its last
+   * frame): its record is final — later frames of that generation are a
+   * restream's and change nothing. A generation never recorded (a page
+   * that joined after its pass) still records the restream's frames once,
+   * so its decode and upload are measured (docs/16 §Inspector contents).
+   */
+  seal(generation: number): void {
+    if (this.generations.has(generation)) this.sealed.add(generation);
+  }
+
+  /** A `display_reset`: every recorded generation is final — what follows is a restream. */
+  sealAll(): void {
+    for (const generation of this.generations.keys()) this.sealed.add(generation);
   }
 
   subscribe(listener: FrameListener): () => void {

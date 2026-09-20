@@ -229,3 +229,47 @@ test("the bus keeps the client's phases per generation for the profiler: decode 
   expect(frameBus.generation(200)).toBeNull();
   expect(frameBus.generation(300 + GENERATIONS_KEPT - 1)).not.toBeNull();
 });
+
+test("a landed pass's record is final: a restream's frames of that generation change nothing, a generation never seen records them once", () => {
+  const store = useCicada.getState();
+  const end = (generation: number) =>
+    store.applyServerMessage({
+      v: 1,
+      seq: 0,
+      type: "display_end",
+      payload: { generation, outputs: 1, frames: 1, tessellate_ms: 4, encode_ms: 1, bytes: BYTES },
+    });
+  // Generation 500's pass: one frame, then its `display_end` (the store
+  // seals the bus's record as it hears it — no `display_begin` needed for
+  // the seal, only for the store's own pass).
+  frameBus.publish(mesh(500, 7, 70), BYTES, 0.5);
+  const landed = frameBus.generation(500)!;
+  expect(landed.frames).toBe(1);
+  end(500);
+  // A `resync_display` re-streams every displayed output at the generation
+  // that drew it: 500's frame comes again — and again — and moves nothing.
+  frameBus.publish(mesh(500, 7, 70), BYTES, 0.5);
+  frameBus.publish(mesh(500, 7, 70), BYTES, 0.5);
+  expect(frameBus.generation(500)).toEqual(landed);
+  expect(frameBus.received, "the frames themselves are still delivered and counted").toBeGreaterThan(0);
+  // A `display_reset` (a reconnect, a resync) seals every record the bus
+  // holds; a generation this page never saw a pass of (501, drawn before it
+  // joined) still records the restream's frames once — its decode and
+  // upload ARE measured — and is sealed by the next reset.
+  frameBus.publish(mesh(502, 8, 80), BYTES, 0.25);
+  useCicada.getState().applyServerMessage({ v: 1, seq: 0, type: "display_reset", payload: { generation: 502 } });
+  const before = frameBus.generation(502)!;
+  frameBus.publish(mesh(502, 8, 80), BYTES, 0.25);
+  expect(frameBus.generation(502)).toEqual(before);
+  frameBus.publish(mesh(501, 9, 90), BYTES, 0.75);
+  expect(frameBus.generation(501)!.frames).toBe(1);
+  frameBus.publish(mesh(501, 9, 90), BYTES, 0.75);
+  expect(frameBus.generation(501)!.frames, "not yet sealed: the join's restream is its first record").toBe(2);
+  useCicada.getState().applyServerMessage({ v: 1, seq: 0, type: "display_reset", payload: { generation: 502 } });
+  frameBus.publish(mesh(501, 9, 90), BYTES, 0.75);
+  expect(frameBus.generation(501)!.frames).toBe(2);
+  // Sealing an unknown generation is a no-op (nothing to seal — it records when it first arrives).
+  frameBus.seal(9_999);
+  frameBus.publish(mesh(9_999, 7, 70), BYTES);
+  expect(frameBus.generation(9_999)!.frames).toBe(1);
+});

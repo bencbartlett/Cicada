@@ -33,6 +33,7 @@ import type {
   ValueSummary,
   WireEnd,
 } from "../protocol/messages";
+import { frameBus } from "./frameBus";
 import { nowMs, type TransportState } from "./transport";
 
 /**
@@ -864,6 +865,10 @@ export const useCicada = create<CicadaState>((set, get) => ({
         break;
       }
       case "display_reset": {
+        // What follows is a restream: every generation the bus has a record
+        // of is final (a page that never saw a generation's pass still
+        // records the restream's frames for it once).
+        frameBus.sealAll();
         set((state) => ({
           displayGeneration: envelope.payload.generation,
           displayResets: state.displayResets + 1,
@@ -958,6 +963,9 @@ export const useCicada = create<CicadaState>((set, get) => ({
         // it has been applied by now. Only the pass standing here ends — a
         // stale end (its begin was overtaken by a newer one) is ignored.
         const p = envelope.payload;
+        // The generation's client phases are final: a restream's frames of
+        // it (a resync, a reconnect) are not this pass's work.
+        frameBus.seal(p.generation);
         set((state) => {
           const pass = state.display;
           if (pass === null || pass.generation !== p.generation) return state;
