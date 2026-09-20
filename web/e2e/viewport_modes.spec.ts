@@ -12,9 +12,11 @@
  *   - window: on this Chromium (a secure-context loopback URL exposes
  *     `documentPictureInPicture` headless) the viewport's element MOVES
  *     into the picture-in-picture window — the same element, the main
- *     window keeps only the placeholder, the scene still follows a write —
- *     and the placeholder brings it back; the PiP window closing on its
- *     own returns to split.
+ *     window keeps only the placeholder, the scene still follows a write,
+ *     the toolbar that moved with it still works (clicked IN the PiP page:
+ *     display modes, frame all, the mode control landing on the chosen
+ *     mode) — the placeholder brings it back; the PiP window closing on
+ *     its own returns to split.
  *   - window without the API (stubbed out): the wave-4 observer pop-out
  *     opens with a notice saying so, and the mode stays put.
  */
@@ -49,6 +51,14 @@ interface StoredSettings {
 
 async function storedSettings(page: Page): Promise<StoredSettings> {
   return page.evaluate(() => JSON.parse(localStorage.getItem("cicada.settings.v1") ?? "{}") as StoredSettings);
+}
+
+/** The store's display mode (the main window's; the PiP page has no store of its own). */
+async function displayMode(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const w = window as unknown as { __cicada: { state: () => { settings: { displayMode: string } } } };
+    return w.__cicada.state().settings.displayMode;
+  });
 }
 
 interface Box {
@@ -228,21 +238,47 @@ test("window: the viewport's element moves into the picture-in-picture window an
   await expect.poll(async () => (await scene(page))?.bounds?.[1][0] ?? 0).not.toBeCloseTo(boundsBefore![1][0]!, 3);
   await expect.poll(async () => (await scene(page))?.renders ?? 0).toBeGreaterThan(rendersBefore);
 
-  // ---- the placeholder brings it back: the element in the main document again, split, the PiP page closed.
+  // ---- the toolbar that moved with the viewport WORKS in the PiP page: its
+  // handlers are React's, reached through the portal's listeners on the host
+  // (a click in the PiP document never bubbles to the main document's root —
+  // review finding 2026-09-20, the toolbar was dead there).
+  expect(await displayMode(page)).toBe("shaded_edges");
+  await pip.getByTitle("wireframe").click();
+  await expect.poll(() => displayMode(page)).toBe("wireframe");
+  await expect(pip.getByTitle("wireframe")).toHaveClass("active");
+  await pip.getByTitle("shaded + edges").click();
+  await expect.poll(() => displayMode(page)).toBe("shaded_edges");
+  const rendersBeforeFrame = (await scene(page))?.renders ?? 0;
+  await pip.getByTestId("viewport-frame-all").click();
+  await expect.poll(async () => (await scene(page))?.renders ?? 0).toBeGreaterThan(rendersBeforeFrame);
+  // The mode control in the PiP: leaving by it lands on the CHOSEN mode (floating, not split), the element home first, the window closed.
+  await pip.getByTestId("viewport-mode-floating").click();
+  await expect(page.getByTestId("viewport-pane")).toHaveAttribute("data-mode", "floating");
+  await expect(page.getByTestId("viewport-canvas")).toHaveAttribute("data-marker", "same-canvas");
+  await expect(page.getByTestId("viewport-float-title")).toBeVisible();
+  await expect(page.getByTestId("viewport-placeholder")).toHaveCount(0);
+  await expect.poll(() => pip.isClosed()).toBe(true);
+  expect((await storedSettings(page)).viewportMode).toBe("floating");
+  expect(triangles(await scene(page))).toBeGreaterThan(500);
+
+  // ---- again, from floating: the placeholder brings it back — the element in the main document again, split, the PiP page closed.
+  const [pip2] = await Promise.all([context.waitForEvent("page"), page.getByTestId("viewport-mode-window").click()]);
+  await expect(page.getByTestId("viewport-pane")).toHaveAttribute("data-mode", "window");
+  await expect(pip2.getByTestId("viewport-canvas")).toHaveAttribute("data-marker", "same-canvas");
   await page.getByTestId("viewport-placeholder").click();
   await expect(page.getByTestId("viewport-pane")).toHaveAttribute("data-mode", "split");
   await expect(page.getByTestId("viewport-canvas")).toHaveAttribute("data-marker", "same-canvas");
   await expect(page.locator(".splitter")).toHaveCount(1);
-  await expect.poll(() => pip.isClosed()).toBe(true);
+  await expect.poll(() => pip2.isClosed()).toBe(true);
   expect(triangles(await scene(page))).toBeGreaterThan(500);
 
-  // ---- again, from floating this time; the PiP window closing on its own returns to SPLIT (the contract).
+  // ---- once more, from floating; the PiP window closing on its own returns to SPLIT (the contract), not to floating.
   await page.getByTestId("viewport-mode-floating").click();
   await expect(page.getByTestId("viewport-pane")).toHaveAttribute("data-mode", "floating");
-  const [pip2] = await Promise.all([context.waitForEvent("page"), page.getByTestId("viewport-mode-window").click()]);
+  const [pip3] = await Promise.all([context.waitForEvent("page"), page.getByTestId("viewport-mode-window").click()]);
   await expect(page.getByTestId("viewport-pane")).toHaveAttribute("data-mode", "window");
-  await expect(pip2.getByTestId("viewport-canvas")).toHaveAttribute("data-marker", "same-canvas");
-  await pip2.close();
+  await expect(pip3.getByTestId("viewport-canvas")).toHaveAttribute("data-marker", "same-canvas");
+  await pip3.close();
   await expect(page.getByTestId("viewport-pane")).toHaveAttribute("data-mode", "split");
   await expect(page.getByTestId("viewport-canvas")).toHaveAttribute("data-marker", "same-canvas");
   await expect(page.getByTestId("viewport-placeholder")).toHaveCount(0);

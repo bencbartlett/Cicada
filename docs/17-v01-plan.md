@@ -3189,6 +3189,18 @@ proves wrong is revised here, dated, in the landing commit.
   docs/16), camera sync with the observer pop-out (unchanged since wave
   4).
 
+  *Review fixes 2026-09-20 (round 1, `wt/viewport`):* (a) **the toolbar
+  that moved with the viewport was dead** in the PiP window — React
+  delegates events to the root container in the main document and a click
+  in the PiP document never bubbles to it, so every `onClick` on the moved
+  overlay (display modes, frame all, the mode control) rendered live and
+  did nothing; now the overlay is a `createPortal` into the host element
+  itself (React installs its listeners on a portal's container, which
+  travels with the element), the same DOM as before — `viewport_modes.
+  spec.ts` clicks the display modes, frame all and the mode control IN
+  the PiP page (landing on the chosen mode), `viewportUnmount.test.tsx`
+  dispatches the click in the fake PiP document.
+
 **Track A — `wt/about` (cli + server + web + CI; R1's server/CI half gets the adversarial pass, the rest one review).**
 - **R1 — releases and About.** The workspace version becomes
   `0.1.0-alpha.1`. `crates/cicada-cli/build.rs` stamps the build:

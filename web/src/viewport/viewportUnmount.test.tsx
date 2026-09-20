@@ -7,9 +7,12 @@
  * conventions; wave 5 V1). jsdom has no WebGL, so the scene's creation
  * fails on its own path (the failure text, a notice); the registration
  * does not depend on it. The observer pop-out page (`view=viewport`)
- * registers nothing: its viewport is never the window mode's.
+ * registers nothing: its viewport is never the window mode's. And the
+ * toolbar that moves WITH the element keeps working there: its handlers
+ * are reached through the portal's listeners on the host, not through the
+ * main document's root (a click in the PiP document never bubbles to it).
  */
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useRoute } from "../state/route";
 import { useCicada } from "../state/store";
@@ -87,6 +90,42 @@ describe("Viewport + the window mode on unmount", () => {
     // Unmounted for good: the element is out of every tree, not parked in the PiP body.
     expect(pip.document.body.contains(host)).toBe(false);
     expect(document.body.contains(host)).toBe(false);
+  });
+
+  it("the toolbar that moved into the PiP document still reaches React: a display-mode click and the control's `split` work from there", async () => {
+    const pip = fakePip();
+    const win = mainWindow(pip.win);
+    useCicada.getState().updateSettings({ displayMode: "shaded_edges" });
+    const { container } = render(<Viewport />);
+    const host = container.querySelector<HTMLElement>("[data-testid='viewport']")!;
+    chooseViewportMode("window", win);
+    await flush();
+    expect(host.ownerDocument).toBe(pip.document);
+    // The PiP document's own events (a real click bubbles in the document the
+    // node is in — `document.implementation`'s has no window of its own, so
+    // the event is constructed here and dispatched there; fireEvent needs a
+    // window and cannot).
+    const click = (testIdOrTitle: string) => {
+      const target = host.querySelector<HTMLElement>(testIdOrTitle);
+      expect(target, testIdOrTitle).not.toBeNull();
+      act(() => {
+        target!.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      });
+    };
+    click("button[title='wireframe']");
+    expect(useCicada.getState().settings.displayMode).toBe("wireframe");
+    expect(host.querySelector("button[title='wireframe']")?.className).toBe("active");
+    click("[data-testid='viewport-mode-split']");
+    expect(useCicada.getState().settings.viewportMode).toBe("split");
+    expect(host.ownerDocument).toBe(document);
+    expect(container.contains(host)).toBe(true);
+    expect(pip.close).toHaveBeenCalledTimes(1);
+    expect(viewportWindowOpen()).toBe(false);
+    // Home again, the same buttons still work once (no doubled listeners).
+    const before = useCicada.getState().settings.displayMode;
+    click("button[title='shaded']");
+    expect(before).toBe("wireframe");
+    expect(useCicada.getState().settings.displayMode).toBe("shaded");
   });
 
   it("the observer pop-out page's viewport registers nothing: `window` there opens no PiP and moves nothing", async () => {

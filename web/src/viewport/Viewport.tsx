@@ -9,8 +9,19 @@
  * viewport-mode controller's (`windowMode.ts`); the host element is
  * registered with it so the `window` mode can move it into the
  * picture-in-picture document and back without a remount.
+ *
+ * The overlay (toolbar, readouts, hover label) is rendered through a PORTAL
+ * whose container is the host element itself. React delegates events to the
+ * container a tree was mounted in — for the app, `#root` in the main
+ * document — so a click on a button inside an element moved into the PiP
+ * document bubbles through THAT document and never reaches `#root`; but React
+ * also installs its listeners on every portal container, and the host travels
+ * with its listeners. The DOM is the same as a plain child's (the overlay is
+ * appended to the host either way) — only the event path differs (review
+ * finding 2026-09-20: the moved toolbar was dead).
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { displayText } from "../panels/format";
 import { frameBus } from "../state/frameBus";
 import { useRoute } from "../state/route";
@@ -65,7 +76,10 @@ function selectedRefs(names: string[]): Set<number> {
 }
 
 export function Viewport() {
-  const hostRef = useRef<HTMLDivElement>(null);
+  // The host element as STATE (a callback ref), not a ref: the overlay's
+  // portal needs it as a render-time value, and the effects below run once
+  // it is there.
+  const [host, setHost] = useState<HTMLDivElement | null>(null);
   const sceneRef = useRef<ViewportScene | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [readout, setReadout] = useState<Readout>(EMPTY_READOUT);
@@ -82,13 +96,11 @@ export function Viewport() {
   // on unmount (a passive cleanup would run after, on a node that is no
   // longer where React looks for it).
   useLayoutEffect(() => {
-    const host = hostRef.current;
     if (host === null || view === "viewport") return;
     return registerViewportHost({ element: host, rehome: (win) => sceneRef.current?.rehome(win) });
-  }, [view]);
+  }, [host, view]);
 
   useEffect(() => {
-    const host = hostRef.current;
     if (host === null) return;
     const store = useCicada.getState;
     const nameOf = (ref: number) => nodeByRef(store().graph, ref)?.name ?? null;
@@ -213,16 +225,15 @@ export function Viewport() {
       scene.dispose();
       sceneRef.current = null;
     };
-  }, []);
+  }, [host]);
 
   const hoverLabel =
     hoverPick === null
       ? null
       : `${hoverPick.node ?? `#${hoverPick.nodeRef}`}[${hoverPick.element}]`;
 
-  return (
-    <div className="viewport" data-testid="viewport" ref={hostRef}>
-      {failure !== null && <div className="viewport-failure">{failure}</div>}
+  const overlay = (
+    <>
       <div className="viewport-overlay">
         <div className="viewport-toolbar">
           <button
@@ -302,6 +313,13 @@ export function Viewport() {
           {hoverLabel}
         </div>
       )}
+    </>
+  );
+
+  return (
+    <div className="viewport" data-testid="viewport" ref={setHost}>
+      {failure !== null && <div className="viewport-failure">{failure}</div>}
+      {host !== null && createPortal(overlay, host)}
     </div>
   );
 }
