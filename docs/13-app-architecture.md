@@ -433,7 +433,17 @@ contents) — additive, `PROTOCOL_VERSION` unchanged:
   fix round 2026-09-19, review finding L3-P1-4); a generation a page
   never saw a pass of still records the join's restream once, so its
   decode and upload are measured. Nothing of the client's is sent to the
-  server.
+  server. The client's READ cadence (fix round 2026-09-19): it asks when
+  the profiler shows, once per LANDED pass (a new `display.generation`
+  with its `display_end` heard) and per re-hydration — never while a pass
+  paints, never on a status bump (`summary.generation` / `running` flip
+  before the pass: the first build keyed on those and asked twice per
+  generation — 60 reads/s during playback, review findings L5-4 / C3) —
+  and keeps at most one read outstanding (§Two lanes); a refusal of its
+  own read ("no generation has completed yet" while a session's first
+  solve runs) is the profiler's placeholder text, never a notice (the
+  caches indicator's click during the wall's carve raised a red toast
+  that outlived the profile it preceded — L4-2 / L5-5 / C6).
 - `/debug/state.profile` = the same `ProfileView` a `profile` read
   answers (`null` before a generation completes); `timings[].solve_ms` =
   the solve's own wall (additive; `elapsed_ms` stays solve + pass).
@@ -630,9 +640,17 @@ restream resumes behind it. Control texts are small — the coalesced
 statuses are ≤ 10 Hz, and since v0.1 wave 5 D1 `display_begin` and
 `caches` ride uncoalesced once per generation (at the generation rate
 during a drag or playback: ~330 B each) — so the display lane is never
-starved in practice. Nothing on the wire changed — no message, no frame
-byte, `PROTOCOL_VERSION` — only the interleaving of two planes the client
-already keeps apart.
+starved in practice. The one control text that is NOT small is the
+profiler's `profile_view` (v0.1 wave 5 P1: a row per node — 69 KB for
+the wall's 1,201 nodes), and the premise holds for it only because the
+client keeps at most ONE `profile` read outstanding (fix round
+2026-09-19, review finding C1: a read per landed pass at a drag's rate
+queued seconds of answers ahead of the frames, the viewport spun on
+`painting…` after the input stopped, and the profiler starved its own
+trigger); the passes that land while an answer is awaited are coalesced
+into the one read sent after it. Nothing on the wire changed — no
+message, no frame byte, `PROTOCOL_VERSION` — only the interleaving of two
+planes the client already keeps apart.
 
 **The join-time half** (review 2026-08-20). The lanes alone did not make
 a join fast: the socket's write task used to start only after the

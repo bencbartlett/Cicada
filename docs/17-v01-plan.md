@@ -2646,6 +2646,30 @@ proves wrong is revised here, dated, in the landing commit.
   clock is injectable so its apply time and last stamp are asserted
   against known numbers (L2-P1-6: `>= 0` held for a bus that never
   moved).
+  **One `profile` read per landed pass, at most one outstanding** (C1 /
+  L3-P1-5 / L5-4 / L4-3 / C3): the panel's ask key included
+  `summary.generation` and `summary.running`, which bump BEFORE the pass
+  lands, so every generation was asked for twice (241 reads for 121
+  generations of the orbit's playback, 60 answers/s and 100 KB/s of text)
+  and every answer replaced `store.profile` and re-rendered the ring and
+  the table; on a 315-node pipeline the profiler left the viewport ≈ 1.6 s
+  behind, and on a 1,201-node one the O(nodes) answers on the biased
+  control lane starved the display lane — `painting…` for seconds after
+  the drag stopped, the profiler's own trigger gated on the pass landing.
+  The store owns the read now (`askProfile`, `profileAsk`): the key is the
+  landed generation and the re-hydration count alone, at most one read is
+  in flight per client, the passes that land meanwhile coalesce into the
+  one read sent after the answer, and an answer for the generation already
+  held re-renders nothing; docs/13 §Two lanes names the per-pass exception
+  to its premise. **A refusal of the panel's own read is its placeholder,
+  never a toast** (L4-2 / L5-5 / C6): clicking `profile` or the caches
+  indicator while a session's first generation solved (the wall's 3.7 s
+  carve) sent a read the server refused — "no generation has completed
+  yet", kind `invalid` — and the store's generic error handler raised a
+  red notice that outlived the profile it preceded (two of them: the
+  connect and the snapshot keys); the store matches the refusal to its
+  outstanding read (`profileRefusal`) and the panel shows the message in
+  place; no protocol change.
   **Every arm of the node and display mapping is held** (L2-P1-2 /
   L2-P1-3 / L2-P1-4 / L2-P1-5 / L2-P1-8): the fixture gains a
   red-by-diagnostics cylinder with a consumer that type-checks itself

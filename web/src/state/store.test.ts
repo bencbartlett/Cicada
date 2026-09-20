@@ -27,6 +27,82 @@ describe("canWrite", () => {
   });
 });
 
+describe("the profile read's lifecycle (docs/13 §The profiler; v0.1 wave 5 P1)", () => {
+  let sent: ClientMessage[];
+  beforeEach(() => {
+    sent = [];
+    useCicada.setState({ connection: "open", profile: null, profileAsk: null, profileRefusal: null, notices: [], lastError: null });
+    useCicada.getState().installSender((message) => {
+      sent.push(message);
+      return `id-${sent.length}`;
+    });
+  });
+
+  it("askProfile sends ONE read and keeps it outstanding until the answer; a second ask meanwhile sends nothing", () => {
+    useCicada.getState().askProfile();
+    useCicada.getState().askProfile();
+    expect(sent).toEqual([{ type: "profile", payload: {} }]);
+    expect(useCicada.getState().profileAsk).toBe("id-1");
+    const view = { generation: 4, kind: "structural", phases: { queued_ms: 0, solve_ms: 1, tessellate_ms: 2, encode_ms: 0.5, bytes: 10 }, nodes: [], display: [], caches: EMPTY_CACHES };
+    useCicada.getState().applyServerMessage({ v: 1, seq: 0, type: "profile_view", payload: view });
+    expect(useCicada.getState().profileAsk).toBeNull();
+    expect(useCicada.getState().profile).toEqual(view);
+    useCicada.getState().askProfile();
+    expect(sent).toHaveLength(2);
+    // The same generation answered again is not a new profile object (nothing re-renders on it).
+    const held = useCicada.getState().profile;
+    useCicada.getState().applyServerMessage({ v: 1, seq: 0, type: "profile_view", payload: { ...view } });
+    expect(useCicada.getState().profile).toBe(held);
+    expect(useCicada.getState().profileAsk).toBeNull();
+    // A newer generation — or the same one now marked cut — replaces it.
+    useCicada.getState().applyServerMessage({ v: 1, seq: 0, type: "profile_view", payload: { ...view, generation: 5 } });
+    expect(useCicada.getState().profile?.generation).toBe(5);
+    useCicada.getState().applyServerMessage({ v: 1, seq: 0, type: "profile_view", payload: { ...view, generation: 5, cancelled: true, cut_by: "esc" } });
+    expect(useCicada.getState().profile?.cut_by).toBe("esc");
+  });
+
+  it("a refusal of the outstanding read is the panel's placeholder, never a notice; any other error still is one", () => {
+    useCicada.getState().askProfile();
+    useCicada.getState().applyServerMessage({
+      v: 1,
+      seq: 0,
+      type: "error",
+      payload: { intent_id: "id-1", kind: "invalid", message: "profile: no generation has completed yet" },
+    });
+    const s = useCicada.getState();
+    expect(s.profileAsk).toBeNull();
+    expect(s.profileRefusal).toBe("profile: no generation has completed yet");
+    expect(s.notices).toEqual([]);
+    expect(s.lastError?.message, "still the last error, for anyone who asks").toBe("profile: no generation has completed yet");
+    // The next answer clears the refusal.
+    useCicada.getState().askProfile();
+    useCicada.getState().applyServerMessage({
+      v: 1,
+      seq: 0,
+      type: "profile_view",
+      payload: { generation: 1, kind: "structural", phases: { queued_ms: 0, solve_ms: 1, tessellate_ms: 2, encode_ms: 0.5, bytes: 10 }, nodes: [], display: [], caches: EMPTY_CACHES },
+    });
+    expect(useCicada.getState().profileRefusal).toBeNull();
+    // An error that is not our read's answer is a notice as before.
+    useCicada.getState().applyServerMessage({ v: 1, seq: 0, type: "error", payload: { intent_id: "other", kind: "invalid", message: "nope" } });
+    expect(useCicada.getState().notices.map((n) => [n.level, n.message])).toEqual([["error", "nope"]]);
+  });
+
+  it("no sender yet: nothing is outstanding; a disconnect or a session reset forgets an outstanding read and its refusal", () => {
+    useCicada.getState().installSender(() => "");
+    useCicada.getState().askProfile();
+    expect(useCicada.getState().profileAsk).toBeNull();
+    useCicada.setState({ profileAsk: "id-9", profileRefusal: "x" });
+    useCicada.getState().markDisconnected("gone", { attempt: 1, nextAt: null });
+    expect(useCicada.getState().profileAsk).toBeNull();
+    expect(useCicada.getState().profileRefusal).toBeNull();
+    useCicada.setState({ profileAsk: "id-9", profileRefusal: "x" });
+    useCicada.getState().resetSession("t", "b.cic");
+    expect(useCicada.getState().profileAsk).toBeNull();
+    expect(useCicada.getState().profileRefusal).toBeNull();
+  });
+});
+
 describe("disconnect / reconnect bookkeeping", () => {
   beforeEach(() => {
     useCicada.setState({

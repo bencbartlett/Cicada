@@ -372,6 +372,22 @@ export interface CicadaState {
    * like `nodeValues`, never authoritative state.
    */
   profile: ProfileView | null;
+  /**
+   * The intent id of this client's ONE outstanding `profile` read, null
+   * when none is in flight (`askProfile`): the panel never has two reads
+   * outstanding — an answer is O(nodes) on the control lane, and a read
+   * per landed pass at a drag's rate starved the display lane behind the
+   * answers (review finding C1). Cleared by the answer or its refusal.
+   */
+  profileAsk: string | null;
+  /**
+   * The server's reason when it REFUSED this client's own `profile` read
+   * ("profile: no generation has completed yet") — the panel shows it in
+   * place of the profile, never as a notice (a normal state of a session
+   * whose first generation is still solving; review finding L4-2). Cleared
+   * by the next answer.
+   */
+  profileRefusal: string | null;
   catalog: Catalog | null;
   nodeValues: Record<string, NodeValues>;
   wireValues: Record<string, WireValues>;
@@ -481,6 +497,13 @@ export interface CicadaState {
    */
   markPainted: (generation: number, at?: number) => void;
   /**
+   * Send the `profile` read (docs/13 §The profiler) unless one is already
+   * outstanding for this client — at most one in flight, whatever the
+   * generation rate; the answer (`profile_view`) or its refusal clears it.
+   * The profiler calls it when it shows and after every pass lands.
+   */
+  askProfile: () => void;
+  /**
    * Ask the session for a display cache of `mib` MiB (the settings menu):
    * remembered as this user's preference and sent now when this client
    * holds the lease — the server answers with `caches`, or refuses
@@ -572,6 +595,8 @@ export const useCicada = create<CicadaState>((set, get) => ({
   caches: null,
 
   profile: null,
+  profileAsk: null,
+  profileRefusal: null,
   catalog: null,
   nodeValues: {},
   wireValues: {},
@@ -627,8 +652,11 @@ export const useCicada = create<CicadaState>((set, get) => ({
       // socket would spin for good; the snapshot brings the caches back.
       display: null,
       caches: null,
-      // The profile too: the re-hydrated session's is asked for afresh.
+      // The profile too: the re-hydrated session's is asked for afresh (an
+      // outstanding read died with the socket).
       profile: null,
+      profileAsk: null,
+      profileRefusal: null,
     }),
   setReconnect: (reconnect) => set({ reconnect }),
   setIdentity: (token, pipeline) => set({ token, pipeline }),
@@ -659,6 +687,8 @@ export const useCicada = create<CicadaState>((set, get) => ({
       display: null,
       caches: null,
       profile: null,
+      profileAsk: null,
+      profileRefusal: null,
       nodeValues: {},
       wireValues: {},
       probe: null,
@@ -826,6 +856,16 @@ export const useCicada = create<CicadaState>((set, get) => ({
         // bounds — writes for the lease, never drag-enders: docs/13
         // §Animation transport).
         set({ lastError: lastErrorOf(p), pending: dragStandsAfter(p.kind) ? get().pending : null });
+        // A refusal of THIS client's own `profile` read — "no generation has
+        // completed yet" on a session whose first solve is still running —
+        // is the profiler's placeholder state, not a fault: it goes to the
+        // panel, never to the notices (review finding L4-2: the caches
+        // indicator's click during the wall's carve raised a red toast that
+        // outlived the profile it preceded).
+        if (p.intent_id !== undefined && p.intent_id === get().profileAsk) {
+          set({ profileAsk: null, profileRefusal: p.message });
+          break;
+        }
         // An empty undo/redo side is a routine answer to Ctrl+Z, not a
         // failure: the message still says why (including the barrier).
         get().addNotice(errorNoticeLevel(p.kind), p.message);
@@ -996,8 +1036,17 @@ export const useCicada = create<CicadaState>((set, get) => ({
       case "profile_view": {
         // The answer to our `profile` read: the last complete generation's
         // profile, replacing whatever we held (a newer generation's answer
-        // can only be newer — the server keeps one).
-        set({ profile: envelope.payload });
+        // can only be newer — the server keeps one). The read is no longer
+        // outstanding. An answer for the generation already held changes
+        // nothing (the server keeps one record per generation, written
+        // once): the ring and the node table are not re-rendered for it.
+        const p = envelope.payload;
+        const held = get().profile;
+        if (held !== null && held.generation === p.generation && held.cut_by === p.cut_by) {
+          set({ profileAsk: null, profileRefusal: null });
+        } else {
+          set({ profile: p, profileAsk: null, profileRefusal: null });
+        }
         break;
       }
       case "screenshot_request":
@@ -1016,6 +1065,13 @@ export const useCicada = create<CicadaState>((set, get) => ({
       }
       return { display: { ...pass, paintedMs: Math.max(0, at - pass.beganAt) } };
     }),
+  askProfile: () => {
+    if (get().profileAsk !== null) return;
+    const id = get().send({ type: "profile", payload: {} });
+    // The default sender (no socket yet) drops the message and returns "":
+    // nothing is outstanding then.
+    if (id !== "") set({ profileAsk: id });
+  },
   chooseDisplayCache: (mib) => {
     get().updateSettings({ displayCacheMib: mib });
     const state = get();

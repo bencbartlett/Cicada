@@ -50,27 +50,37 @@ const COLUMNS: [NodeSortKey, string, string][] = [
 export function ProfilePanel() {
   const profile = useCicada((s) => s.profile);
   const display = useCicada((s) => s.display);
-  const summary = useCicada((s) => s.summary);
   const connection = useCicada((s) => s.connection);
   const snapshots = useCicada((s) => s.snapshots);
-  const send = useCicada((s) => s.send);
+  const outstanding = useCicada((s) => s.profileAsk);
+  const refusal = useCicada((s) => s.profileRefusal);
+  const askProfile = useCicada((s) => s.askProfile);
   const focus = useInspectorTab((s) => s.profileFocus);
   const consumeFocus = useInspectorTab((s) => s.consumeProfileFocus);
   const asked = useRef("");
   const cachesRef = useRef<HTMLElement>(null);
 
-  // Ask once per landed pass (and per re-hydration): the profile is the
-  // LAST COMPLETE generation's, final once its `display_end` has been
-  // heard — a pass still painting is not asked for (its answer would be the
-  // previous generation's, replaced moments later).
+  // Ask when the tab shows, once per LANDED pass (`display.phase ===
+  // "painted"`, a new generation) and per re-hydration — nothing else: the
+  // profile is the last complete generation's, final once its `display_end`
+  // has been heard, so a pass still painting is not asked for (its answer
+  // would be the previous generation's), and a status bump (`summary`'s
+  // generation or `running`) before the pass is not a landed pass (the
+  // first build keyed on those too and asked twice per generation — review
+  // findings L5-4 / C3). At most ONE read is outstanding per client: the
+  // answer is O(nodes) on the control lane, and at a drag's rate a read
+  // per pass queued seconds of answers ahead of the frames (C1) — while a
+  // read is in flight the passes that land are coalesced into the one read
+  // sent when the answer arrives (`askProfile`).
   useEffect(() => {
     if (connection !== "open") return;
     if (display !== null && display.phase !== "painted") return;
-    const key = `${display?.generation ?? 0}:${summary.generation}:${summary.running ? 1 : 0}:${snapshots}`;
+    const key = `${display?.generation ?? 0}:${snapshots}`;
     if (asked.current === key) return;
+    if (outstanding !== null) return;
     asked.current = key;
-    send({ type: "profile", payload: {} });
-  }, [connection, display, summary.generation, summary.running, snapshots, send]);
+    askProfile();
+  }, [connection, display, snapshots, outstanding, askProfile]);
 
   // Esc closes the tab. The keyboard map does it when the key reaches it;
   // from a FOCUSED BUTTON — the top bar's `profile` button or the caches
@@ -105,13 +115,20 @@ export function ProfilePanel() {
   const shares = useMemo(() => (profile === null ? new Map<string, number>() : nodeShares(profile.nodes)), [profile]);
 
   if (profile === null || client === null) {
+    // The server's refusal of our own read ("profile: no generation has
+    // completed yet" while the first solve runs) is THE placeholder text —
+    // a normal state, shown here and never as a notice; the next landed
+    // pass asks again.
+    const waiting = connection !== "open" ? "not connected" : (refusal ?? "asking the session for the last complete generation…");
     return (
       <div data-testid="profile-view" data-generation="none">
         <div className="insp-title">
           <span className="name" style={{ fontSize: 13 }}>
             profile
           </span>
-          <span className="faint">{connection === "open" ? "asking the session for the last complete generation…" : "not connected"}</span>
+          <span className="faint" data-testid="profile-waiting">
+            {waiting}
+          </span>
         </div>
         <ProfileCaches sectionRef={cachesRef} />
       </div>

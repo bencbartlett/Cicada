@@ -65,25 +65,90 @@ describe("the profiler tab", () => {
       notices: [],
       selection: { nodes: [], wire: null, element: null },
     });
+    useCicada.setState({ profileAsk: null, profileRefusal: null });
     useCicada.getState().installSender((message) => {
       sent.push(message);
-      return "";
+      return String(sent.length);
     });
     useInspectorTab.setState({ tab: "profile", profileFocus: null });
   });
   afterEach(cleanup);
 
-  it("asks for the profile when it shows, again when a pass lands, and not while one paints", () => {
+  /** The server's answer to the outstanding read (the sender's ids are the send count; an answer clears whichever is in flight). */
+  const answer = (generation: number) =>
+    act(() => useCicada.getState().applyServerMessage({ v: 1, seq: 0, type: "profile_view", payload: { ...profile, generation } }));
+
+  it("asks for the profile when it shows, once per LANDED pass, never while one paints and never on a status bump", () => {
     render(<ProfilePanel />);
     expect(sent).toEqual([{ type: "profile", payload: {} }]);
     expect(screen.getByTestId("profile-view").getAttribute("data-generation")).toBe("none");
+    answer(12);
     act(() => useCicada.setState({ display: pass(13, "painting") }));
     expect(sent, "a pass in flight is not asked for").toHaveLength(1);
-    act(() => useCicada.setState({ display: pass(13, "painted"), summary: { ...useCicada.getState().summary, generation: 13 } }));
-    expect(sent).toHaveLength(2);
+    // The next solve starts (the status flips `running`, then names the
+    // generation) while the previous pass stands painted: NOT a landed pass
+    // — the first build asked here too, twice per generation (L5-4 / C3).
+    act(() => useCicada.setState({ display: pass(12, "painted"), summary: { ...useCicada.getState().summary, generation: 13, running: true } }));
+    expect(sent, "a status bump is not a landed pass").toHaveLength(1);
+    act(() => useCicada.setState({ summary: { ...useCicada.getState().summary, running: false } }));
+    expect(sent).toHaveLength(1);
+    act(() => useCicada.setState({ display: pass(13, "painted") }));
+    expect(sent, "the landed pass").toHaveLength(2);
+    answer(13);
     // A re-hydration asks again for the same generation.
     act(() => useCicada.setState({ snapshots: 2 }));
     expect(sent).toHaveLength(3);
+  });
+
+  it("keeps at most one read outstanding: passes landing while an answer is awaited coalesce into ONE read after it", () => {
+    render(<ProfilePanel />);
+    expect(sent).toHaveLength(1);
+    expect(useCicada.getState().profileAsk).toBe("1");
+    // Three passes land before the answer to the first read arrives (a drag
+    // on a heavy pipeline: the answers are O(nodes) and lag the frames).
+    for (const generation of [13, 14, 15]) {
+      act(() => useCicada.setState({ display: pass(generation, "painted") }));
+    }
+    expect(sent, "nothing more while the read is outstanding").toHaveLength(1);
+    answer(12);
+    expect(useCicada.getState().profileAsk, "the answer arrived: the latest landed pass is asked for, once").toBe("2");
+    expect(sent).toHaveLength(2);
+    answer(15);
+    expect(useCicada.getState().profileAsk).toBeNull();
+    expect(sent, "two reads for four landed passes, never two in flight").toHaveLength(2);
+    expect(screen.getByTestId("profile-view").getAttribute("data-generation")).toBe("15");
+    // The same generation answered again (a re-hydration's read) re-renders nothing.
+    const before = useCicada.getState().profile;
+    act(() => useCicada.setState({ snapshots: 2 }));
+    answer(15);
+    expect(useCicada.getState().profile).toBe(before);
+  });
+
+  it("a refusal of its own read is the placeholder, not a notice: the session's first generation is still solving", () => {
+    useCicada.setState({ display: null, summary: { ...useCicada.getState().summary, generation: 1, running: true } });
+    render(<ProfilePanel />);
+    expect(sent).toHaveLength(1);
+    act(() =>
+      useCicada.getState().applyServerMessage({
+        v: 1,
+        seq: 0,
+        type: "error",
+        payload: { intent_id: "1", kind: "invalid", message: "profile: no generation has completed yet" },
+      }),
+    );
+    expect(useCicada.getState().notices, "no toast for a normal state").toEqual([]);
+    expect(useCicada.getState().profileAsk).toBeNull();
+    expect(screen.getByTestId("profile-waiting").textContent).toBe("profile: no generation has completed yet");
+    expect(sent, "not asked again until a pass lands").toHaveLength(1);
+    // The first pass lands: asked again, answered, the placeholder gone.
+    act(() => useCicada.setState({ display: pass(1, "painted") }));
+    expect(sent).toHaveLength(2);
+    answer(1);
+    expect(useCicada.getState().profileRefusal).toBeNull();
+    expect(screen.getByTestId("profile-view").getAttribute("data-generation")).toBe("1");
+    // Another client's-worth of refusal (an intent id that is not our read's) is still a notice.
+    act(() => useCicada.getState().applyServerMessage({ v: 1, seq: 0, type: "error", payload: { intent_id: "zz", kind: "invalid", message: "something else" } }));
+    expect(useCicada.getState().notices.map((n) => n.message)).toEqual(["something else"]);
   });
 
   it("renders the headline, the ring, the legend, the phases and every node; a cached row is marked with its last compute", () => {
