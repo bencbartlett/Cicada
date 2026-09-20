@@ -101,6 +101,15 @@ signing, and Python 3 must be on the machine (the engine's script host).
   rests on the element — below it, above when there is no room; below the
   pointer on a wire — in place of the browser's own tooltip and its second
   of delay; a press or Esc dismisses it.
+- **Viewport modes** (wave 5 V1): the viewport is one of three — *split*
+  (the panes as before), *floating* (the canvas across the whole work
+  area and the viewport in a panel over it, dragged by its strip and
+  resized from its corner, its place and size remembered) or *window*
+  (the browser's picture-in-picture window, the viewport moved into it
+  and brought back by the placeholder's click; closing that window
+  returns to split). A browser without the picture-in-picture API opens
+  the read-only second-monitor window instead and says so; that pop-out
+  itself now lives under settings › viewport.
 
 ### From the user tests
 
@@ -129,11 +138,3 @@ sets thrash a 256 MiB cache — which is why the cache is 1 GiB and visible.
   changes to its sources (`crates/`, `web/`, the manifests) — a dev build,
   not a release.
 
-<!-- TAG-TODO: wave 5's round 2 package V1 (viewport modes: Split ·
-Floating · Window) is landing beside this entry (T1, the 250 ms tooltip
-layer, is in this branch's history and described under "The app"). Before
-tagging: if the tag includes V1, describe it under "The app" above; if
-not, say so under Known limits. Then delete this comment — `python
-tools/changelog.py check --tag` refuses to release a section that still
-carries a TAG-TODO, so the notes cannot describe a release they do not
-match. -->
