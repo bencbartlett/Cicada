@@ -7198,7 +7198,6 @@ impl Core {
         // The solve's own wall (`finish_statuses` measured it from the
         // generation's start): the chip's `solve`, the profiler's `solve_ms`.
         let solve_ms = self.lock_status().summary.elapsed_ms;
-        let began = Instant::now();
         let tier = tier_of(job.kind);
         // The display pass (docs/12 §Display, docs/13 §The display edge).
         // 1. Under a short lock hold: which outputs may need drawing, and
@@ -7224,6 +7223,13 @@ impl Core {
             );
             pending
         };
+        // The pass's clock starts once `display_begin` is on the wire: the
+        // wait for the lock above (an intent, a revert's hold) is not
+        // tessellation, and a client's socket residual — its wall from the
+        // begin it heard to its last frame, minus the server's phases —
+        // must not be charged for time before that begin existed (review
+        // finding L3-P1-3: the residual went negative and read `0.00 ms`).
+        let began = Instant::now();
         // 2. The warm-up, off the session lock: the values are loaded, the
         //    budget decides each output's tier by tessellating its distinct
         //    solids on the worker pool (docs/12 §Display cache), and the

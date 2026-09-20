@@ -31,16 +31,26 @@ export interface ClientPhases {
    * The socket's share: what remains of the client's wall from
    * `display_begin` to the last frame applied once the server's
    * tessellation and encode and the client's decode and upload are taken
-   * out — transfer and queueing (clamped at 0: `display_begin` itself
-   * crosses the wire). Null when the pass sent no frame the client saw, or
-   * the pass at hand is another generation's.
+   * out — transfer and queueing. Null when the pass sent no frame the
+   * client saw, when the pass at hand is another generation's, or when
+   * NOTHING remains (`socket_note` says so): the client stamps
+   * `display_begin` when it processes the text, behind whatever its main
+   * thread was doing — the previous pass's frames on a drag — so on a
+   * heavy pass the wall can come out shorter than the server's phases;
+   * that is "not measurable", never `0.00 ms` (review finding L3-P1-3).
    */
   socket_ms: number | null;
-  /** The pass's bytes over `socket_ms`, bytes per millisecond; null when the socket time is null or 0. */
+  /** Why the socket's share is null although this client watched the pass; null otherwise. */
+  socket_note: string | null;
+  /** The pass's bytes over `socket_ms`, bytes per millisecond; null when the socket time is null. */
   rate_bytes_per_ms: number | null;
   /** Frames the client saw for the generation. */
   frames: number;
 }
+
+/** The hover of a socket cell reading `—` while this client watched the pass. */
+export const SOCKET_NOT_MEASURABLE =
+  "not measurable: this client's wall from display_begin to the last frame applied was no longer than the server's tessellation and encode plus its own decode and upload — the begin was processed late (behind the previous pass's frames), so the transfer is inside those phases";
 
 /**
  * The client's phases of `view`'s generation from the frame bus's record of
@@ -55,17 +65,20 @@ export function clientPhases(view: ProfileView, frames: GenerationFrames | null,
   // a paint — the viewport still shows the previous picture.
   const first_paint_ms = same === null || (same.cancelled && same.frames === 0) ? null : same.paintedMs;
   if (frames === null || frames.frames === 0) {
-    return { decode_ms: 0, upload_ms: 0, first_paint_ms, socket_ms: null, rate_bytes_per_ms: null, frames: 0 };
+    return { decode_ms: 0, upload_ms: 0, first_paint_ms, socket_ms: null, socket_note: null, rate_bytes_per_ms: null, frames: 0 };
   }
   const decode_ms = frames.decodeMs;
   const upload_ms = frames.applyMs;
   let socket_ms: number | null = null;
+  let socket_note: string | null = null;
   if (same !== null) {
     const wall = frames.lastAt - same.beganAt;
-    socket_ms = Math.max(0, wall - view.phases.tessellate_ms - view.phases.encode_ms - decode_ms - upload_ms);
+    const residual = wall - view.phases.tessellate_ms - view.phases.encode_ms - decode_ms - upload_ms;
+    if (residual > 0) socket_ms = residual;
+    else socket_note = SOCKET_NOT_MEASURABLE;
   }
-  const rate_bytes_per_ms = socket_ms !== null && socket_ms > 0 ? view.phases.bytes / socket_ms : null;
-  return { decode_ms, upload_ms, first_paint_ms, socket_ms, rate_bytes_per_ms, frames: frames.frames };
+  const rate_bytes_per_ms = socket_ms !== null ? view.phases.bytes / socket_ms : null;
+  return { decode_ms, upload_ms, first_paint_ms, socket_ms, socket_note, rate_bytes_per_ms, frames: frames.frames };
 }
 
 // ----------------------------------------------------------------- ring --

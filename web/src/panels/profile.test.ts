@@ -12,6 +12,7 @@ import {
   RING_GAP_PX,
   RING_RADIUS,
   RING_TOP_NODES,
+  SOCKET_NOT_MEASURABLE,
   clientPhases,
   displayCaption,
   filterProfileNodes,
@@ -102,7 +103,7 @@ describe("ringArcs", () => {
 });
 
 describe("ringPhases", () => {
-  const client = { decode_ms: 3, upload_ms: 4, first_paint_ms: 50, socket_ms: 6, rate_bytes_per_ms: 100, frames: 2 };
+  const client = { decode_ms: 3, upload_ms: 4, first_paint_ms: 50, socket_ms: 6, socket_note: null, rate_bytes_per_ms: 100, frames: 2 };
 
   it("lists the top nodes by this generation's work, the rest as one arc, then the server's and the client's phases", () => {
     const nodes = Array.from({ length: 11 }, (_, i) => node(`n${i}`, { nanos: (i + 1) * 1e6, elements: 1 }));
@@ -167,6 +168,7 @@ describe("clientPhases", () => {
       upload_ms: 0,
       first_paint_ms: 130,
       socket_ms: null,
+      socket_note: null,
       rate_bytes_per_ms: null,
       frames: 0,
     });
@@ -181,16 +183,30 @@ describe("clientPhases", () => {
       upload_ms: 5,
       first_paint_ms: 130,
       socket_ms: 51,
+      socket_note: null,
       rate_bytes_per_ms: 4096 / 51,
       frames: 3,
     });
   });
 
-  it("never negative: a pass whose begin arrived late clamps the socket at 0 with no rate", () => {
-    const phases = clientPhases(view([]), frames, pass(12, 1090, null));
-    expect(phases.socket_ms).toBe(0);
-    expect(phases.rate_bytes_per_ms).toBeNull();
-    expect(phases.first_paint_ms).toBeNull();
+  it("nothing remaining is 'not measurable' with the reason — never 0.00 ms, never a rate", () => {
+    // A begin processed late (1090): 10 ms wall against 49 ms of phases.
+    const late = clientPhases(view([]), frames, pass(12, 1090, null));
+    expect(late.socket_ms).toBeNull();
+    expect(late.socket_note).toBe(SOCKET_NOT_MEASURABLE);
+    expect(late.rate_bytes_per_ms).toBeNull();
+    expect(late.first_paint_ms).toBeNull();
+    // Exactly nothing remaining is the same: 1100 − 1051 = 49 = the phases' sum.
+    const exact = clientPhases(view([]), frames, pass(12, 1051, null));
+    expect(exact.socket_ms).toBeNull();
+    expect(exact.socket_note).toBe(SOCKET_NOT_MEASURABLE);
+    // A sliver remaining is a time with a rate, and no note.
+    const sliver = clientPhases(view([]), frames, pass(12, 1050.5, null));
+    expect(sliver.socket_ms).toBeCloseTo(0.5, 9);
+    expect(sliver.socket_note).toBeNull();
+    expect(sliver.rate_bytes_per_ms).toBeCloseTo(4096 / 0.5, 6);
+    // Another generation's pass: no socket and no note either (nothing was watched).
+    expect(clientPhases(view([]), frames, pass(13, 1090, null)).socket_note).toBeNull();
   });
 
   it("another generation's pass says nothing about the socket or the paint", () => {

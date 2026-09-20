@@ -2571,9 +2571,13 @@ proves wrong is revised here, dated, in the landing commit.
   current graph's view of a text that changed since. (4) **The socket
   phase is a residual**: the client's wall from `display_begin` to the
   last frame applied minus the server's tessellation and encode and the
-  client's decode and upload, clamped at 0 — "bytes at the measured rate"
-  read backwards (the rate shown is the bytes over it); a separate probe
-  of the socket would be an invention. **`upload_ms` is the frames'
+  client's decode and upload — "bytes at the measured rate" read
+  backwards (the rate shown is the bytes over it); a separate probe of
+  the socket would be an invention. When nothing remains it reads `—`,
+  "not measurable" in the hover, never `0.00 ms` (fix round 2026-09-19:
+  the first build clamped at 0 and showed `0.00 ms` on every heavy pass —
+  the begin is stamped when the page processes it, behind the previous
+  pass's frames on a drag). **`upload_ms` is the frames'
   apply** — the scene building its geometry for the GPU on the main
   thread (the GPU upload itself happens inside the render); a page that
   joined a session at rest saw no pass for the kept generation and reads
@@ -2621,7 +2625,29 @@ proves wrong is revised here, dated, in the landing commit.
   second output's memo-hit verdict (0 / 0) overwrote the first's — both
   rows read `0 / 0` and the kernel call was on no row; it accumulates now,
   and the profile test has a `twin` of `ball` whose rows carry the shared
-  count and whose distinct-value sum equals the cache's misses.
+  count and whose distinct-value sum equals the cache's misses. **The
+  socket residual is never `0.00 ms`** (L3-P1-3): on every heavy pass the
+  client's wall came out shorter than the server's phases — the server
+  stamped the warm-up's clock BEFORE the `display_begin` broadcast (a
+  lock wait charged to tessellation) and the page stamps the begin when
+  it processes the text, behind the previous pass's frames — and the
+  clamp turned the negative residual into `0.00 ms` with no rate; the
+  server's clock now starts once the begin is on the wire, a non-positive
+  residual reads `—` with "not measurable" in the hover, and
+  `profile.spec.ts` accepts a time WITH a rate or `—`, never `0.00 ms`.
+  **Every arm of the node and display mapping is held** (L2-P1-2 /
+  L2-P1-3 / L2-P1-4 / L2-P1-5 / L2-P1-8): the fixture gains a
+  red-by-diagnostics cylinder with a consumer that type-checks itself
+  (`FedBy` → blocked), an exporter (`idle`), a point (no `tier` key), a
+  list holding a meshed body (a hit in the same pass), the display test
+  asserts the warm decisions' `(hits, misses)`, and the read's refusal
+  before the first generation completes is pinned under the
+  `display_hold` seam. **`idle` is said truly** (L5-3 / L1-4 / C5):
+  docs/13, deviation (3) above and the `profile_nodes` rustdoc had
+  promised `idle` for a node outside a preview's cone — a row no preview
+  can produce, since every session job targets every non-effectful node
+  and a preview's out-of-change nodes are `cached`; `idle` is a binding
+  no target needed (an effectful leaf), and the canvas says the same.
 
 **Track N — `wt/face` (web + one server addition; one review).**
 - **N1 — the node face.**

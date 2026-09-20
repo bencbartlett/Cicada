@@ -151,7 +151,12 @@ test("the profiler: the ring, every node with its state and cost, cached rows af
   // decoded and uploaded, the socket's share, the first paint.
   await expect(page.getByTestId("profile-decode")).toHaveText(/\d+ frames?$/);
   await expect(page.getByTestId("profile-upload")).toHaveText(/(ms|s)$/);
-  await expect(page.getByTestId("profile-socket")).toHaveText(/(ms|s)/);
+  // The socket is a residual: a time WITH the rate the bytes make of it, or
+  // `—` (with the reason in the hover) when nothing remains of this client's
+  // wall once the server's phases are out — never `0.00 ms` (L3-P1-3).
+  const socket = page.getByTestId("profile-socket");
+  await expect(socket).toHaveText(/^(—|[\d.]+ (ms|s) · [\d.]+ [KMG]?B at [\d.]+ [KM]B\/s)$/);
+  if ((await socket.textContent()) === "—") await expect(socket).toHaveAttribute("title", /not measurable/);
   await expect(page.getByTestId("profile-first-paint")).toHaveText(/(ms|s)$/);
   await page.screenshot({ path: testInfo.outputPath("profile-second-generation.png") });
 

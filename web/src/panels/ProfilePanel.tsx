@@ -207,7 +207,7 @@ export function ProfilePanel() {
           <span className="k" title="the frames' transfer and queueing, as this client measured it">
             socket
           </span>
-          <span className="v" data-testid="profile-socket">
+          <span className="v" data-testid="profile-socket" title={client.socket_note ?? undefined}>
             {client.socket_ms === null ? "—" : `${formatMs(client.socket_ms)}${rate === null ? "" : ` · ${rate}`}`}
           </span>
           <span className="k">decode</span>

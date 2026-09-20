@@ -416,7 +416,14 @@ contents) — additive, `PROTOCOL_VERSION` unchanged:
   the client's wall from `display_begin` to the last frame applied once
   the server's tessellation and encode and the client's decode and upload
   are taken out (transfer and queueing; the rate shown is the pass's
-  bytes over it). Nothing of the client's is sent to the server.
+  bytes over it) — and when nothing remains it is "not measurable", said
+  so, never `0.00 ms`: the client stamps the begin when it PROCESSES the
+  text, behind whatever its main thread was doing (a drag's previous pass
+  applying), so on a heavy pass the wall can come out shorter than the
+  server's phases (fix round 2026-09-19, review finding L3-P1-3; the
+  server's `tessellate_ms` starts once `display_begin` is on the wire, so
+  the lock wait before the begin is charged to neither side). Nothing of
+  the client's is sent to the server.
 - `/debug/state.profile` = the same `ProfileView` a `profile` read
   answers (`null` before a generation completes); `timings[].solve_ms` =
   the solve's own wall (additive; `elapsed_ms` stays solve + pass).
