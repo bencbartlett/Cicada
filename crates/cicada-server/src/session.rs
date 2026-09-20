@@ -11073,8 +11073,15 @@ size = slider(value=4.0, min=0.5, max=5.0)
     /// the generation is not reported cancelled (the edit follows at once).
     /// (b) The same edit landing after the LAST verdict — the pass parked
     /// before its encode — is seen by the encode's own check: the same
-    /// end, nothing sent (each of the two documented check sites pinned on
-    /// its own). (c) Esc while parked: `cut_by: "esc"`, the generation IS
+    /// end, nothing sent. Each of the two documented check sites is pinned
+    /// on its own: (b) by its end alone (without the encode's check the
+    /// pinned meshes would be sent), (a) by the cache's miss count — the
+    /// cut pass, parked with one output still to mesh, meshes nothing more
+    /// once the edit is pending; without the warm-up's check it would
+    /// tessellate the rest of a superseded generation on the pool (the
+    /// heavy pipeline's seconds of kernel work) before the encode's check
+    /// cut it, with the same end (review finding 2026-08-25, L2-1).
+    /// (c) Esc while parked: `cut_by: "esc"`, the generation IS
     /// reported cancelled (the chip's `cancelled gen N`, the timing, a
     /// `cancel_to_idle_ms`), the outputs the pass did not reach keep the
     /// previous generation's picture — the loop idle, nothing further on
@@ -11107,10 +11114,16 @@ size = slider(value=4.0, min=0.5, max=5.0)
                 },
             );
         };
+        let misses = || {
+            session.debug_state(false)["display_cache"]["misses"]
+                .as_u64()
+                .unwrap()
+        };
         let mut cut_by_edit = |at: usize, value: &str, edit: &str| {
             hold.arm(at);
             set(value, "parked");
             let parked = hold.parked();
+            let meshed_when_parked = misses();
             // The edit: through the debounce it becomes the pending
             // structural job — wait for the loop to hold it.
             set(edit, "edit");
@@ -11122,6 +11135,17 @@ size = slider(value=4.0, min=0.5, max=5.0)
             );
             hold.release();
             session.wait_idle();
+            // Across the release the cache misses exactly the edit's
+            // generation's two new solids: the cut pass meshed nothing
+            // more — with `at == 1` it had one output left, and the
+            // warm-up's own check is what keeps it from meshing it (the
+            // encode's check, one output later, would end the pass the same
+            // way after the wasted work).
+            assert_eq!(
+                misses() - meshed_when_parked,
+                2,
+                "the cut pass meshed nothing more; the edit's generation its two new solids"
+            );
             let got = drain(&mut rx);
             let msgs = texts(&got);
             let ends = of_kind(&msgs, "display_end");
