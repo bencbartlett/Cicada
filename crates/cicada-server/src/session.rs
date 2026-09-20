@@ -11450,6 +11450,57 @@ size = slider(value=4.0, min=0.5, max=5.0)
         );
     }
 
+    /// Before the first generation completes the `profile` read is refused
+    /// (kind `invalid`, "no generation has completed yet") and
+    /// `/debug/state.profile` is `null` — never an empty view (docs/13 §The
+    /// profiler); once the pass lands the same read answers. The first
+    /// pass is parked in its warm-up by the `display_hold` seam (review
+    /// finding L2-P1-8: the `last_complete.is_none()` arm had no test).
+    #[test]
+    fn profile_is_refused_until_the_first_generation_completes() {
+        let (_dir, mut config) = project("# cicada 1\nball = sphere(radius=1.0)\n");
+        let hold = PassHold::new();
+        hold.arm(1);
+        config.display_hold = Some(hold.seam());
+        let session = Session::open(config).unwrap();
+        let parked = hold.parked();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        let _ = drain(&mut rx);
+        session.handle(
+            id,
+            Some("early".into()),
+            ClientMessage::Profile { generation: None },
+        );
+        let got = texts(&drain(&mut rx));
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0]["type"], "error", "{}", got[0]);
+        assert_eq!(got[0]["payload"]["kind"], "invalid");
+        assert_eq!(got[0]["payload"]["intent_id"], "early");
+        assert_eq!(
+            got[0]["payload"]["message"],
+            "profile: no generation has completed yet"
+        );
+        let state = session.debug_state(false);
+        assert!(state["profile"].is_null(), "{}", state["profile"]);
+        assert!(state["solve"]["last_complete_generation"].is_null());
+        hold.release();
+        session.wait_idle();
+        let _ = drain(&mut rx);
+        session.handle(
+            id,
+            Some("late".into()),
+            ClientMessage::Profile { generation: None },
+        );
+        let got = texts(&drain(&mut rx));
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0]["type"], "profile_view", "{}", got[0]);
+        assert_eq!(got[0]["payload"]["generation"], parked);
+        assert!(got[0]["payload"].get("cancelled").is_none());
+        let state = session.debug_state(false);
+        assert_eq!(state["profile"]["generation"], parked);
+    }
+
     /// `set_display_cache` (docs/13 §The display edge): writer-only, 64 ..=
     /// 65536 MiB, resizes the session's cache live and answers every client
     /// with `caches`; never an op, never a delta, never the file.
