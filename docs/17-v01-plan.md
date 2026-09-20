@@ -3229,8 +3229,11 @@ proves wrong is revised here, dated, in the landing commit.
   `hello` echoing the raw request is red (fix round 2026-09-20, L4-1:
   the first test sat where requested and resolved coincide),
   `/health` unchanged), `AboutDialog.test.tsx` (8 — with the real key
-  router on the window: Del and Space behind the modal send nothing, Esc
-  closes it alone, focus in and back; `unknown` as text),
+  router on the window, keydown AND keyup, over a paused transport with a
+  time param: Del and Space behind the modal send nothing and post
+  nothing, Esc closes it alone, focus in and back; `unknown` as text —
+  fix round 2 2026-09-20, L2-R1-2 / L3A-4: as first written only keydown
+  was routed and no transport seeded, so the Space half could not fail),
   `keyboard.test.ts` (the modal rule — About, the commit dialog and File →
   Open each held INERT behind, not only closed on Esc: a rule narrowed back
   to About + File → Open with the old commit-dialog Esc branch kept passed

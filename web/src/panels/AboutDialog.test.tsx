@@ -8,10 +8,13 @@
  * rather than an invented value, Esc / × close it, and the settings menu's
  * last entry opens it while closing the menu. With the REAL key router on
  * the window (App's order — the router first, the dialog's own listener
- * after), Esc from the page behind the dialog closes it and does nothing
- * else, Del behind it deletes nothing, and focus moves into the dialog on
- * open and back to the gear on close (fix round 2026-09-20, L5-1 / R1-C1 /
- * R1-C5).
+ * after; keydown AND keyup, the path Space takes — and a paused transport
+ * with a time param, so Space would otherwise send `transport_play`: fix
+ * round 2 2026-09-20, L2-R1-2 / L3A-4 — without both the Space assertion
+ * could not fail), Esc from the page behind the dialog closes it and does
+ * nothing else, Del and Space behind it send nothing, and focus moves into
+ * the dialog on open and back to the gear on close (fix round 2026-09-20,
+ * L5-1 / R1-C1 / R1-C5).
  */
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -44,6 +47,21 @@ function installClipboard(writeText: (text: string) => Promise<void>) {
 
 const text = (testId: string) => screen.getByTestId(testId).textContent;
 const isOpen = () => useCicada.getState().aboutDialog;
+
+// A paused transport with a time param: from the canvas, a Space tap sends
+// `transport_play`; with no transport the map only posts a notice.
+const paused = {
+  view: {
+    playing: false,
+    speed: 1,
+    t_ms: 0,
+    frame: 0,
+    frames: 120,
+    period_ms: 4000,
+    driven: [{ node: "spin", port: "frame", signal: "frame" as const, loop: { frames: 120, period_ms: 4000 } }],
+  },
+  receivedAt: 0,
+};
 
 describe("the About dialog", () => {
   afterEach(() => {
@@ -162,9 +180,11 @@ describe("the About dialog", () => {
     useCicada.setState({
       summary: { ...useCicada.getState().summary, running: true },
       selection: { nodes: ["a"], wire: null, element: null },
+      transport: paused,
     });
     const router = createKeyRouter();
     window.addEventListener("keydown", router.onKeyDown);
+    window.addEventListener("keyup", router.onKeyUp);
     try {
       render(<TopBar />);
       fireEvent.click(screen.getByTestId("tb-settings"));
@@ -180,6 +200,8 @@ describe("the About dialog", () => {
       fireEvent.keyDown(document.body, { key: " ", code: "Space" });
       fireEvent.keyUp(document.body, { key: " ", code: "Space" });
       expect(sent, "no transport intent behind the modal").toEqual([]);
+      expect(useCicada.getState().notices, "and no notice either").toEqual([]);
+      expect(isOpen(), "Space is not the modal's close key either").toBe(true);
 
       // Esc behind it: closes About — the running solve is NOT cancelled and
       // the selection stands.
@@ -196,7 +218,7 @@ describe("the About dialog", () => {
     } finally {
       window.removeEventListener("keydown", router.onKeyDown);
       window.removeEventListener("keyup", router.onKeyUp);
-      useCicada.setState({ summary: { ...useCicada.getState().summary, running: false }, selection: { nodes: [], wire: null, element: null } });
+      useCicada.setState({ summary: { ...useCicada.getState().summary, running: false }, selection: { nodes: [], wire: null, element: null }, transport: null });
     }
   });
 });
