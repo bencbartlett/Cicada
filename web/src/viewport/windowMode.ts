@@ -88,7 +88,11 @@ function dispatch(event: ModeEvent, win: ModeWindow, choice?: WindowChoice): voi
   if (effects.includes("close_window")) pip?.close();
   if (effects.includes("open_window") && choice?.kind === "pip") void openWindow(win, choice.api);
   if (effects.includes("pop_out") && choice?.kind === "popout") {
-    if (popOutViewport(win) !== null) {
+    // Said once per window: a further `window` click re-targets the open
+    // pop-out (focus, the current pipeline) and would otherwise stack the
+    // same warning again (review finding 2026-09-20).
+    const result = popOutViewport(win);
+    if (result !== null && result.opened) {
       store.addNotice(
         "warning",
         `${choice.reason} — the viewport opened as a separate read-only window instead (the second-monitor pop-out)`,

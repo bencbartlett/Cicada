@@ -118,6 +118,22 @@ describe("chooseViewportMode", () => {
     expect(notices[0]!.message).toMatch(/read-only window instead/);
   });
 
+  it("a further `window` click with the pop-out open re-targets it and adds no second warning", () => {
+    const existing = {} as Window;
+    const win = mainWindow(
+      undefined,
+      vi.fn<() => Window | null>(() => existing),
+    );
+    cleanup.push(mountHost(win).unregister);
+    chooseViewportMode("window", win);
+    chooseViewportMode("window", win);
+    chooseViewportMode("window", win);
+    expect(win.open).toHaveBeenCalledTimes(3);
+    const notices = useCicada.getState().notices;
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.message).toMatch(/read-only window instead/);
+  });
+
   it("a blocked pop-out is the pop-out's own notice, not a second one", () => {
     const win = mainWindow(
       undefined,

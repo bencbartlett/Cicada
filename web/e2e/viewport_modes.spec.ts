@@ -471,5 +471,14 @@ test("window without the API: the observer pop-out opens with a notice, and the 
   await expect(page.getByTestId("viewport-mode-window")).toHaveAttribute("aria-checked", "false");
   await expect(page.getByTestId("viewport-canvas")).toHaveAttribute("data-marker", "same-canvas");
   expect((await storedSettings(page)).viewportMode).toBe("floating");
+
+  // A second click: the fixed window name re-targets the open pop-out — no
+  // second page, and the warning is not stacked again.
+  const pagesBefore = context.pages().length;
+  await page.getByTestId("viewport-mode-window").click();
+  await expect(page.getByTestId("viewport-mode-floating")).toHaveAttribute("aria-checked", "true");
+  await expect(notice).toHaveCount(1);
+  expect(context.pages().length).toBe(pagesBefore);
+  expect(popup.isClosed()).toBe(false);
   await popup.close();
 });
