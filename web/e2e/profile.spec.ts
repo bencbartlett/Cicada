@@ -84,6 +84,17 @@ test("the profiler: the ring, every node with its state and cost, cached rows af
   // hears of no pass until the next one — docs/17 L5-7.)
   await expect(page.getByTestId("tb-solve-text")).toHaveText(/gen \d+ · solve .+/, { timeout: 60_000 });
 
+  // The session is the suite's, shared with the specs before this one, and
+  // their last write may have been a memo hit for every node (a
+  // scrub-warmed `size` — the ring draws only nodes that COMPUTED): make the
+  // last complete generation one that computed, with an off-grid `size` no
+  // scrub position and no other spec ever solved. The second generation
+  // below puts `size` back on the grid for the specs after this one.
+  const opening = await debugState(page);
+  const fresh = opening.text.includes("value=3.37") ? "2.87" : "3.37";
+  await send(page, { type: "set_param", payload: { node: "size", port: "value", value: fresh } });
+  await expect.poll(async () => (await debugState(page)).text).toContain(`size = slider(value=${fresh}`);
+
   // ---- open: the view is the server's last complete generation.
   await page.getByTestId("tb-profile").click();
   await expect(page.getByTestId("insp-tab-profile")).toHaveAttribute("aria-selected", "true");

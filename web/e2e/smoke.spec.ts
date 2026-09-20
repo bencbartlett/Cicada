@@ -79,6 +79,18 @@ test("serve → load → place → wire → drag → screenshot asserts geometry
   const initial = await debugState(page);
   expect(initial.graph.nodes.length).toBe(12);
   await expect(page.locator(".react-flow__node")).toHaveCount(12);
+  // The served copy is the suite's, shared with the specs before this one,
+  // and a drag elsewhere may have left `size` anywhere in its range; the
+  // drag below GROWS the box from the example's own 2.0, so start there (a
+  // write of that value when the text says otherwise — this page is the
+  // one client, the writer).
+  if (!initial.text.includes("size = slider(value=2.0,")) {
+    await page.evaluate(() => {
+      const w = window as unknown as { __cicada: { send: (message: unknown) => void } };
+      w.__cicada.send({ type: "set_param", payload: { node: "size", port: "value", value: "2.0" } });
+    });
+    await expect.poll(async () => (await debugState(page)).text).toContain("size = slider(value=2.0,");
+  }
   await expect
     .poll(async () => (await scene(page)).framesReceived, { timeout: 20_000 })
     .toBeGreaterThan(0);
