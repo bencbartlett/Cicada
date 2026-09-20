@@ -290,10 +290,16 @@ test("floating: the panel over the canvas — the same scene, drag + resize pers
   // ---- back to split from the settings menu's control: the panes and the splitter return.
   await page.getByTestId("tb-settings").click();
   await expect(page.getByTestId("settings-viewport-mode-floating")).toHaveAttribute("aria-checked", "true");
+  // Outside split the pane arrangement has nothing to arrange: the split presets and the swap are greyed, with the reason.
+  await expect(page.getByTestId("settings-swap")).toBeDisabled();
+  await expect(page.getByTestId("settings-swap")).toHaveAttribute("title", /applies to the split viewport mode/);
+  for (const preset of await page.getByTestId("settings-split").locator("button").all()) await expect(preset).toBeDisabled();
   await page.getByTestId("settings-viewport-mode-split").click();
   await expect(page.getByTestId("viewport-pane")).toHaveAttribute("data-mode", "split");
   await expect(page.locator(".splitter")).toHaveCount(1);
   expect((await storedSettings(page)).viewportMode).toBe("split");
+  await expect(page.getByTestId("settings-swap")).toBeEnabled();
+  for (const preset of await page.getByTestId("settings-split").locator("button").all()) await expect(preset).toBeEnabled();
   expect(errors, errors.join("\n")).toEqual([]);
 });
 

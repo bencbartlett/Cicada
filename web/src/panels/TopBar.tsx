@@ -349,14 +349,16 @@ function SettingsMenu() {
     };
   }, [open]);
 
-  const seg = <K extends keyof Settings>(key: K, options: [Settings[K], string][]) => (
-    <span className="seg" role="radiogroup">
+  /** A segmented control over one setting; `disabled` = the reason it does not apply right now (shown as the hover), null when it does. */
+  const seg = <K extends keyof Settings>(key: K, options: [Settings[K], string][], extra: { testId?: string; disabled?: string | null } = {}) => (
+    <span className="seg" role="radiogroup" data-testid={extra.testId} title={extra.disabled ?? undefined}>
       {options.map(([value, label]) => (
         <button
           key={String(value)}
           className={settings[key] === value ? "active" : ""}
           role="radio"
           aria-checked={settings[key] === value}
+          disabled={extra.disabled !== undefined && extra.disabled !== null}
           onClick={() => updateSettings({ [key]: value } as Partial<Settings>)}
         >
           {label}
@@ -364,6 +366,14 @@ function SettingsMenu() {
       ))}
     </span>
   );
+  // The split presets and the swap arrange the two panes: outside the split
+  // viewport mode there are no panes to arrange, so they are greyed with the
+  // reason rather than writing a setting nothing shows (review finding
+  // 2026-09-20).
+  const splitOnly =
+    settings.viewportMode === "split"
+      ? null
+      : `applies to the split viewport mode — the viewport is ${settings.viewportMode === "floating" ? "a floating panel" : "in its own window"} now`;
 
   return (
     <span className="tb-menu-wrap" ref={wrapRef}>
@@ -386,13 +396,15 @@ function SettingsMenu() {
             ["light", "light"],
           ])}
           <span className="menu-h">layout</span>
-          <label>split</label>
-          {seg("split", SPLIT_LABELS)}
-          <label>swap panes</label>
+          <label title={splitOnly ?? undefined}>split</label>
+          {seg("split", SPLIT_LABELS, { testId: "settings-split", disabled: splitOnly })}
+          <label title={splitOnly ?? undefined}>swap panes</label>
           <input
             type="checkbox"
             data-testid="settings-swap"
             checked={settings.swap}
+            disabled={splitOnly !== null}
+            title={splitOnly ?? undefined}
             onChange={(e) => updateSettings({ swap: e.target.checked })}
           />
           <label>text panel</label>
