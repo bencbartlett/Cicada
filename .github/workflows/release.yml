@@ -142,7 +142,7 @@ jobs:
           binary=target/release/cicada
           if [ "$RUNNER_OS" = Windows ]; then binary=$binary.exe; fi
           out="$RUNNER_TEMP/Cicada-$VERSION-${{ matrix.slug }}"
-          python tools/launch/bundle.py --out "$out" --binary "$binary" --cache-root "$RUNNER_TEMP/cicada-occt"
+          python tools/launch/bundle.py --out "$out" --binary "$binary" --cache-root "$RUNNER_TEMP/cicada-occt" --release
           python tools/launch/bundle.py --check "$out" --smoke
       - name: Zip the bundle folder (`Cicada-<version>-<os>.zip` unpacks to that folder)
         shell: bash

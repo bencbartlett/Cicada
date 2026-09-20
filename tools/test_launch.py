@@ -416,13 +416,14 @@ class FilesTest(unittest.TestCase):
         self.assertEqual(info["CFBundleShortVersionString"], "0.0.1")
 
     def test_readme_states_the_requirements_per_platform(self):
-        windows = bundle.readme_text("win-64", "0.0.1", "abc1234")
+        windows = bundle.readme_text("win-64", "0.0.1", "abc1234abc12")
         self.assertIn("Cicada 0.0.1", windows)
-        self.assertIn("commit abc1234", windows)
+        self.assertIn("commit abc1234abc12", windows)
         self.assertIn("Double-click Cicada.cmd", windows)
         self.assertIn("CICADA_PYTHON", windows)
         self.assertIn("Visual C++", windows)
         self.assertIn("WORK IN PROGRESS", windows)
+        self.assertIn("not a release", windows)
         self.assertIn("app built in", windows)
         self.assertNotIn("right-click", windows)
         mac = bundle.readme_text("osx-arm64", "0.0.1", None)
@@ -430,8 +431,19 @@ class FilesTest(unittest.TestCase):
         self.assertIn("right-click", mac)
         self.assertNotIn("Visual C++", mac)
         self.assertNotIn("commit", mac)
+        # A tagged release's asset (finding R1-C4): a pre-release, never a
+        # "development build ... not a release" -- the GitHub Release's own zip
+        # once disclaimed being one.
+        release = bundle.readme_text("win-64", "0.1.0-alpha.1", "abc1234abc12", release=True)
+        self.assertIn("Cicada 0.1.0-alpha.1 -- win-64, commit abc1234abc12", release)
+        self.assertIn("PRE-RELEASE", release)
+        self.assertIn("v0.1.0-alpha.1 release page", release)
+        self.assertNotIn("WORK IN PROGRESS", release)
+        self.assertNotIn("not a release", release)
+        self.assertNotIn("development build", release)
+        self.assertIn("Double-click Cicada.cmd", release)
         # ASCII like the launchers: `type README.txt` in a cp1252 console and Notepad agree.
-        for text in (windows, mac):
+        for text in (windows, mac, release):
             self.assertTrue(all(ord(c) < 128 for c in text), sorted({c for c in text if ord(c) >= 128}))
         # The engine-only bundle says so and never claims the app.
         engine_only = bundle.readme_text("win-64", "0.0.1", "abc1234", spa=False)
@@ -495,6 +507,17 @@ class EnvironmentAndParsingTest(unittest.TestCase):
         self.assertEqual(bundle.default_binary(Path("t"), "windows"), Path("t/release/cicada.exe"))
         self.assertEqual(bundle.default_binary(Path("t"), "darwin"), Path("t/release/cicada"))
 
+    def test_parse_version_line_reads_the_binarys_own_stamp(self):
+        # The stamped shape (wave 5 R1): version AND commit come from the binary.
+        self.assertEqual(bundle.parse_version_line("cicada 0.1.0-alpha.1 (a82eb39d1c2e, 2026-08-25)\n"), ("0.1.0-alpha.1", "a82eb39d1c2e"))
+        self.assertEqual(bundle.parse_version_line("cicada 0.1.0-alpha.1 (a82eb39d1c2e-dirty, 2026-08-25)"), ("0.1.0-alpha.1", "a82eb39d1c2e-dirty"))
+        self.assertEqual(bundle.parse_version_line("cicada 0.1.0-alpha.1 (unknown, 2026-08-25)"), ("0.1.0-alpha.1", "unknown"))
+        # A binary from before the stamp: the version alone, no commit.
+        self.assertEqual(bundle.parse_version_line("cicada 0.0.1\n"), ("0.0.1", None))
+        for other in ("", "cicada", "clap 4.5\n", "cicada 0.0.1 (a82eb39d1c2e)"):
+            with self.assertRaisesRegex(bundle.BundleError, "not `cicada <version>"):
+                bundle.parse_version_line(other)
+
 
 class MakeAndCheckTest(unittest.TestCase):
     """`make_bundle` and `check_bundle` over synthetic prefixes and binaries;
@@ -526,7 +549,12 @@ class MakeAndCheckTest(unittest.TestCase):
         binary.write_bytes(fake_pe(["TKernel.dll", "TKBO.dll", "KERNEL32.dll", "combase.dll"]) + (SPA if spa else b"") + extra)
         return binary
 
-    def runner(self, help_code=0, help_stdout="Cicada: code-first parametric design\n\nCommands:\n  catalog\n  run\n  serve\n  app\n  mcp\n", version="cicada 0.0.1\n"):
+    def runner(
+        self,
+        help_code=0,
+        help_stdout="Cicada: code-first parametric design\n\nCommands:\n  catalog\n  run\n  serve\n  app\n  mcp\n",
+        version="cicada 0.0.1 (abc1234abc12, 2026-09-20)\n",
+    ):
         def run(argv, **kwargs):
             self.calls.append((list(argv), kwargs.get("env")))
             if argv[-1] == "--version":
@@ -542,19 +570,24 @@ class MakeAndCheckTest(unittest.TestCase):
         binary = self.windows_binary()
         out = self.root / "dist"
         environ = {"SystemRoot": r"C:\Windows", "PATH": r"C:\somewhere", "DEP_OCCT_ROOT": "x"}
-        spots = bundle.make_bundle(binary, out, layout, self.manifest, self.log, environ, run=self.runner(), commit="abc1234")
+        spots = bundle.make_bundle(binary, out, layout, self.manifest, self.log, environ, run=self.runner())
         self.assertEqual(spots.binary, out / "cicada.exe")
         self.assertEqual((out / "cicada.exe").read_bytes(), binary.read_bytes())
         for name in ("TKernel.dll", "TKBO.dll", "Cicada.cmd", "README.txt", bundle.STAMP_NAME, fo.BUNDLE_STAMP_NAME):
             self.assertTrue((out / name).is_file(), name)
         self.assertEqual((out / "Cicada.cmd").read_bytes().decode("utf-8"), bundle.windows_launcher_text())
         readme = (out / "README.txt").read_text(encoding="utf-8")
-        self.assertIn("Cicada 0.0.1", readme)
-        self.assertIn("commit abc1234", readme)
+        # Version AND commit are the binary's own stamp (R1-C4), the dev wording.
+        self.assertIn("Cicada 0.0.1 -- win-64, commit abc1234abc12", readme)
+        self.assertIn("not a release", readme)
         stamp = json.loads((out / bundle.STAMP_NAME).read_text(encoding="utf-8"))
         self.assertEqual(stamp["version"], "0.0.1")
+        self.assertEqual(stamp["commit"], "abc1234abc12")
+        self.assertIs(stamp["release"], False)
         self.assertEqual(stamp["subdir"], "win-64")
         self.assertIs(stamp["spa"], True)
+        # No git call: the checkout the script runs in is not the binary's provenance.
+        self.assertFalse(any(argv[0] == "git" for argv, _ in self.calls), self.calls)
         self.assertEqual(stamp["binary_source"]["size"], binary.stat().st_size)
         # --version ran on the BUNDLED copy under the clean environment.
         version_calls = [(argv, env) for argv, env in self.calls if argv[-1] == "--version"]
@@ -576,15 +609,38 @@ class MakeAndCheckTest(unittest.TestCase):
         # Idempotent: a second make changes no file (bytes AND mtimes).
         before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in out.iterdir()}
         self.messages.clear()
-        bundle.make_bundle(binary, out, layout, self.manifest, self.log, environ, run=self.runner(), commit="abc1234")
+        bundle.make_bundle(binary, out, layout, self.manifest, self.log, environ, run=self.runner())
         after = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in out.iterdir()}
         self.assertEqual(after, before)
         self.assertTrue(any("unchanged" in m for m in self.messages), self.messages)
         self.assertTrue(any("source unchanged" in m for m in self.messages), self.messages)
         # A rebuilt source binary is copied again.
         binary.write_bytes(binary.read_bytes() + b"\0" * 16)
-        bundle.make_bundle(binary, out, layout, self.manifest, self.log, environ, run=self.runner(), commit="abc1234")
+        bundle.make_bundle(binary, out, layout, self.manifest, self.log, environ, run=self.runner())
         self.assertEqual((out / "cicada.exe").read_bytes(), binary.read_bytes())
+
+    def test_release_bundle_wording_and_its_refusal_of_a_dirty_or_unknown_stamp(self):
+        layout = self.windows_prefix()
+        binary = self.windows_binary()
+        out = self.root / "dist"
+        environ = {"SystemRoot": r"C:\Windows"}
+        # A clean stamp: the release README and stamp.
+        spots = bundle.make_bundle(binary, out, layout, self.manifest, self.log, environ, run=self.runner(version="cicada 0.1.0-alpha.1 (a82eb39d1c2e, 2026-09-20)\n"), release=True)
+        readme = spots.readme.read_text(encoding="utf-8")
+        self.assertIn("Cicada 0.1.0-alpha.1 -- win-64, commit a82eb39d1c2e", readme)
+        self.assertIn("PRE-RELEASE", readme)
+        self.assertNotIn("not a release", readme)
+        stamp = json.loads(spots.stamp.read_text(encoding="utf-8"))
+        self.assertEqual((stamp["version"], stamp["commit"], stamp["release"]), ("0.1.0-alpha.1", "a82eb39d1c2e", True))
+        self.assertEqual(bundle.check_bundle(out, self.log, environ, run=self.runner()), [])
+        # A dirty, an unknown and an unstamped binary are refused under --release.
+        for version in ("cicada 0.1.0-alpha.1 (a82eb39d1c2e-dirty, 2026-09-20)\n", "cicada 0.1.0-alpha.1 (unknown, 2026-09-20)\n", "cicada 0.0.1\n"):
+            with self.assertRaisesRegex(bundle.BundleError, r"--release: cicada\.exe --version stamps commit .*clean, known commit"):
+                bundle.make_bundle(binary, self.root / "dist2", layout, self.manifest, self.log, environ, run=self.runner(version=version), release=True)
+        # Without --release the same binaries bundle with the dev wording.
+        spots = bundle.make_bundle(binary, self.root / "dist3", layout, self.manifest, self.log, environ, run=self.runner(version="cicada 0.1.0-alpha.1 (a82eb39d1c2e-dirty, 2026-09-20)\n"))
+        self.assertIn("commit a82eb39d1c2e-dirty", spots.readme.read_text(encoding="utf-8"))
+        self.assertIn("not a release", spots.readme.read_text(encoding="utf-8"))
 
     def test_check_names_every_problem(self):
         layout = self.windows_prefix()

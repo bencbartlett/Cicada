@@ -38,7 +38,13 @@ notarized.
 Idempotent: a second `--out` over the same build changes nothing (the binary
 is copied again only when the SOURCE binary changed -- size or mtime --
 recorded in `.cicada-bundle.json`, a pure function of the inputs; launcher,
-plist and README are rewritten only when their bytes would change).
+plist and README are rewritten only when their bytes would change). The
+README's version and commit are the BINARY's own stamp (`cicada --version`:
+`cicada <version> (<commit>, <date>)`), never the checkout the script ran
+in -- a `--binary` from elsewhere is named for what it is (finding R1-C4).
+`--release` writes a tagged release's README (a pre-release, not the
+launcher's "development build") and refuses a binary whose stamp is
+`-dirty` or `unknown`; the release workflow passes it.
 
 The binary must embed the SPA (`embeds_spa`: two lines of `web/index.html`
 an `embed` build carries verbatim -- rust-embed stores the files
@@ -81,6 +87,7 @@ import os
 import platform
 import plistlib
 import queue
+import re
 import secrets
 import shutil
 import subprocess
@@ -297,21 +304,35 @@ def info_plist_text(version: str) -> str:
     return plistlib.dumps(info, sort_keys=True).decode("utf-8")
 
 
-def readme_text(subdir: str, version: str, commit: str | None, spa: bool = True) -> str:
+def readme_text(subdir: str, version: str, commit: str | None, spa: bool = True, release: bool = False) -> str:
     """`README.txt` -- ASCII only, like the launchers: `type README.txt` in a
     cp1252 console and Notepad must agree. `spa=False` is the engine-only
-    bundle (`--allow-no-spa`), whose launcher would stop at `cicada app`."""
+    bundle (`--allow-no-spa`), whose launcher would stop at `cicada app`.
+    `commit` is what the BINARY stamped (`cicada --version`), so the README
+    names the build it sits beside and never the checkout the script ran in
+    (fix round 2026-09-20, finding R1-C4). `release=True` is the wording of
+    a tagged release's asset (`--release`, the release workflow): a
+    pre-release, not the launcher's "development build" -- which a GitHub
+    Release's own zip once disclaimed being."""
     windows = subdir.startswith("win-")
     launcher = WINDOWS_LAUNCHER if windows else MACOS_APP
     binary = "cicada.exe" if windows else f"{MACOS_APP}/Contents/MacOS/cicada"
-    lines = [
-        f"Cicada {version} -- {subdir}" + (f", commit {commit}" if commit else ""),
-        "",
-        "WORK IN PROGRESS. Cicada is pre-release software under daily development;",
-        "nothing is stable, there is no support, and the file formats change without",
-        "notice. This folder is a development build for trying it, not a release.",
-        "",
-    ]
+    lines = [f"Cicada {version} -- {subdir}" + (f", commit {commit}" if commit else ""), ""]
+    if release:
+        lines += [
+            f"PRE-RELEASE. Cicada {version} is pre-release software under daily development:",
+            "the .cic dialect, the node catalog and the file formats still change without",
+            "notice, there is no installer, no code signing and no support. The release",
+            f"notes are on the v{version} release page of the Cicada repository.",
+            "",
+        ]
+    else:
+        lines += [
+            "WORK IN PROGRESS. Cicada is pre-release software under daily development;",
+            "nothing is stable, there is no support, and the file formats change without",
+            "notice. This folder is a development build for trying it, not a release.",
+            "",
+        ]
     if spa:
         lines += [
             "Run it",
@@ -434,29 +455,37 @@ def run_capture(argv: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(argv, 127, "", str(error))
 
 
-def binary_version(binary: Path, env: dict[str, str], run: Run) -> str:
-    """`cicada --version` -> the version word; refused when the binary does
-    not answer (a bundled binary that cannot start is the first thing this
-    script must say)."""
+#: `cicada --version` since wave 5 R1: `cicada <version> (<commit>, <YYYY-MM-DD>)`
+#: -- the commit git's 12-digit short hash, `-dirty`, or `unknown`
+#: (`crates/cicada-cli/src/stamp.rs`). A binary from before the stamp
+#: answers `cicada <version>` alone.
+VERSION_LINE = re.compile(r"^cicada (\S+)(?: \((\S+), (\d{4}-\d{2}-\d{2})\))?\s*$")
+
+
+def parse_version_line(stdout: str) -> tuple[str, str | None]:
+    """`cicada --version`'s first line -> `(version, commit)`; the commit is
+    None for a binary that stamps none. Refused for any other shape."""
+    first = stdout.strip().splitlines()[0] if stdout.strip() else ""
+    match = VERSION_LINE.match(first)
+    if match is None:
+        raise BundleError(f"--version answered {first!r}, not `cicada <version> (<commit>, <date>)`")
+    return match.group(1), match.group(2)
+
+
+def binary_version(binary: Path, env: dict[str, str], run: Run) -> tuple[str, str | None]:
+    """`cicada --version` -> `(version, commit)` as the BINARY stamped them;
+    refused when the binary does not answer (a bundled binary that cannot
+    start is the first thing this script must say)."""
     completed = run([str(binary), "--version"], cwd=str(binary.parent), env=env, timeout=60)
     if completed.returncode != 0:
         raise BundleError(
             f"{binary.name} --version exited {completed.returncode} from inside the bundle under a clean environment: "
             f"{(completed.stderr or completed.stdout).strip() or 'no output'}"
         )
-    words = completed.stdout.split()
-    if len(words) < 2 or words[0] != "cicada":
-        raise BundleError(f"{binary.name} --version answered {completed.stdout.strip()!r}, not `cicada <version>`")
-    return words[1]
-
-
-def git_commit(repo: Path, run: Run) -> str | None:
-    """The repository's HEAD (short), or None when this is not a checkout."""
-    completed = run(["git", "-C", str(repo), "rev-parse", "--short", "HEAD"], timeout=60)
-    if completed.returncode != 0:
-        return None
-    word = completed.stdout.strip()
-    return word or None
+    try:
+        return parse_version_line(completed.stdout)
+    except BundleError as error:
+        raise BundleError(f"{binary.name} {error}") from None
 
 
 def parse_url_line(line: str) -> str | None:
@@ -501,12 +530,14 @@ def make_bundle(
     environ: dict[str, str] | None = None,
     run: Run = run_capture,
     which=shutil.which,
-    commit: str | None = None,
     allow_no_spa: bool = False,
+    release: bool = False,
 ) -> Places:
     """Produce (or refresh) the bundle in `out` from `binary`; refused, before
     anything is written, when the binary embeds no SPA and `allow_no_spa` is
-    not set (module docstring)."""
+    not set (module docstring). `release` writes a tagged release's README
+    and requires the binary's stamp to name a clean commit -- a `-dirty` or
+    `unknown` build is refused, never shipped under release wording."""
     environ = dict(os.environ if environ is None else environ)
     system = "windows" if layout.is_windows else "darwin"
     if not binary.is_file():
@@ -540,13 +571,18 @@ def make_bundle(
         raise BundleError(str(error)) from error
     if layout.is_macos:
         log(f"rpaths after: {fo.macho_rpaths(spots.binary.read_bytes())}")
-    version = binary_version(spots.binary, clean_environment(system, environ), run)
+    version, commit = binary_version(spots.binary, clean_environment(system, environ), run)
+    if release and (commit is None or commit == "unknown" or commit.endswith("-dirty")):
+        raise BundleError(
+            f"--release: {spots.binary.name} --version stamps commit {commit or 'none'} -- a release bundle needs a clean, "
+            "known commit (a fresh checkout with CICADA_GIT_SHA set, as the release workflow builds it)"
+        )
     changed = [copied]
     changed.append(write_if_changed(spots.launcher, windows_launcher_text() if spots.is_windows else macos_launcher_text(), executable=True))
     if spots.plist is not None:
         changed.append(write_if_changed(spots.plist, info_plist_text(version)))
-    changed.append(write_if_changed(spots.readme, readme_text(layout.subdir, version, commit, spa)))
-    stamp = {"binary_source": source, "commit": commit, "spa": spa, "subdir": layout.subdir, "version": version}
+    changed.append(write_if_changed(spots.readme, readme_text(layout.subdir, version, commit, spa, release)))
+    stamp = {"binary_source": source, "commit": commit, "release": release, "spa": spa, "subdir": layout.subdir, "version": version}
     changed.append(write_if_changed(spots.stamp, json.dumps(stamp, indent=1, sort_keys=True) + "\n"))
     log(
         f"bundle {out}: cicada {version}{'' if spa else ' (engine only -- no SPA)'}, {spots.launcher.relative_to(out)}, {README_NAME}"
@@ -801,6 +837,11 @@ def main(argv: list[str], environ: dict[str, str] | None = None) -> int:
         action="store_true",
         help="with --out: bundle a binary that embeds no SPA -- engine only (run, serve, mcp; `cicada app` refuses); CI's debug binaries",
     )
+    parser.add_argument(
+        "--release",
+        action="store_true",
+        help="with --out: a tagged release's asset -- the README says pre-release, not development build; the binary's stamp must name a clean commit",
+    )
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args(argv)
     environ = dict(os.environ if environ is None else environ)
@@ -813,6 +854,8 @@ def main(argv: list[str], environ: dict[str, str] | None = None) -> int:
         if args.check is not None:
             if args.allow_no_spa:
                 raise BundleError("--allow-no-spa goes with --out")
+            if args.release:
+                raise BundleError("--release goes with --out")
             problems = check_bundle(args.check, log, environ)
             if problems:
                 raise BundleError(f"bundle {args.check} fails its check:\n  " + "\n  ".join(problems))
@@ -827,9 +870,7 @@ def main(argv: list[str], environ: dict[str, str] | None = None) -> int:
         layout = fo.Layout(args.cache_root or fo.default_cache_root(environ), fo.detect_subdir(), manifest["occt_version"])
         binary = args.binary if args.binary is not None else default_binary(cargo_target_dir(run_capture, REPO, environ), system)
         fo.fetch(manifest, layout, log)
-        spots = make_bundle(
-            binary, args.out, layout, manifest, log, environ, commit=git_commit(REPO, run_capture), allow_no_spa=args.allow_no_spa
-        )
+        spots = make_bundle(binary, args.out, layout, manifest, log, environ, allow_no_spa=args.allow_no_spa, release=args.release)
         print(f"bundle {args.out}: {spots.launcher.relative_to(args.out)} runs `cicada app`; `bundle.py --check {args.out}` verifies it")
         return 0
     except (BundleError, fo.FetchError) as error:

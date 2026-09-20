@@ -1493,7 +1493,14 @@ canvas; then item 5 / C2 / the follow-ups as the second half of the wave.
   minimal env, writes `Cicada.cmd` (CRLF; `.gitattributes` now keeps
   `*.cmd` CRLF against the repo's LF rule) or
   `Cicada.app/Contents/{Info.plist, MacOS/Cicada.command}` and
-  `README.txt` (the version, the commit, what the machine still needs:
+  `README.txt` (the version and the commit — both the BINARY's own
+  `--version` stamp since the fix round of 2026-09-20, R1-C4: the README
+  once named `git rev-parse` of the checkout the script ran in, seven
+  digits beside About's twelve and, with `--binary` from elsewhere, a
+  commit the binary was not; `--release` writes a tagged release's
+  wording — a pre-release, not "a development build … not a release",
+  which every release zip once said — and refuses a `-dirty` or `unknown`
+  stamp; what the machine still needs:
   Python 3, the VC++ runtime, a first right-click → Open); `--check` =
   launcher files present, the L2 stamp's libraries at their sizes, the
   binary's imports resolved statically, the macOS rpath
@@ -3195,8 +3202,9 @@ proves wrong is revised here, dated, in the landing commit.
   every commit) and `.github/workflows/release.yml` — `notes` (the tag
   must name Cargo.toml's version and the CHANGELOG its section, else the
   run stops there) → `bundle` (Windows + macOS: release + `embed`,
-  `--version` must print the tag's version and commit, `bundle.py --out`
-  then `--check --smoke`, `Cicada-<version>-<os>.zip` unpacking to a
+  `--version` must print the tag's version and commit, `bundle.py --out
+  --release` (the release README, the commit from the binary's stamp —
+  fix round 2026-09-20, R1-C4) then `--check --smoke`, `Cicada-<version>-<os>.zip` unpacking to a
   folder of that name) and `linux` (the bare `cicada-<version>-linux-x86_64`)
   → `release` (`gh release create --verify-tag`, every asset,
   `--prerelease` for a `-` suffix; `CICADA_GIT_SHA = github.sha` stamps
