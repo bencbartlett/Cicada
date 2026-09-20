@@ -3244,7 +3244,11 @@ proves wrong is revised here, dated, in the landing commit.
   `--threads 2`, the mirror's protocol number, the clipboard before the
   note, Esc; a selected node survives Esc and Del from the dialog's focus
   and from a blurred body), `tools/test_launch.py` (the README from the
-  binary's stamp, `--release`, the licensing files), `tools/test_changelog.py`
+  binary's stamp, `--release`, the licensing files; `--check` holds the
+  bundled binary's `--version` to the stamp and the README, and a stamp
+  marked release to a clean commit — fix round 2 2026-09-20, L2-R1-3: as
+  first built the check ran `--help` alone, so a binary swapped in after
+  the bundle was made shipped a README naming another build), `tools/test_changelog.py`
   (the `TAG-TODO` and `Unreleased` rules, the asset names). *What the contract did
   not foresee:* (1) the engine's threads reach the client through
   `hello.threads` (additive) — nothing had carried them, and About lists

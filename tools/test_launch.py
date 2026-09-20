@@ -602,10 +602,14 @@ class MakeAndCheckTest(unittest.TestCase):
         self.assertTrue(any("2 libraries present at their recorded sizes" in m for m in self.messages), self.messages)
         self.assertTrue(any("every import resolves" in m for m in self.messages), self.messages)
         self.assertTrue(any(m == "cicada.exe embeds the SPA" for m in self.messages), self.messages)
+        self.assertTrue(any(m == "cicada.exe --version is the build the bundle records: 0.0.1 (abc1234abc12)" for m in self.messages), self.messages)
         self.assertTrue(any("--help answers from inside the bundle" in m for m in self.messages), self.messages)
-        help_calls = [(argv, kw) for argv, kw in self.calls if argv[-1] == "--help"]
-        self.assertEqual(help_calls[0][0], [str(out / "cicada.exe"), "--help"])
-        self.assertEqual(help_calls[0][1]["PATH"], r"C:\Windows\System32;C:\Windows")
+        # --version and --help both ran on the BUNDLED copy under the clean environment.
+        for flag in ("--version", "--help"):
+            calls = [(argv, kw) for argv, kw in self.calls if argv[-1] == flag]
+            self.assertEqual(len(calls), 1, flag)
+            self.assertEqual(calls[0][0], [str(out / "cicada.exe"), flag])
+            self.assertEqual(calls[0][1]["PATH"], r"C:\Windows\System32;C:\Windows")
         # Idempotent: a second make changes no file (bytes AND mtimes).
         before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in out.iterdir()}
         self.messages.clear()
@@ -632,15 +636,40 @@ class MakeAndCheckTest(unittest.TestCase):
         self.assertNotIn("not a release", readme)
         stamp = json.loads(spots.stamp.read_text(encoding="utf-8"))
         self.assertEqual((stamp["version"], stamp["commit"], stamp["release"]), ("0.1.0-alpha.1", "a82eb39d1c2e", True))
-        self.assertEqual(bundle.check_bundle(out, self.log, environ, run=self.runner()), [])
+        released = self.runner(version="cicada 0.1.0-alpha.1 (a82eb39d1c2e, 2026-09-20)\n")
+        self.assertEqual(bundle.check_bundle(out, self.log, environ, run=released), [])
+        # The check holds the README's version and commit to the BINARY's
+        # `--version` (finding L2-R1-3): a binary swapped in after the bundle
+        # was made -- here one answering another build -- fails it, naming
+        # both builds; so does a stamp edited by hand.
+        problems = bundle.check_bundle(out, self.log, environ, run=self.runner())
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("cicada.exe --version says 0.0.1 (abc1234abc12) but .cicada-bundle.json and the README say 0.1.0-alpha.1 (a82eb39d1c2e)", problems[0])
+        edited = json.loads(spots.stamp.read_text(encoding="utf-8"))
+        edited["commit"] = "a82eb39d1c2e-dirty"
+        spots.stamp.write_text(json.dumps(edited), encoding="utf-8")
+        problems = bundle.check_bundle(out, self.log, environ, run=released)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("says 0.1.0-alpha.1 (a82eb39d1c2e) but .cicada-bundle.json and the README say 0.1.0-alpha.1 (a82eb39d1c2e-dirty)", problems[0])
+        spots.stamp.write_text(json.dumps(stamp), encoding="utf-8")
+        self.assertEqual(bundle.check_bundle(out, self.log, environ, run=released), [])
         # A dirty, an unknown and an unstamped binary are refused under --release.
         for version in ("cicada 0.1.0-alpha.1 (a82eb39d1c2e-dirty, 2026-09-20)\n", "cicada 0.1.0-alpha.1 (unknown, 2026-09-20)\n", "cicada 0.0.1\n"):
             with self.assertRaisesRegex(bundle.BundleError, r"--release: cicada\.exe --version stamps commit .*clean, known commit"):
                 bundle.make_bundle(binary, self.root / "dist2", layout, self.manifest, self.log, environ, run=self.runner(version=version), release=True)
         # Without --release the same binaries bundle with the dev wording.
-        spots = bundle.make_bundle(binary, self.root / "dist3", layout, self.manifest, self.log, environ, run=self.runner(version="cicada 0.1.0-alpha.1 (a82eb39d1c2e-dirty, 2026-09-20)\n"))
+        dirty = self.runner(version="cicada 0.1.0-alpha.1 (a82eb39d1c2e-dirty, 2026-09-20)\n")
+        spots = bundle.make_bundle(binary, self.root / "dist3", layout, self.manifest, self.log, environ, run=dirty)
         self.assertIn("commit a82eb39d1c2e-dirty", spots.readme.read_text(encoding="utf-8"))
         self.assertIn("not a release", spots.readme.read_text(encoding="utf-8"))
+        self.assertEqual(bundle.check_bundle(self.root / "dist3", self.log, environ, run=dirty), [])
+        # A stamp hand-edited to say release over a dirty binary: the check
+        # re-holds what --release refused at make time.
+        edited = json.loads(spots.stamp.read_text(encoding="utf-8"))
+        edited["release"] = True
+        spots.stamp.write_text(json.dumps(edited), encoding="utf-8")
+        problems = bundle.check_bundle(self.root / "dist3", self.log, environ, run=dirty)
+        self.assertEqual(problems, [".cicada-bundle.json says release but cicada.exe --version stamps commit a82eb39d1c2e-dirty -- a release bundle needs a clean, known commit"])
 
     def test_the_licensing_files_ride_beside_the_readme_when_the_repository_has_them(self):
         # DECISIONS.md 2026-08-11 / 2026-08-20 (finding R1-C3): LICENSE and the
@@ -726,7 +755,17 @@ class MakeAndCheckTest(unittest.TestCase):
         bundle.make_bundle(binary, out, layout, self.manifest, self.log, environ, run=self.runner())
         self.assertTrue(any(m.startswith("copied ") for m in self.messages), self.messages)
         self.assertEqual(bundle.check_bundle(out, self.log, environ, run=self.runner()), [])
-        # A stamp from before the SPA was recorded: remake, never guess.
+        # A binary swapped in that embeds the SPA but is another build
+        # (finding L2-R1-3): the README would name the wrong version and commit.
+        problems = bundle.check_bundle(out, self.log, environ, run=self.runner(version="cicada 0.2.0 (ffffffffffff, 2026-09-21)\n"))
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("cicada.exe --version says 0.2.0 (ffffffffffff) but .cicada-bundle.json and the README say 0.0.1 (abc1234abc12)", problems[0])
+        # One that does not answer --version at all.
+        problems = bundle.check_bundle(out, self.log, environ, run=lambda argv, **kw: completed(argv, 127, "", "STATUS_DLL_NOT_FOUND") if argv[-1] == "--version" else self.runner()(argv, **kw))
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("--version exited 127 from inside the bundle under a clean environment: STATUS_DLL_NOT_FOUND", problems[0])
+        # A stamp from before the SPA was recorded, and one from before the
+        # binary's build was: remake, never guess.
         stamp_path = out / bundle.STAMP_NAME
         stamp = json.loads(stamp_path.read_text(encoding="utf-8"))
         del stamp["spa"]
@@ -734,6 +773,12 @@ class MakeAndCheckTest(unittest.TestCase):
         problems = bundle.check_bundle(out, self.log, environ, run=self.runner())
         self.assertEqual(len(problems), 1, problems)
         self.assertIn("does not record whether the SPA is embedded", problems[0])
+        stamp = json.loads((out / bundle.STAMP_NAME).read_text(encoding="utf-8"))
+        del stamp["commit"]
+        stamp_path.write_text(json.dumps({**stamp, "spa": True}), encoding="utf-8")
+        problems = bundle.check_bundle(out, self.log, environ, run=self.runner())
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("does not record the binary's version and commit", problems[0])
         # Not a bundle at all.
         with self.assertRaisesRegex(bundle.BundleError, "is not a bundle"):
             bundle.check_bundle(self.root / "empty-nowhere", self.log, environ, run=self.runner())

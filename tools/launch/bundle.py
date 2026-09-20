@@ -68,9 +68,13 @@ or the OS (the static read `fetch_occt --check-closure` does); on macOS the
 binary's rpath is `@executable_path/lib` and no prefix rpath remains;
 `Info.plist` names the launcher as the executable; the binary agrees with
 the stamp about the SPA (a binary swapped in after the bundle was made is
-caught); and the binary answers `--help` from inside the bundle under a
-MINIMAL environment (Windows: PATH = System32 alone; macOS: the system
-PATH, no loader variable) -- the sentence the contract asks for. `--smoke`
+caught) and about the build -- its `--version` is the version and commit
+the stamp recorded and the README names (a swapped-in binary or a
+hand-edited stamp is caught; a stamp marked release must name a clean,
+known commit -- finding L2-R1-3); and the binary answers `--help` from
+inside the bundle under a MINIMAL environment (Windows: PATH = System32
+alone; macOS: the system PATH, no loader variable) -- the sentence the
+contract asks for. `--smoke`
 adds the process-level proof: the bundle's `cicada app --no-browser` over a
 scratch pipeline prints its URL, `/health` answers `ok` over it and `/` is
 the SPA, never the server's "API only" page; then the server is stopped.
@@ -691,7 +695,8 @@ def check_bundle(out: Path, log: Callable[[str], None], environ: dict[str, str] 
     # The binary and the bundle's own stamp agree about the SPA: a plain
     # release build swapped in after the bundle was made would pass every
     # check above and die at the first double-click.
-    recorded = (read_json(spots.stamp) or {}).get("spa")
+    bundle_stamp = read_json(spots.stamp) or {}
+    recorded = bundle_stamp.get("spa")
     if not isinstance(recorded, bool):
         return [f"{spots.stamp.relative_to(out)} does not record whether the SPA is embedded -- remake the bundle (bundle.py --out)"]
     actual = embeds_spa(spots.binary)
@@ -701,10 +706,34 @@ def check_bundle(out: Path, log: Callable[[str], None], environ: dict[str, str] 
             f"{'does' if recorded else 'does not'} -- not the binary this bundle was made from; remake the bundle (bundle.py --out)"
         ]
     log(f"{spots.binary.name} {'embeds the SPA' if actual else 'embeds no SPA (engine only, as the bundle records)'}")
+    # ... and about the build (finding L2-R1-3): the README names the version
+    # and commit the stamp recorded from `--version` when the bundle was
+    # made, so a binary swapped in since, or a stamp edited by hand, would
+    # ship a README naming another build. `--version` runs under the same
+    # clean environment as `--help` below.
+    if not isinstance(bundle_stamp.get("version"), str) or "commit" not in bundle_stamp:
+        return [f"{spots.stamp.relative_to(out)} does not record the binary's version and commit -- remake the bundle (bundle.py --out)"]
+    try:
+        version, commit = binary_version(spots.binary, clean_environment(system, environ), run)
+    except BundleError as error:
+        return [str(error)]
+    recorded_build = (bundle_stamp["version"], bundle_stamp["commit"])
+    if (version, commit) != recorded_build:
+        return [
+            f"{spots.binary.name} --version says {version} ({commit or 'no commit'}) but {STAMP_NAME} and the README say "
+            f"{recorded_build[0]} ({recorded_build[1] or 'no commit'}) -- not the binary this bundle was made from; "
+            "remake the bundle (bundle.py --out)"
+        ]
+    if bundle_stamp.get("release") is True and (commit is None or commit == "unknown" or commit.endswith("-dirty")):
+        problems.append(
+            f"{STAMP_NAME} says release but {spots.binary.name} --version stamps commit {commit or 'none'} -- "
+            "a release bundle needs a clean, known commit"
+        )
+    log(f"{spots.binary.name} --version is the build the bundle records: {version} ({commit or 'no commit'})")
     # The licensing files the bundle was made with are still there and not
     # empty (a release ships nothing without them; the workflow gates on the
     # repository's copies, this holds the bundle's).
-    recorded_notices = (read_json(spots.stamp) or {}).get("notices", [])
+    recorded_notices = bundle_stamp.get("notices", [])
     for name in recorded_notices if isinstance(recorded_notices, list) else []:
         path = out / str(name)
         if not path.is_file() or path.stat().st_size == 0:
