@@ -26,6 +26,8 @@ import config from "../playwright.config";
 const meta = config.metadata as { token: string };
 const TOKEN = meta.token;
 const PIPELINE = "02-solids.cic";
+/** The file the window test opens while in window mode (File → Open keeps the PiP window, its title follows). */
+const CURVES = "01-curves.cic";
 
 interface SceneStats {
   bounds: [number[], number[]] | null;
@@ -412,6 +414,27 @@ test("window: the viewport's element moves into the picture-in-picture window an
   await expect(page.getByTestId("viewport-canvas")).toHaveAttribute("data-marker", "same-canvas");
   await expect(page.getByTestId("viewport-placeholder")).toHaveCount(0);
   expect((await storedSettings(page)).viewportMode).toBe("split");
+
+  // ---- File → Open while in window mode: the viewport stays mounted, so the
+  // window stays and the same scene follows the next pipeline — and the
+  // window's title names it (review finding: it kept naming the old file).
+  const [pip4] = await Promise.all([context.waitForEvent("page"), page.getByTestId("viewport-mode-window").click()]);
+  await expect(page.getByTestId("viewport-pane")).toHaveAttribute("data-mode", "window");
+  expect(await pip4.title()).toBe(`${PIPELINE} — viewport · Cicada`);
+  await page.getByTestId("tb-file").click();
+  await page.getByTestId("file-open").click();
+  const dialog = page.getByTestId("open-dialog");
+  await expect(dialog).toBeVisible();
+  await dialog.getByTestId(`files-entry-${CURVES}`).dblclick();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByTestId("tb-pipeline")).toHaveText(CURVES);
+  await expect.poll(() => pip4.title()).toBe(`${CURVES} — viewport · Cicada`);
+  expect(pip4.isClosed()).toBe(false);
+  await expect(page.getByTestId("viewport-pane")).toHaveAttribute("data-mode", "window");
+  await expect(pip4.getByTestId("viewport-canvas")).toHaveAttribute("data-marker", "same-canvas");
+  await page.getByTestId("viewport-placeholder").click();
+  await expect(page.getByTestId("viewport-pane")).toHaveAttribute("data-mode", "split");
+  await expect.poll(() => pip4.isClosed()).toBe(true);
   expect(errors, errors.join("\n")).toEqual([]);
 });
 

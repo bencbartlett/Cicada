@@ -120,10 +120,10 @@ async function openWindow(win: ModeWindow, api: DocumentPictureInPicture): Promi
     pip.close();
     return;
   }
-  const settings = useCicada.getState().settings;
+  const state = useCicada.getState();
   adoptStyles(win.document, pip.document);
-  pip.document.documentElement.dataset.theme = settings.theme;
-  pip.document.title = `${useCicada.getState().hello?.pipeline ?? useCicada.getState().pipeline} — viewport · Cicada`;
+  pip.document.documentElement.dataset.theme = state.settings.theme;
+  pip.document.title = windowTitle(state);
   c.home = host.element.parentElement;
   pip.document.body.append(host.element);
   c.pip = pip;
@@ -131,10 +131,19 @@ async function openWindow(win: ModeWindow, api: DocumentPictureInPicture): Promi
   pip.addEventListener("pagehide", () => {
     if (c.pip === pip) dispatch({ kind: "window_closed" }, win);
   });
-  c.unsubscribeTheme = useCicada.subscribe((state, prev) => {
-    if (state.settings.theme !== prev.settings.theme) pip.document.documentElement.dataset.theme = state.settings.theme;
+  // Kept in step while the window is open: the theme, and the title — the
+  // same scene follows File → Open to the next pipeline, so the window must
+  // name it (review finding 2026-09-20: the title named the old file).
+  c.unsubscribeTheme = useCicada.subscribe((next, prev) => {
+    if (next.settings.theme !== prev.settings.theme) pip.document.documentElement.dataset.theme = next.settings.theme;
+    if (windowTitle(next) !== windowTitle(prev)) pip.document.title = windowTitle(next);
   });
   dispatch({ kind: "window_opened" }, win);
+}
+
+/** The PiP window's title: the pipeline the app is on (the server's word once it has said hello). */
+function windowTitle(state: { hello: { pipeline: string } | null; pipeline: string }): string {
+  return `${state.hello?.pipeline ?? state.pipeline} — viewport · Cicada`;
 }
 
 /** The element back into the wrapper it left, the scene back on the main window. */

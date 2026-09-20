@@ -175,9 +175,11 @@ describe("chooseViewportMode", () => {
     expect(copied).toEqual([".viewport{position:absolute;}"]);
     expect(rehome).toHaveBeenCalledTimes(1);
     expect(rehome).toHaveBeenLastCalledWith(pip.win);
-    // The theme follows while the window is open.
+    // The theme follows while the window is open; so does the title (File → Open keeps the window and moves the scene to the next pipeline).
     useCicada.getState().updateSettings({ theme: "dark" });
     expect(pip.document.documentElement.dataset.theme).toBe("dark");
+    useCicada.setState({ pipeline: "01-curves.cic" });
+    expect(pip.document.title).toBe("01-curves.cic — viewport · Cicada");
     // A second `window` while open opens nothing more.
     chooseViewportMode("window", win);
     expect(requestWindow).toHaveBeenCalledTimes(1);
@@ -191,9 +193,11 @@ describe("chooseViewportMode", () => {
     expect(rehome).toHaveBeenCalledTimes(2);
     expect(rehome).toHaveBeenLastCalledWith(win);
     expect(pip.close).not.toHaveBeenCalled();
-    // The theme no longer follows a closed window.
+    // The theme and the title no longer follow a closed window.
     useCicada.getState().updateSettings({ theme: "light" });
     expect(pip.document.documentElement.dataset.theme).toBe("dark");
+    useCicada.setState({ pipeline: "06-lists.cic" });
+    expect(pip.document.title).toBe("01-curves.cic — viewport · Cicada");
   });
 
   it("a request without a floating size asks for the default size", async () => {
