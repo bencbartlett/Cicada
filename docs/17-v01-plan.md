@@ -3381,7 +3381,11 @@ proves wrong is revised here, dated, in the landing commit.
   with a debug engine makes the interval longer, never shorter), so the
   spec holds the layer's own contract instead: never before the delay
   (the in-page measurement), shown within the suite's expect timeout;
-  the exact 250 is the fake-timer test's. (2) **Disabled controls DO
+  the fake-timer tests hold the timer to the constant, and the constant
+  is held to 250 by an assertion of its own (fix round 1, L2-1: before
+  it, a constant of 240 or of 1000 passed every test — the timing tests
+  were relative to the constant and the smoke's lower bound moves with
+  it). (2) **Disabled controls DO
   fire pointer events in Chromium** (measured on 151 with a document
   listener: `pointerover` / `pointerout` / `pointerdown` / `pointerup`
   and the mouse events arrive over a disabled button; only `click` is

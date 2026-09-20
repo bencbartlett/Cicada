@@ -75,6 +75,14 @@ afterEach(() => {
 });
 
 describe("the tooltip controller", () => {
+  it("the delay is the contract's 250 ms", () => {
+    // The timing tests below hold the timer to the constant; this holds the
+    // constant to the number docs/17 §Wave 5 T1 and docs/16 §Theme name — a
+    // constant of 240, or of 1000, would pass every other test here and the
+    // smoke's lower bound moves with it.
+    expect(TOOLTIP_DELAY_MS).toBe(250);
+  });
+
   it("shows the hovered element's title at the delay, not a millisecond before, and puts the title back on leave", () => {
     const undo = el("undo");
     move(el("pane"), undo);
@@ -98,7 +106,7 @@ describe("the tooltip controller", () => {
     const undo = el("undo");
     const glyph = el("glyph");
     move(el("pane"), undo);
-    vi.advanceTimersByTime(200);
+    vi.advanceTimersByTime(TOOLTIP_DELAY_MS - 50);
     move(undo, glyph);
     expect(undo.getAttribute("title"), "still the same hover").toBe("");
     vi.advanceTimersByTime(50);

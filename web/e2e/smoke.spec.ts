@@ -208,8 +208,9 @@ test("serve → load → place → wire → drag → screenshot asserts geometry
   // measured INSIDE the page — the time from the button's `pointerover` to
   // the box's arrival in the DOM — so the assertion is the layer's own
   // clock, not the runner's: a loaded runner makes the interval longer,
-  // never shorter, so only the lower bound is a fact to hold (the exact
-  // 250 ms is the fake-timer unit test's).
+  // never shorter, so only the lower bound is a fact to hold (the constant
+  // is held to 250 by its unit test, and the fake-timer tests hold the
+  // timer to the constant).
   const undo = page.getByTestId("tb-undo");
   await expect(undo).toBeEnabled();
   const undoTitle = await undo.getAttribute("title");
