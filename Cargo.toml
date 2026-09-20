@@ -7,7 +7,11 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.1"
+# The release version (docs/17 wave 5 R1; CHANGELOG.md's first section names
+# it): a `v<version>` tag on the commit that sets it is a release —
+# `.github/workflows/release.yml` builds and attaches the bundles. Every
+# binary stamps this plus its commit and build date (crates/cicada-cli/build.rs).
+version = "0.1.0-alpha.1"
 edition = "2024"
 # MSRV = current stable, updated freely (doc 14 — solo project, no legacy burden).
 rust-version = "1.97"

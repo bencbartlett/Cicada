@@ -297,7 +297,7 @@ dependencies = [
 
 [[package]]
 name = "cicada-cli"
-version = "0.0.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "cargo_metadata",
@@ -317,7 +317,7 @@ dependencies = [
 
 [[package]]
 name = "cicada-core"
-version = "0.0.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "blake3",
  "cicada-macros",
@@ -329,7 +329,7 @@ dependencies = [
 
 [[package]]
 name = "cicada-geom"
-version = "0.0.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "blake3",
  "cicada-core",
@@ -347,7 +347,7 @@ dependencies = [
 
 [[package]]
 name = "cicada-lang"
-version = "0.0.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "cicada-core",
  "insta",
@@ -358,7 +358,7 @@ dependencies = [
 
 [[package]]
 name = "cicada-macros"
-version = "0.0.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "cicada-sched"
-version = "0.0.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "blake3",
  "cicada-core",
@@ -383,7 +383,7 @@ dependencies = [
 
 [[package]]
 name = "cicada-script"
-version = "0.0.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "blake3",
  "cicada-core",
@@ -394,7 +394,7 @@ dependencies = [
 
 [[package]]
 name = "cicada-server"
-version = "0.0.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "axum",
  "base64",
@@ -423,7 +423,7 @@ dependencies = [
 
 [[package]]
 name = "cicada-stdlib"
-version = "0.0.1"
+version = "0.1.0-alpha.1"
 dependencies = [
  "cicada-core",
  "cicada-geom",

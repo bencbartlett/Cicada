@@ -12,7 +12,9 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(
     name = "cicada",
-    version,
+    // `cicada 0.1.0-alpha.1 (a82eb39d1c2e, 2026-08-25)`: the version plus
+    // the commit and the date `build.rs` stamped (docs/17 wave 5 R1).
+    version = cicada_cli::version::LINE,
     about = "Cicada: code-first parametric design"
 )]
 struct Cli {
