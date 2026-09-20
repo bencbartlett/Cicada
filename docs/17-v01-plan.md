@@ -3408,6 +3408,27 @@ proves wrong is revised here, dated, in the landing commit.
   differs from `tooltip.ts` only in case, and Vite resolves `./Tooltip`
   to `tooltip.ts` on a case-insensitive file system — the first run of
   the component test on this Windows machine rendered `undefined`.
+  (6) *(fix round 1, findings L1-T1-1 / L5-2 / T1-C1)* **Two hover texts
+  are not `title` attributes**: every wire's (`CicadaEdge.tsx`, the id ·
+  type · list depth · `each()` or the red reason) and the profiler ring's
+  arcs are SVG `<title>` children — the platform's second tooltip source,
+  which the contract's count of `title=` sites did not include — and the
+  layer's first version keyed on `closest("[title]")`, so the most-hovered
+  canvas element kept the native second. The controller now walks up from
+  the target to the first element with a `title` attribute or a direct
+  SVG `<title>` child (the platform's own walk); an SVG source is parked
+  by emptying the `<title>`'s text (an empty `<title>` is "no tooltip
+  here" to Chromium too, so the doubling rule holds) with the text in
+  `data-title` on the element, and its box goes below the POINTER where
+  it rested when the box was due (`TooltipShown.point`; the pointer glyph's
+  `POINTER_HEIGHT_PX` = 18 + the gap; a `pointermove` listener tracks the
+  point only while such a box is pending) — a diagonal wire's own box is
+  the whole diagonal, no edge to sit under. Tests: the controller over an
+  `<svg><g><title>` fixture (parked, the resting point, the rewrite of the
+  `<title>` text under the pointer), the layer placing at the pointer,
+  and a wire hovered in `smoke.spec.ts` (a point along its own path that
+  hit-tests to the wire; the box below the pointer, the `<title>` emptied
+  and `data-title` set while hovered, both back on leave).
   Not built: a scroll or resize listener (the box is placed once, at
   show; Chromium re-hovers after layout moves the element away from
   under the pointer and the layer ends the hover then); a hover timer

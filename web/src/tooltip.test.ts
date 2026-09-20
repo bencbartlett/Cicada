@@ -6,13 +6,17 @@
  * descendants keeping the hover, an ancestor's title serving an untitled
  * child, an empty title showing nothing, a press or Esc dismissing without
  * consuming, a title rewritten or removed under the pointer, newlines
- * kept, a disabled control treated like any other, and the placement math.
+ * kept, a disabled control treated like any other, a wire's SVG `<title>`
+ * child served the same way with its box at the pointer, and the placement
+ * math.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  anchorRect,
   installTooltips,
   PARKED_ATTR,
   placeTooltip,
+  POINTER_HEIGHT_PX,
   TOOLTIP_DELAY_MS,
   type TooltipController,
   type TooltipShown,
@@ -21,6 +25,7 @@ import {
 const UNDO = "undo: wire size.out → sphere_1.radius (Ctrl+Z)";
 const REDO = "nothing to redo (Ctrl+Shift+Z / Ctrl+Y)";
 const TWO_LINES = "out: [Number] — the values\n[1, 2, 3]";
+const WIRE = "size.out->span.end: Number";
 
 let tooltips: TooltipController;
 let seen: (TooltipShown | null)[];
@@ -54,6 +59,10 @@ beforeEach(() => {
       </span>
       <b id="empty" title="">no tooltip here</b>
       <div id="port" title="${TWO_LINES.replace("\n", "&#10;")}">out</div>
+      <svg id="canvas" xmlns="http://www.w3.org/2000/svg">
+        <g id="wire"><title>${WIRE}</title><path id="wire-path" d="M0 0 L10 10" /></g>
+        <g id="bare"><path id="bare-path" d="M0 0 L10 10" /></g>
+      </svg>
     </div>`;
   seen = [];
   tooltips = installTooltips(document);
@@ -207,6 +216,63 @@ describe("the tooltip controller", () => {
     move(el("pane"), el("port"));
     vi.advanceTimersByTime(TOOLTIP_DELAY_MS);
     expect(tooltips.shown()?.text).toBe(TWO_LINES);
+  });
+
+  it("a wire's SVG <title> child is a source too: parked empty while hovered, the box at the pointer's resting point, and put back on leave", () => {
+    const wire = el("wire");
+    const path = el("wire-path");
+    const title = wire.querySelector("title");
+    if (title === null) throw new Error("no <title>");
+    path.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, clientX: 100, clientY: 200 }));
+    expect(title.textContent, "parked: an empty <title> is the platform's 'no tooltip here'").toBe("");
+    expect(wire.getAttribute(PARKED_ATTR)).toBe(WIRE);
+    expect(wire.hasAttribute("title"), "parking an SVG source writes no attribute").toBe(false);
+    // The pointer settles a little further along the wire before the box is
+    // due: the box goes where it rests, not where it entered.
+    path.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 120, clientY: 210 }));
+    vi.advanceTimersByTime(TOOLTIP_DELAY_MS - 1);
+    expect(tooltips.shown()).toBeNull();
+    vi.advanceTimersByTime(1);
+    expect(tooltips.shown()).toEqual({ anchor: wire, text: WIRE, point: { x: 120, y: 210 } });
+    // Once shown, the box stays where it was placed.
+    path.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 300, clientY: 300 }));
+    expect(tooltips.shown()?.point).toEqual({ x: 120, y: 210 });
+    // What the layer places against: the pointer glyph under its hotspot.
+    expect(anchorRect(tooltips.shown()!)).toEqual({ left: 120, top: 210, width: 0, height: POINTER_HEIGHT_PX });
+
+    move(path, el("pane"));
+    expect(tooltips.shown()).toBeNull();
+    expect(title.textContent).toBe(WIRE);
+    expect(wire.hasAttribute(PARKED_ATTR)).toBe(false);
+
+    // A wire without a <title> is nothing, and the box of an HTML source
+    // carries no point.
+    move(el("pane"), el("bare-path"));
+    vi.advanceTimersByTime(TOOLTIP_DELAY_MS * 4);
+    expect(tooltips.shown()).toBeNull();
+    move(el("bare-path"), el("undo"));
+    vi.advanceTimersByTime(TOOLTIP_DELAY_MS);
+    expect(tooltips.shown()).toEqual({ anchor: el("undo"), text: UNDO });
+    expect(tooltips.shown()?.point).toBeUndefined();
+  });
+
+  it("a wire's <title> rewritten under the pointer — a red reason arriving — is what the box shows and what leave restores", async () => {
+    const wire = el("wire");
+    const path = el("wire-path");
+    const title = wire.querySelector("title");
+    if (title === null) throw new Error("no <title>");
+    const RED = "size.out->span.end: Number into a Plane port";
+    path.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, clientX: 100, clientY: 200 }));
+    vi.advanceTimersByTime(TOOLTIP_DELAY_MS);
+    expect(tooltips.shown()?.text).toBe(WIRE);
+    // What React does for a changed text child of an emptied element.
+    title.textContent = RED;
+    await flush();
+    expect(tooltips.shown()).toEqual({ anchor: wire, text: RED, point: { x: 100, y: 200 } });
+    expect(title.textContent, "parked again").toBe("");
+    expect(wire.getAttribute(PARKED_ATTR)).toBe(RED);
+    move(path, el("pane"));
+    expect(title.textContent, "the NEW text, never the stale one").toBe(RED);
   });
 
   it("an element removed from the document before the delay shows nothing and ends the hover", () => {

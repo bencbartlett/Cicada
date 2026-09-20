@@ -8,9 +8,10 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipLayer } from "./TooltipLayer";
-import { PARKED_ATTR, TOOLTIP_DELAY_MS, TOOLTIP_GAP_PX, TOOLTIP_MARGIN_PX } from "./tooltip";
+import { PARKED_ATTR, POINTER_HEIGHT_PX, TOOLTIP_DELAY_MS, TOOLTIP_GAP_PX, TOOLTIP_MARGIN_PX } from "./tooltip";
 
 const TITLE = "undo: place sphere_1 (Ctrl+Z)";
+const WIRE = "size.out->block.size: Number";
 
 function move(from: Element | null, to: Element | null) {
   act(() => {
@@ -69,5 +70,36 @@ describe("the tooltip layer", () => {
     expect(screen.getByRole("tooltip").textContent).toBe(TITLE);
     unmount();
     expect(undo.getAttribute("title")).toBe(TITLE);
+  });
+
+  it("places a wire's SVG <title> box below the pointer, not below the wire's box", () => {
+    render(
+      <>
+        <div data-testid="pane" />
+        <svg>
+          <g data-testid="wire">
+            <title>{WIRE}</title>
+            <path data-testid="wire-path" d="M0 0 L100 100" />
+          </g>
+        </svg>
+        <TooltipLayer />
+      </>,
+    );
+    const path = screen.getByTestId("wire-path");
+    act(() => {
+      path.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, clientX: 300, clientY: 200 }));
+    });
+    expect(screen.getByTestId("wire").querySelector("title")?.textContent, "parked").toBe("");
+    act(() => vi.advanceTimersByTime(TOOLTIP_DELAY_MS));
+    const box = screen.getByRole("tooltip");
+    expect(box.textContent).toBe(WIRE);
+    // jsdom measures the box at zero: the placement is the pure function's
+    // over the pointer's point — centred on it, below the glyph and the gap.
+    expect(box.dataset.side).toBe("below");
+    expect(box.style.left).toBe("300px");
+    expect(box.style.top).toBe(`${200 + POINTER_HEIGHT_PX + TOOLTIP_GAP_PX}px`);
+    move(path, screen.getByTestId("pane"));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(screen.getByTestId("wire").querySelector("title")?.textContent).toBe(WIRE);
   });
 });

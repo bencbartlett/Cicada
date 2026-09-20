@@ -249,5 +249,46 @@ test("serve → load → place → wire → drag → screenshot asserts geometry
   await expect(undo).toHaveAttribute("title", undoTitle!);
   await expect(undo).not.toHaveAttribute(PARKED_ATTR);
 
+  // ---- a wire: its hover text is an SVG <title> child, not a `title`
+  // attribute — the platform's second tooltip source — and the layer serves
+  // it the same way, the box placed below the POINTER (a diagonal wire's box
+  // is no edge to sit under) and the <title> emptied while hovered. The
+  // point hovered is one along the wire's own path that hit-tests to the
+  // wire (a node may cover its middle), in client coordinates.
+  const wire = await page.evaluate(() => {
+    for (const g of Array.from(document.querySelectorAll("g.cicada-edge"))) {
+      const path = g.querySelector("path.react-flow__edge-path") as SVGPathElement | null;
+      const title = g.querySelector(":scope > title");
+      if (path === null || title === null) continue;
+      const total = path.getTotalLength();
+      const m = path.getScreenCTM();
+      if (m === null) continue;
+      for (const t of [0.5, 0.4, 0.6, 0.3, 0.7]) {
+        const p = path.getPointAtLength(total * t);
+        const x = m.a * p.x + m.c * p.y + m.e;
+        const y = m.b * p.x + m.d * p.y + m.f;
+        const hit = document.elementFromPoint(x, y);
+        if (hit !== null && g.contains(hit)) return { id: g.getAttribute("data-wire"), x, y, title: title.textContent };
+      }
+    }
+    return null;
+  });
+  expect(wire, "a wire with a point of its own to hover").not.toBeNull();
+  const wireG = page.locator(`g.cicada-edge[data-wire="${wire!.id}"]`);
+  await page.mouse.move(wire!.x, wire!.y);
+  await expect(tooltip).toBeVisible();
+  await expect(tooltip).toHaveText(wire!.title!);
+  await expect(wireG.locator("title")).toHaveText("");
+  await expect(wireG).toHaveAttribute(PARKED_ATTR, wire!.title!);
+  const wireTip = (await tooltip.boundingBox())!;
+  expect(wireTip.y, "below the pointer").toBeGreaterThanOrEqual(wire!.y);
+  expect(Math.abs(wireTip.x + wireTip.width / 2 - wire!.x), "the pointer within the box's span").toBeLessThanOrEqual(wireTip.width / 2 + 1);
+  expect(wireTip.x + wireTip.width).toBeLessThanOrEqual(viewportSize.width);
+  expect(wireTip.y + wireTip.height).toBeLessThanOrEqual(viewportSize.height);
+  await page.mouse.move(vb.x + vb.width / 2, vb.y + vb.height / 2);
+  await expect(tooltip).toHaveCount(0);
+  await expect(wireG.locator("title")).toHaveText(wire!.title!);
+  await expect(wireG).not.toHaveAttribute(PARKED_ATTR);
+
   expect(errors, errors.join("\n")).toEqual([]);
 });

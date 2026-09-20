@@ -95,11 +95,12 @@ signing, and Python 3 must be on the machine (the engine's script host).
   settings menu's About dialog shows them with the protocol, the engine's
   threads and links to the repository and the release notes; `v*` tags
   build and publish the bundles.
-- **Tooltips at 250 ms** (wave 5 T1): every `title` in the app shows in a
-  themed box of our own a quarter second after the pointer rests on the
-  element — below it, above when there is no room — in place of the
-  browser's own tooltip and its second of delay; a press or Esc dismisses
-  it.
+- **Tooltips at 250 ms** (wave 5 T1): every hover text in the app — the
+  `title` attributes, and the wires' and the profiler arcs' SVG `<title>`s
+  — shows in a themed box of our own a quarter second after the pointer
+  rests on the element — below it, above when there is no room; below the
+  pointer on a wire — in place of the browser's own tooltip and its second
+  of delay; a press or Esc dismisses it.
 
 ### From the user tests
 

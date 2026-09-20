@@ -1,21 +1,23 @@
 /**
  * The tooltip layer (docs/16 §Theme and visual language; docs/17 wave 5 T1,
  * finding U24 — "mouseover text boxes should appear ~50 % faster"). The
- * browser's own `title` tooltip takes ~1 s in Chromium and cannot be tuned,
- * so this layer shows the same text itself after `TOOLTIP_DELAY_MS`: ONE
- * listener set on the document (`pointerover`, `pointerout`, `pointerdown`,
+ * browser's own tooltip takes ~1 s in Chromium and cannot be tuned, so this
+ * layer shows the same text itself after `TOOLTIP_DELAY_MS`: ONE listener set
+ * on the document (`pointerover`, `pointerout`, `pointermove`, `pointerdown`,
  * `keydown` Esc — all in the capture phase, so a component that stops a
- * pointer event's propagation, as the dialogs do, still hovers) and the
- * 125 `title=` sites change nothing.
+ * pointer event's propagation, as the dialogs do, still hovers) and every
+ * hover text in the app changes nothing — the `title=` sites and the two SVG
+ * `<title>` children (every wire's, the profiler ring's arcs) alike, the
+ * platform's two tooltip sources.
  *
- * Entering an element whose closest `[title]` ancestor-or-self carries text
- * starts the delay; the box shows that text (newlines kept) until the
- * pointer leaves the element, a pointer goes down, or Esc is pressed. While
- * the element is hovered its `title` is PARKED: the text moves to
- * `data-title` and the attribute is left EMPTY — an empty `title` is what
- * the platform itself reads as "no tooltip here", so the native box never
- * doubles ours and no ancestor's title surfaces in its place — and it is
- * restored on leave. A title the app rewrites under the pointer (React
+ * Entering an element whose closest ancestor-or-self carries a title starts
+ * the delay; the box shows that text (newlines kept) until the pointer leaves
+ * the element, a pointer goes down, or Esc is pressed. While the element is
+ * hovered its title is PARKED: the text moves to `data-title` and the source
+ * is left EMPTY — an empty `title` attribute, or an empty `<title>` child, is
+ * what the platform itself reads as "no tooltip here", so the native box
+ * never doubles ours and no ancestor's title surfaces in its place — and it
+ * is restored on leave. A title the app rewrites under the pointer (React
  * re-rendering the undo button after a click) is adopted through a
  * MutationObserver: the box follows the new text and the restore writes
  * the NEW value, never the stale one; a title removed under the pointer
@@ -35,7 +37,9 @@
  * file's only in case resolves to THIS file on a case-insensitive file
  * system, Windows and macOS) renders what it reports. `placeTooltip` is
  * the pure placement: below the element, above when there is no room,
- * clamped to the viewport.
+ * clamped to the viewport — and for an SVG `<title>` source, whose element
+ * has no edge to sit under (a wire's box is the whole diagonal), below the
+ * pointer where it rested.
  */
 
 /** The hover-to-box delay. The native tooltip's is the browser's (~1 s). */
@@ -44,13 +48,31 @@ export const TOOLTIP_DELAY_MS = 250;
 export const TOOLTIP_GAP_PX = 6;
 /** What the box keeps from the viewport's edges, px. */
 export const TOOLTIP_MARGIN_PX = 4;
-/** Where a hovered element's title text lives while its `title` is parked. */
+/**
+ * The pointer glyph's height under its hotspot, px: what a box placed at the
+ * pointer (an SVG `<title>` source) sits below, so the arrow never covers it.
+ */
+export const POINTER_HEIGHT_PX = 18;
+/** Where a hovered element's title text lives while its title is parked. */
 export const PARKED_ATTR = "data-title";
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+export interface TooltipPoint {
+  x: number;
+  y: number;
+}
 
 export interface TooltipShown {
   /** The element whose title is shown; the box is placed against it. */
   anchor: Element;
   text: string;
+  /**
+   * Where the pointer rested when the box was due — set for an SVG `<title>`
+   * source, whose element has no edge to sit under; absent, the box sits
+   * under the anchor's own box.
+   */
+  point?: TooltipPoint;
 }
 
 export interface TooltipController {
@@ -62,22 +84,71 @@ export interface TooltipController {
   dispose(): void;
 }
 
-interface Session {
+/** A hovered element's title source: the `title` attribute, or an SVG `<title>` child. */
+interface TitleSource {
   anchor: Element;
+  /** The SVG `<title>` child carrying the text; null when the text is the attribute's. */
+  titleEl: Element | null;
+}
+
+interface Session {
+  source: TitleSource;
   /** The title as parked — what leave restores; null once the app removed it. */
   title: string | null;
   timer: ReturnType<typeof setTimeout> | null;
   observer: MutationObserver;
+  /** For an SVG `<title>` source: where the pointer was last seen while the box was pending. */
+  point: TooltipPoint | null;
 }
 
-/** The element whose title the pointer's target shows: the closest `[title]` ancestor-or-self. */
-function anchorFor(target: EventTarget | null): Element | null {
-  if (target === null || typeof target !== "object" || typeof (target as Element).closest !== "function") return null;
-  return (target as Element).closest("[title]");
+function isElement(value: EventTarget | null): value is Element {
+  return value !== null && typeof value === "object" && (value as Node).nodeType === 1;
 }
 
 function isNode(value: EventTarget | null): value is Node {
   return value !== null && typeof value === "object" && "nodeType" in value;
+}
+
+/** The element's direct SVG `<title>` child, if any — the SVG tooltip source. */
+function svgTitleChild(el: Element): Element | null {
+  const children = el.children;
+  for (let i = 0; i < children.length; i += 1) {
+    const child = children[i];
+    if (child !== undefined && child.localName === "title" && child.namespaceURI === SVG_NS) return child;
+  }
+  return null;
+}
+
+/**
+ * The title source the pointer's target shows: walking up from the target,
+ * the first element with a `title` attribute or an SVG `<title>` child — the
+ * platform's own walk, which stops at the closest source, empty or not.
+ */
+function sourceFor(target: EventTarget | null): TitleSource | null {
+  if (!isElement(target)) return null;
+  for (let el: Element | null = target; el !== null; el = el.parentElement) {
+    if (el.hasAttribute("title")) return { anchor: el, titleEl: null };
+    const titleEl = svgTitleChild(el);
+    if (titleEl !== null) return { anchor: el, titleEl };
+  }
+  return null;
+}
+
+/** The source's current text; null once the app removed the source. */
+function readTitle(source: TitleSource): string | null {
+  if (source.titleEl === null) return source.anchor.getAttribute("title");
+  if (source.titleEl.parentNode !== source.anchor) return null;
+  return source.titleEl.textContent ?? "";
+}
+
+function writeTitle(source: TitleSource, text: string) {
+  if (source.titleEl === null) source.anchor.setAttribute("title", text);
+  else source.titleEl.textContent = text;
+}
+
+function pointOf(event: Event): TooltipPoint {
+  const { clientX, clientY } = event as PointerEvent;
+  return { x: clientX, y: clientY };
 }
 
 /**
@@ -102,79 +173,92 @@ export function installTooltips(doc: Document, delayMs = TOOLTIP_DELAY_MS): Tool
     }
   };
 
-  const park = (el: Element, text: string) => {
-    el.setAttribute(PARKED_ATTR, text);
-    el.setAttribute("title", "");
+  // Park: the text into `data-title`, the source emptied.
+  const park = (current: Session, text: string) => {
+    current.source.anchor.setAttribute(PARKED_ATTR, text);
+    writeTitle(current.source, "");
   };
 
-  // The app rewrote the hovered element's `title` (a React re-render with a
+  // The app rewrote the hovered element's title (a React re-render with a
   // new prop): adopt it — the box follows, the restore writes this one.
   const adopt = () => {
     if (session === null) return;
-    const el = session.anchor;
-    const title = el.getAttribute("title");
+    const current = session;
+    const title = readTitle(current.source);
     // Our own parking write: nothing to adopt.
     if (title === "") return;
     if (title === null) {
       // Removed by the app: nothing to show and nothing to restore.
-      session.title = null;
-      el.removeAttribute(PARKED_ATTR);
+      current.title = null;
+      current.source.anchor.removeAttribute(PARKED_ATTR);
       cancelTimer();
       setShown(null);
       return;
     }
-    session.title = title;
-    park(el, title);
-    if (shown !== null) setShown({ anchor: el, text: title });
+    current.title = title;
+    park(current, title);
+    if (shown !== null) setShown({ anchor: current.source.anchor, text: title, ...(current.point !== null ? { point: current.point } : {}) });
   };
 
   const leave = () => {
     if (session === null) return;
     cancelTimer();
     session.observer.disconnect();
-    const { anchor, title } = session;
-    anchor.removeAttribute(PARKED_ATTR);
-    if (title !== null) anchor.setAttribute("title", title);
+    const { source, title } = session;
+    source.anchor.removeAttribute(PARKED_ATTR);
+    if (title !== null) writeTitle(source, title);
     session = null;
     setShown(null);
   };
 
-  const enter = (anchor: Element) => {
-    const title = anchor.getAttribute("title") ?? "";
+  const enter = (source: TitleSource, at: TooltipPoint) => {
+    const title = readTitle(source) ?? "";
     // An empty title is the platform's "no tooltip here" (and none of the
     // ancestors' either): the same for us.
     if (title === "") return;
     const observer = new MutationObserver(adopt);
-    observer.observe(anchor, { attributes: true, attributeFilter: ["title"] });
-    park(anchor, title);
-    const started: Session = { anchor, title, timer: null, observer };
+    observer.observe(source.anchor, { attributes: true, attributeFilter: ["title"] });
+    if (source.titleEl !== null) observer.observe(source.titleEl, { childList: true, characterData: true, subtree: true });
+    const started: Session = { source, title, timer: null, observer, point: source.titleEl !== null ? at : null };
     session = started;
+    park(started, title);
     started.timer = setTimeout(() => {
       if (session !== started) return;
       started.timer = null;
       // Gone from the document meanwhile (a node deleted under the pointer),
       // or the app took the title away: nothing to show.
-      if (!started.anchor.isConnected || started.title === null) {
+      if (!started.source.anchor.isConnected || started.title === null) {
         leave();
         return;
       }
-      setShown({ anchor: started.anchor, text: started.title });
+      setShown({
+        anchor: started.source.anchor,
+        text: started.title,
+        ...(started.point !== null ? { point: started.point } : {}),
+      });
     }, delayMs);
   };
 
   const onPointerOver = (event: Event) => {
-    const next = anchorFor(event.target);
-    if (session !== null && session.anchor === next) return;
+    const next = sourceFor(event.target);
+    if (session !== null && next !== null && session.source.anchor === next.anchor) return;
     leave();
-    if (next !== null) enter(next);
+    if (next !== null) enter(next, pointOf(event));
   };
 
   const onPointerOut = (event: Event) => {
     if (session === null) return;
     // Moving between the element's own descendants is not a leave.
     const related = (event as PointerEvent).relatedTarget;
-    if (isNode(related) && session.anchor.contains(related)) return;
+    if (isNode(related) && session.source.anchor.contains(related)) return;
     leave();
+  };
+
+  // The pointer resting on an SVG-titled element decides where its box goes:
+  // the last position before the box is due.
+  const onPointerMove = (event: Event) => {
+    if (session === null || session.point === null || session.timer === null) return;
+    session.point = pointOf(event);
   };
 
   // A press or Esc dismisses the box; the title stays parked, so the native
@@ -191,6 +275,7 @@ export function installTooltips(doc: Document, delayMs = TOOLTIP_DELAY_MS): Tool
 
   doc.addEventListener("pointerover", onPointerOver, true);
   doc.addEventListener("pointerout", onPointerOut, true);
+  doc.addEventListener("pointermove", onPointerMove, true);
   doc.addEventListener("pointerdown", onPointerDown, true);
   doc.addEventListener("keydown", onKeyDown, true);
 
@@ -206,6 +291,7 @@ export function installTooltips(doc: Document, delayMs = TOOLTIP_DELAY_MS): Tool
       leave();
       doc.removeEventListener("pointerover", onPointerOver, true);
       doc.removeEventListener("pointerout", onPointerOut, true);
+      doc.removeEventListener("pointermove", onPointerMove, true);
       doc.removeEventListener("pointerdown", onPointerDown, true);
       doc.removeEventListener("keydown", onKeyDown, true);
       listeners.clear();
@@ -233,6 +319,15 @@ export interface TooltipPlacement {
 
 function clamp(value: number, low: number, high: number): number {
   return Math.min(Math.max(value, low), Math.max(low, high));
+}
+
+/**
+ * The rect a shown tooltip is placed against: the anchor's own box, or — for
+ * a box due at the pointer — the pointer glyph under its hotspot.
+ */
+export function anchorRect(shown: TooltipShown): RectLike {
+  if (shown.point !== undefined) return { left: shown.point.x, top: shown.point.y, width: 0, height: POINTER_HEIGHT_PX };
+  return shown.anchor.getBoundingClientRect();
 }
 
 /**
