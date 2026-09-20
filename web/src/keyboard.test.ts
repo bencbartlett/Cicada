@@ -166,6 +166,17 @@ describe("handleHotkey", () => {
     expect(sent).toEqual([{ type: "cancel", payload: {} }]);
     expect(useInspectorTab.getState().tab, "the solve was the one thing this Esc did").toBe("profile");
     useCicada.setState({ summary: { ...useCicada.getState().summary, running: false } });
+    // Only the PROFILER's tab closes on Esc: on Git (Params, Text) Esc clears
+    // the selection and leaves the tab — the pre-P1 behaviour beside the new
+    // branch (review finding L2-P1-7: widening the branch to any non-Inspect
+    // tab passed the suite).
+    sent = [];
+    useInspectorTab.setState({ tab: "git" });
+    useCicada.getState().selectNodes(["a"]);
+    expect(handleHotkey(key("Escape"))).toBe(true);
+    expect(useInspectorTab.getState().tab, "the Git tab stays").toBe("git");
+    expect(useCicada.getState().selection.nodes, "the selection is what this Esc cleared").toEqual([]);
+    expect(sent).toEqual([]);
     useInspectorTab.setState({ tab: "inspect" });
   });
 
