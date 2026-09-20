@@ -177,6 +177,16 @@ describe("handleHotkey", () => {
     expect(useInspectorTab.getState().tab, "the Git tab stays").toBe("git");
     expect(useCicada.getState().selection.nodes, "the selection is what this Esc cleared").toEqual([]);
     expect(sent).toEqual([]);
+    // Search closes TOGETHER with the one thing that follows — the profiler
+    // tab here, the selection otherwise (the pre-P1 "close search and clear
+    // selection" on one press; docs/16's keyboard row, review finding L1-5).
+    useInspectorTab.setState({ tab: "profile" });
+    useCicada.getState().selectNodes(["a"]);
+    useCicada.getState().openSearch({ x: 1, y: 2, cell: null, from: null });
+    expect(handleHotkey(key("Escape"))).toBe(true);
+    expect(useCicada.getState().search, "search closed").toBeNull();
+    expect(useInspectorTab.getState().tab, "and the profiler with it").toBe("inspect");
+    expect(useCicada.getState().selection.nodes, "the selection stands for the next Esc").toEqual(["a"]);
     useInspectorTab.setState({ tab: "inspect" });
   });
 

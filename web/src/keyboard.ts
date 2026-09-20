@@ -136,10 +136,13 @@ export function handleHotkey(event: KeyboardEvent): boolean {
       state.send({ type: "cancel", payload: {} });
       return true;
     }
+    // Search closes together with whatever else this Esc does below (the
+    // pre-P1 rule: "close search and clear selection" on one press).
     if (state.search !== null) state.closeSearch();
     // The profiler closes on Esc (docs/16 §Inspector contents; v0.1 wave 5
-    // P1) — back to Inspect, the selection kept: one Esc does one thing,
-    // like the transport's.
+    // P1) — back to Inspect, the selection kept: the tab or the selection,
+    // never both on one press (like the transport's Esc, which cancels and
+    // does nothing else).
     const tabs = useInspectorTab.getState();
     if (tabs.tab === "profile") {
       tabs.setTab("inspect");
