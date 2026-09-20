@@ -3225,7 +3225,17 @@ proves wrong is revised here, dated, in the landing commit.
   is said once per window (a further click re-targets the open pop-out);
   the PiP window's title follows File → Open; the toolbar wraps inside a
   240 px panel with every control inside; the placeholder is asserted
-  absent in floating.
+  absent in floating; the settings menu's split presets and swap are
+  greyed outside split with the reason as their hover; the fallback
+  notice names the ORIGIN, not the browser, when the API is missing
+  because the page is not a secure context (`cicada serve --host` over
+  plain http); docs/16 §Application layout names the split as one mode of
+  three. (f) Left open, said why: the two three-way controls are
+  `radiogroup`s without the arrow-key / roving-tabindex pattern, and the
+  floating panel's strip and corner are pointer-only — the radio gap is
+  shared by every segmented control in the settings menu (`seg`, wave 4),
+  so a shared keyboard-aware `Seg` is a cross-surface change for a track
+  of its own, not this package's fix round.
 
 **Track A — `wt/about` (cli + server + web + CI; R1's server/CI half gets the adversarial pass, the rest one review).**
 - **R1 — releases and About.** The workspace version becomes
