@@ -2,8 +2,8 @@
 //! has the stamped shape — `cicada <semver> (<commit>, <YYYY-MM-DD>)` with
 //! the workspace version, a 12-digit git hash (`-dirty` allowed) or
 //! `unknown`, and a date — and, where git can be asked, the hash is HEAD's,
-//! `-dirty` is exactly the build inputs' state. The rules themselves are
-//! unit-tested in
+//! `-dirty` is exactly the build inputs' state and the date is not before
+//! HEAD's commit. The rules themselves are unit-tested in
 //! `cicada_cli::stamp`; this proves the build script ran, re-ran when it had
 //! to, and clap prints what it stamped.
 
@@ -12,7 +12,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use cicada_cli::stamp::BUILD_INPUTS;
+use cicada_cli::stamp::{BUILD_INPUTS, utc_date};
 
 fn version_line() -> String {
     let output = Command::new(env!("CARGO_BIN_EXE_cicada"))
@@ -130,5 +130,27 @@ fn dirty_follows_the_build_inputs_when_git_can_say() {
         commit.ends_with("-dirty"),
         dirty,
         "the stamp {commit:?} disagrees with the build inputs' porcelain:\n{porcelain}"
+    );
+}
+
+/// The build date is a real date (finding L2-2): never before HEAD's
+/// commit date — the stamp is re-taken when HEAD moves, so a binary cannot
+/// predate its own commit — which a pinned or fallen-back date
+/// (`1970-01-01`) fails. `SOURCE_DATE_EPOCH` names the date by contract;
+/// `YYYY-MM-DD` compares chronologically as text.
+#[test]
+fn the_build_date_is_not_before_heads_commit_date() {
+    if std::env::var_os("SOURCE_DATE_EPOCH").is_some_and(|v| !v.is_empty()) {
+        return;
+    }
+    let Some(committed) = git(&["log", "-1", "--format=%ct", "HEAD"]) else {
+        return;
+    };
+    let committed: i64 = committed.parse().expect("git's %ct is an integer");
+    let head_date = utc_date(committed);
+    let (_, _, built) = parse(&version_line());
+    assert!(
+        built.as_str() >= head_date.as_str(),
+        "built {built} predates HEAD's commit date {head_date}"
     );
 }

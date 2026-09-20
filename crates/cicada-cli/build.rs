@@ -86,7 +86,10 @@ fn main() {
     };
     let built = match stamp::epoch_from_override(env_var("SOURCE_DATE_EPOCH").as_deref()) {
         Ok(Some(epoch)) => stamp::utc_date(epoch),
-        Ok(None) => stamp::utc_date(now_epoch_seconds()),
+        Ok(None) => match now_epoch_seconds() {
+            Ok(now) => stamp::utc_date(now),
+            Err(why) => fail(&why),
+        },
         Err(error) => fail(&error.to_string()),
     };
     // The shape every reader relies on (the tests, About): refuse to stamp
@@ -114,12 +117,19 @@ fn fail(message: &str) -> ! {
     std::process::exit(1)
 }
 
-fn now_epoch_seconds() -> i64 {
-    SystemTime::now()
+/// Now, as whole seconds since the Unix epoch — or why the clock could not
+/// say (a build date is stamped from a real clock or not at all; the
+/// silent `1970-01-01` this once fell back to was finding L2-2).
+fn now_epoch_seconds() -> Result<i64, String> {
+    let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .ok()
-        .and_then(|elapsed| i64::try_from(elapsed.as_secs()).ok())
-        .unwrap_or(0)
+        .map_err(|error| format!("the system clock is before the Unix epoch ({error})"))?;
+    i64::try_from(elapsed.as_secs()).map_err(|_| {
+        format!(
+            "the system clock is beyond i64 seconds ({})",
+            elapsed.as_secs()
+        )
+    })
 }
 
 /// Run git in `dir`; its trimmed stdout, or why it could not answer.

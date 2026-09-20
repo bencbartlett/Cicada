@@ -3226,8 +3226,10 @@ proves wrong is revised here, dated, in the landing commit.
   behind cargo (L3-1: that re-ran the script on the very next build); the
   repository must be this workspace (`git rev-parse --show-toplevel` =
   the root) or the stamp is `unknown` with the reason (L3-3: a tarball
-  unpacked inside another checkout stamped that project's HEAD); a fresh
-  CI checkout is exact; (6) the repository URL is a
+  unpacked inside another checkout stamped that project's HEAD); the
+  build date comes from a real clock or the build fails (L2-2: a clock
+  failure silently stamped `1970-01-01`), and `tests/version.rs` holds it
+  to ≥ HEAD's commit date; a fresh CI checkout is exact; (6) the repository URL is a
   client constant (`about.ts`), the release-notes link
   `<repo>/releases/tag/v<semver>`; (7) the CHANGELOG's section date is
   the day it was written — the tag's run carries the release date — and
