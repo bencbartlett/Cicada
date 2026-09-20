@@ -6518,15 +6518,27 @@ impl Core {
                             .insert(display::TessellationKey::new(hash, deflection), mesh);
                     }
                 }
-                warm.decided.insert(
-                    pending.hash,
-                    Decided {
-                        value,
-                        verdict,
-                        hits,
-                        misses,
-                    },
-                );
+                // One record per VALUE: a second output of the same hash gets
+                // its verdict from the memo (0 / 0) and pins nothing new —
+                // its lookups ADD to the value's count rather than replacing
+                // the first output's, so every output of the value carries
+                // the value's counts (docs/13 §The profiler: "two outputs of
+                // one value share the count"; review finding L1-1).
+                match warm.decided.entry(pending.hash) {
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        let decided = entry.get_mut();
+                        decided.hits += hits;
+                        decided.misses += misses;
+                    }
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(Decided {
+                            value,
+                            verdict,
+                            hits,
+                            misses,
+                        });
+                    }
+                }
             }
             if let Some(hold) = &self.config.display_hold {
                 hold(generation, done + 1);
@@ -11044,6 +11056,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
              span = construct_domain(start=0.0, end=r)\n\
              block = box(x=span, y=span, z=span)\n\
              ball = sphere(radius=r)\n\
+             twin = sphere(radius=r)\n\
              fixed = sphere(radius=0.6)\n\
              bad = cylinder(radius=0.0, height=1.0)\n\
              vol, cen = volume(solid=bad)\n\
@@ -11109,7 +11122,7 @@ size = slider(value=4.0, min=0.5, max=5.0)
             let name = node["name"].as_str().unwrap();
             assert!(listed.contains(&name), "`{name}` missing from {listed:?}");
         }
-        for computed in ["r", "span", "block", "ball", "fixed"] {
+        for computed in ["r", "span", "block", "fixed"] {
             let node = node_of(&view, computed);
             assert_eq!(node["state"], "done", "{node}");
             assert!(
@@ -11119,6 +11132,34 @@ size = slider(value=4.0, min=0.5, max=5.0)
             assert!(node.get("last_nanos").is_none(), "not a memo hit: {node}");
             assert_eq!(node["elements"], 1, "{node}");
         }
+        // `ball` and `twin` are one content-addressed key: the one that
+        // reaches the memo second is a hit on the first's entry (or both
+        // compute, racing) — either way every cost field is the state's.
+        let twins_done = |view: &serde_json::Value| -> usize {
+            ["ball", "twin"]
+                .iter()
+                .filter(|name| {
+                    let node = node_of(view, name);
+                    match node["state"].as_str().unwrap() {
+                        "done" => {
+                            assert!(node["nanos"].as_u64().is_some(), "{node}");
+                            assert!(node.get("last_nanos").is_none(), "{node}");
+                            true
+                        }
+                        "cached" => {
+                            assert!(node.get("nanos").is_none(), "{node}");
+                            assert!(node["last_nanos"].as_u64().is_some(), "{node}");
+                            false
+                        }
+                        other => panic!("{name}: {other} in {node}"),
+                    }
+                })
+                .count()
+        };
+        assert!(
+            twins_done(&view) >= 1,
+            "the sphere was computed once at least"
+        );
         let bad = node_of(&view, "bad");
         assert_eq!(bad["state"], "red", "{bad}");
         assert!(
@@ -11181,6 +11222,37 @@ size = slider(value=4.0, min=0.5, max=5.0)
         assert!(ball["cache_misses"].as_u64().unwrap() >= 1, "{ball}");
         assert!(row_of(&view, "block").is_some(), "{}", view["display"]);
         assert!(row_of(&view, "bad").is_none(), "a red node drew nothing");
+        // Two outputs of ONE value (`ball` and `twin` are the same sphere)
+        // share the value's count: the second output's memo-hit verdict
+        // (0 / 0) adds to the first's, never replaces it — the kernel call
+        // that meshed the value is on both rows (review finding L1-1: both
+        // read 0 / 0 and the miss was on no row).
+        let twin = row_of(&view, "twin").expect("twin.out was drawn");
+        assert_eq!(
+            state["display"]["twin.out"]["hash"], state["display"]["ball.out"]["hash"],
+            "one value"
+        );
+        assert_eq!(
+            (twin["cache_hits"].clone(), twin["cache_misses"].clone()),
+            (ball["cache_hits"].clone(), ball["cache_misses"].clone()),
+            "the shared value's count on both rows: {twin} vs {ball}"
+        );
+        // Summed over DISTINCT values, the rows' misses are exactly the
+        // pass's kernel calls — the fresh cache's whole miss count.
+        let distinct_misses: u64 = ["block", "ball", "fixed"]
+            .iter()
+            .map(|node| {
+                row_of(&view, node).unwrap()["cache_misses"]
+                    .as_u64()
+                    .unwrap()
+            })
+            .sum();
+        assert_eq!(
+            distinct_misses,
+            state["display_cache"]["misses"].as_u64().unwrap(),
+            "every kernel call of the pass is on a row: {}",
+            view["display"]
+        );
         assert_eq!(view["caches"], state["caches"]);
         // `/debug/state.profile` is the same object (the times within the
         // text round trip's tolerance, the rest exactly).
@@ -11239,9 +11311,11 @@ size = slider(value=4.0, min=0.5, max=5.0)
             "the memo's recorded cost: {fixed}"
         );
         assert_eq!(fixed["elements"], 1, "{fixed}");
-        let ball = node_of(&view, "ball");
-        assert_eq!(ball["state"], "done", "{ball}");
-        assert!(ball["nanos"].as_u64().is_some(), "{ball}");
+        assert!(
+            twins_done(&view) >= 1,
+            "the new radius was computed: {}",
+            view["nodes"]
+        );
         assert!(
             row_of(&view, "ball").is_some(),
             "redrawn: {}",
