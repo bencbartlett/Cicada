@@ -23,6 +23,14 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # A dry run (Actions → Release → Run workflow, on any branch): every job
+  # but the last — the notes, the release builds, the bundles with their
+  # check and smoke, the zips, the Linux binary — so the workflow's first
+  # execution is not the release itself, and a failure costs no re-tag
+  # (fix round 2026-09-20, finding R1-C6). The version is Cargo.toml's, the
+  # licensing gate and `gh release create` run only for a tag: a dry run
+  # publishes nothing.
+  workflow_dispatch:
 
 # The token is read-only everywhere but the publishing job: the build jobs
 # run `npm ci` and every dependency's build script, and a write-capable
@@ -59,6 +67,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: The licensing files a release must carry are in place (DECISIONS.md 2026-08-11, 2026-08-20)
+        if: github.ref_type == 'tag'
         run: |
           # A tag ships nothing without the licence the 2026-08-11 row defers to
           # "first public release" and the third-party notices the 2026-08-20
@@ -77,8 +86,15 @@ jobs:
       - id: version
         name: Check the tag against Cargo.toml and CHANGELOG.md, write the release body
         run: |
-          python tools/changelog.py check --tag "$GITHUB_REF_NAME"
-          version="${GITHUB_REF_NAME#v}"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            python tools/changelog.py check --tag "$GITHUB_REF_NAME"
+            version="${GITHUB_REF_NAME#v}"
+          else
+            # A dry run: the workspace version, checked against the CHANGELOG
+            # the same way; nothing is published.
+            version="$(python tools/changelog.py check | cut -d: -f1)"
+            echo "dry run on $GITHUB_REF_NAME: building $version, publishing nothing"
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           case "$version" in
             *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
@@ -255,6 +271,7 @@ jobs:
   release:
     name: Publish the GitHub Release
     needs: [notes, bundle, linux]
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       contents: write
