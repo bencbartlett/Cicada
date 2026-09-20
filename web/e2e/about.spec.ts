@@ -112,4 +112,11 @@ test("About shows the build /api/version reports, copies the commit, closes on E
   await expect(dialog).toHaveCount(0);
   expect(await view(), "Esc closed About and did nothing else").toMatchObject({ about: false, selection: ["size"], nodes: before.nodes });
   expect((await view()).active, "focus returns to the gear").toBe("tb-settings");
+  // Esc again, from the gear: the map's ordinary Esc (nothing runs) — the
+  // selection clears. A focused button keeps its plain keys from the map,
+  // so the gear hands Esc over itself; without that, every hotkey was dead
+  // after About closed by keyboard until a click (fix round 2, L3A-2).
+  await page.keyboard.press("Escape");
+  await expect.poll(async () => (await view()).selection, "Esc from the gear reached the keyboard map").toEqual([]);
+  expect(await view()).toMatchObject({ about: false, nodes: before.nodes });
 });

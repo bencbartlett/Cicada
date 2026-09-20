@@ -3196,7 +3196,13 @@ proves wrong is revised here, dated, in the landing commit.
   other hotkey is inert behind any modal (About, the commit dialog, File
   → Open — one rule, `keyboard.ts::modalOpen`), and the dialog takes
   focus on open and returns it to the gear on close (R1-C5's focus half;
-  no Tab trap yet), and the three open actions refuse while another modal
+  no Tab trap yet — and the gear hands a plain Esc to the map while its
+  menu is closed, as the profiler's controls do: fix round 2 2026-09-20,
+  L3A-2 — with focus back on the gear, "Esc to close About, Esc to cancel"
+  cancelled nothing until a click, a focused button keeping its plain keys
+  from the map; `AboutDialog.test.tsx` holds Esc·Esc → `cancel`, Del on
+  the gear inert, and Esc with the menu open closing the menu alone;
+  `about.spec.ts` the second Esc clearing the selection), and the three open actions refuse while another modal
   is open (`store.ts::modalOpen`, the one rule `keyboard.ts` reads — fix
   round 2 2026-09-20, L3A-3: by Tab the gear behind the commit dialog's
   backdrop opened About over it, and one Esc then closed both).

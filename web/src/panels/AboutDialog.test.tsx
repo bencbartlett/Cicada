@@ -170,6 +170,34 @@ describe("the About dialog", () => {
     expect(screen.queryByTestId("about-dialog")).toBeNull();
   });
 
+  it("Esc on the gear while its menu is open closes the menu alone — nothing is cancelled", () => {
+    seed(stamped, false);
+    const sent: ClientMessage[] = [];
+    useCicada.getState().installSender((m) => {
+      sent.push(m);
+      return "id";
+    });
+    useCicada.setState({ summary: { ...useCicada.getState().summary, running: true } });
+    const router = createKeyRouter();
+    window.addEventListener("keydown", router.onKeyDown);
+    try {
+      render(<TopBar />);
+      const gear = screen.getByTestId("tb-settings");
+      fireEvent.click(gear);
+      gear.focus();
+      expect(screen.getByRole("dialog", { name: "settings" })).toBeTruthy();
+      fireEvent.keyDown(gear, { key: "Escape" });
+      expect(screen.queryByRole("dialog", { name: "settings" }), "the menu closed").toBeNull();
+      expect(sent, "the running solve was not cancelled").toEqual([]);
+      // Closed: the next Esc from the gear is the map's.
+      fireEvent.keyDown(gear, { key: "Escape" });
+      expect(sent).toEqual([{ type: "cancel", payload: {} }]);
+    } finally {
+      window.removeEventListener("keydown", router.onKeyDown);
+      useCicada.setState({ summary: { ...useCicada.getState().summary, running: false } });
+    }
+  });
+
   it("never opens over another modal: with the commit dialog open the menu's About entry does nothing (one modal at a time)", () => {
     seed(stamped, false);
     useCicada.setState({ commitDialog: true });
@@ -225,11 +253,19 @@ describe("the About dialog", () => {
       expect(screen.queryByTestId("about-dialog")).toBeNull();
       expect(sent, "no cancel: Esc did one thing").toEqual([]);
       expect(useCicada.getState().selection.nodes).toEqual(["a"]);
-      expect(document.activeElement, "focus returns to the gear that opened it").toBe(screen.getByTestId("tb-settings"));
+      const gear = screen.getByTestId("tb-settings");
+      expect(document.activeElement, "focus returns to the gear that opened it").toBe(gear);
 
-      // With About closed the same Esc is the map's again (a running solve → cancel).
-      fireEvent.keyDown(document.body, { key: "Escape" });
+      // Esc again, from the gear the focus sits on: the map's (a running
+      // solve → cancel) — a focused button keeps its plain keys from the
+      // map, so the gear hands Esc over itself (fix round 2, L3A-2: "Esc to
+      // close About, Esc to cancel" cancelled nothing until a click). Del
+      // on the gear stays the button's: the gear forwards Esc alone.
+      fireEvent.keyDown(gear, { key: "Delete" });
+      expect(sent, "Del on a focused button is the button's").toEqual([]);
+      fireEvent.keyDown(gear, { key: "Escape" });
       expect(sent).toEqual([{ type: "cancel", payload: {} }]);
+      expect(useCicada.getState().selection.nodes, "the cancel was the one thing this Esc did").toEqual(["a"]);
     } finally {
       window.removeEventListener("keydown", router.onKeyDown);
       window.removeEventListener("keyup", router.onKeyUp);

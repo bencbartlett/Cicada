@@ -12,6 +12,7 @@
  * and `set_display_cache`.
  */
 import { useEffect, useRef, useState } from "react";
+import { handleHotkey } from "../keyboard";
 import {
   canWrite,
   useCicada,
@@ -334,7 +335,14 @@ const DISPLAY_MODES: [DisplayMode, string][] = [
  * state — and, last, **About**, which closes the menu and opens the dialog
  * (`onAbout`). Focus goes to the gear first, so the dialog — which takes
  * focus on open — has an opener to hand it back to when it closes (the
- * menu item it came from unmounts with the menu).
+ * menu item it came from unmounts with the menu). A plain Esc on the gear
+ * while its menu is closed goes to the keyboard map (the profiler's
+ * controls do the same): a focused button keeps its plain keys from the
+ * map (`hotkeysReach`), so with focus back on the gear after About closed,
+ * "Esc to close About, Esc to cancel the solve" cancelled nothing until a
+ * click (fix round 2 2026-09-20, finding L3A-2). While the menu is open
+ * Esc closes the menu alone (its own listener), Space and Enter stay the
+ * button's.
  */
 function SettingsMenu({ onAbout }: { onAbout: () => void }) {
   const settings = useCicada((s) => s.settings);
@@ -386,6 +394,10 @@ function SettingsMenu({ onAbout }: { onAbout: () => void }) {
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
+        onKeyDown={(event) => {
+          if (event.key !== "Escape" || open || event.defaultPrevented) return;
+          if (handleHotkey(event.nativeEvent)) event.preventDefault();
+        }}
         ref={gearRef}
         data-testid="tb-settings"
       >
