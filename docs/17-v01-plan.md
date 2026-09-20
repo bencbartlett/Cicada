@@ -3231,7 +3231,12 @@ proves wrong is revised here, dated, in the landing commit.
   `/health` unchanged), `AboutDialog.test.tsx` (8 — with the real key
   router on the window: Del and Space behind the modal send nothing, Esc
   closes it alone, focus in and back; `unknown` as text),
-  `keyboard.test.ts` (the modal rule), `store.test.ts`,
+  `keyboard.test.ts` (the modal rule — About, the commit dialog and File →
+  Open each held INERT behind, not only closed on Esc: a rule narrowed back
+  to About + File → Open with the old commit-dialog Esc branch kept passed
+  the whole suite — fix round 2 2026-09-20, L2-R1-1),
+  `CommitDialog.test.tsx` (the commit dialog through the real router,
+  keyup path included), `store.test.ts`,
   `web/e2e/about.spec.ts` (the dialog = `/api/version`, the suite's
   `--threads 2`, the mirror's protocol number, the clipboard before the
   note, Esc; a selected node survives Esc and Del from the dialog's focus

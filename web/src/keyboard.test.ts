@@ -250,6 +250,41 @@ describe("handleHotkey", () => {
       expect(useCicada.getState().fileDialog).toBe(false);
       expect(useCicada.getState().selection.nodes).toEqual(["a"]);
     });
+
+    // The commit dialog's inertness, not only its Esc (fix round 2026-09-20,
+    // finding L2-R1-1): a rule narrowed back to About + File → Open, with
+    // the old commit-dialog Esc branch kept, passed every test — the Esc
+    // test above could not see Del, Space, P, D, the arrows and Ctrl+Z
+    // reaching the canvas from behind the open dialog.
+    it("the commit dialog behind the same rule: Del, Space, P, D, the arrows and Ctrl+Z are inert, Esc closes it alone", () => {
+      useCicada.setState({
+        aboutDialog: false,
+        commitDialog: true,
+        transport: { ...playing, view: { ...playing.view, playing: false } },
+        summary: { ...useCicada.getState().summary, running: true },
+      });
+      for (const event of [
+        key("Delete"),
+        key(" ", { code: "Space" }),
+        key("p"),
+        key("d"),
+        key("ArrowLeft"),
+        key("ArrowDown"),
+        key("z", { ctrlKey: true }),
+        key("a", { ctrlKey: true }),
+      ]) {
+        expect(handleHotkey(event), `${event.key} is inert behind the commit dialog`).toBe(false);
+      }
+      expect(sent).toEqual([]);
+      expect(useCicada.getState().notices).toEqual([]);
+      expect(useCicada.getState().commitDialog).toBe(true);
+      expect(useCicada.getState().selection.nodes).toEqual(["a"]);
+      expect(handleHotkey(key("Escape"))).toBe(true);
+      expect(useCicada.getState().commitDialog).toBe(false);
+      expect(sent, "no cancel of the running solve: Esc did one thing").toEqual([]);
+      expect(useCicada.getState().selection.nodes).toEqual(["a"]);
+      useCicada.setState({ summary: { ...useCicada.getState().summary, running: false } });
+    });
   });
 
   // The profiler closes on Esc (docs/16 §Inspector contents; v0.1 wave 5
