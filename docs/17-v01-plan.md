@@ -3207,8 +3207,14 @@ proves wrong is revised here, dated, in the landing commit.
   fix round 2026-09-20, R1-C4) then `--check --smoke`, `Cicada-<version>-<os>.zip` unpacking to a
   folder of that name) and `linux` (the bare `cicada-<version>-linux-x86_64`)
   → `release` (`gh release create --verify-tag`, every asset,
-  `--prerelease` for a `-` suffix; `CICADA_GIT_SHA = github.sha` stamps
-  every binary). Tests: `stamp` (9), `version::LINE`'s shape,
+  `--prerelease` for a `-` suffix; `tools/release_stamp.sh` stamps every
+  binary with the CHECKOUT's HEAD and HEAD's commit date —
+  `CICADA_GIT_SHA` + `SOURCE_DATE_EPOCH` — after refusing a HEAD that is
+  not the pushed object's commit, and its `--check` holds `--version` to
+  the values read from git again, never to the variables that fed the
+  build (fix round 2026-09-20, L3-5 / R1-C8: as first built the stamp was
+  `github.sha`, an annotated tag's OBJECT, and the check compared it with
+  itself; a release's `built` was the runner's day). Tests: `stamp` (9), `version::LINE`'s shape,
   `tests/version.rs` (the binary's line; HEAD's hash where git can say),
   `tests/app.rs` (`/api/version` = `--version`), the protocol unit test,
   `tests/http_e2e.rs` (`/api/version` 401 / the object, `hello.version` +

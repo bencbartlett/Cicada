@@ -38,7 +38,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  CICADA_GIT_SHA: ${{ github.sha }}
+  # `CICADA_GIT_SHA` and `SOURCE_DATE_EPOCH` are set per build job from the
+  # checkout's own HEAD (the "stamp" step), not from `github.sha` here: for
+  # an annotated tag the pushed object is the tag, not its commit, and a
+  # stamp that both fed and checked itself proved nothing (findings L3-5,
+  # R1-C8).
 
 jobs:
   notes:
@@ -146,21 +150,18 @@ jobs:
         working-directory: web
         shell: bash
         run: npm ci && npm run build
+      - name: Stamp the checkout's HEAD and its commit date into the build (HEAD must be the pushed object's commit)
+        shell: bash
+        run: bash tools/release_stamp.sh
       - name: Build cicada in release with the SPA embedded (the shipped shape)
         shell: bash
         run: cargo build --locked --release -p cicada-cli --features embed
-      - name: The binary says the tag's version and the tag's commit
+      - name: The binary says the tag's version, HEAD's commit and HEAD's date
         shell: bash
         run: |
           binary=target/release/cicada
           if [ "$RUNNER_OS" = Windows ]; then binary=$binary.exe; fi
-          line="$("$binary" --version)"
-          echo "$line"
-          short="$(printf '%s' "$GITHUB_SHA" | cut -c1-12)"
-          case "$line" in
-            "cicada $VERSION ($short, "*) ;;
-            *) echo "error: expected \`cicada $VERSION ($short, <date>)\`, got \`$line\`" >&2; exit 1 ;;
-          esac
+          bash tools/release_stamp.sh --check "$("$binary" --version)" "$VERSION"
       - name: Bundle, check and smoke (docs/17 L3 — the run-time libraries beside the binary; `cicada app --no-browser` from inside the bundle under a minimal env)
         shell: bash
         run: |
@@ -230,17 +231,13 @@ jobs:
       - name: Build the SPA
         working-directory: web
         run: npm ci && npm run build
+      - name: Stamp the checkout's HEAD and its commit date into the build (HEAD must be the pushed object's commit)
+        run: bash tools/release_stamp.sh
       - name: Build cicada in release with the SPA embedded (the shipped shape)
         run: cargo build --locked --release -p cicada-cli --features embed
-      - name: The binary says the tag's version and the tag's commit; name it for the release
+      - name: The binary says the tag's version, HEAD's commit and HEAD's date; name it for the release
         run: |
-          line="$(./target/release/cicada --version)"
-          echo "$line"
-          short="$(printf '%s' "$GITHUB_SHA" | cut -c1-12)"
-          case "$line" in
-            "cicada $VERSION ($short, "*) ;;
-            *) echo "error: expected \`cicada $VERSION ($short, <date>)\`, got \`$line\`" >&2; exit 1 ;;
-          esac
+          bash tools/release_stamp.sh --check "$(./target/release/cicada --version)" "$VERSION"
           mkdir -p release-assets
           cp target/release/cicada "release-assets/cicada-$VERSION-linux-x86_64"
       - uses: actions/upload-artifact@v4
