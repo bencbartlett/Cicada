@@ -2453,6 +2453,40 @@ proves wrong is revised here, dated, in the landing commit.
   next pass (L5-7, open); an output drawn at preview because it is over
   the budget is said in `/debug/state` and the inspector's tier, not in a
   notice (L5-4, open).
+
+  *Fix round 2 (the second review's two confirmed findings; docs/12
+  §Display, docs/13 §The display edge and DECISIONS.md row 2026-08-25
+  revised in the same commit).* **The encode draws only what the warm-up
+  reached** (L3-1): `emit_frames` still re-reads the graph's want-set for
+  the clears, but encodes an output only if the pass's warm-up decided it
+  (`Warm::outputs` — the pending set as far as the warm-up got, by node
+  ref · output · value hash; the value and its verdict live in one
+  `Decided`, so the encode has no state in which it would have to decide).
+  An output the graph started wanting under an intent between the two — a
+  preview toggled on inside the 30 ms structural debounce, when no job is
+  pending yet to cut the pass — is left to the display-only generation
+  that toggle scheduled, which draws it on the pool. Before, the encode
+  decided it itself, the full budget tally and the tessellation under the
+  session lock with every intent and Esc waiting (measured 1.0–1.3 s per
+  hit on a 1,000-sphere output; the ~30 ms window recurs on every pass of
+  a drag or a playback, 5 hits in 12 timed attempts) while docs/12, 13 and
+  this paragraph said the encode never tessellates — the code side is the
+  one fixed, the docs being the contract. A value the warm-up could not
+  load is reported from the warm-up's reason, never re-tried under the
+  lock. Regression: `a_toggle_inside_the_debounce_window_is_drawn_by_its_
+  own_generation` (the pass parked after its only pending output, the eye
+  on a hidden sphere while parked, the release at once: the parked pass
+  draws its one output, the toggle's generation the revealed one; the
+  pre-fix behaviour reinstated as a mutation fails it with `outputs: 2`,
+  `encode_ms: 44` — the sphere's tessellation moved under the lock).
+  **The warm-up's supersession check is pinned by the cache's miss
+  count** (L2-1): `an_edit_or_esc_cuts_a_parked_pass_where_it_is_seen`
+  asserts that across the release the misses equal the edit's
+  generation's two new solids, so a pass parked with one output left
+  meshes nothing more once the edit is pending; before, deleting the
+  warm-up's check left the whole crate green — the encode's check ended
+  the pass the same way after the wasted work (the heavy pipeline's
+  seconds of kernel work per superseded generation).
 - **P1 — the profiler.**
   - **Server.** A read intent `profile {generation?}` (any client) →
     `profile_view {generation, kind, phases: {queued_ms, solve_ms,

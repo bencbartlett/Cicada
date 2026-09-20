@@ -256,7 +256,8 @@ DECISIONS.md row 2026-08-25) — additive, `PROTOCOL_VERSION` unchanged:
   already on screen at the tier it chose — or when the pass was cut);
   `tessellate_ms` is the warm-up on the worker pool, `encode_ms` the
   encode under the session lock (which never tessellates: the warm-up
-  pins the meshes — docs/12 §Display) — their sum is the chip's `display`
+  pins the meshes, and the encode draws only the outputs the warm-up
+  reached — docs/12 §Display) — their sum is the chip's `display`
   time; `cancelled` (omitted when false) = the pass stopped between
   outputs, or the generation's solve was cancelled (then no `cut_by`:
   there was no pass to cut); `cut_by` (omitted otherwise) says what
@@ -282,7 +283,12 @@ DECISIONS.md row 2026-08-25) — additive, `PROTOCOL_VERSION` unchanged:
   (kind `structural`, `computed: 0`). The first build re-emitted from the
   last complete generation under the lock — the whole display edge with
   every intent, `/debug/state` and Esc waiting, no spinner, nothing
-  supersedable (review finding CR-2).
+  supersedable (review finding CR-2). A toggle landing while a pass is in
+  flight, inside the structural debounce — no job pending yet, so nothing
+  cuts the pass — is not drawn by that pass's encode: its warm-up never
+  reached the output, and deciding it there tessellated under the lock
+  (review finding L3-1, the second fix round); the toggle's own generation
+  draws it, on the pool.
 - `caches` — the payload IS `CachesView {display: {entries, bytes, budget,
   hits, misses, evictions, oversized, refusals, working_set, over_budget,
   thrash}, memo: {bytes, entries}}`: the display cache's counters

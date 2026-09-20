@@ -856,13 +856,28 @@ struct PendingOutput {
 }
 
 /// What a display pass's warm-up produced ([`Core::warm_display`]) and the
-/// encode reads.
+/// encode reads — and ALL the encode may draw: an output the warm-up did
+/// not reach is not encoded (docs/12 §Display: the encode never
+/// tessellates).
 #[derive(Default)]
 struct Warm {
-    /// The pending outputs' values, by hash.
-    loaded: HashMap<ValueHash, Arc<HashedValue>>,
-    /// The budget's verdict per value.
-    verdicts: HashMap<ValueHash, display::BudgetStats>,
+    /// The outputs the warm-up reached — `(node ref, output, value hash)`,
+    /// the pass's pending set as far as it got. The encode's allow-list:
+    /// an output the graph started wanting under an intent between the
+    /// warm-up and the encode (a preview toggled on inside the structural
+    /// debounce, so no job is pending yet to cut the pass; a rename that
+    /// re-binds a node ref) is left to the display-only generation that
+    /// intent scheduled, which draws it on the pool — deciding it in the
+    /// encode would tessellate it under the session lock (review finding
+    /// 2026-08-25, L3-1).
+    outputs: HashSet<(u32, u32, ValueHash)>,
+    /// The loaded value and the budget's verdict, by value hash.
+    decided: HashMap<ValueHash, Decided>,
+    /// The values the store could not load, by hash, with the store's
+    /// reason: the encode reports them (a notice) and draws nothing for
+    /// them — it does not try again under the lock (a load that succeeded
+    /// there would need a verdict, which is the tessellation).
+    unloadable: HashMap<ValueHash, String>,
     /// The drawn tier's display meshes of every output to encode, PINNED
     /// so the encode under the session lock never tessellates — the
     /// cache may have evicted them between the warm-up and the encode
@@ -872,6 +887,22 @@ struct Warm {
     pinned_for: HashSet<(ValueHash, DisplayTier)>,
     /// The warm-up stopped between outputs, and why.
     cut: Option<Superseded>,
+}
+
+/// One value the warm-up loaded and decided ([`Warm::decided`]): the
+/// verdict is never without its value, so the encode has no state in
+/// which it would have to decide — tessellate — under the lock.
+struct Decided {
+    value: Arc<HashedValue>,
+    verdict: display::BudgetStats,
+}
+
+impl Warm {
+    /// Did the warm-up reach this output, as this value? Only such an
+    /// output is encoded.
+    fn decided_for(&self, node_ref: u32, output: u32, hash: ValueHash) -> bool {
+        self.outputs.contains(&(node_ref, output, hash))
+    }
 }
 
 /// A generation's report kept for the inspector.
@@ -6218,8 +6249,9 @@ impl Core {
     /// be encoded. Latest-wins: between outputs the pass asks whether an
     /// edit is waiting (or Esc was pressed) and stops — the rest of this
     /// generation's picture is the edit's generation's to paint; a
-    /// pending preview or transport tick waits. The `display_hold` seam
-    /// is called after each output.
+    /// pending preview or transport tick waits. The outputs reached are
+    /// the encode's allow-list ([`Warm::outputs`]). The `display_hold`
+    /// seam is called after each output.
     fn warm_display(
         &self,
         generation: u64,
@@ -6234,11 +6266,19 @@ impl Core {
                 warm.cut = Some(why);
                 return warm;
             }
-            // A value that cannot be loaded is reported by the emit path,
-            // which tries again under the lock and broadcasts the notice.
-            let value = match warm.loaded.get(&pending.hash) {
-                Some(value) => Some(Arc::clone(value)),
-                None => store.load_value(&pending.hash).ok(),
+            warm.outputs
+                .insert((pending.node_ref, pending.output, pending.hash));
+            // A value that cannot be loaded is reported by the encode (a
+            // notice) from the reason kept here; nothing is drawn for it.
+            let value = match warm.decided.get(&pending.hash) {
+                Some(decided) => Some(Arc::clone(&decided.value)),
+                None => match store.load_value(&pending.hash) {
+                    Ok(value) => Some(value),
+                    Err(error) => {
+                        warm.unloadable.insert(pending.hash, error.to_string());
+                        None
+                    }
+                },
             };
             if let Some(value) = value {
                 let (verdict, fresh) = self.verdict_for(&value, requested);
@@ -6251,8 +6291,8 @@ impl Core {
                             .insert(display::TessellationKey::new(hash, deflection), mesh);
                     }
                 }
-                warm.loaded.insert(pending.hash, value);
-                warm.verdicts.insert(pending.hash, verdict);
+                warm.decided
+                    .insert(pending.hash, Decided { value, verdict });
             }
             if let Some(hold) = &self.config.display_hold {
                 hold(generation, done + 1);
@@ -6266,17 +6306,20 @@ impl Core {
     /// and send frames when it changed (or when it was last drawn at a
     /// coarser tier than the budget chooses now); send clears for outputs
     /// that stopped drawing. `warm` holds what the warm-up loaded, decided
-    /// and pinned; anything else is loaded and decided here (the graph
-    /// changed under an intent between the two — a structural edit, whose
-    /// pending job normally cuts the pass before this output is reached;
-    /// inside the debounce window this path tessellates under the lock).
-    /// Latest-wins: the pass stops between outputs once an edit is waiting
-    /// or Esc was pressed (docs/13 §The display edge); the outputs it did
-    /// not reach keep their previous frames and table entries, so the
-    /// edit's generation draws them. Every display emission is a
-    /// generation's pass — a preview toggle schedules a display-only
-    /// generation (`Session::commit`) rather than re-emitting under the
-    /// lock.
+    /// and pinned, and the encode draws THAT and nothing else: an output
+    /// the graph started wanting under an intent between the two — a
+    /// preview toggled on inside the structural debounce, when no job is
+    /// pending yet to cut the pass — is skipped, and the display-only
+    /// generation that intent scheduled draws it on the worker pool;
+    /// deciding it here tessellated a whole output under the session lock
+    /// (review finding 2026-08-25, L3-1). The want-set is still read from
+    /// the current graph, for the clears. Latest-wins: the pass stops
+    /// between outputs once an edit is waiting or Esc was pressed (docs/13
+    /// §The display edge); the outputs it did not reach keep their previous
+    /// frames and table entries, so the edit's generation draws them. Every
+    /// display emission is a generation's pass — a preview toggle schedules
+    /// a display-only generation (`Session::commit`) rather than
+    /// re-emitting under the lock.
     #[allow(clippy::too_many_lines)] // want-set, clears, sends: one pass in one place
     fn emit_frames(
         &self,
@@ -6288,7 +6331,6 @@ impl Core {
         warm: &Warm,
     ) -> Emitted {
         let mut emitted = Emitted::default();
-        let store = Arc::clone(self.scheduler.store());
         let wanted = Self::display_wants(inner, lowered, report);
         // Clears: displayed before, not wanted now (preview off, red, gone).
         let wanted_keys: HashSet<(u32, u32)> = wanted.iter().map(|(n, o, _)| (*n, *o)).collect();
@@ -6320,66 +6362,68 @@ impl Core {
         }
         for (node_ref, output, hash) in wanted {
             // The cheap pre-filter first (on screen at the requested tier or
-            // finer: nothing to decide), then the budget's verdict, then the
-            // same question at the tier it chose.
+            // finer: nothing to decide), then only what the warm-up reached,
+            // then the budget's verdict, then the same question at the tier
+            // it chose.
             if Self::already_displayed(inner, node_ref, output, hash, requested) {
+                continue;
+            }
+            if !warm.decided_for(node_ref, output, hash) {
+                // Wanted since the warm-up — the graph changed under an
+                // intent that scheduled its own generation: that one draws
+                // it, off the lock.
                 continue;
             }
             if let Some(why) = self.display_superseded() {
                 emitted.cut = Some(why);
                 break;
             }
-            let loaded = match warm.loaded.get(&hash) {
-                Some(value) => Ok(Arc::clone(value)),
-                None => store.load_value(&hash),
+            let Some(decided) = warm.decided.get(&hash) else {
+                // The warm-up reached it and the store could not load it
+                // (reached means decided or unloadable; neither is a bug,
+                // and says so).
+                let reason = warm.unloadable.get(&hash).map_or(
+                    "the warm-up reached it and kept neither a verdict nor a reason (a bug)",
+                    String::as_str,
+                );
+                broadcast(
+                    inner,
+                    &ServerMessage::Notice {
+                        level: "warning".to_owned(),
+                        message: format!("value {hash} not loadable for display: {reason}"),
+                    },
+                );
+                continue;
             };
-            match loaded {
-                Ok(value) => {
-                    let verdict = match warm.verdicts.get(&hash) {
-                        Some(verdict) => *verdict,
-                        None => self.verdict_for(&value, requested).0,
-                    };
-                    if Self::already_displayed(inner, node_ref, output, hash, verdict.drawn) {
-                        continue;
-                    }
-                    let context = self.display_context_for(verdict, &warm.pinned);
-                    let frames = display::frames_for_value(
-                        &value,
-                        generation,
-                        node_ref,
-                        output,
-                        &mut |elements: &[u32]| {
-                            self.lock_picks().ids_for(node_ref, output, elements)
-                        },
-                        &context,
-                    );
-                    emitted.outputs += 1;
-                    for frame in frames.frames {
-                        emitted.bytes += frame.len();
-                        emitted.frames += 1;
-                        broadcast_binary(inner, &Bytes::from(frame));
-                    }
-                    inner.display.insert(
-                        (node_ref, output),
-                        Displayed {
-                            hash,
-                            generation,
-                            stats: frames.stats,
-                            tier: verdict.drawn,
-                            solids: frames.solids,
-                        },
-                    );
-                }
-                Err(error) => {
-                    broadcast(
-                        inner,
-                        &ServerMessage::Notice {
-                            level: "warning".to_owned(),
-                            message: format!("value {hash} not loadable for display: {error}"),
-                        },
-                    );
-                }
+            let verdict = decided.verdict;
+            if Self::already_displayed(inner, node_ref, output, hash, verdict.drawn) {
+                continue;
             }
+            let context = self.display_context_for(verdict, &warm.pinned);
+            let frames = display::frames_for_value(
+                &decided.value,
+                generation,
+                node_ref,
+                output,
+                &mut |elements: &[u32]| self.lock_picks().ids_for(node_ref, output, elements),
+                &context,
+            );
+            emitted.outputs += 1;
+            for frame in frames.frames {
+                emitted.bytes += frame.len();
+                emitted.frames += 1;
+                broadcast_binary(inner, &Bytes::from(frame));
+            }
+            inner.display.insert(
+                (node_ref, output),
+                Displayed {
+                    hash,
+                    generation,
+                    stats: frames.stats,
+                    tier: verdict.drawn,
+                    solids: frames.solids,
+                },
+            );
         }
         emitted
     }
@@ -6890,8 +6934,10 @@ impl Core {
         //    drawn tier's meshes are pinned for the encode, while intents
         //    keep flowing; an edit waiting on the loop (or Esc) stops it
         //    between outputs (latest-wins) — a pending tick waits. Between
-        //    this and the broadcast below the graph may change under an
-        //    intent; the broadcast recomputes what it wants.
+        //    this and the encode below the graph may change under an
+        //    intent; the encode re-reads what the graph wants for the
+        //    clears, and draws only what the warm-up reached — the rest is
+        //    that intent's own generation's.
         let warm = self.warm_display(generation, &pending, tier);
         let tessellate_ms = began.elapsed().as_secs_f64() * 1000.0;
         // 3. Under the lock: encode and send (stopping between outputs if
@@ -11424,6 +11470,154 @@ size = slider(value=4.0, min=0.5, max=5.0)
         assert!(
             state["text"].as_str().unwrap().contains("value=3.0"),
             "the value the eye reveals is the current one"
+        );
+        assert_eq!(state["summary"]["cancelled"], false);
+    }
+
+    /// A preview toggled ON while a pass is parked in its warm-up, with no
+    /// job pending yet — the toggle's structural generation is inside the
+    /// 30 ms debounce, so nothing cuts the pass — is NOT drawn by that
+    /// pass: its warm-up never reached the revealed output, and the encode
+    /// draws only what the warm-up reached. Deciding it in the encode
+    /// tessellated a whole output under the session lock, every intent and
+    /// Esc waiting (~1 s per hit on a 1,000-sphere output, and the window
+    /// recurs on every pass of a drag or a playback — review finding
+    /// 2026-08-25, L3-1). The toggle's own display-only generation draws it
+    /// on the pool. Should the debounce fire before the parked pass's
+    /// encode (this thread stalled 30 ms between the toggle and the
+    /// release), the pending job cuts the pass instead — the other correct
+    /// outcome, pinned by `an_edit_or_esc_cuts_a_parked_pass_where_it_is_seen`
+    /// — and the toggle's generation draws both; either way the revealed
+    /// output is meshed once, by a warm-up, and never by the parked pass.
+    #[test]
+    #[allow(clippy::too_many_lines)] // hide, park, reveal, release, then who drew what: one story
+    fn a_toggle_inside_the_debounce_window_is_drawn_by_its_own_generation() {
+        let (_dir, mut config) = project(
+            "# cicada 1\n\
+             k = slider(value=1.0, min=0.5, max=2.0)\n\
+             kb = k * 1.5\n\
+             a = sphere(radius=k)\n\
+             b = sphere(radius=kb)\n",
+        );
+        let hold = PassHold::new();
+        config.display_hold = Some(hold.seam());
+        let session = Session::open(config).unwrap();
+        session.wait_idle();
+        let (tx, mut rx) = unbounded_channel();
+        let (id, _) = session.connect(ClientLanes::merged(tx));
+        let _ = drain(&mut rx);
+        let misses = || {
+            session.debug_state(false)["display_cache"]["misses"]
+                .as_u64()
+                .unwrap()
+        };
+        let b_ref = {
+            let inner = session.core.lock_inner();
+            inner.graph.node("b").unwrap().node_ref
+        };
+        session.handle(
+            id,
+            Some("off".into()),
+            ClientMessage::SetPreview {
+                node: "b".into(),
+                on: Some(false),
+            },
+        );
+        session.wait_idle();
+        let _ = drain(&mut rx);
+        let before = misses();
+        // A new value: with `b` hidden the pass has one pending output, and
+        // parks after its verdict.
+        hold.arm(1);
+        session.handle(
+            id,
+            Some("k".into()),
+            ClientMessage::SetParam {
+                node: "k".into(),
+                port: Some("value".into()),
+                value: "1.2".into(),
+            },
+        );
+        let parked = hold.parked();
+        let msgs = texts(&drain(&mut rx));
+        let begins = of_kind(&msgs, "display_begin");
+        assert_eq!(begins.len(), 1);
+        assert_eq!(begins[0]["payload"]["generation"], parked);
+        assert_eq!(
+            begins[0]["payload"]["outputs"], 1,
+            "`b` hidden: `a` alone is pending"
+        );
+        assert_eq!(misses(), before + 1, "`a` meshed in the warm-up");
+        // The eye on `b` while the pass is parked, and the release at once:
+        // the toggle's generation is inside the debounce when the parked
+        // pass encodes.
+        session.handle(
+            id,
+            Some("on".into()),
+            ClientMessage::SetPreview {
+                node: "b".into(),
+                on: Some(true),
+            },
+        );
+        hold.release();
+        session.wait_idle();
+        let got = drain(&mut rx);
+        let msgs = texts(&got);
+        let ends = of_kind(&msgs, "display_end");
+        assert_eq!(
+            ends.len(),
+            2,
+            "the parked pass's and the toggle's: {msgs:?}"
+        );
+        let parked_end = ends
+            .iter()
+            .find(|e| e["payload"]["generation"] == parked)
+            .expect("the parked generation ended");
+        let toggled = ends
+            .iter()
+            .find(|e| e["payload"]["generation"] != parked)
+            .unwrap();
+        let toggled_generation = toggled["payload"]["generation"].as_u64().unwrap();
+        assert!(toggled_generation > parked);
+        // The parked pass drew `a` alone — or, the debounce having fired
+        // first, was cut and drew nothing.
+        let cut = parked_end["payload"]["cut_by"] == "edit";
+        if cut {
+            assert_eq!(parked_end["payload"]["outputs"], 0, "{parked_end}");
+            assert_eq!(toggled["payload"]["outputs"], 2, "{toggled}");
+        } else {
+            assert!(
+                parked_end["payload"].get("cancelled").is_none(),
+                "{parked_end}"
+            );
+            assert_eq!(
+                parked_end["payload"]["outputs"], 1,
+                "`a` alone — never the output the warm-up did not reach: {parked_end}"
+            );
+            assert_eq!(toggled["payload"]["outputs"], 1, "`b`: {toggled}");
+        }
+        let sent = frames(&got);
+        assert!(
+            sent.iter()
+                .any(|f| f.header().kind == FrameKind::Mesh && f.header().node == b_ref),
+            "`b` was drawn"
+        );
+        assert!(
+            sent.iter()
+                .filter(|f| f.header().node == b_ref)
+                .all(|f| f.header().generation == toggled_generation),
+            "every frame of `b` is the toggle's generation's"
+        );
+        assert_eq!(
+            misses(),
+            before + 2,
+            "`a` and `b` meshed once each — `b` by a warm-up on the pool"
+        );
+        let state = session.debug_state(false);
+        assert_eq!(state["display"]["b.out"]["generation"], toggled_generation);
+        assert_eq!(
+            state["display"]["a.out"]["generation"],
+            if cut { toggled_generation } else { parked }
         );
         assert_eq!(state["summary"]["cancelled"], false);
     }

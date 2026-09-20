@@ -349,7 +349,19 @@ sets did not fit a 256 MiB cache).
   cache's eviction went in between (a working set larger than the budget
   evicts the warm-up's own first entries before the encode reads them;
   the pin ends the cascade). Both were lock-held serial kernel work
-  before the fix round of 2026-08-25 (review findings). Between outputs —
+  before the fix round of 2026-08-25 (review findings). And the encode
+  draws ONLY what the warm-up reached (`Warm::outputs` — the pending set
+  as far as the warm-up got, by node ref · output · value hash): an
+  output the graph started wanting under an intent between the warm-up
+  and the encode — a preview toggled on inside the 30 ms structural
+  debounce, when no job is pending yet to cut the pass — is left to the
+  display-only generation that intent scheduled, which draws it on the
+  pool; deciding it in the encode put a whole output's budget tally and
+  tessellation under the session lock, every intent and Esc waiting
+  (review finding L3-1, the second fix round of 2026-08-25). The encode
+  still re-reads the graph's want-set, for the clears. A value the
+  warm-up could not load is reported by the encode from the warm-up's
+  reason (a `notice`), never re-tried under the lock. Between outputs —
   in the warm-up and in the encode — the pass asks the solve loop whether
   it is **superseded** (`SolveLoop::superseded`), and the rule is the
   solve's own: a pending STRUCTURAL job — an edit — supersedes it (the
