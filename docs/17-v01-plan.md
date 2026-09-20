@@ -2561,9 +2561,12 @@ proves wrong is revised here, dated, in the landing commit.
   by `tessellation_served` — a delta of the cache-wide counters around
   each output would count a restream's or an inspector summary's lookups
   on another thread. (3) **The node rows are the generation's own
-  lowering's**: its solved graph (`idle` for a node outside a preview's
-  cone), the bindings it excluded (the checker's red / blocked, the `#off`
-  ghosts) and its literal values (`done`, no cost) — so the table lists
+  lowering's**: its solved graph (`idle` for a binding no target needed —
+  an effectful leaf; every session job targets every non-effectful node,
+  so a preview's out-of-change nodes are `cached`, never `idle` — fix
+  round 2026-09-19), the bindings it excluded (the checker's red /
+  blocked, the `#off` ghosts) and its literal values (`done`, no cost) —
+  so the table lists
   every node of the pipeline as that generation saw it, and never the
   current graph's view of a text that changed since. (4) **The socket
   phase is a residual**: the client's wall from `display_begin` to the

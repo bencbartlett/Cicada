@@ -5455,11 +5455,14 @@ impl Core {
     /// The profile's node rows: every node of the kept lowering's graph with
     /// its outcome — `done` with this generation's `nanos`, `cached` with the
     /// memo entry's `last_nanos`, `red` / `blocked` / `cancelled` with
-    /// neither, `idle` for one outside the requested cone — then the
-    /// bindings that lowering excluded (the checker's red / blocked, `#off`)
-    /// and its literal values (always `done`, no cost — the status board's
-    /// rule), so the table lists every binding of the pipeline as that
-    /// generation saw it.
+    /// neither, `idle` for a node no target of the generation needed (an
+    /// effectful leaf — an exporter, run only by explicit action; every
+    /// session job targets every non-effectful node, so a preview
+    /// generation's out-of-change nodes are memo hits, `cached`, never
+    /// `idle`) — then the bindings that lowering excluded (the checker's
+    /// red / blocked, `#off`) and its literal values (always `done`, no cost
+    /// — the status board's rule), so the table lists every binding of the
+    /// pipeline as that generation saw it.
     fn profile_nodes(kept: &Kept) -> Vec<ProfileNode> {
         let mut nodes: Vec<ProfileNode> = kept
             .report
@@ -11076,9 +11079,14 @@ size = slider(value=4.0, min=0.5, max=5.0)
              ball = sphere(radius=r)\n\
              twin = sphere(radius=r)\n\
              fixed = sphere(radius=0.6)\n\
+             one = duplicate(item=fixed, count=1)\n\
+             exp = export_step(solids=one, path=\"never-run.step\")\n\
+             pt = construct_point(x=1.0, y=2.0, z=3.0)\n\
              bad = cylinder(radius=0.0, height=1.0)\n\
              vol, cen = volume(solid=bad)\n\
              #off ghost = sphere(radius=2.0)\n\
+             typo = cylinder(radius=\"x\", height=1.0)\n\
+             dvol, dcen = volume(solid=typo)\n\
              k = 3.0\n",
         );
         let session = Session::open(config).unwrap();
@@ -11193,6 +11201,34 @@ size = slider(value=4.0, min=0.5, max=5.0)
         let k = node_of(&view, "k");
         assert_eq!(k["state"], "done", "a literal is always done: {k}");
         assert!(k.get("nanos").is_none(), "and costs nothing: {k}");
+        // Both arms of the exclusion mapping: a binding with diagnostics of
+        // its own (the Text radius) is red, a binding FED by it that
+        // type-checks itself is blocked (`Exclusion::FedBy`), neither costed
+        // (review finding L2-P1-3: the blocked arm had no test). (A consumer
+        // of the `#off` ghost is red, not blocked: the checker flags the
+        // reference to a disabled name on the consumer itself.)
+        let typo = node_of(&view, "typo");
+        assert_eq!(typo["state"], "red", "{typo}");
+        for blocked in ["dvol", "dcen"] {
+            let node = node_of(&view, blocked);
+            assert_eq!(node["state"], "blocked", "fed by the red `typo`: {node}");
+            assert!(
+                node.get("nanos").is_none() && node.get("last_nanos").is_none(),
+                "{node}"
+            );
+        }
+        // `idle`: a binding no target of the generation needed — the
+        // exporter, effectful, runs only by explicit action and is never a
+        // session job's target (`NodeOutcome::Skipped`); no cost, no
+        // elements (review finding L2-P1-4).
+        let exp = node_of(&view, "exp");
+        assert_eq!(exp["state"], "idle", "{exp}");
+        assert!(
+            exp.get("nanos").is_none()
+                && exp.get("last_nanos").is_none()
+                && exp.get("elements").is_none(),
+            "{exp}"
+        );
         // The phases are the timing's, and the pass's bytes.
         let timing = state["timings"]
             .as_array()
@@ -11271,6 +11307,29 @@ size = slider(value=4.0, min=0.5, max=5.0)
             "every kernel call of the pass is on a row: {}",
             view["display"]
         );
+        // An output without solids — the point — has no tier (the key is
+        // absent, not `null`), no solids, no lookups; a wrong field here
+        // would put `fine` on every curve and point row (review finding
+        // L2-P1-5: every fixture output was a Solid).
+        let pt = row_of(&view, "pt").expect("pt.out was drawn");
+        assert!(pt.get("tier").is_none(), "no tier without solids: {pt}");
+        assert_eq!(pt["solids"], 0, "{pt}");
+        assert_eq!(
+            (pt["cache_hits"].clone(), pt["cache_misses"].clone()),
+            (0.into(), 0.into()),
+            "{pt}"
+        );
+        assert!(pt["bytes"].as_u64().unwrap() > 0, "a point frame: {pt}");
+        assert_eq!(pt["triangles"], 0, "{pt}");
+        // A value over a body the pass already meshed — the list holding
+        // `fixed`'s sphere — counts a HIT for it in the same pass, never a
+        // second kernel call (review finding L2-P1-2: no warm-cache
+        // decision's hits were asserted anywhere).
+        let one = row_of(&view, "one").expect("one.out was drawn");
+        assert_eq!(one["tier"], "fine", "{one}");
+        assert_eq!(one["solids"], 1, "{one}");
+        assert_eq!(one["cache_hits"], 1, "fixed's mesh, from the cache: {one}");
+        assert_eq!(one["cache_misses"], 0, "{one}");
         assert_eq!(view["caches"], state["caches"]);
         // `/debug/state.profile` is the same object (the times within the
         // text round trip's tolerance, the rest exactly).

@@ -384,9 +384,15 @@ contents) — additive, `PROTOCOL_VERSION` unchanged:
   generation's measured work, CPU summed across chunks) for `done`,
   `last_nanos` (the memo entry's recorded cost of the LAST compute, never
   this generation's cache read) for `cached`, neither for `red` /
-  `blocked` / `cancelled`, `idle` for a node outside the requested cone
-  (a drag's preview generation solves its cone alone) — then the bindings
-  the lowering excluded (the checker's red / blocked, the `#off` ghosts)
+  `blocked` / `cancelled`, `idle` for a node no target of the generation
+  needed — an effectful leaf (an exporter runs only by explicit action
+  and is never a session job's target; docs/16's `idle`); every session
+  job — a drag's preview tick included — targets every non-effectful
+  node, so the nodes a change did not reach are memo hits, `cached`,
+  never `idle` (fix round 2026-09-19: the first text promised `idle` for
+  "a node outside a preview's cone", a row no preview can produce) — then
+  the bindings the lowering excluded (the checker's red / blocked, the
+  `#off` ghosts)
   and its literal values (`done`, no cost — the status board's rule), so a
   table over it lists every node of the pipeline as that generation saw
   it; `display` lists the outputs the generation's OWN pass drew (frames

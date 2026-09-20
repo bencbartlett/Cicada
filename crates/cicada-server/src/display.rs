@@ -2786,6 +2786,12 @@ mod tests {
             }
         );
         assert_eq!(fits.meshes.len(), 2);
+        // The decision reports its lookups on a WARM cache too (the profiler's
+        // per-output counters): `count` meshed both tiers above, so the fine
+        // tally is two hits and no kernel call — a decision that dropped its
+        // hit tally would show `0 / 0` for every value sharing a cached body
+        // (review finding L2-P1-2: nothing asserted a warm decision's hits).
+        assert_eq!((fits.hits, fits.misses), (2, 0));
         let fine_deflection = DisplayTier::Fine.deflection(config);
         for (hash, mesh) in &fits.meshes {
             let body = solids.iter().find(|(h, _)| h == hash).unwrap();
@@ -2824,6 +2830,9 @@ mod tests {
                 .sum::<u64>(),
             preview
         );
+        // Both tallies' lookups are counted: the fine one (two hits, past the
+        // limit only at its second solid) and the preview one (two hits).
+        assert_eq!((dropped.hits, dropped.misses), (4, 0));
         // Below even the preview total: preview anyway, and said so.
         let over = choose(DisplayTier::Fine, preview - 1);
         assert_eq!(over.drawn, DisplayTier::Preview);
