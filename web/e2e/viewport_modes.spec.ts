@@ -74,6 +74,19 @@ async function box(page: Page, testId: string): Promise<Box> {
   return b;
 }
 
+const rounded = (b: Box): Box => ({ x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) });
+
+/** `inner` lies within `outer` (to half a pixel). */
+function inside(inner: Box, outer: Box): boolean {
+  const eps = 0.5;
+  return (
+    inner.x >= outer.x - eps &&
+    inner.y >= outer.y - eps &&
+    inner.x + inner.width <= outer.x + outer.width + eps &&
+    inner.y + inner.height <= outer.y + outer.height + eps
+  );
+}
+
 async function debugText(page: Page): Promise<string> {
   const response = await page.request.get(`/debug/state?token=${TOKEN}&pipeline=${PIPELINE}&wait=true`);
   expect(response.ok(), await response.text()).toBeTruthy();
@@ -164,6 +177,22 @@ test("floating: the panel over the canvas — the same scene, drag + resize pers
   expect(stored.floatingViewport!.y).toBeCloseTo(resized.y - workArea!.y - 0, 0);
   expect(stored.floatingViewport!.width).toBeCloseTo(resized.width, 0);
   expect(stored.floatingViewport!.height).toBeCloseTo(resized.height, 0);
+
+  // ---- the window shrinking pulls the panel back inside the work area (the
+  // frame's ResizeObserver re-clamps at every measured size — docs/16); the
+  // stored rect is untouched, so growing the window again restores the place.
+  await page.setViewportSize({ width: 900, height: 600 });
+  await expect
+    .poll(async () => {
+      const pane = rounded(await box(page, "viewport-pane"));
+      const area = (await page.locator(".app-work").boundingBox())!;
+      return { inside: inside(pane, area), width: pane.width, height: pane.height };
+    })
+    .toEqual({ inside: true, width: Math.round(resized.width), height: Math.round(resized.height) });
+  expect(resized.width).toBeGreaterThanOrEqual(240);
+  expect(resized.height).toBeGreaterThanOrEqual(160);
+  await page.setViewportSize({ width: 1400, height: 900 });
+  await expect.poll(async () => rounded(await box(page, "viewport-pane"))).toEqual(rounded(resized));
 
   // ---- a reload keeps the mode and the rect.
   await page.reload();

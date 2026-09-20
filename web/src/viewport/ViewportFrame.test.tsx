@@ -17,17 +17,35 @@ import { ViewportFrame, ViewportPlaceholder } from "./ViewportFrame";
 
 vi.mock("./Viewport", () => ({ Viewport: () => <div data-testid="viewport" /> }));
 
+/** A `ResizeObserver` the test fires by hand: it records what was observed, and `fire()` runs the callback as a real one would after a layout change. */
 class FakeResizeObserver {
-  observe(): void {}
-  disconnect(): void {}
+  static instances: FakeResizeObserver[] = [];
+  observed: Element[] = [];
+  constructor(private readonly callback: ResizeObserverCallback) {
+    FakeResizeObserver.instances.push(this);
+  }
+  observe(el: Element): void {
+    this.observed.push(el);
+  }
+  disconnect(): void {
+    this.observed = [];
+  }
   unobserve(): void {}
+  fire(): void {
+    this.callback([], this as unknown as ResizeObserver);
+  }
 }
 
-/** A work area of `width` × `height` (jsdom lays nothing out, so the size is declared). */
+/** Declare the work area's size (jsdom lays nothing out). */
+function sizeArea(el: HTMLElement, width: number, height: number): void {
+  Object.defineProperty(el, "clientWidth", { value: width, configurable: true });
+  Object.defineProperty(el, "clientHeight", { value: height, configurable: true });
+}
+
+/** A work area of `width` × `height`. */
 function area(width: number, height: number) {
   const el = document.createElement("div");
-  Object.defineProperty(el, "clientWidth", { value: width });
-  Object.defineProperty(el, "clientHeight", { value: height });
+  sizeArea(el, width, height);
   document.body.append(el);
   const ref = createRef<HTMLDivElement>() as React.MutableRefObject<HTMLDivElement>;
   ref.current = el;
@@ -44,6 +62,7 @@ const rectOf = (el: HTMLElement) => ({
 
 describe("ViewportFrame", () => {
   beforeEach(() => {
+    FakeResizeObserver.instances = [];
     vi.stubGlobal("ResizeObserver", FakeResizeObserver);
     useCicada.getState().updateSettings({ viewportMode: "split", floatingViewport: null });
   });
@@ -82,6 +101,39 @@ describe("ViewportFrame", () => {
     useCicada.getState().updateSettings({ floatingViewport: { x: 900, y: 500, width: 300, height: 200 } });
     render(<ViewportFrame mode="floating" areaRef={area(1000, 600)} />);
     expect(rectOf(frame())).toEqual({ x: 700, y: 400, width: 300, height: 200 });
+  });
+
+  it("the work area shrinking re-clamps the panel through the observer it watches the area with; the stored rect stays, so growing it back restores the place", () => {
+    useCicada.getState().updateSettings({ floatingViewport: { x: 600, y: 300, width: 400, height: 300 } });
+    const ref = area(1000, 600);
+    render(<ViewportFrame mode="floating" areaRef={ref} />);
+    expect(rectOf(frame())).toEqual({ x: 600, y: 300, width: 400, height: 300 });
+    // The area is observed — not just measured once at mount.
+    const observer = FakeResizeObserver.instances.at(-1);
+    expect(observer, "a ResizeObserver was created for the floating mode").toBeDefined();
+    expect(observer!.observed).toEqual([ref.current]);
+    // The window shrinks: the panel's right/bottom edges would be 300/200 px outside — it is pulled back in.
+    sizeArea(ref.current, 700, 400);
+    act(() => observer!.fire());
+    expect(rectOf(frame())).toEqual({ x: 300, y: 100, width: 400, height: 300 });
+    expect(useCicada.getState().settings.floatingViewport).toEqual({ x: 600, y: 300, width: 400, height: 300 });
+    // Smaller than the panel: the size is cut to the area, the place 0.
+    sizeArea(ref.current, 300, 200);
+    act(() => observer!.fire());
+    expect(rectOf(frame())).toEqual({ x: 0, y: 0, width: 300, height: 200 });
+    // Back to the original area: the user's place and size again.
+    sizeArea(ref.current, 1000, 600);
+    act(() => observer!.fire());
+    expect(rectOf(frame())).toEqual({ x: 600, y: 300, width: 400, height: 300 });
+  });
+
+  it("leaving floating disconnects the area's observer", () => {
+    const ref = area(1000, 600);
+    const { rerender } = render(<ViewportFrame mode="floating" areaRef={ref} />);
+    const observer = FakeResizeObserver.instances.at(-1)!;
+    expect(observer.observed).toEqual([ref.current]);
+    rerender(<ViewportFrame mode="split" areaRef={ref} />);
+    expect(observer.observed).toEqual([]);
   });
 
   it("the title strip drags: the DOM follows the pointer, the settings get the rect on release", () => {
