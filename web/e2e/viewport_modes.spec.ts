@@ -415,6 +415,35 @@ test("window: the viewport's element moves into the picture-in-picture window an
   expect(errors, errors.join("\n")).toEqual([]);
 });
 
+test("floating at the minimum: the toolbar wraps, every control — the mode control included — stays inside the panel", async ({ page }) => {
+  await loadDrawn(page);
+  await page.getByTestId("viewport-mode-floating").click();
+  await expect(page.getByTestId("viewport-float-corner")).toBeVisible();
+  // The corner dragged far up-left: the panel stops at 240 × 160 (the contract's minimum).
+  const corner = await box(page, "viewport-float-corner");
+  await page.mouse.move(corner.x + corner.width / 2, corner.y + corner.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(corner.x - 1000, corner.y - 1000, { steps: 8 });
+  await page.mouse.up();
+  const panel = await box(page, "viewport-pane");
+  expect(rounded(panel).width).toBe(240);
+  expect(rounded(panel).height).toBe(160);
+  // A layout invariant, not a font fact (Linux draws the same text wider):
+  // every toolbar button and the mode control lie inside the panel, and the
+  // mode control is usable — the panel's own way out of floating.
+  const buttons = await page.locator(".viewport-toolbar button").evaluateAll((els) =>
+    els.map((el) => {
+      const r = el.getBoundingClientRect();
+      return { text: el.textContent ?? "", x: r.x, y: r.y, width: r.width, height: r.height };
+    }),
+  );
+  expect(buttons.length).toBeGreaterThanOrEqual(7);
+  for (const button of buttons) expect(inside(button, panel), `${button.text} inside the panel`).toBe(true);
+  expect(inside(await box(page, "viewport-modes"), panel)).toBe(true);
+  await page.getByTestId("viewport-mode-split").click();
+  await expect(page.getByTestId("viewport-pane")).toHaveAttribute("data-mode", "split");
+});
+
 test("window without the API: the observer pop-out opens with a notice, and the mode stays", async ({ page, context }) => {
   await page.addInitScript(() => {
     Object.defineProperty(window, "documentPictureInPicture", { value: undefined, configurable: true });

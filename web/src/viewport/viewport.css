@@ -16,19 +16,27 @@
   outline: none;
 }
 
+/* bounded by the host on both sides so its rows wrap inside a narrow panel;
+   the children keep their content width (`flex-start`) — a toolbar stretched
+   to the full width would take the orbit drags that start beside it */
 .viewport-overlay {
   position: absolute;
   top: 6px;
   left: 6px;
+  right: 6px;
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 4px;
   pointer-events: none;
   z-index: 2;
 }
 
+/* wraps: at the floating panel's 240 px minimum the row is wider than the
+   panel, and a clipped mode control would be the panel's own way out gone */
 .viewport-toolbar {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   pointer-events: auto;
 }
@@ -63,13 +71,15 @@
   color: var(--accent);
 }
 
+/* the pills are as wide as their text (`fit-content`) and wrap it only when
+   the overlay is narrower than that — the floating panel at its minimum */
 .viewport-readout {
   font-size: 11px;
   color: var(--fg-dim);
   background: color-mix(in srgb, var(--bg-elev) 75%, transparent);
   border-radius: var(--radius);
   padding: 1px 6px;
-  width: max-content;
+  width: fit-content;
 }
 
 /* the display pass (docs/13 §The display edge): a spinner with `painting N
@@ -83,7 +93,7 @@
   background: color-mix(in srgb, var(--bg-elev) 75%, transparent);
   border-radius: var(--radius);
   padding: 1px 6px;
-  width: max-content;
+  width: fit-content;
 }
 
 .viewport-display[data-phase="painting"] {
