@@ -3199,7 +3199,23 @@ proves wrong is revised here, dated, in the landing commit.
   travels with the element), the same DOM as before — `viewport_modes.
   spec.ts` clicks the display modes, frame all and the mode control IN
   the PiP page (landing on the chosen mode), `viewportUnmount.test.tsx`
-  dispatches the click in the fake PiP document.
+  dispatches the click in the fake PiP document. (b) Three claims had no
+  test that could fail — the floating panel's re-clamp when the work area
+  shrinks (the frame's `ResizeObserver`; now a firing fake in
+  `ViewportFrame.test.tsx` and a `setViewportSize` step in the e2e), the
+  scene's observer being the PiP window's after the move (the e2e wraps
+  `ResizeObserver` per document and asserts the REALM — a wait for the
+  canvas to follow could not fail under the runner, whose trace screencast
+  drives the main document's rendering and lets a main-realm observer fire
+  late; then the canvas following a PiP resize), and the swap remounting
+  nothing (the e2e toggles `swap panes` and keeps the marked canvas). (c)
+  The floating panel painted one unstyled 240 × 160 frame at the area's
+  top-left before its rect landed — the measure is a layout effect now,
+  and `App` hands the frame the work area's ELEMENT as state (a callback
+  ref) rather than a ref object: React attaches a parent's ref after its
+  children's layout effects, so a ref object was still null in the frame's
+  first layout effect and the panel loaded unmeasured (the floating e2e's
+  reload step caught that on the way).
 
 **Track A — `wt/about` (cli + server + web + CI; R1's server/CI half gets the adversarial pass, the rest one review).**
 - **R1 — releases and About.** The workspace version becomes

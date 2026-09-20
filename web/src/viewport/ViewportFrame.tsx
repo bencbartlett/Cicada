@@ -11,7 +11,7 @@
  * document (`windowMode.ts`), so the wrapper is parked out of layout and
  * the `ViewportPlaceholder` says where the viewport went.
  */
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useCicada } from "../state/store";
 import { clampFloating, defaultFloating, moveFloating, resizeFloating, type FloatingRect, type Size, type ViewportMode } from "./modes";
 import { Viewport } from "./Viewport";
@@ -26,7 +26,8 @@ interface Drag {
   live: FloatingRect;
 }
 
-export function ViewportFrame({ mode, areaRef }: { mode: ViewportMode; areaRef: RefObject<HTMLDivElement> }) {
+/** `area`: the work area's element — null until the app has mounted it (the panel is measured against it, in a layout effect, as soon as it is there). */
+export function ViewportFrame({ mode, area: areaEl }: { mode: ViewportMode; area: HTMLDivElement | null }) {
   const stored = useCicada((s) => s.settings.floatingViewport);
   const updateSettings = useCicada((s) => s.updateSettings);
   const frameRef = useRef<HTMLDivElement>(null);
@@ -34,17 +35,20 @@ export function ViewportFrame({ mode, areaRef }: { mode: ViewportMode; areaRef: 
   const [area, setArea] = useState<Size | null>(null);
 
   // Measure the work area while floating: the stored rect is clamped into
-  // it at every size, so a shrunken window never hides the panel.
-  useEffect(() => {
-    if (mode !== "floating") return;
-    const el = areaRef.current;
-    if (el === null) return;
+  // it at every size, so a shrunken window never hides the panel. A LAYOUT
+  // effect: the first measure lands before the browser paints, so the first
+  // frame of the floating mode already shows the panel at its rect — a
+  // passive effect painted one frame of an unstyled 240 × 160 panel at the
+  // area's top-left first (review finding 2026-09-20).
+  useLayoutEffect(() => {
+    if (mode !== "floating" || areaEl === null) return;
+    const el = areaEl;
     const measure = () => setArea({ width: el.clientWidth, height: el.clientHeight });
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [mode, areaRef]);
+  }, [mode, areaEl]);
 
   const rect = mode === "floating" && area !== null ? clampFloating(stored ?? defaultFloating(area), area) : null;
 

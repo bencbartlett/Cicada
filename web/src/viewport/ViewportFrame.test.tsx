@@ -10,7 +10,6 @@
  * the placeholder's click asks for `split`.
  */
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useCicada } from "../state/store";
 import { ViewportFrame, ViewportPlaceholder } from "./ViewportFrame";
@@ -42,14 +41,12 @@ function sizeArea(el: HTMLElement, width: number, height: number): void {
   Object.defineProperty(el, "clientHeight", { value: height, configurable: true });
 }
 
-/** A work area of `width` × `height`. */
-function area(width: number, height: number) {
+/** A work area of `width` × `height` — the element the app hands the frame once it has mounted it. */
+function area(width: number, height: number): HTMLDivElement {
   const el = document.createElement("div");
   sizeArea(el, width, height);
   document.body.append(el);
-  const ref = createRef<HTMLDivElement>() as React.MutableRefObject<HTMLDivElement>;
-  ref.current = el;
-  return ref;
+  return el;
 }
 
 const frame = () => screen.getByTestId("viewport-pane");
@@ -73,7 +70,7 @@ describe("ViewportFrame", () => {
   });
 
   it("split: a pane, the viewport inside, no strip, no corner, no inline place", () => {
-    render(<ViewportFrame mode="split" areaRef={area(1000, 600)} />);
+    render(<ViewportFrame mode="split" area={area(1000, 600)} />);
     expect(frame().className).toBe("pane");
     expect(frame().dataset.mode).toBe("split");
     expect(frame().getAttribute("style")).toBeNull();
@@ -83,13 +80,13 @@ describe("ViewportFrame", () => {
   });
 
   it("window: the wrapper is parked (the element itself is in the PiP document)", () => {
-    render(<ViewportFrame mode="window" areaRef={area(1000, 600)} />);
+    render(<ViewportFrame mode="window" area={area(1000, 600)} />);
     expect(frame().className).toBe("viewport-parked");
     expect(screen.queryByTestId("viewport-float-title")).toBeNull();
   });
 
   it("floating without a stored rect: the default — 40 % of the area, in the lower-right corner — with strip and corner", () => {
-    render(<ViewportFrame mode="floating" areaRef={area(1000, 600)} />);
+    render(<ViewportFrame mode="floating" area={area(1000, 600)} />);
     expect(frame().className).toBe("viewport-float");
     expect(rectOf(frame())).toEqual({ x: 588, y: 348, width: 400, height: 240 });
     expect(screen.getByTestId("viewport-float-title")).toBeTruthy();
@@ -99,46 +96,46 @@ describe("ViewportFrame", () => {
 
   it("floating with a stored rect: clamped into the area at render (a shrunken window never hides the panel)", () => {
     useCicada.getState().updateSettings({ floatingViewport: { x: 900, y: 500, width: 300, height: 200 } });
-    render(<ViewportFrame mode="floating" areaRef={area(1000, 600)} />);
+    render(<ViewportFrame mode="floating" area={area(1000, 600)} />);
     expect(rectOf(frame())).toEqual({ x: 700, y: 400, width: 300, height: 200 });
   });
 
   it("the work area shrinking re-clamps the panel through the observer it watches the area with; the stored rect stays, so growing it back restores the place", () => {
     useCicada.getState().updateSettings({ floatingViewport: { x: 600, y: 300, width: 400, height: 300 } });
-    const ref = area(1000, 600);
-    render(<ViewportFrame mode="floating" areaRef={ref} />);
+    const el = area(1000, 600);
+    render(<ViewportFrame mode="floating" area={el} />);
     expect(rectOf(frame())).toEqual({ x: 600, y: 300, width: 400, height: 300 });
     // The area is observed — not just measured once at mount.
     const observer = FakeResizeObserver.instances.at(-1);
     expect(observer, "a ResizeObserver was created for the floating mode").toBeDefined();
-    expect(observer!.observed).toEqual([ref.current]);
+    expect(observer!.observed).toEqual([el]);
     // The window shrinks: the panel's right/bottom edges would be 300/200 px outside — it is pulled back in.
-    sizeArea(ref.current, 700, 400);
+    sizeArea(el, 700, 400);
     act(() => observer!.fire());
     expect(rectOf(frame())).toEqual({ x: 300, y: 100, width: 400, height: 300 });
     expect(useCicada.getState().settings.floatingViewport).toEqual({ x: 600, y: 300, width: 400, height: 300 });
     // Smaller than the panel: the size is cut to the area, the place 0.
-    sizeArea(ref.current, 300, 200);
+    sizeArea(el, 300, 200);
     act(() => observer!.fire());
     expect(rectOf(frame())).toEqual({ x: 0, y: 0, width: 300, height: 200 });
     // Back to the original area: the user's place and size again.
-    sizeArea(ref.current, 1000, 600);
+    sizeArea(el, 1000, 600);
     act(() => observer!.fire());
     expect(rectOf(frame())).toEqual({ x: 600, y: 300, width: 400, height: 300 });
   });
 
   it("leaving floating disconnects the area's observer", () => {
-    const ref = area(1000, 600);
-    const { rerender } = render(<ViewportFrame mode="floating" areaRef={ref} />);
+    const el = area(1000, 600);
+    const { rerender } = render(<ViewportFrame mode="floating" area={el} />);
     const observer = FakeResizeObserver.instances.at(-1)!;
-    expect(observer.observed).toEqual([ref.current]);
-    rerender(<ViewportFrame mode="split" areaRef={ref} />);
+    expect(observer.observed).toEqual([el]);
+    rerender(<ViewportFrame mode="split" area={el} />);
     expect(observer.observed).toEqual([]);
   });
 
   it("the title strip drags: the DOM follows the pointer, the settings get the rect on release", () => {
     useCicada.getState().updateSettings({ floatingViewport: { x: 100, y: 100, width: 400, height: 300 } });
-    render(<ViewportFrame mode="floating" areaRef={area(1000, 600)} />);
+    render(<ViewportFrame mode="floating" area={area(1000, 600)} />);
     const title = screen.getByTestId("viewport-float-title");
     fireEvent.pointerDown(title, { clientX: 200, clientY: 110, button: 0, pointerId: 1 });
     fireEvent.pointerMove(title, { clientX: 160, clientY: 150 });
@@ -156,7 +153,7 @@ describe("ViewportFrame", () => {
 
   it("the corner resizes: the place stays, the size follows, never below 240 × 160 nor past the area", () => {
     useCicada.getState().updateSettings({ floatingViewport: { x: 100, y: 100, width: 400, height: 300 } });
-    render(<ViewportFrame mode="floating" areaRef={area(1000, 600)} />);
+    render(<ViewportFrame mode="floating" area={area(1000, 600)} />);
     const corner = screen.getByTestId("viewport-float-corner");
     fireEvent.pointerDown(corner, { clientX: 500, clientY: 400, button: 0, pointerId: 1 });
     fireEvent.pointerMove(corner, { clientX: 560, clientY: 380 });
@@ -173,7 +170,7 @@ describe("ViewportFrame", () => {
 
   it("a secondary button starts no drag", () => {
     useCicada.getState().updateSettings({ floatingViewport: { x: 100, y: 100, width: 400, height: 300 } });
-    render(<ViewportFrame mode="floating" areaRef={area(1000, 600)} />);
+    render(<ViewportFrame mode="floating" area={area(1000, 600)} />);
     const title = screen.getByTestId("viewport-float-title");
     fireEvent.pointerDown(title, { clientX: 200, clientY: 110, button: 2, pointerId: 1 });
     fireEvent.pointerMove(title, { clientX: 160, clientY: 150 });
@@ -185,18 +182,18 @@ describe("ViewportFrame", () => {
   });
 
   it("the mode changing keeps the one wrapper element (the viewport inside never remounts)", () => {
-    const ref = area(1000, 600);
-    const { rerender } = render(<ViewportFrame mode="split" areaRef={ref} />);
+    const el = area(1000, 600);
+    const { rerender } = render(<ViewportFrame mode="split" area={el} />);
     const wrapper = frame();
     const viewport = screen.getByTestId("viewport");
-    rerender(<ViewportFrame mode="floating" areaRef={ref} />);
+    rerender(<ViewportFrame mode="floating" area={el} />);
     expect(frame()).toBe(wrapper);
     expect(screen.getByTestId("viewport")).toBe(viewport);
     expect(wrapper.className).toBe("viewport-float");
-    rerender(<ViewportFrame mode="window" areaRef={ref} />);
+    rerender(<ViewportFrame mode="window" area={el} />);
     expect(frame()).toBe(wrapper);
     expect(screen.getByTestId("viewport")).toBe(viewport);
-    rerender(<ViewportFrame mode="split" areaRef={ref} />);
+    rerender(<ViewportFrame mode="split" area={el} />);
     expect(frame()).toBe(wrapper);
     expect(screen.getByTestId("viewport")).toBe(viewport);
     expect(wrapper.getAttribute("style")).toBe("");

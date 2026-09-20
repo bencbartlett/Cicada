@@ -5,7 +5,7 @@
  * Regions are components owned by their folders; this file only arranges
  * them and applies per-user settings (theme, split, the viewport mode).
  */
-import { useRef } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Canvas } from "./canvas/Canvas";
 import { useKeyboard } from "./keyboard";
 import { CommitDialog } from "./panels/CommitDialog";
@@ -30,7 +30,16 @@ export function App() {
   const settings = useCicada((s) => s.settings);
   const updateSettings = useCicada((s) => s.updateSettings);
   const pipeline = useCicada((s) => s.pipeline);
-  const workRef = useRef<HTMLDivElement>(null);
+  const workRef = useRef<HTMLDivElement | null>(null);
+  // The work area's element as STATE for the floating viewport, which
+  // measures it in a layout effect: a ref object would still be null there
+  // on the first mount (React attaches a parent's ref after its children's
+  // layout effects run), and the panel would paint a frame unmeasured.
+  const [workEl, setWorkEl] = useState<HTMLDivElement | null>(null);
+  const attachWork = useCallback((el: HTMLDivElement | null) => {
+    workRef.current = el;
+    setWorkEl(el);
+  }, []);
   const dragging = useRef(false);
   useKeyboard();
 
@@ -88,7 +97,7 @@ export function App() {
       }
     />
   ) : null;
-  const viewport = <ViewportFrame key="viewport" mode={mode} areaRef={workRef} />;
+  const viewport = <ViewportFrame key="viewport" mode={mode} area={workEl} />;
   const placeholder = mode === "window" ? <ViewportPlaceholder key="placeholder" /> : null;
   const work = split && settings.swap ? [viewport, splitter, canvasPane] : [canvasPane, splitter, viewport, placeholder];
 
@@ -98,7 +107,7 @@ export function App() {
       <TopBar />
       <MenuBar />
       <div className="app-main">
-        <div className="app-work" ref={workRef} style={style} data-viewport-mode={mode}>
+        <div className="app-work" ref={attachWork} style={style} data-viewport-mode={mode}>
           {work}
         </div>
         <Inspector />
