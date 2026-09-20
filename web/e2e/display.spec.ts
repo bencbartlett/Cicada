@@ -130,7 +130,13 @@ function displayMs(chip: string): number {
   return match[2] === "s" ? value * 1000 : value;
 }
 
-test.describe.configure({ mode: "serial" });
+// Never retried, on CI either: the spec reads the session's COLD counters
+// (the first paint's cache entries, a chip that says `display` only to the
+// page that watched the pass — docs/17 L5-7), and Playwright restarts no
+// server between attempts, so a retry on the same session cannot pass and
+// would only hide the first attempt's failure (the compute_on_release
+// spec's rule).
+test.describe.configure({ mode: "serial", retries: 0 });
 
 test("a heavy output is drawn at preview, the chip and the viewport show the display edge, the caches indicator reads the cache", async ({ page }, testInfo) => {
   const dir = join(meta.scratch, "examples", "display");
@@ -263,12 +269,19 @@ test("a heavy output is drawn at preview, the chip and the viewport show the dis
   expect(fit.barRight, `the bar fits: ${JSON.stringify(fit)}`).toBeLessThanOrEqual(fit.innerWidth);
   expect(fit.gearRight, `the gear is on screen: ${JSON.stringify(fit)}`).toBeLessThanOrEqual(fit.innerWidth);
   expect(fit.gearLeft).toBeGreaterThanOrEqual(0);
-  // And the solve chip is whole at the reference width: its text is not clipped.
-  const chipWhole = await page.evaluate(() => {
-    const el = document.querySelector('[data-testid="tb-solve-text"]')!;
-    return el.scrollWidth <= el.clientWidth + 1;
-  });
-  expect(chipWhole, "the solve chip's text is not truncated at 1400 px").toBe(true);
+  // And the solve chip's text is whole where there is room for it. At the
+  // reference 1400 px the two chips are what gives way first (above) —
+  // and whether the chip is already ellipsised there depends on the font
+  // the runner draws the bar with (Linux sets the same text wider than
+  // Windows; 2026-09-19); 300 px wider it is whole on any font.
+  const chipWhole = () =>
+    page.evaluate(() => {
+      const el = document.querySelector('[data-testid="tb-solve-text"]')!;
+      return el.scrollWidth <= el.clientWidth + 1;
+    });
+  await page.setViewportSize({ width: 1700, height: 900 });
+  await expect.poll(chipWhole, { message: "the solve chip's text is whole at 1700 px" }).toBe(true);
+  await page.setViewportSize({ width: 1400, height: 900 });
 
   // ---- the settings menu resizes the cache live; the choice is per user.
   await page.getByTestId("tb-settings").click();

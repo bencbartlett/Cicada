@@ -12132,10 +12132,25 @@ size = slider(value=4.0, min=0.5, max=5.0)
             ["ball.out", "block.out"],
             "the kept generation's rows, not the current graph's names"
         );
+        // What cuts the parked pass is the rename's own generation, and it
+        // is pending only once the structural debounce fired: released
+        // before that, the pass draws `block.out` itself and the rename's
+        // generation then has only `orb.out` left to draw (the macOS
+        // runner, 2026-09-19). Wait for the job — a deadline, never a
+        // pass condition.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while session.solve.superseded() != Some(Superseded::Edit) {
+            assert!(
+                Instant::now() < deadline,
+                "the rename's generation never queued behind the parked pass"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
         hold.release();
         session.wait_idle();
         // The last generation to complete (the rename's, which cut the
-        // parked pass — latest-wins) drew both outputs under the new name.
+        // parked pass before it drew anything — latest-wins) drew both
+        // outputs under the new name.
         let state = session.debug_state(false);
         let last = state["profile"]["generation"].as_u64().unwrap();
         assert!(last > parked, "{last} vs {parked}");
