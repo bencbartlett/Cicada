@@ -3354,8 +3354,10 @@ proves wrong is revised here, dated, in the landing commit.
   `smoke.spec.ts` (hover the undo button → the box shows its title
   within 400 ms). docs/16 §Theme and visual language.
   *Built 2026-09-20 (wave 5 T1)* — `web/src/tooltip.ts` (the
-  controller: `installTooltips(document)` → a subscription, the four
-  listeners in the capture phase; `placeTooltip`, the pure placement;
+  controller: `installTooltips(document)` → a subscription, the
+  listeners in the capture phase — for the dismiss through the dialogs'
+  stopped `pointerdown` and the editors' stopped `keydown`, not for the
+  hover: nothing stops a `pointerover`; `placeTooltip`, the pure placement;
   `TOOLTIP_DELAY_MS` = 250, `PARKED_ATTR` = `data-title`) +
   `web/src/TooltipLayer.tsx` (the box, mounted in `Root` beside every
   screen), the `.tooltip` rule in `styles.css` (z-index 100, over the
@@ -3449,7 +3451,19 @@ proves wrong is revised here, dated, in the landing commit.
   parked or shown; the release enters; a press then a move with the button
   held restores the first title and starts nothing; a click restarts
   nothing) and the smoke's wire drag held over the target for 4 × the delay
-  (no box, nothing parked) with the box due after the release.
+  (no box, nothing parked) with the box due after the release. (8) *(fix
+  round 1, L2-2 / L1-T1-2 / L5-4 / T1-C5)* **The capture phase was held
+  by no test and justified with the wrong event**: docs/16 and the file
+  header said "so a component that stops a pointer event's propagation,
+  as the dialogs do, still hovers", but nothing in `web/src` stops a
+  `pointerover` — the dialogs and the search box stop `pointerdown`, the
+  text editors `keydown` — so what capture buys is the DISMISS (a press on
+  About's ×, an Esc typed into the search box), and all eight capture
+  flags flipped to bubble passed the 15 tests. A controller test now
+  dismisses through a wrapper that stops `pointerdown`, `keydown` and
+  `pointerover` in the bubble phase (red under the bubble mutation), a
+  stylesheet test holds `.tooltip`'s z-index above both dialog backdrops',
+  and the docs say what capture is for.
   Not built: a scroll or resize listener (the box is placed once, at
   show; Chromium re-hovers after layout moves the element away from
   under the pointer and the layer ends the hover then); a hover timer

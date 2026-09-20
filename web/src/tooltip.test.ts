@@ -10,6 +10,7 @@
  * child served the same way with its box at the pointer, and the placement
  * math.
  */
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   anchorRect,
@@ -232,6 +233,43 @@ describe("the tooltip controller", () => {
     expect(tooltips.shown()).toEqual({ anchor: undo, text: UNDO });
   });
 
+  it("the dismiss reaches the layer through a component that stops pointerdown or keydown at its own element, as the dialogs and the text editors do", () => {
+    // What About, the commit and open dialogs and the search box do to
+    // `pointerdown`, and the search box and the literal editors to
+    // `keydown`: React's handler calls the native `stopPropagation`, so a
+    // bubble-phase document listener never sees the press or the Esc. The
+    // layer's listeners are in the capture phase for exactly this.
+    const wrap = el("wrap");
+    const stops: Event[] = [];
+    const stop = (event: Event) => {
+      stops.push(event);
+      event.stopPropagation();
+    };
+    wrap.addEventListener("pointerdown", stop);
+    wrap.addEventListener("keydown", stop);
+    // Nothing in the app stops a `pointerover`; a wrapper that did must not
+    // stop the hover either.
+    wrap.addEventListener("pointerover", stop);
+    const undo = el("undo");
+    move(el("pane"), undo);
+    vi.advanceTimersByTime(TOOLTIP_DELAY_MS);
+    expect(tooltips.shown(), "the hover through a stopping wrapper").toEqual({ anchor: undo, text: UNDO });
+    undo.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, buttons: 1 }));
+    expect(stops.map((e) => e.type)).toEqual(["pointerover", "pointerdown"]);
+    expect(tooltips.shown(), "a press inside the dialog dismisses the box").toBeNull();
+    move(undo, el("pane"));
+
+    move(el("pane"), undo);
+    vi.advanceTimersByTime(TOOLTIP_DELAY_MS);
+    expect(tooltips.shown()).not.toBeNull();
+    undo.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(stops.map((e) => e.type)).toEqual(["pointerover", "pointerdown", "pointerover", "keydown"]);
+    expect(tooltips.shown(), "an Esc typed into the editor dismisses the box").toBeNull();
+    wrap.removeEventListener("pointerdown", stop);
+    wrap.removeEventListener("keydown", stop);
+    wrap.removeEventListener("pointerover", stop);
+  });
+
   it("a title rewritten under the pointer is what the box shows and what leave restores", async () => {
     const undo = el("undo");
     const NEXT = "undo: delete sphere_1 (Ctrl+Z)";
@@ -352,6 +390,27 @@ describe("the tooltip controller", () => {
     vi.advanceTimersByTime(TOOLTIP_DELAY_MS * 4);
     expect(tooltips.shown()).toBeNull();
     expect(undo.getAttribute("title"), "no listener parks anything any more").toBe(UNDO);
+  });
+});
+
+describe("the box's layer", () => {
+  // The stylesheets as the contract docs/16 §Theme states: the box over
+  // every other layer, a modal's backdrop included (the × of About carries
+  // a title too).
+  const zIndexOf = (file: string, selector: string): number => {
+    const css = readFileSync(new URL(file, import.meta.url), "utf8");
+    const start = css.indexOf(`${selector} {`);
+    if (start < 0) throw new Error(`no ${selector} block in ${file}`);
+    const block = css.slice(start, css.indexOf("\n}", start));
+    const match = /z-index:\s*(\d+);/.exec(block);
+    if (match === null) throw new Error(`no z-index in ${selector}`);
+    return Number(match[1]);
+  };
+
+  it("sits over the dialogs' backdrops", () => {
+    const box = zIndexOf("./styles.css", ".tooltip");
+    expect(box).toBeGreaterThan(zIndexOf("./panels/panels.css", ".app-dialog-backdrop"));
+    expect(box).toBeGreaterThan(zIndexOf("./panels/panels.css", ".git-dialog-backdrop"));
   });
 });
 

@@ -4,11 +4,17 @@
  * browser's own tooltip takes ~1 s in Chromium and cannot be tuned, so this
  * layer shows the same text itself after `TOOLTIP_DELAY_MS`: ONE listener set
  * on the document (`pointerover`, `pointerout`, `pointermove`, `pointerdown`,
- * `pointerup`, `keydown` Esc — all in the capture phase, so a component that
- * stops a pointer event's propagation, as the dialogs do, still hovers) and
- * every hover text in the app changes nothing — the `title=` sites and the
- * two SVG `<title>` children (every wire's, the profiler ring's arcs) alike,
- * the platform's two tooltip sources.
+ * `pointerup`, `keydown` Esc — all in the capture phase) and every hover
+ * text in the app changes nothing — the `title=` sites and the two SVG
+ * `<title>` children (every wire's, the profiler ring's arcs) alike, the
+ * platform's two tooltip sources.
+ *
+ * The capture phase is for the DISMISS, not the hover: nothing in the app
+ * stops a `pointerover`, but the dialogs and the search box stop `pointerdown`
+ * and the text editors stop `keydown` at their own element, so a bubble-phase
+ * document listener would never see a press inside About or an Esc typed into
+ * the search box — the box would stand over a closed dialog until the next
+ * hover.
  *
  * Entering an element whose closest ancestor-or-self carries a title starts
  * the delay; the box shows that text (newlines kept) until the pointer leaves
